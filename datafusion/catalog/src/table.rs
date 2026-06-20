@@ -552,8 +552,10 @@ pub trait TableProviderFactory: Debug + Sync + Send {
 
 /// Describes arguments provided to the table function call.
 pub struct TableFunctionArgs<'e, 's> {
-    /// Call arguments.
+    /// Call arguments (potentially coerced/simplified).
     exprs: &'e [Expr],
+    /// Original raw arguments before any coercion/simplification.
+    raw_exprs: &'e [Expr],
     /// Session within which the function is called.
     session: &'s dyn Session,
 }
@@ -561,7 +563,11 @@ pub struct TableFunctionArgs<'e, 's> {
 impl<'e, 's> TableFunctionArgs<'e, 's> {
     /// Make a new [`TableFunctionArgs`].
     pub fn new(exprs: &'e [Expr], session: &'s dyn Session) -> Self {
-        Self { exprs, session }
+        Self {
+            exprs,
+            raw_exprs: exprs,
+            session,
+        }
     }
 
     /// Get expressions passed as the called function arguments.
@@ -569,9 +575,38 @@ impl<'e, 's> TableFunctionArgs<'e, 's> {
         self.exprs
     }
 
+    /// Get the original, unprocessed call arguments (before
+    /// type coercion and simplification).
+    ///
+    /// The arguments returned by [`Self::exprs`] may have been
+    /// type-coerced or simplified. Use this method to access the
+    /// arguments exactly as the user wrote them in the SQL query.
+    pub fn raw_exprs(&self) -> &'e [Expr] {
+        self.raw_exprs
+    }
+
     /// Get a session where the table function is called.
     pub fn session(&self) -> &'s dyn Session {
         self.session
+    }
+}
+
+impl<'e, 's> TableFunctionArgs<'e, 's> {
+    /// Make a new [`TableFunctionArgs`] with separate processed and raw expressions.
+    ///
+    /// This is useful when the table function implementation needs
+    /// access to both the (possibly coerced/simplified) expressions
+    /// and the original expressions as written.
+    pub fn new_with_raw(
+        exprs: &'e [Expr],
+        raw_exprs: &'e [Expr],
+        session: &'s dyn Session,
+    ) -> Self {
+        Self {
+            exprs,
+            raw_exprs,
+            session,
+        }
     }
 }
 
