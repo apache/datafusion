@@ -99,9 +99,9 @@ impl StdinUtils {
         format!("{}:///{object_name}", Self::SCHEME)
     }
 
-    /// Returns the object store backing the `stdin://` scheme, reading and
-    /// buffering standard input on first use and reusing that buffer for any
-    /// subsequent `stdin://` table created in the same session.
+    /// Returns the object store backing the `stdin://` scheme, buffering all of
+    /// standard input when the store is first constructed and reusing that
+    /// buffer for any subsequent `stdin://` table created in the same session.
     ///
     /// stdin is a one-shot stream: it can only be read once. The object store
     /// registry keys by scheme/authority, so every `stdin://` URL maps to the
