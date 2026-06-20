@@ -299,33 +299,33 @@ impl<K: CacheKey, V: CacheValue> Cache<K, V> for DefaultCache<K, V> {
 mod tests {
     use std::sync::Arc;
 
-    use crate::cache::cache_manager::{CachedFileMetadataEntry, FileMetadata};
-    use crate::cache::default_cache::DefaultCache;
-    use crate::cache::{Cache, CacheEntryInfo};
-    use datafusion_common::HashMap;
-    use object_store::ObjectMeta;
-    use object_store::path::Path;
     use crate::cache::TableScopedPath;
+    use crate::cache::cache_manager::{
+        CachedFileList, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, meta_heap_bytes,
+    };
     use crate::cache::cache_manager::{
         CachedFileMetadata, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
     };
+    use crate::cache::cache_manager::{CachedFileMetadataEntry, FileMetadata};
+    use crate::cache::default_cache::DefaultCache;
+    use crate::cache::default_cache::TimeProvider;
+    use crate::cache::{Cache, CacheEntryInfo};
+    use crate::cache::{CacheKey, CacheValue};
     use arrow::array::{Int32Array, ListArray, RecordBatch};
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use chrono::DateTime;
+    use datafusion_common::HashMap;
+    use datafusion_common::TableReference;
     use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
+    use datafusion_common::instant::Instant;
     use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
     use datafusion_expr::ColumnarValue;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-    use crate::cache::cache_manager::{
-        CachedFileList, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, meta_heap_bytes,
-    };
-    use crate::cache::default_cache::TimeProvider;
-    use crate::cache::{CacheKey, CacheValue};
-    use datafusion_common::TableReference;
-    use datafusion_common::instant::Instant;
+    use object_store::ObjectMeta;
+    use object_store::path::Path;
     use std::sync::Mutex;
     use std::thread;
     use std::time::Duration;
