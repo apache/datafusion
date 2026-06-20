@@ -19,7 +19,7 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use datafusion_common::{Result, exec_datafusion_err, internal_err};
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err, internal_err};
 
 use arrow::array::{
     Array, ArrayAccessor, ArrayDataBuilder, ArrayRef, BinaryArray, ByteView,
@@ -453,6 +453,20 @@ pub(crate) struct GenericStringArrayBuilder<O: OffsetSizeTrait> {
     _phantom: PhantomData<O>,
 }
 
+fn offset_overflow_error<O: OffsetSizeTrait>() -> DataFusionError {
+    exec_datafusion_err!(
+        "byte array offset overflow: output size exceeds {} bytes",
+        O::MAX_OFFSET
+    )
+}
+
+fn try_offset<O: OffsetSizeTrait>(len: usize) -> Result<O> {
+    if len > O::MAX_OFFSET {
+        return Err(offset_overflow_error::<O>());
+    }
+    Ok(O::usize_as(len))
+}
+
 impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         let capacity = item_capacity
@@ -470,29 +484,106 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         }
     }
 
+    #[inline]
+    fn try_push_offset_for_len(&mut self, len: usize) -> Result<()> {
+        let next_offset = try_offset::<O>(len)?;
+        self.offsets_buffer.push(next_offset);
+        Ok(())
+    }
+
+    #[inline]
+    fn try_append_bytes<F>(&mut self, additional_len: usize, append: F) -> Result<()>
+    where
+        F: FnOnce(&mut MutableBuffer),
+    {
+        let next_len = self
+            .value_buffer
+            .len()
+            .checked_add(additional_len)
+            .ok_or_else(offset_overflow_error::<O>)?;
+        let next_offset = try_offset::<O>(next_len)?;
+        append(&mut self.value_buffer);
+        debug_assert_eq!(self.value_buffer.len(), next_len);
+        self.offsets_buffer.push(next_offset);
+        Ok(())
+    }
+
+    /// Fallible variant of [`Self::append_value`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cumulative byte length exceeds this builder's
+    /// offset type limit.
+    #[inline]
+    pub fn try_append_value(&mut self, value: &str) -> Result<()> {
+        self.try_append_bytes(value.len(), |value_buffer| {
+            value_buffer.extend_from_slice(value.as_bytes());
+        })
+    }
+
+    /// Fallible variant of [`Self::append_placeholder`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the current cumulative byte length exceeds this
+    /// builder's offset type limit.
+    #[inline]
+    pub fn try_append_placeholder(&mut self) -> Result<()> {
+        self.try_push_offset_for_len(self.value_buffer.len())?;
+        self.placeholder_count += 1;
+        Ok(())
+    }
+
     /// See [`BulkNullStringArrayBuilder::append_value`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_value`].
     ///
     /// # Panics
     ///
     /// Panics if the cumulative byte length exceeds `O::MAX`.
     #[inline]
     pub fn append_value(&mut self, value: &str) {
-        self.value_buffer.extend_from_slice(value.as_bytes());
-        let next_offset =
-            O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
-        self.offsets_buffer.push(next_offset);
+        self.try_append_value(value)
+            .expect("byte array offset overflow");
     }
 
     /// See [`BulkNullStringArrayBuilder::append_placeholder`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_placeholder`].
     #[inline]
     pub fn append_placeholder(&mut self) {
-        let next_offset =
-            O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
-        self.offsets_buffer.push(next_offset);
-        self.placeholder_count += 1;
+        self.try_append_placeholder()
+            .expect("byte array offset overflow");
+    }
+
+    /// Fallible variant of [`Self::append_byte_map`].
+    ///
+    /// # Safety
+    ///
+    /// The bytes produced by applying `map` to each byte of `src`, in order,
+    /// must form valid UTF-8.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cumulative byte length exceeds this builder's
+    /// offset type limit.
+    #[inline]
+    pub unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
+        &mut self,
+        src: &[u8],
+        mut map: F,
+    ) -> Result<()> {
+        self.try_append_bytes(src.len(), |value_buffer| {
+            value_buffer.extend(src.iter().map(|&b| map(b)));
+        })
     }
 
     /// See [`BulkNullStringArrayBuilder::append_byte_map`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_byte_map`].
     ///
     /// # Safety
     ///
@@ -503,14 +594,45 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     ///
     /// Panics if the cumulative byte length exceeds `O::MAX`.
     #[inline]
-    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], mut map: F) {
-        self.value_buffer.extend(src.iter().map(|&b| map(b)));
-        let next_offset =
-            O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
+    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
+        // SAFETY: caller upholds this method's UTF-8 contract.
+        unsafe { self.try_append_byte_map(src, map) }
+            .expect("byte array offset overflow");
+    }
+
+    /// Fallible variant of [`Self::append_with`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cumulative byte length exceeds this builder's
+    /// offset type limit.
+    #[inline]
+    pub fn try_append_with<F>(&mut self, f: F) -> Result<()>
+    where
+        F: FnOnce(&mut GenericStringWriter<'_>),
+    {
+        let old_len = self.value_buffer.len();
+        let mut writer = GenericStringWriter {
+            value_buffer: &mut self.value_buffer,
+        };
+        f(&mut writer);
+        let next_offset = match try_offset::<O>(self.value_buffer.len()) {
+            Ok(offset) => offset,
+            Err(e) => {
+                // SAFETY: `old_len` was the initialized length before `f` wrote to
+                // this owned buffer, so shrinking back preserves initialized data.
+                unsafe { self.value_buffer.set_len(old_len) };
+                return Err(e);
+            }
+        };
         self.offsets_buffer.push(next_offset);
+        Ok(())
     }
 
     /// See [`BulkNullStringArrayBuilder::append_with`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_with`].
     ///
     /// # Panics
     ///
@@ -520,6 +642,9 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     where
         F: FnOnce(&mut GenericStringWriter<'_>),
     {
+        // Do not delegate to `try_append_with`: it rolls back value_buffer on
+        // overflow before returning Err, which would change this infallible
+        // method's state if its panic is caught.
         let mut writer = GenericStringWriter {
             value_buffer: &mut self.value_buffer,
         };
@@ -1386,6 +1511,76 @@ mod tests {
             GenericStringArrayBuilder::<i64>::with_capacity(2, 4),
         );
         assert_finish_errs_on_length_mismatch(StringViewArrayBuilder::with_capacity(2));
+    }
+
+    #[test]
+    fn generic_string_builder_try_append_success_path() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(4, 16);
+        builder.try_append_value("abc").unwrap();
+        builder.try_append_placeholder().unwrap();
+        // SAFETY: ASCII input and output.
+        unsafe {
+            builder
+                .try_append_byte_map(b"de", |b| b.to_ascii_uppercase())
+                .unwrap();
+        }
+        builder
+            .try_append_with(|w| {
+                w.write_str("f");
+                w.write_char('é');
+            })
+            .unwrap();
+
+        let nulls = Some(NullBuffer::from(vec![true, false, true, true]));
+        let array = builder.finish(nulls).unwrap();
+        assert_eq!(
+            &array,
+            &StringArray::from(vec![Some("abc"), None, Some("DE"), Some("fé")])
+        );
+    }
+
+    #[test]
+    fn generic_string_builder_mixed_append_success_path() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(4, 16);
+        builder.append_value("ab");
+        builder.try_append_value("cd").unwrap();
+        // SAFETY: ASCII input and output.
+        unsafe {
+            builder.append_byte_map(b"ef", |b| b.to_ascii_uppercase());
+            builder
+                .try_append_byte_map(b"gh", |b| b.to_ascii_uppercase())
+                .unwrap();
+        }
+
+        let array = builder.finish(None).unwrap();
+        assert_eq!(
+            &array,
+            &StringArray::from(vec![Some("ab"), Some("cd"), Some("EF"), Some("GH")])
+        );
+    }
+
+    #[test]
+    fn generic_string_builder_try_offset_overflow() {
+        let err = try_offset::<i32>(i32::MAX as usize + 1)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("byte array offset overflow"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn generic_string_builder_try_append_bytes_overflow() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(0, 0);
+        let err = builder
+            .try_append_bytes(i32::MAX as usize + 1, |_| unreachable!())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("byte array offset overflow"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
