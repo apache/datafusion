@@ -23,9 +23,11 @@ use std::time::Duration;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::context::TaskContext;
 use datafusion::prelude::SessionConfig;
-use datafusion_execution::cache::DefaultListFilesCache;
-use datafusion_execution::cache::cache_manager::CacheManagerConfig;
-use datafusion_execution::cache::file_statistics_cache::DefaultFileStatisticsCache;
+use datafusion_execution::cache::cache_manager::{
+    CacheManagerConfig, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
+    DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
+};
+use datafusion_execution::cache::default_cache::DefaultCache;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_plan::common::collect;
 
@@ -260,7 +262,8 @@ async fn test_test_metadata_cache_limit() {
 
 #[tokio::test]
 async fn test_list_files_cache_limit() {
-    let list_files_cache = Arc::new(DefaultListFilesCache::default());
+    let list_files_cache =
+        Arc::new(DefaultCache::new(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT));
 
     let rt = RuntimeEnvBuilder::new()
         .with_cache_manager(
@@ -303,7 +306,8 @@ async fn test_list_files_cache_limit() {
 
 #[tokio::test]
 async fn test_list_files_cache_ttl() {
-    let list_files_cache = Arc::new(DefaultListFilesCache::default());
+    let list_files_cache =
+        Arc::new(DefaultCache::new(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT));
 
     let rt = RuntimeEnvBuilder::new()
         .with_cache_manager(
@@ -347,7 +351,8 @@ async fn test_list_files_cache_ttl() {
 
 #[tokio::test]
 async fn test_file_statistics_cache_limit() {
-    let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+    let file_statistics_cache =
+        Arc::new(DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT));
 
     let rt = RuntimeEnvBuilder::new()
         .with_cache_manager(

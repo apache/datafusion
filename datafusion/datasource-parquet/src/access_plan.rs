@@ -17,7 +17,7 @@
 
 use crate::sort::reverse_row_selection;
 use arrow::datatypes::Schema;
-use datafusion_common::{Result, assert_eq_or_internal_err};
+use datafusion_common::{Result, assert_eq_or_internal_err, exec_err};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use log::debug;
@@ -104,6 +104,41 @@ pub struct ParquetAccessPlan {
     fully_matched: Vec<bool>,
 }
 
+/// A file-level row selection for a parquet scan.
+///
+/// Attach this type to a [`PartitionedFile`](datafusion_datasource::PartitionedFile)
+/// with [`PartitionedFile::with_extension`](datafusion_datasource::PartitionedFile::with_extension)
+/// when an external index produces a [`RowSelection`] across the entire parquet
+/// file. DataFusion will use parquet metadata to split it into row-group-level
+/// access when the file is opened.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParquetRowSelection {
+    selection: RowSelection,
+}
+
+impl ParquetRowSelection {
+    /// Create a new file-level parquet row selection.
+    pub fn new(selection: RowSelection) -> Self {
+        Self { selection }
+    }
+
+    /// Return a reference to the underlying [`RowSelection`].
+    pub fn selection(&self) -> &RowSelection {
+        &self.selection
+    }
+
+    /// Convert into the underlying [`RowSelection`].
+    pub fn into_inner(self) -> RowSelection {
+        self.selection
+    }
+}
+
+impl From<RowSelection> for ParquetRowSelection {
+    fn from(selection: RowSelection) -> Self {
+        Self::new(selection)
+    }
+}
+
 /// Describes how the parquet reader will access a row group
 #[derive(Debug, Clone, PartialEq)]
 pub enum RowGroupAccess {
@@ -143,6 +178,102 @@ impl RowGroupAccess {
     }
 }
 
+/// Single-pass cursor over a file-level [`RowSelection`].
+///
+/// `take` returns the next selector fragment capped to the requested row count,
+/// splitting the current selector when it straddles a row group boundary.
+struct OverallRowSelectionCursor {
+    selector_iter: std::vec::IntoIter<RowSelector>,
+    current: Option<RowSelector>,
+}
+
+impl OverallRowSelectionCursor {
+    fn new(selection: RowSelection) -> Self {
+        let selectors: Vec<RowSelector> = selection.into();
+        let mut selector_iter = selectors.into_iter();
+        let current = selector_iter.next();
+        Self {
+            selector_iter,
+            current,
+        }
+    }
+
+    /// Take up to `max_rows` rows from the current selector.
+    ///
+    /// If the current selector crosses the requested boundary, this returns the
+    /// leading fragment and keeps the remaining rows in `self.current` for the
+    /// next call.
+    #[inline]
+    fn take(&mut self, max_rows: usize) -> Option<RowSelector> {
+        let sel = self.current?;
+        let row_count = sel.row_count.min(max_rows);
+        self.current = if row_count < sel.row_count {
+            Some(RowSelector {
+                row_count: sel.row_count - row_count,
+                skip: sel.skip,
+            })
+        } else {
+            self.selector_iter.next()
+        };
+
+        Some(RowSelector {
+            row_count,
+            skip: sel.skip,
+        })
+    }
+
+    fn remaining_rows(self) -> usize {
+        self.current.map_or(0, |s| s.row_count)
+            + self.selector_iter.map(|s| s.row_count).sum::<usize>()
+    }
+}
+
+/// Accumulates the selector fragments that belong to one row group.
+struct RowGroupAccessBuilder {
+    /// Selector fragments belonging to this row group.
+    selectors: Vec<RowSelector>,
+    /// Number of selected rows accumulated for this row group.
+    selected: usize,
+    /// Number of skipped rows accumulated for this row group.
+    skipped: usize,
+    /// Number of rows still needed to complete this row group.
+    remaining: usize,
+}
+
+impl RowGroupAccessBuilder {
+    fn new(row_group_rows: usize) -> Self {
+        Self {
+            selectors: Vec::with_capacity(1),
+            selected: 0,
+            skipped: 0,
+            remaining: row_group_rows,
+        }
+    }
+
+    #[inline]
+    fn push(&mut self, selector: RowSelector) {
+        self.remaining -= selector.row_count;
+
+        if selector.skip {
+            self.skipped += selector.row_count;
+        } else {
+            self.selected += selector.row_count;
+        }
+
+        self.selectors.push(selector);
+    }
+
+    fn into_access(self) -> RowGroupAccess {
+        if self.selected == 0 {
+            RowGroupAccess::Skip
+        } else if self.skipped == 0 {
+            RowGroupAccess::Scan
+        } else {
+            RowGroupAccess::Selection(self.selectors.into())
+        }
+    }
+}
+
 impl ParquetAccessPlan {
     /// Create a new `ParquetAccessPlan` that scans all row groups
     pub fn new_all(row_group_count: usize) -> Self {
@@ -167,6 +298,60 @@ impl ParquetAccessPlan {
             row_groups,
             fully_matched: vec![false; row_group_count],
         }
+    }
+
+    /// Create a new `ParquetAccessPlan` from a file-level [`RowSelection`].
+    ///
+    /// The selection is interpreted across all rows in the file, in row group
+    /// order, and is split into row-group level access using `row_group_meta_data`.
+    /// Fully skipped row groups become [`RowGroupAccess::Skip`], fully selected
+    /// row groups become [`RowGroupAccess::Scan`], and partially selected row
+    /// groups become [`RowGroupAccess::Selection`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the selection does not specify exactly the same
+    /// number of rows as the file metadata.
+    pub fn try_new_from_overall_row_selection(
+        selection: RowSelection,
+        row_group_meta_data: &[RowGroupMetaData],
+    ) -> Result<Self> {
+        // Keep this as a single pass over the selector stream rather than
+        // repeatedly calling `RowSelection::split_off` per row group. The
+        // `split_off` version is simpler, but it clones/retains substantially
+        // more selector buffer capacity for highly fragmented selections.
+        let mut cursor = OverallRowSelectionCursor::new(selection);
+
+        let mut selection_rows = 0usize;
+        let mut file_rows = 0usize;
+
+        let mut row_groups = Vec::with_capacity(row_group_meta_data.len());
+        for rg_meta in row_group_meta_data {
+            let rg_rows = rg_meta.num_rows() as usize;
+            file_rows += rg_rows;
+
+            let mut builder = RowGroupAccessBuilder::new(rg_rows);
+            while builder.remaining > 0 {
+                let Some(selector) = cursor.take(builder.remaining) else {
+                    break;
+                };
+                selection_rows += selector.row_count;
+                builder.push(selector);
+            }
+
+            row_groups.push(builder.into_access());
+        }
+
+        selection_rows += cursor.remaining_rows();
+
+        if selection_rows != file_rows {
+            return exec_err!(
+                "Invalid Parquet RowSelection. File has {file_rows} rows, \
+                but selection specifies {selection_rows} rows."
+            );
+        }
+
+        Ok(Self::new(row_groups))
     }
 
     /// Set the i-th row group to the specified [`RowGroupAccess`]
@@ -755,6 +940,90 @@ mod test {
                 ]
                 .into()
             )
+        );
+    }
+
+    #[test]
+    fn test_new_from_overall_row_selection() {
+        let row_selection = RowSelection::from(vec![
+            RowSelector::select(10),
+            RowSelector::skip(25),
+            RowSelector::select(10),
+            RowSelector::skip(15),
+            RowSelector::select(40),
+        ]);
+
+        let access_plan = ParquetAccessPlan::try_new_from_overall_row_selection(
+            row_selection,
+            &ROW_GROUP_METADATA,
+        )
+        .unwrap();
+
+        assert_eq!(
+            access_plan,
+            ParquetAccessPlan::new(vec![
+                RowGroupAccess::Scan,
+                RowGroupAccess::Skip,
+                RowGroupAccess::Selection(
+                    vec![
+                        RowSelector::skip(5),
+                        RowSelector::select(10),
+                        RowSelector::skip(15),
+                    ]
+                    .into()
+                ),
+                RowGroupAccess::Scan,
+            ])
+        );
+    }
+
+    #[test]
+    fn test_new_from_overall_row_selection_invalid_row_count() {
+        let row_selection = RowSelection::from(vec![RowSelector::select(99)]);
+
+        let err = ParquetAccessPlan::try_new_from_overall_row_selection(
+            row_selection,
+            &ROW_GROUP_METADATA,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_contains!(
+            err,
+            "Invalid Parquet RowSelection. File has 100 rows, but selection specifies 99 rows"
+        );
+    }
+
+    #[test]
+    fn test_new_from_overall_row_selection_boundary_splits() {
+        let row_selection = RowSelection::from(vec![
+            RowSelector::skip(5),
+            RowSelector::select(10),
+            RowSelector::skip(20),
+            RowSelector::select(25),
+            RowSelector::skip(40),
+        ]);
+
+        let access_plan = ParquetAccessPlan::try_new_from_overall_row_selection(
+            row_selection,
+            &ROW_GROUP_METADATA,
+        )
+        .unwrap();
+
+        assert_eq!(
+            access_plan,
+            ParquetAccessPlan::new(vec![
+                RowGroupAccess::Selection(
+                    vec![RowSelector::skip(5), RowSelector::select(5)].into()
+                ),
+                RowGroupAccess::Selection(
+                    vec![RowSelector::select(5), RowSelector::skip(15)].into()
+                ),
+                RowGroupAccess::Selection(
+                    vec![RowSelector::skip(5), RowSelector::select(25)].into()
+                ),
+                RowGroupAccess::Skip,
+            ])
         );
     }
 
