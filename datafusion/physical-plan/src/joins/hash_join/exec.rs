@@ -242,8 +242,6 @@ impl JoinLeftData {
     /// Under [`NullEquality::NullEqualsNothing`] build rows whose join key is
     /// NULL are omitted from the map, so this can be `false` even when
     /// [`Self::has_build_rows`] is `true`.
-    ///
-    /// [`NullEquality::NullEqualsNothing`]: datafusion_common::NullEquality::NullEqualsNothing
     pub(super) fn has_matchable_build_rows(&self) -> bool {
         !self.map().is_empty()
     }

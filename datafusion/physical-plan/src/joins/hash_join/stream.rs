@@ -779,7 +779,7 @@ impl HashJoinStream {
             }
         }
 
-        let is_empty = build_side.left_data.map().is_empty();
+        let is_empty = !build_side.left_data.has_matchable_build_rows();
 
         if is_empty {
             let result = build_batch_empty_build_side(
