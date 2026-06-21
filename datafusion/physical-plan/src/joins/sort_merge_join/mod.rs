@@ -24,6 +24,7 @@ mod exec;
 mod filter;
 pub(crate) mod materializing_stream;
 mod metrics;
+mod shared_bounds;
 
 #[cfg(test)]
 mod tests;

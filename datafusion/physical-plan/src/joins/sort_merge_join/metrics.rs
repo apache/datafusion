@@ -35,6 +35,8 @@ pub(super) struct SortMergeJoinMetrics {
     /// Peak memory used for buffered data.
     /// Calculated as sum of peak memory values across partitions
     peak_mem_used: Gauge,
+    /// Number of times the dynamic filter was tightened
+    dynamic_filter_updates: Count,
 }
 
 impl SortMergeJoinMetrics {
@@ -49,6 +51,8 @@ impl SortMergeJoinMetrics {
         let peak_mem_used = MetricBuilder::new(metrics)
             .with_category(MetricCategory::Bytes)
             .gauge("peak_mem_used", partition);
+        let dynamic_filter_updates =
+            MetricBuilder::new(metrics).counter("dynamic_filter_updates", partition);
 
         let baseline_metrics = BaselineMetrics::new(metrics, partition);
 
@@ -58,6 +62,7 @@ impl SortMergeJoinMetrics {
             input_rows,
             baseline_metrics,
             peak_mem_used,
+            dynamic_filter_updates,
         }
     }
 
@@ -79,5 +84,9 @@ impl SortMergeJoinMetrics {
 
     pub fn peak_mem_used(&self) -> Gauge {
         self.peak_mem_used.clone()
+    }
+
+    pub fn dynamic_filter_updates(&self) -> Count {
+        self.dynamic_filter_updates.clone()
     }
 }

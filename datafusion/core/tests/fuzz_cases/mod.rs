@@ -21,6 +21,7 @@ mod distinct_count_string_fuzz;
 #[expect(clippy::needless_pass_by_value)]
 mod join_fuzz;
 mod merge_fuzz;
+mod smj_filter_pushdown;
 #[expect(clippy::needless_pass_by_value)]
 mod sort_fuzz;
 #[expect(clippy::needless_pass_by_value)]

@@ -123,6 +123,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::joins::sort_merge_join::shared_bounds::SharedSortMergeBoundsAccumulator;
 use crate::joins::utils::{JoinFilter, JoinKeyComparator, compare_join_arrays};
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
@@ -294,6 +295,19 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     baseline_metrics: BaselineMetrics,
     peak_mem_used: Gauge,
 
+    // ========================================================================
+    // DYNAMIC FILTER FIELDS:
+    // These fields manage dynamic filter pushdown.
+    // ========================================================================
+    /// Dynamic filter for the streamed side (here, the `outer` stream),
+    /// advanced from the buffered side's head values.
+    streamed_dynamic_filter: Option<Arc<SharedSortMergeBoundsAccumulator>>,
+    /// Dynamic filter for the buffered side (here, the `inner` stream),
+    /// advanced from the streamed side's head values.
+    buffered_dynamic_filter: Option<Arc<SharedSortMergeBoundsAccumulator>>,
+    /// Partition ID of this stream
+    partition: usize,
+
     // Memory / spill — only the inner key buffer is tracked via reservation,
     // matching existing SMJ (which tracks only the buffered side). The outer
     // batch is a single batch at a time and cannot be spilled.
@@ -337,6 +351,8 @@ impl BitwiseSortMergeJoinStream {
         reservation: MemoryReservation,
         spill_manager: SpillManager,
         runtime_env: Arc<datafusion_execution::runtime_env::RuntimeEnv>,
+        streamed_dynamic_filter: Option<Arc<SharedSortMergeBoundsAccumulator>>,
+        buffered_dynamic_filter: Option<Arc<SharedSortMergeBoundsAccumulator>>,
     ) -> Result<Self> {
         debug_assert!(
             matches!(
@@ -394,6 +410,9 @@ impl BitwiseSortMergeJoinStream {
             input_rows,
             baseline_metrics,
             peak_mem_used,
+            streamed_dynamic_filter,
+            buffered_dynamic_filter,
+            partition,
             reservation,
             spill_manager,
             runtime_env,
@@ -484,8 +503,22 @@ impl BitwiseSortMergeJoinStream {
     /// Poll for the next outer batch. Returns true if a batch was loaded.
     fn poll_next_outer_batch(&mut self, cx: &mut Context<'_>) -> Poll<Result<bool>> {
         loop {
+            // The outer side is the streamed side; report its last join key to
+            // the buffered side's dynamic filter before pulling the next batch.
+            if let Some(accumulator) = &self.buffered_dynamic_filter
+                && let Some(batch) = &self.outer_batch
+                && let Some(key) = self.outer_key_arrays.first().and_then(|arr| {
+                    ScalarValue::try_from_array(arr, batch.num_rows() - 1).ok()
+                })
+            {
+                accumulator.report_head(self.partition, key)?;
+            }
+
             match ready!(self.outer.poll_next_unpin(cx)) {
                 None => {
+                    if let Some(accumulator) = &self.buffered_dynamic_filter {
+                        accumulator.mark_exhausted(self.partition)?;
+                    }
                     // Release the outer input pipeline's resources.
                     let outer_schema = self.outer.schema();
                     self.outer = Box::pin(EmptyRecordBatchStream::new(outer_schema));
@@ -500,6 +533,16 @@ impl BitwiseSortMergeJoinStream {
                         continue;
                     }
                     let keys = evaluate_join_keys(&batch, &self.on_outer)?;
+
+                    // Report first join key to the buffered side's dynamic filter.
+                    if let Some(accumulator) = &self.buffered_dynamic_filter
+                        && let Some(key) = keys
+                            .first()
+                            .and_then(|arr| ScalarValue::try_from_array(arr, 0).ok())
+                    {
+                        accumulator.report_head(self.partition, key)?;
+                    }
+
                     self.outer_batch = Some(batch);
                     self.outer_offset = 0;
                     self.outer_key_arrays = keys;
@@ -517,8 +560,22 @@ impl BitwiseSortMergeJoinStream {
     /// Poll for the next inner batch. Returns true if a batch was loaded.
     fn poll_next_inner_batch(&mut self, cx: &mut Context<'_>) -> Poll<Result<bool>> {
         loop {
+            // The inner side is the buffered side; report its last join key to
+            // the streamed side's dynamic filter before pulling the next batch.
+            if let Some(accumulator) = &self.streamed_dynamic_filter
+                && let Some(batch) = &self.inner_batch
+                && let Some(key) = self.inner_key_arrays.first().and_then(|arr| {
+                    ScalarValue::try_from_array(arr, batch.num_rows() - 1).ok()
+                })
+            {
+                accumulator.report_head(self.partition, key)?;
+            }
+
             match ready!(self.inner.poll_next_unpin(cx)) {
                 None => {
+                    if let Some(accumulator) = &self.streamed_dynamic_filter {
+                        accumulator.mark_exhausted(self.partition)?;
+                    }
                     // Release the inner input pipeline's resources.
                     let inner_schema = self.inner.schema();
                     self.inner = Box::pin(EmptyRecordBatchStream::new(inner_schema));
@@ -533,6 +590,16 @@ impl BitwiseSortMergeJoinStream {
                         continue;
                     }
                     let keys = evaluate_join_keys(&batch, &self.on_inner)?;
+
+                    // Report first join key to the streamed side's dynamic filter.
+                    if let Some(accumulator) = &self.streamed_dynamic_filter
+                        && let Some(key) = keys
+                            .first()
+                            .and_then(|arr| ScalarValue::try_from_array(arr, 0).ok())
+                    {
+                        accumulator.report_head(self.partition, key)?;
+                    }
+
                     self.inner_batch = Some(batch);
                     self.inner_offset = 0;
                     self.inner_key_arrays = keys;
