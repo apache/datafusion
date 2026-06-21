@@ -361,8 +361,36 @@ impl CatalogProvider for ForeignCatalogProvider {
 #[cfg(test)]
 mod tests {
     use datafusion::catalog::{MemoryCatalogProvider, MemorySchemaProvider};
+    use datafusion_common::DataFusionError;
 
     use super::*;
+
+    #[derive(Debug)]
+    struct FailingCatalogProvider;
+
+    impl CatalogProvider for FailingCatalogProvider {
+        fn schema_names(&self) -> Result<Vec<String>> {
+            Err(DataFusionError::Internal(
+                "schema_names failure from provider".to_string(),
+            ))
+        }
+
+        fn schema(&self, _name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
+            Err(DataFusionError::Internal(
+                "schema failure from provider".to_string(),
+            ))
+        }
+    }
+
+    fn assert_ffi_error_contains(err: DataFusionError, expected: &str) {
+        let DataFusionError::Ffi(message) = err else {
+            panic!("expected FFI error, got {err:?}");
+        };
+        assert!(
+            message.contains(expected),
+            "expected error message to contain '{expected}', got '{message}'"
+        );
+    }
 
     #[test]
     fn test_round_trip_ffi_catalog_provider() {
@@ -440,6 +468,31 @@ mod tests {
             .schema("second_schema")
             .expect("schema lookup should succeed");
         assert!(returned_schema.is_some());
+    }
+
+    #[test]
+    fn test_ffi_catalog_provider_propagates_failures() {
+        let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+
+        let mut ffi_catalog = FFI_CatalogProvider::new(
+            Arc::new(FailingCatalogProvider),
+            None,
+            task_ctx_provider,
+            None,
+        );
+        ffi_catalog.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_catalog: Arc<dyn CatalogProvider> = (&ffi_catalog).into();
+
+        let schema_names_err = foreign_catalog
+            .schema_names()
+            .expect_err("schema_names failure should cross FFI boundary");
+        assert_ffi_error_contains(schema_names_err, "schema_names failure");
+
+        let schema_err = foreign_catalog
+            .schema("failing_schema")
+            .expect_err("schema failure should cross FFI boundary");
+        assert_ffi_error_contains(schema_err, "schema failure");
     }
 
     #[test]
