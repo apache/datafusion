@@ -687,7 +687,7 @@ where
         .collect::<Result<Vec<_>, Error>>()
 }
 
-pub fn serialize_range_split_point(
+pub(super) fn serialize_range_split_point(
     split_point: &SplitPoint,
 ) -> Result<protobuf::RangeSplitPoint, Error> {
     Ok(protobuf::RangeSplitPoint {

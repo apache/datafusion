@@ -747,11 +747,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                         Partitioning::RoundRobinBatch(*partition_count as usize)
                     }
                     PartitionMethod::Range(protobuf::RangeRepartition {
-                        expr: pb_sort_expr,
-                        split_points,
+                        sort_expr: pb_sort_expr,
+                        split_point,
                     }) => Partitioning::Range(RangePartitioning::try_new(
                         from_proto::parse_sorts(pb_sort_expr, ctx, extension_codec)?,
-                        split_points
+                        split_point
                             .iter()
                             .map(from_proto::parse_protobuf_range_split_point)
                             .collect::<Result<Vec<_>, _>>()?,
@@ -1767,15 +1767,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     }
                     Partitioning::Range(range_partitioning) => {
                         let ordering = range_partitioning.ordering();
-                        let split_points = range_partitioning
+                        let split_point = range_partitioning
                             .split_points()
                             .iter()
                             .map(serialize_range_split_point)
                             .collect::<Result<Vec<_>, _>>()?;
 
                         PartitionMethod::Range(protobuf::RangeRepartition {
-                            expr: serialize_sorts(ordering, extension_codec)?,
-                            split_points,
+                            sort_expr: serialize_sorts(ordering, extension_codec)?,
+                            split_point,
                         })
                     }
                     Partitioning::DistributeBy(_) => {

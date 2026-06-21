@@ -900,7 +900,7 @@ fn proto_error<S: Into<String>>(message: S) -> Error {
     Error::General(message.into())
 }
 
-pub fn parse_protobuf_range_split_point(
+pub(super) fn parse_protobuf_range_split_point(
     split_point: &protobuf::RangeSplitPoint,
 ) -> Result<SplitPoint, Error> {
     let values = split_point
