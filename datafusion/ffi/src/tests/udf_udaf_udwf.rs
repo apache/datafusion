@@ -20,6 +20,7 @@ use std::sync::Arc;
 use arrow_schema::DataType;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::ScalarValue;
+use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
     AggregateUDF, ColumnarValue, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, Volatility, WindowUDF,
@@ -156,6 +157,50 @@ impl ScalarUDFImpl for PlacementUDF {
 
 pub(crate) extern "C" fn create_placement_func() -> FFI_ScalarUDF {
     let udf: Arc<ScalarUDF> = Arc::new(ScalarUDF::from(PlacementUDF {
+        signature: Signature::uniform(1, vec![DataType::Int64], Volatility::Immutable),
+    }));
+
+    udf.into()
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct LexOrderingUDF {
+    signature: Signature,
+}
+
+impl ScalarUDFImpl for LexOrderingUDF {
+    fn name(&self) -> &str {
+        "lex_ordering_udf"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(
+        &self,
+        _arg_types: &[DataType],
+    ) -> datafusion_common::Result<DataType> {
+        Ok(DataType::Int64)
+    }
+
+    fn invoke_with_args(
+        &self,
+        _args: ScalarFunctionArgs,
+    ) -> datafusion_common::Result<ColumnarValue> {
+        datafusion_common::internal_err!("lex_ordering_udf is not meant to be invoked")
+    }
+
+    fn preserves_lex_ordering(
+        &self,
+        inputs: &[ExprProperties],
+    ) -> datafusion_common::Result<bool> {
+        Ok(inputs.iter().all(|input| input.preserves_lex_ordering))
+    }
+}
+
+pub(crate) extern "C" fn create_lex_ordering_func() -> FFI_ScalarUDF {
+    let udf: Arc<ScalarUDF> = Arc::new(ScalarUDF::from(LexOrderingUDF {
         signature: Signature::uniform(1, vec![DataType::Int64], Volatility::Immutable),
     }));
 

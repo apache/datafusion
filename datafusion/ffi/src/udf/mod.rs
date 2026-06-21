@@ -26,6 +26,7 @@ use arrow::ffi::{FFI_ArrowSchema, from_ffi, to_ffi};
 use arrow_schema::FieldRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
     ColumnarValue, ExpressionPlacement, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
@@ -41,6 +42,7 @@ use stabby::vec::Vec as SVec;
 use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
 use crate::config::FFI_ConfigOptions;
 use crate::expr::columnar_value::FFI_ColumnarValue;
+use crate::expr::expr_properties::FFI_ExprProperties;
 use crate::placement::FFI_ExpressionPlacement;
 use crate::util::{
     FFI_Result, rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped,
@@ -99,6 +101,12 @@ pub struct FFI_ScalarUDF {
         udf: &Self,
         args: SVec<FFI_ExpressionPlacement>,
     ) -> FFI_ExpressionPlacement,
+
+    /// FFI equivalent to [`ScalarUDFImpl::preserves_lex_ordering`].
+    pub preserves_lex_ordering: unsafe extern "C" fn(
+        udf: &Self,
+        inputs: SVec<FFI_ExprProperties>,
+    ) -> FFI_Result<bool>,
 
     /// Used to create a clone on the provider of the udf. This should
     /// only need to be called by the receiver of the udf.
@@ -176,6 +184,20 @@ unsafe extern "C" fn placement_fn_wrapper(
         .collect::<Vec<_>>();
 
     udf.inner().placement(&args).into()
+}
+
+unsafe extern "C" fn preserves_lex_ordering_fn_wrapper(
+    udf: &FFI_ScalarUDF,
+    inputs: SVec<FFI_ExprProperties>,
+) -> FFI_Result<bool> {
+    let inputs = sresult_return!(
+        inputs
+            .into_iter()
+            .map(ExprProperties::try_from)
+            .collect::<Result<Vec<_>>>()
+    );
+
+    sresult!(udf.inner().preserves_lex_ordering(&inputs))
 }
 
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
@@ -272,6 +294,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             return_field_from_args: return_field_from_args_fn_wrapper,
             coerce_types: coerce_types_fn_wrapper,
             placement: placement_fn_wrapper,
+            preserves_lex_ordering: preserves_lex_ordering_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -460,6 +483,17 @@ impl ScalarUDFImpl for ForeignScalarUDF {
 
         result.into()
     }
+
+    fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        let inputs = inputs
+            .iter()
+            .map(FFI_ExprProperties::try_from)
+            .collect::<Result<SVec<_>>>()?;
+
+        let result = unsafe { (self.udf.preserves_lex_ordering)(&self.udf, inputs) };
+
+        df_result!(result)
+    }
 }
 
 #[cfg(test)]
@@ -499,6 +533,33 @@ mod tests {
             } else {
                 ExpressionPlacement::KeepInPlace
             }
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct LexOrderingUDF {
+        signature: Signature,
+    }
+
+    impl ScalarUDFImpl for LexOrderingUDF {
+        fn name(&self) -> &str {
+            "lex_ordering_udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            internal_err!("LexOrderingUDF is not meant to be invoked")
+        }
+
+        fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
+            Ok(inputs.iter().all(|input| input.preserves_lex_ordering))
         }
     }
 
@@ -571,6 +632,33 @@ mod tests {
             ExpressionPlacement::KeepInPlace
         );
         assert_eq!(foreign_udf.placement(&[]), ExpressionPlacement::KeepInPlace);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_udf_preserves_lex_ordering_round_trip() -> Result<()> {
+        use datafusion_expr::Volatility;
+
+        let original_udf = Arc::new(ScalarUDF::from(LexOrderingUDF {
+            signature: Signature::uniform(
+                1,
+                vec![DataType::Int64],
+                Volatility::Immutable,
+            ),
+        }));
+
+        let mut ffi_udf = FFI_ScalarUDF::from(original_udf);
+        ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
+        assert!(foreign_udf.is::<ForeignScalarUDF>());
+
+        let preserves = ExprProperties::new_unknown().with_preserves_lex_ordering(true);
+        let does_not_preserve = ExprProperties::new_unknown();
+
+        assert!(foreign_udf.preserves_lex_ordering(std::slice::from_ref(&preserves))?);
+        assert!(!foreign_udf.preserves_lex_ordering(&[preserves, does_not_preserve])?);
 
         Ok(())
     }
