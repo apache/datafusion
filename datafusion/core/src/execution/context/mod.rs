@@ -82,7 +82,7 @@ use datafusion_execution::cache::cache_manager::{
 };
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{
-    DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
+    DEFAULT_MAX_SPILL_MERGE_FAN_IN, DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::HigherOrderUDF;
@@ -1181,6 +1181,19 @@ impl SessionContext {
 
         let mut state = self.state.write();
 
+        if key == "max_spill_merge_fan_in" {
+            let fan_in = value.parse::<usize>().map_err(|e| {
+                DataFusionError::Plan(format!(
+                    "Failed to parse non-negative integer from '{variable}', value '{value}': {e}"
+                ))
+            })?;
+            state
+                .runtime_env()
+                .disk_manager
+                .set_max_spill_merge_fan_in(fan_in);
+            return Ok(());
+        }
+
         let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
         builder = match key {
             "memory_limit" => {
@@ -1223,6 +1236,14 @@ impl SessionContext {
         let key = variable.strip_prefix("datafusion.runtime.").unwrap();
 
         let mut state = self.state.write();
+
+        if key == "max_spill_merge_fan_in" {
+            state
+                .runtime_env()
+                .disk_manager
+                .set_max_spill_merge_fan_in(DEFAULT_MAX_SPILL_MERGE_FAN_IN);
+            return Ok(());
+        }
 
         let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
         match key {

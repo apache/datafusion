@@ -95,15 +95,28 @@ impl Debug for RuntimeEnv {
 /// This helper function defines the structure and metadata for all runtime configuration
 /// entries to avoid duplication between `RuntimeEnv::config_entries()` and
 /// `RuntimeEnvBuilder::entries()`.
-fn create_runtime_config_entries(
+struct RuntimeConfigValues {
     memory_limit: Option<String>,
     max_temp_directory_size: Option<String>,
+    max_spill_merge_fan_in: Option<String>,
     temp_directory: Option<String>,
     metadata_cache_limit: Option<String>,
     list_files_cache_limit: Option<String>,
     list_files_cache_ttl: Option<String>,
     file_statistics_cache_limit: Option<String>,
-) -> Vec<ConfigEntry> {
+}
+
+fn create_runtime_config_entries(values: RuntimeConfigValues) -> Vec<ConfigEntry> {
+    let RuntimeConfigValues {
+        memory_limit,
+        max_temp_directory_size,
+        max_spill_merge_fan_in,
+        temp_directory,
+        metadata_cache_limit,
+        list_files_cache_limit,
+        list_files_cache_ttl,
+        file_statistics_cache_limit,
+    } = values;
     vec![
         ConfigEntry {
             key: "datafusion.runtime.memory_limit".to_string(),
@@ -114,6 +127,11 @@ fn create_runtime_config_entries(
             key: "datafusion.runtime.max_temp_directory_size".to_string(),
             value: max_temp_directory_size,
             description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
+        },
+        ConfigEntry {
+            key: "datafusion.runtime.max_spill_merge_fan_in".to_string(),
+            value: max_spill_merge_fan_in,
+            description: "Maximum number of spill files opened by one external merge pass. Use 0 for unlimited. Values below 2 still use 2 so a merge can make progress.",
         },
         ConfigEntry {
             key: "datafusion.runtime.temp_directory".to_string(),
@@ -268,6 +286,8 @@ impl RuntimeEnv {
 
         let max_temp_dir_size = self.disk_manager.max_temp_directory_size();
         let max_temp_dir_value = format_byte_size(max_temp_dir_size);
+        let max_spill_merge_fan_in =
+            self.disk_manager.max_spill_merge_fan_in().to_string();
 
         let temp_paths = self.disk_manager.temp_dir_paths();
         let temp_dir_value = if temp_paths.is_empty() {
@@ -309,15 +329,16 @@ impl RuntimeEnv {
                 .expect("File statistics cache size conversion failed"),
         );
 
-        create_runtime_config_entries(
-            memory_limit_value,
-            Some(max_temp_dir_value),
-            temp_dir_value,
-            Some(metadata_cache_value),
-            Some(list_files_cache_value),
+        create_runtime_config_entries(RuntimeConfigValues {
+            memory_limit: memory_limit_value,
+            max_temp_directory_size: Some(max_temp_dir_value),
+            max_spill_merge_fan_in: Some(max_spill_merge_fan_in),
+            temp_directory: temp_dir_value,
+            metadata_cache_limit: Some(metadata_cache_value),
+            list_files_cache_limit: Some(list_files_cache_value),
             list_files_cache_ttl,
-            Some(file_statistics_cache_value),
-        )
+            file_statistics_cache_limit: Some(file_statistics_cache_value),
+        })
     }
 }
 
@@ -425,6 +446,14 @@ impl RuntimeEnvBuilder {
         self.with_disk_manager_builder(builder.with_max_temp_directory_size(size))
     }
 
+    /// Limit the number of spill files opened by one external merge pass.
+    ///
+    /// A value of 0 means unlimited.
+    pub fn with_max_spill_merge_fan_in(mut self, fan_in: usize) -> Self {
+        let builder = self.disk_manager_builder.take().unwrap_or_default();
+        self.with_disk_manager_builder(builder.with_max_spill_merge_fan_in(fan_in))
+    }
+
     /// Specify the limit of the file-embedded metadata cache, in bytes.
     pub fn with_metadata_cache_limit(mut self, limit: usize) -> Self {
         self.cache_manager = self.cache_manager.with_metadata_cache_limit(limit);
@@ -516,15 +545,16 @@ impl RuntimeEnvBuilder {
 
     /// Returns a list of all available runtime configurations with their current values and descriptions
     pub fn entries(&self) -> Vec<ConfigEntry> {
-        create_runtime_config_entries(
-            None,
-            Some("100G".to_string()),
-            None,
-            Some("50M".to_owned()),
-            Some("1M".to_owned()),
-            None,
-            Some("20M".to_owned()),
-        )
+        create_runtime_config_entries(RuntimeConfigValues {
+            memory_limit: None,
+            max_temp_directory_size: Some("100G".to_string()),
+            max_spill_merge_fan_in: Some("0".to_string()),
+            temp_directory: None,
+            metadata_cache_limit: Some("50M".to_owned()),
+            list_files_cache_limit: Some("1M".to_owned()),
+            list_files_cache_ttl: None,
+            file_statistics_cache_limit: Some("20M".to_owned()),
+        })
     }
 
     /// Generate documentation that can be included in the user guide

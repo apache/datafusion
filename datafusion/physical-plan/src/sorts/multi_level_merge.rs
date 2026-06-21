@@ -408,6 +408,12 @@ impl MultiLevelMergeBuilder {
     ) -> Result<SpillFilesToMerge> {
         assert_ne!(buffer_len, 0, "Buffer length must be greater than 0");
         let mut number_of_spills_to_read_for_current_phase = 0;
+        let configured_fan_in = self
+            .spill_manager
+            .env()
+            .disk_manager
+            .max_spill_merge_fan_in();
+        let max_spill_files = effective_spill_merge_fan_in(configured_fan_in);
         // Track total memory needed for spill file buffers. When the
         // reservation has pre-reserved bytes (from sort_spill_reservation_bytes),
         // those bytes cover the first N spill files without additional pool
@@ -415,6 +421,10 @@ impl MultiLevelMergeBuilder {
         let mut total_needed: usize = 0;
 
         for spill in &self.sorted_spill_files {
+            if number_of_spills_to_read_for_current_phase >= max_spill_files {
+                break;
+            }
+
             let per_spill = get_reserved_bytes_for_record_batch_size(
                 spill.max_record_batch_memory,
                 // Size will be the same as the sliced size, bc it is a spilled batch.
@@ -601,6 +611,14 @@ fn split_batch_in_half(batch: RecordBatch) -> Vec<RecordBatch> {
     }
     let mid = num_rows / 2;
     vec![batch.slice(0, mid), batch.slice(mid, num_rows - mid)]
+}
+
+fn effective_spill_merge_fan_in(configured_fan_in: usize) -> usize {
+    if configured_fan_in == 0 {
+        usize::MAX
+    } else {
+        configured_fan_in.max(2)
+    }
 }
 
 struct StreamAttachedReservation {
@@ -858,5 +876,17 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn spill_merge_fan_in_is_unlimited_by_default() {
+        assert_eq!(effective_spill_merge_fan_in(0), usize::MAX);
+    }
+
+    #[test]
+    fn spill_merge_fan_in_preserves_merge_progress() {
+        assert_eq!(effective_spill_merge_fan_in(1), 2);
+        assert_eq!(effective_spill_merge_fan_in(2), 2);
+        assert_eq!(effective_spill_merge_fan_in(8), 8);
     }
 }
