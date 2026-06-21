@@ -805,11 +805,11 @@ fn parse_subquery(
         .ok_or_else(|| Error::required("SubqueryNode.subquery"))?;
     let plan = plan_node.try_into_logical_plan(ctx, codec)?;
     let outer_ref_columns = parse_exprs(&proto.outer_ref_columns, ctx, codec)?;
-    Ok(Subquery {
-        subquery: Arc::new(plan),
+    Ok(Subquery::new(
+        Arc::new(plan),
         outer_ref_columns,
-        spans: Default::default(),
-    })
+        Default::default(),
+    ))
 }
 
 /// Parse a vector of `protobuf::LogicalExprNode`s.

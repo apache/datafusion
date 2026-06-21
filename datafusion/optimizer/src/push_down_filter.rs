@@ -388,7 +388,9 @@ fn extract_or_clause(
             }
         }
         _ => {
-            if has_all_column_refs(expr, schema_columns) {
+            if !expr.is_volatile_including_subqueries()
+                && has_all_column_refs(expr, schema_columns)
+            {
                 predicate = Some(expr.clone());
             }
         }
@@ -961,6 +963,18 @@ impl OptimizerRule for PushDownFilter {
                 )))
             }
             LogicalPlan::Union(mut union) => {
+                let (keep_predicates, push_predicates): (Vec<_>, Vec<_>) =
+                    split_conjunction_owned(filter.predicate)
+                        .into_iter()
+                        .partition(|expr| expr.is_volatile_including_subqueries());
+
+                if push_predicates.is_empty() {
+                    return Ok(Transformed::yes(with_filters(
+                        keep_predicates,
+                        LogicalPlan::Union(union),
+                    )));
+                }
+
                 let mut inputs = Vec::with_capacity(union.inputs.len());
                 for input in union.inputs {
                     let mut replace_map = HashMap::new();
@@ -973,16 +987,25 @@ impl OptimizerRule for PushDownFilter {
                         );
                     }
 
-                    let push_predicate =
-                        replace_cols_by_name(filter.predicate.clone(), &replace_map)?;
-                    inputs.push(Arc::new(LogicalPlan::Filter(Filter::new(
-                        push_predicate,
-                        input,
-                    ))))
+                    let push_predicates = push_predicates
+                        .iter()
+                        .cloned()
+                        .map(|predicate| replace_cols_by_name(predicate, &replace_map))
+                        .collect::<Result<Vec<_>>>()?;
+                    let input = if let Some(push_predicate) = conjunction(push_predicates)
+                    {
+                        Arc::new(LogicalPlan::Filter(Filter::new(push_predicate, input)))
+                    } else {
+                        input
+                    };
+                    inputs.push(input);
                 }
 
                 union.inputs = inputs;
-                Ok(Transformed::yes(LogicalPlan::Union(union)))
+                Ok(Transformed::yes(with_filters(
+                    keep_predicates,
+                    LogicalPlan::Union(union),
+                )))
             }
             LogicalPlan::Aggregate(mut agg) => {
                 // We can push down Predicate which in groupby_expr.
@@ -1117,7 +1140,7 @@ impl OptimizerRule for PushDownFilter {
                 let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
                     pushdown_candidates
                         .into_iter()
-                        .partition(|pred| pred.is_volatile());
+                        .partition(|pred| pred.is_volatile_including_subqueries());
 
                 // Check which non-volatile filters are supported by source
                 let supported_filters = scan
@@ -1299,7 +1322,7 @@ fn rewrite_projection(
             (qualified_name(qualifier, field.name()), unalias(expr))
         })
         .partition(|(_, value)| {
-            value.is_volatile()
+            value.is_volatile_including_subqueries()
                 || value.placement() == ExpressionPlacement::MoveTowardsLeafNodes
         });
 

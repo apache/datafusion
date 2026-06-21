@@ -251,11 +251,7 @@ pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
 pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::Exists(Exists {
-        subquery: Subquery {
-            subquery,
-            outer_ref_columns,
-            spans: Spans::new(),
-        },
+        subquery: Subquery::new(subquery, outer_ref_columns, Spans::new()),
         negated: false,
     })
 }
@@ -264,11 +260,7 @@ pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
 pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::Exists(Exists {
-        subquery: Subquery {
-            subquery,
-            outer_ref_columns,
-            spans: Spans::new(),
-        },
+        subquery: Subquery::new(subquery, outer_ref_columns, Spans::new()),
         negated: true,
     })
 }
@@ -278,11 +270,7 @@ pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::InSubquery(InSubquery::new(
         Box::new(expr),
-        Subquery {
-            subquery,
-            outer_ref_columns,
-            spans: Spans::new(),
-        },
+        Subquery::new(subquery, outer_ref_columns, Spans::new()),
         false,
     ))
 }
@@ -292,11 +280,7 @@ pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::InSubquery(InSubquery::new(
         Box::new(expr),
-        Subquery {
-            subquery,
-            outer_ref_columns,
-            spans: Spans::new(),
-        },
+        Subquery::new(subquery, outer_ref_columns, Spans::new()),
         true,
     ))
 }
@@ -304,11 +288,7 @@ pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
 /// Create a scalar subquery expression
 pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
-    Expr::ScalarSubquery(Subquery {
-        subquery,
-        outer_ref_columns,
-        spans: Spans::new(),
-    })
+    Expr::ScalarSubquery(Subquery::new(subquery, outer_ref_columns, Spans::new()))
 }
 
 /// Create a grouping set

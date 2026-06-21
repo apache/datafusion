@@ -2391,11 +2391,7 @@ async fn build_set_comparison_plan(
         .build()?;
     let predicate = Expr::SetComparison(SetComparison::new(
         Box::new(col("data.a")),
-        Subquery {
-            subquery: Arc::new(subquery_plan),
-            outer_ref_columns: vec![],
-            spans: Spans::new(),
-        },
+        Subquery::new(Arc::new(subquery_plan), vec![], Spans::new()),
         op,
         quantifier,
     ));
@@ -2415,11 +2411,11 @@ async fn build_scalar_subquery_projection_plan(
         .limit(0, Some(1))?
         .build()?;
 
-    let scalar_subquery = Expr::ScalarSubquery(Subquery {
-        subquery: Arc::new(subquery_plan),
-        outer_ref_columns: vec![],
-        spans: Spans::new(),
-    });
+    let scalar_subquery = Expr::ScalarSubquery(Subquery::new(
+        Arc::new(subquery_plan),
+        vec![],
+        Spans::new(),
+    ));
 
     let outer_empty_relation = LogicalPlan::EmptyRelation(EmptyRelation {
         produce_one_row: true,
@@ -2442,11 +2438,7 @@ async fn build_exists_filter_plan(
         .build()?;
 
     let predicate = Expr::Exists(Exists::new(
-        Subquery {
-            subquery: Arc::new(subquery_plan),
-            outer_ref_columns: vec![],
-            spans: Spans::new(),
-        },
+        Subquery::new(Arc::new(subquery_plan), vec![], Spans::new()),
         negated,
     ));
 

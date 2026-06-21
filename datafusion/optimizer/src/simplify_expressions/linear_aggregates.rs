@@ -147,7 +147,7 @@ fn candidate_linear_param(params: &AggregateFunctionParams) -> Option<&Expr> {
         return None;
     }
     let arg = args.first()?;
-    if arg.is_volatile() {
+    if arg.is_volatile_including_subqueries() {
         return None;
     };
     Some(arg)

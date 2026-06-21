@@ -2084,6 +2084,112 @@ physical_plan
 05)--AggregateExec: mode=Single, gby=[], aggr=[max(sq_values.v)]
 06)----DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Cross-node non-volatile scalar subqueries are deduplicated.
+query TT
+explain SELECT (SELECT max(v) FROM sq_values) AS r FROM (SELECT 1) t WHERE (SELECT max(v) FROM sq_values) IS NOT NULL;
+----
+logical_plan
+01)Projection: (<subquery>) AS r
+02)--Subquery:
+03)----Aggregate: groupBy=[[]], aggr=[[max(sq_values.v)]]
+04)------TableScan: sq_values projection=[v]
+05)--SubqueryAlias: t
+06)----Filter: (<subquery>) IS NOT NULL
+07)------Subquery:
+08)--------Aggregate: groupBy=[[]], aggr=[[max(sq_values.v)]]
+09)----------TableScan: sq_values projection=[v]
+10)------EmptyRelation: rows=1
+physical_plan
+01)ScalarSubqueryExec: subqueries=1
+02)--ProjectionExec: expr=[scalar_subquery(<pending>) as r]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------FilterExec: scalar_subquery(<pending>) IS NOT NULL
+05)--------PlaceholderRowExec
+06)--AggregateExec: mode=Single, gby=[], aggr=[max(sq_values.v)]
+07)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Volatile scalar subqueries are evaluated per occurrence.
+query TT
+explain SELECT (SELECT random()) - (SELECT random()) AS diff;
+----
+logical_plan
+01)Projection: (<subquery>) - (<subquery>) AS diff
+02)--Subquery:
+03)----Projection: random()
+04)------EmptyRelation: rows=1
+05)--Subquery:
+06)----Projection: random()
+07)------EmptyRelation: rows=1
+08)--EmptyRelation: rows=1
+physical_plan
+01)ScalarSubqueryExec: subqueries=2
+02)--ProjectionExec: expr=[scalar_subquery(<pending>) - scalar_subquery(<pending>) as diff]
+03)----PlaceholderRowExec
+04)--ProjectionExec: expr=[random()]
+05)----PlaceholderRowExec
+06)--ProjectionExec: expr=[random()]
+07)----PlaceholderRowExec
+
+# Cross-node volatile scalar subqueries are not deduplicated.
+query TT
+explain SELECT (SELECT random()) AS r FROM (SELECT 1) t WHERE (SELECT random()) >= 0.0;
+----
+logical_plan
+01)Projection: (<subquery>) AS r
+02)--Subquery:
+03)----Projection: random()
+04)------EmptyRelation: rows=1
+05)--SubqueryAlias: t
+06)----Filter: (<subquery>) >= Float64(0)
+07)------Subquery:
+08)--------Projection: random()
+09)----------EmptyRelation: rows=1
+10)------EmptyRelation: rows=1
+physical_plan
+01)ScalarSubqueryExec: subqueries=2
+02)--ProjectionExec: expr=[scalar_subquery(<pending>) as r]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------FilterExec: scalar_subquery(<pending>) >= 0
+05)--------PlaceholderRowExec
+06)--ProjectionExec: expr=[random()]
+07)----PlaceholderRowExec
+08)--ProjectionExec: expr=[random()]
+09)----PlaceholderRowExec
+
+# Volatility from a nested scalar subquery is still detected.
+query TT
+explain SELECT (SELECT (SELECT random())) - (SELECT (SELECT random())) AS d;
+----
+logical_plan
+01)Projection: (<subquery>) - (<subquery>) AS d
+02)--Subquery:
+03)----Projection: (<subquery>)
+04)------Subquery:
+05)--------Projection: random()
+06)----------EmptyRelation: rows=1
+07)------EmptyRelation: rows=1
+08)--Subquery:
+09)----Projection: (<subquery>)
+10)------Subquery:
+11)--------Projection: random()
+12)----------EmptyRelation: rows=1
+13)------EmptyRelation: rows=1
+14)--EmptyRelation: rows=1
+physical_plan
+01)ScalarSubqueryExec: subqueries=2
+02)--ProjectionExec: expr=[scalar_subquery(<pending>) - scalar_subquery(<pending>) as d]
+03)----PlaceholderRowExec
+04)--ScalarSubqueryExec: subqueries=1
+05)----ProjectionExec: expr=[scalar_subquery(<pending>) as random()]
+06)------PlaceholderRowExec
+07)----ProjectionExec: expr=[random()]
+08)------PlaceholderRowExec
+09)--ScalarSubqueryExec: subqueries=1
+10)----ProjectionExec: expr=[scalar_subquery(<pending>) as random()]
+11)------PlaceholderRowExec
+12)----ProjectionExec: expr=[random()]
+13)------PlaceholderRowExec
+
 statement ok
 RESET datafusion.explain.logical_plan_only;
 

@@ -403,8 +403,14 @@ pub fn create_physical_expr(
             }
         },
         Expr::ScalarSubquery(sq) => {
-            match execution_props.subquery_indexes.get(sq) {
-                Some(&index) => {
+            let index = sq.scalar_subquery_index.or_else(|| {
+                execution_props
+                    .subquery_indexes
+                    .get(&sq.without_scalar_subquery_index())
+                    .copied()
+            });
+            match index {
+                Some(index) => {
                     let schema = sq.subquery.schema();
                     if schema.fields().len() != 1 {
                         return plan_err!(

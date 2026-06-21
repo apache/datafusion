@@ -169,5 +169,7 @@ fn retrieve_emit_kind(rel_common: Option<&RelCommon>) -> EmitKind {
 }
 
 fn contains_volatile_expr(proj: &Projection) -> bool {
-    proj.expr.iter().any(|e| e.is_volatile())
+    proj.expr
+        .iter()
+        .any(|e| e.is_volatile_including_subqueries())
 }

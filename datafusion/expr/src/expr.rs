@@ -2151,6 +2151,24 @@ impl Expr {
             .expect("exists closure is infallible")
     }
 
+    /// Like [`Self::is_volatile`], but also descends into subquery-bearing
+    /// expressions.
+    pub fn is_volatile_including_subqueries(&self) -> bool {
+        self.exists(|expr| {
+            let subquery_is_volatile = match expr {
+                Expr::ScalarSubquery(subquery)
+                | Expr::Exists(Exists { subquery, .. })
+                | Expr::InSubquery(InSubquery { subquery, .. })
+                | Expr::SetComparison(SetComparison { subquery, .. }) => {
+                    subquery.is_volatile()
+                }
+                _ => false,
+            };
+            Ok(expr.is_volatile_node() || subquery_is_volatile)
+        })
+        .expect("exists closure is infallible")
+    }
+
     /// Recursively find all [`Expr::Placeholder`] expressions, and
     /// to infer their [`DataType`] from the context of their use.
     ///
@@ -3855,14 +3873,14 @@ mod test {
             )
             .unwrap(),
         );
-        let subquery = Subquery {
-            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+        let subquery = Subquery::new(
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
                 schema: subquery_schema,
             })),
-            outer_ref_columns: vec![],
-            spans: Spans::new(),
-        };
+            vec![],
+            Spans::new(),
+        );
 
         let in_subquery = Expr::InSubquery(InSubquery {
             expr: Box::new(Expr::Placeholder(Placeholder {
@@ -3903,14 +3921,14 @@ mod test {
             )
             .unwrap(),
         );
-        let subquery = Subquery {
-            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+        let subquery = Subquery::new(
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
                 schema: subquery_schema,
             })),
-            outer_ref_columns: vec![],
-            spans: Spans::new(),
-        };
+            vec![],
+            Spans::new(),
+        );
 
         let not_in_subquery = Expr::InSubquery(InSubquery {
             expr: Box::new(Expr::Placeholder(Placeholder {
@@ -4186,6 +4204,107 @@ mod test {
         assert_eq!(udf.signature().volatility, Volatility::Volatile);
     }
 
+    #[test]
+    fn test_is_volatile_subquery() -> Result<()> {
+        use crate::logical_plan::{LogicalPlanBuilder, Subquery};
+        use datafusion_common::Spans;
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct VolatileUdf {
+            signature: Signature,
+        }
+        impl ScalarUDFImpl for VolatileUdf {
+            fn name(&self) -> &str {
+                "volatile_udf"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Int64)
+            }
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(0))))
+            }
+        }
+
+        let vol_udf = Arc::new(ScalarUDF::from(VolatileUdf {
+            signature: Signature::nullary(Volatility::Volatile),
+        }));
+
+        let volatile_plan = Arc::new(
+            LogicalPlanBuilder::empty(true)
+                .project(vec![vol_udf.call(vec![])])?
+                .build()?,
+        );
+        let stable_plan = Arc::new(
+            LogicalPlanBuilder::empty(true)
+                .project(vec![lit(1i64)])?
+                .build()?,
+        );
+
+        let subquery = |plan: &Arc<LogicalPlan>| {
+            Subquery::new(Arc::clone(plan), vec![], Spans::new())
+        };
+
+        // Every subquery-bearing expression kind must surface the volatility of
+        // its subquery plan.
+        assert!(
+            Expr::ScalarSubquery(subquery(&volatile_plan))
+                .is_volatile_including_subqueries()
+        );
+        assert!(
+            Expr::Exists(Exists::new(subquery(&volatile_plan), false))
+                .is_volatile_including_subqueries()
+        );
+        assert!(
+            Expr::InSubquery(InSubquery::new(
+                Box::new(lit(1i64)),
+                subquery(&volatile_plan),
+                false
+            ))
+            .is_volatile_including_subqueries()
+        );
+        assert!(
+            Expr::SetComparison(SetComparison::new(
+                Box::new(lit(1i64)),
+                subquery(&volatile_plan),
+                Operator::Eq,
+                SetQuantifier::Any
+            ))
+            .is_volatile_including_subqueries()
+        );
+
+        // Non-volatile subqueries are not reported as volatile.
+        assert!(
+            !Expr::ScalarSubquery(subquery(&stable_plan))
+                .is_volatile_including_subqueries()
+        );
+        assert!(
+            !Expr::Exists(Exists::new(subquery(&stable_plan), false))
+                .is_volatile_including_subqueries()
+        );
+
+        // Volatility hidden behind a nested subquery is still detected.
+        let nested_plan = Arc::new(
+            LogicalPlanBuilder::empty(true)
+                .project(vec![Expr::Exists(Exists::new(
+                    subquery(&volatile_plan),
+                    false,
+                ))])?
+                .build()?,
+        );
+        assert!(
+            Expr::ScalarSubquery(subquery(&nested_plan))
+                .is_volatile_including_subqueries()
+        );
+
+        Ok(())
+    }
+
     use super::*;
     use crate::logical_plan::{EmptyRelation, LogicalPlan};
 
@@ -4280,14 +4399,14 @@ mod test {
 
     #[test]
     fn test_display_set_comparison() {
-        let subquery = Subquery {
-            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+        let subquery = Subquery::new(
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
                 schema: Arc::new(DFSchema::empty()),
             })),
-            outer_ref_columns: vec![],
-            spans: Spans::new(),
-        };
+            vec![],
+            Spans::new(),
+        );
 
         let expr = Expr::SetComparison(SetComparison::new(
             Box::new(Expr::Column(Column::from_name("a"))),
