@@ -21,7 +21,7 @@
 
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::ops::{Index, IndexMut};
+use std::ops::{Deref, DerefMut, Index, IndexMut};
 
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::ArrowPrimitiveType;
@@ -56,7 +56,7 @@ impl Default for BooleanBlock {
     }
 }
 
-impl std::ops::Deref for BooleanBlock {
+impl Deref for BooleanBlock {
     type Target = BooleanBufferBuilder;
 
     fn deref(&self) -> &Self::Target {
@@ -64,7 +64,7 @@ impl std::ops::Deref for BooleanBlock {
     }
 }
 
-impl std::ops::DerefMut for BooleanBlock {
+impl DerefMut for BooleanBlock {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
