@@ -382,7 +382,7 @@ statement error DataFusion error: Invalid or Unsupported Configuration: Config v
 RESET datafusion.execution.batches_size
 
 # reset invalid variable - extra suffix on valid field
-statement error DataFusion error: Invalid or Unsupported Configuration: Config field is a scalar ConfigNonZeroUsize and does not have nested field "bar"
+statement error DataFusion error: Invalid or Unsupported Configuration: Config field batch_size is a scalar ConfigNonZeroUsize and does not have nested field "bar"
 RESET datafusion.execution.batch_size.bar
 
 #############################################

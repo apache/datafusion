@@ -21,7 +21,7 @@ use arrow_ipc::CompressionType;
 
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
-use crate::error::_config_err;
+use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::DFParquetWriterVersion;
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
@@ -585,28 +585,27 @@ impl Display for SpillCompression {
 
 /// A `usize` configuration value that rejects zero when set from strings.
 ///
-/// Use this for options where zero is never a meaningful runtime value. The
-/// default should be constructed with [`ConfigNonZeroUsize::new`] so invalid
-/// defaults fail at compile/test time, while user-provided values return a
-/// configuration error through [`ConfigField`].
+/// Use this for options where zero is never a meaningful runtime value.
+/// Invalid values return a configuration error through [`ConfigField`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConfigNonZeroUsize(NonZeroUsize);
 
-impl ConfigNonZeroUsize {
-    /// Creates a [`ConfigNonZeroUsize`], panicking if `value` is zero.
-    pub const fn new(value: usize) -> Self {
-        match NonZeroUsize::new(value) {
-            Some(value) => Self(value),
-            None => panic!("value must be greater than 0"),
-        }
+/// Private helper for hard-coded defaults in `config_namespace!`, which cannot
+/// use `?`. All external construction should use [`ConfigNonZeroUsize::try_new`].
+const fn non_zero_usize_default(value: usize) -> ConfigNonZeroUsize {
+    match NonZeroUsize::new(value) {
+        Some(value) => ConfigNonZeroUsize(value),
+        None => panic!("value must be greater than 0"),
     }
+}
 
+impl ConfigNonZeroUsize {
     /// Creates a [`ConfigNonZeroUsize`], returning a configuration error if
     /// `value` is zero.
     pub fn try_new(value: usize) -> Result<Self> {
-        NonZeroUsize::new(value).map(Self).ok_or_else(|| {
-            DataFusionError::Configuration("value must be greater than 0".to_string())
-        })
+        NonZeroUsize::new(value)
+            .map(Self)
+            .ok_or_else(|| _config_datafusion_err!("value must be greater than 0"))
     }
 
     /// Returns the wrapped `usize`.
@@ -637,7 +636,7 @@ impl ConfigField for ConfigNonZeroUsize {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         if !key.is_empty() {
             return _config_err!(
-                "Config field is a scalar ConfigNonZeroUsize and does not have nested field \"{}\"",
+                "Config field batch_size is a scalar ConfigNonZeroUsize and does not have nested field \"{}\"",
                 key
             );
         }
@@ -651,7 +650,7 @@ impl ConfigField for ConfigNonZeroUsize {
             Ok(())
         } else {
             _config_err!(
-                "Config field is a scalar ConfigNonZeroUsize and does not have nested field \"{}\"",
+                "Config field batch_size is a scalar ConfigNonZeroUsize and does not have nested field \"{}\"",
                 key
             )
         }
@@ -731,7 +730,7 @@ config_namespace! {
         /// Default batch size while creating new batches, it's especially useful for
         /// buffer-in-memory batches since creating tiny batches would result in too much
         /// metadata memory consumption
-        pub batch_size: ConfigNonZeroUsize, default = ConfigNonZeroUsize::new(8192)
+        pub batch_size: ConfigNonZeroUsize, default = non_zero_usize_default(8192)
 
         /// A perfect hash join (see `HashJoinExec` for more details) will be considered
         /// if the range of keys (max - min) on the build side is < this threshold.

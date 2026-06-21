@@ -336,7 +336,7 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
             return config_err!("batch_size must be greater than 0");
         }
         config_options.execution.batch_size =
-            datafusion_common::config::ConfigNonZeroUsize::new(batch_size);
+            datafusion_common::config::ConfigNonZeroUsize::try_new(batch_size)?;
     };
 
     // use easier to understand "tree" mode by default
