@@ -247,7 +247,100 @@ impl ScalarUDFImpl for ConcatFunc {
         args: Vec<Expr>,
         _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        simplify_concat(args)
+        // Skip simplification when binary literals are present, because it
+        // handles only strings
+        for arg in &args {
+            match arg {
+                Expr::Literal(dt, _) if dt.data_type().is_binary() => {
+                    return Ok(ExprSimplifyResult::Original(args));
+                }
+                _ => {}
+            }
+        }
+
+        let mut new_args = Vec::with_capacity(args.len());
+        let mut contiguous_scalar = "".to_string();
+
+        let return_type = {
+            let data_types: Vec<_> = args
+                .iter()
+                .filter_map(|expr| match expr {
+                    Expr::Literal(l, _) => Some(l.data_type()),
+                    _ => None,
+                })
+                .collect();
+            ConcatFunc::new().return_type(&data_types)
+        }?;
+
+        for arg in args.clone() {
+            match arg {
+                Expr::Literal(ScalarValue::Utf8(None), _) => {}
+                Expr::Literal(ScalarValue::LargeUtf8(None), _) => {}
+                Expr::Literal(ScalarValue::Utf8View(None), _) => {}
+
+                // filter out `null` args
+                // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
+                // Concatenate it with the `contiguous_scalar`.
+                Expr::Literal(ScalarValue::Utf8(Some(v)), _) => {
+                    contiguous_scalar += &v;
+                }
+                Expr::Literal(ScalarValue::LargeUtf8(Some(v)), _) => {
+                    contiguous_scalar += &v;
+                }
+                Expr::Literal(ScalarValue::Utf8View(Some(v)), _) => {
+                    contiguous_scalar += &v;
+                }
+
+                Expr::Literal(x, _) => {
+                    return internal_err!(
+                        "The scalar {x} should be casted to string type during the type coercion."
+                    );
+                }
+                // If the arg is not a literal, we should first push the current `contiguous_scalar`
+                // to the `new_args` (if it is not empty) and reset it to empty string.
+                // Then pushing this arg to the `new_args`.
+                arg => {
+                    if !contiguous_scalar.is_empty() {
+                        match return_type {
+                            DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
+                            DataType::LargeUtf8 => new_args.push(lit(
+                                ScalarValue::LargeUtf8(Some(contiguous_scalar)),
+                            )),
+                            DataType::Utf8View => new_args.push(lit(
+                                ScalarValue::Utf8View(Some(contiguous_scalar)),
+                            )),
+                            _ => unreachable!(),
+                        }
+                        contiguous_scalar = "".to_string();
+                    }
+                    new_args.push(arg);
+                }
+            }
+        }
+
+        if !contiguous_scalar.is_empty() {
+            match return_type {
+                DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
+                DataType::LargeUtf8 => {
+                    new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar))))
+                }
+                DataType::Utf8View => {
+                    new_args.push(lit(ScalarValue::Utf8View(Some(contiguous_scalar))))
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        if !args.eq(&new_args) {
+            Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
+                ScalarFunction {
+                    func: concat(),
+                    args: new_args,
+                },
+            )))
+        } else {
+            Ok(ExprSimplifyResult::Original(args))
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -309,101 +402,6 @@ fn build_concat<B: ConcatBuilder>(
 
     let array = builder.finish(None)?;
     Ok(ColumnarValue::Array(array))
-}
-
-pub(crate) fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
-    // Skip simplification when binary literals are present, because it
-    // handles only strings
-    for arg in &args {
-        match arg {
-            Expr::Literal(dt, _) if dt.data_type().is_binary() => {
-                return Ok(ExprSimplifyResult::Original(args));
-            }
-            _ => {}
-        }
-    }
-
-    let mut new_args = Vec::with_capacity(args.len());
-    let mut contiguous_scalar = "".to_string();
-
-    let return_type = {
-        let data_types: Vec<_> = args
-            .iter()
-            .filter_map(|expr| match expr {
-                Expr::Literal(l, _) => Some(l.data_type()),
-                _ => None,
-            })
-            .collect();
-        ConcatFunc::new().return_type(&data_types)
-    }?;
-
-    for arg in args.clone() {
-        match arg {
-            Expr::Literal(ScalarValue::Utf8(None), _) => {}
-            Expr::Literal(ScalarValue::LargeUtf8(None), _) => {}
-            Expr::Literal(ScalarValue::Utf8View(None), _) => {}
-
-            // filter out `null` args
-            // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
-            // Concatenate it with the `contiguous_scalar`.
-            Expr::Literal(ScalarValue::Utf8(Some(v)), _) => {
-                contiguous_scalar += &v;
-            }
-            Expr::Literal(ScalarValue::LargeUtf8(Some(v)), _) => {
-                contiguous_scalar += &v;
-            }
-            Expr::Literal(ScalarValue::Utf8View(Some(v)), _) => {
-                contiguous_scalar += &v;
-            }
-
-            Expr::Literal(x, _) => {
-                return internal_err!(
-                    "The scalar {x} should be casted to string type during the type coercion."
-                );
-            }
-            // If the arg is not a literal, we should first push the current `contiguous_scalar`
-            // to the `new_args` (if it is not empty) and reset it to empty string.
-            // Then pushing this arg to the `new_args`.
-            arg => {
-                if !contiguous_scalar.is_empty() {
-                    match return_type {
-                        DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
-                        DataType::LargeUtf8 => new_args
-                            .push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar)))),
-                        DataType::Utf8View => new_args
-                            .push(lit(ScalarValue::Utf8View(Some(contiguous_scalar)))),
-                        _ => unreachable!(),
-                    }
-                    contiguous_scalar = "".to_string();
-                }
-                new_args.push(arg);
-            }
-        }
-    }
-
-    if !contiguous_scalar.is_empty() {
-        match return_type {
-            DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
-            DataType::LargeUtf8 => {
-                new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar))))
-            }
-            DataType::Utf8View => {
-                new_args.push(lit(ScalarValue::Utf8View(Some(contiguous_scalar))))
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    if !args.eq(&new_args) {
-        Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
-            ScalarFunction {
-                func: concat(),
-                args: new_args,
-            },
-        )))
-    } else {
-        Ok(ExprSimplifyResult::Original(args))
-    }
 }
 
 #[cfg(test)]
