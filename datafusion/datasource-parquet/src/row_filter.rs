@@ -57,13 +57,16 @@
 //! List-aware predicates (for example, `array_has`, `array_has_all`, and
 //! `array_has_any`) can be evaluated directly during Parquet decoding.
 //! Struct field access via `get_field` is also supported when the accessed
-//! leaf is a primitive type. Filters that reference entire struct columns
-//! rather than individual fields cannot be pushed down and are instead
+//! leaf is a primitive type. IS NULL and IS NOT NULL checks on whole struct
+//! columns are also pushed down, reading only a single leaf column to
+//! reconstruct the struct's null bitmap from definition levels. Other filters
+//! that reference entire struct columns cannot be pushed down and are instead
 //! evaluated after the full batches are materialized.
 //!
 //! For example, given a struct column `s {name: Utf8, value: Int32}`:
 //! - `WHERE s['value'] > 5` — pushed down (accesses a primitive leaf)
-//! - `WHERE s IS NOT NULL`  — not pushed down (references the whole struct)
+//! - `WHERE s IS NOT NULL`  — pushed down (reads one leaf for null bitmap)
+//! - `WHERE s = ROW(...)`   — not pushed down (references the whole struct)
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -83,7 +86,7 @@ use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_physical_expr::ScalarFunctionExpr;
-use datafusion_physical_expr::expressions::{Column, Literal};
+use datafusion_physical_expr::expressions::{Column, IsNotNullExpr, IsNullExpr, Literal};
 use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
@@ -269,6 +272,10 @@ struct PushdownChecker<'schema> {
     required_columns: Vec<usize>,
     /// Struct field accesses via `get_field`.
     struct_field_accesses: Vec<StructFieldAccess>,
+    /// Root column indices of struct columns used in IS NULL / IS NOT NULL.
+    /// These need only a single leaf column to evaluate (the struct's null bitmap
+    /// is derived from definition levels of any leaf).
+    struct_null_checks: Vec<usize>,
     /// Whether nested list columns are supported by the predicate semantics.
     allow_list_columns: bool,
     /// The Arrow schema of the parquet file.
@@ -283,6 +290,7 @@ impl<'schema> PushdownChecker<'schema> {
             has_unpushable_udfs: false,
             required_columns: Vec::new(),
             struct_field_accesses: Vec::new(),
+            struct_null_checks: Vec::new(),
             allow_list_columns,
             file_schema,
         }
@@ -375,6 +383,33 @@ impl<'schema> PushdownChecker<'schema> {
         self.allow_list_columns && is_list
     }
 
+    /// If `node` is `IS NULL(Column)` or `IS NOT NULL(Column)` where the column
+    /// is a struct type, record it as a struct null check and return `Jump`.
+    /// Otherwise return `None` so normal traversal continues.
+    fn try_handle_struct_null_check(
+        &mut self,
+        node: &Arc<dyn PhysicalExpr>,
+    ) -> Option<TreeNodeRecursion> {
+        let column = if let Some(expr) = node.downcast_ref::<IsNotNullExpr>() {
+            expr.arg().downcast_ref::<Column>()
+        } else if let Some(expr) = node.downcast_ref::<IsNullExpr>() {
+            expr.arg().downcast_ref::<Column>()
+        } else {
+            None
+        }?;
+
+        // If the column is missing from the file schema, return None and let
+        // normal traversal handle it — check_single_column will set
+        // projected_columns = true, correctly blocking pushdown.
+        let idx = self.file_schema.index_of(column.name()).ok()?;
+        if !matches!(self.file_schema.field(idx).data_type(), DataType::Struct(_)) {
+            return None;
+        }
+
+        self.struct_null_checks.push(idx);
+        Some(TreeNodeRecursion::Jump)
+    }
+
     #[inline]
     fn prevents_pushdown(&self) -> bool {
         self.non_primitive_columns || self.projected_columns || self.has_unpushable_udfs
@@ -389,9 +424,12 @@ impl<'schema> PushdownChecker<'schema> {
     fn into_sorted_columns(mut self) -> PushdownColumns {
         self.required_columns.sort_unstable();
         self.required_columns.dedup();
+        self.struct_null_checks.sort_unstable();
+        self.struct_null_checks.dedup();
         PushdownColumns {
             required_columns: self.required_columns,
             struct_field_accesses: self.struct_field_accesses,
+            struct_null_checks: self.struct_null_checks,
         }
     }
 }
@@ -400,6 +438,16 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
     type Node = Arc<dyn PhysicalExpr>;
 
     fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
+        // Handle IS NULL / IS NOT NULL on struct columns.
+        //
+        // These predicates only need the struct's null bitmap, which arrow-rs
+        // populates from definition levels of any single leaf column. We
+        // intercept here so the visitor never reaches the raw Column node
+        // (which would trigger `check_single_column` and reject the struct).
+        if let Some(recursion) = self.try_handle_struct_null_check(node) {
+            return Ok(recursion);
+        }
+
         // Handle struct field access like `s['foo']['bar'] > 10`.
         //
         // DataFusion represents nested field access as `get_field(Column("s"), "foo")`
@@ -514,6 +562,9 @@ struct PushdownColumns {
     /// Struct field accesses via `get_field`. Each entry records the root struct
     /// column index and the field path being accessed.
     struct_field_accesses: Vec<StructFieldAccess>,
+    /// Root indices of struct columns used only in IS NULL / IS NOT NULL checks.
+    /// Only a single leaf column is needed per struct to reconstruct its null bitmap.
+    struct_null_checks: Vec<usize>,
 }
 
 /// Records a struct field access via `get_field(struct_col, 'field1', 'field2', ...)`.
@@ -581,6 +632,14 @@ pub(crate) fn build_parquet_read_plan(
         schema_descr,
     );
     leaf_indices.extend_from_slice(&struct_leaf_indices);
+
+    // For struct null checks, resolve to only the first leaf of each struct
+    let null_check_leaf_indices = resolve_struct_null_check_leaves(
+        &required_columns.struct_null_checks,
+        schema_descr,
+    );
+    leaf_indices.extend_from_slice(&null_check_leaf_indices);
+
     leaf_indices.sort_unstable();
     leaf_indices.dedup();
 
@@ -593,6 +652,8 @@ pub(crate) fn build_parquet_read_plan(
         file_schema,
         root_indices,
         &required_columns.struct_field_accesses,
+        &required_columns.struct_null_checks,
+        schema_descr,
     );
 
     Ok(Some((
@@ -723,8 +784,13 @@ pub(crate) fn build_projection_read_plan(
     let projection_mask =
         ProjectionMask::leaves(schema_descr, leaf_indices.iter().copied());
 
-    let projected_schema =
-        build_filter_schema(file_schema, &all_root_indices, &all_struct_accesses);
+    let projected_schema = build_filter_schema(
+        file_schema,
+        &all_root_indices,
+        &all_struct_accesses,
+        &[],
+        schema_descr,
+    );
 
     ParquetReadPlan {
         projection_mask,
@@ -795,6 +861,52 @@ fn resolve_struct_field_leaves(
     leaf_indices
 }
 
+/// Resolves struct null-check root indices to a single Parquet leaf each.
+///
+/// For IS NULL / IS NOT NULL on a struct column, we only need one leaf to
+/// reconstruct the struct's null bitmap from definition levels. We pick the
+/// first leaf (in Parquet schema order) whose root is the target struct.
+fn resolve_struct_null_check_leaves(
+    root_indices: &[usize],
+    schema_descr: &SchemaDescriptor,
+) -> Vec<usize> {
+    let root_set: BTreeSet<usize> = root_indices.iter().copied().collect();
+    let mut found: BTreeSet<usize> = BTreeSet::new();
+    let mut result = Vec::new();
+
+    for leaf_idx in 0..schema_descr.num_columns() {
+        let root = schema_descr.get_column_root_idx(leaf_idx);
+        if root_set.contains(&root) && !found.contains(&root) {
+            found.insert(root);
+            result.push(leaf_idx);
+            if found.len() == root_set.len() {
+                break;
+            }
+        }
+    }
+
+    result
+}
+
+/// Returns the field path (relative to the struct root) for the first leaf column
+/// of a struct. Used to build a pruned schema matching the single-leaf projection
+/// mask for struct null checks.
+fn first_leaf_field_path(
+    root_index: usize,
+    schema_descr: &SchemaDescriptor,
+) -> Vec<String> {
+    let first_leaf_idx = (0..schema_descr.num_columns())
+        .find(|&leaf_idx| schema_descr.get_column_root_idx(leaf_idx) == root_index)
+        .expect("struct must have at least one leaf column");
+
+    let leaf_col = schema_descr.column(first_leaf_idx);
+    // parts()[0] is the struct root name, parts()[1..] is the field path
+    leaf_col.path().parts()[1..]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
 /// Builds a filter schema that includes only the fields actually accessed by the
 /// filter expression.
 ///
@@ -806,8 +918,11 @@ fn build_filter_schema(
     file_schema: &Schema,
     regular_indices: &[usize],
     struct_field_accesses: &[StructFieldAccess],
+    struct_null_checks: &[usize],
+    schema_descr: &SchemaDescriptor,
 ) -> SchemaRef {
     let regular_set: BTreeSet<usize> = regular_indices.iter().copied().collect();
+    let null_check_set: BTreeSet<usize> = struct_null_checks.iter().copied().collect();
 
     let all_indices = regular_indices
         .iter()
@@ -817,6 +932,7 @@ fn build_filter_schema(
                 .iter()
                 .map(|&StructFieldAccess { root_index, .. }| root_index),
         )
+        .chain(struct_null_checks.iter().copied())
         .collect::<BTreeSet<_>>();
 
     let fields = all_indices
@@ -828,13 +944,13 @@ fn build_filter_schema(
             // keep the full type
             //
             // Pruning is only valid when the column is accessed exclusively
-            // through struct field accesses
+            // through struct field accesses or null checks
             if regular_set.contains(&idx) {
                 return Arc::new(field.clone());
             }
 
             // collect all field paths that access this root struct column
-            let field_paths = struct_field_accesses
+            let mut field_paths = struct_field_accesses
                 .iter()
                 .filter_map(
                     |&StructFieldAccess {
@@ -845,6 +961,19 @@ fn build_filter_schema(
                     },
                 )
                 .collect::<Vec<_>>();
+
+            // When this struct is used in a null check, include the first
+            // leaf's field path so the pruned schema matches the projection
+            // mask. This handles both the null-check-only case and the
+            // combined case (e.g., `s IS NOT NULL OR s['value'] > 5`).
+            let null_check_path = if null_check_set.contains(&idx) {
+                Some(first_leaf_field_path(idx, schema_descr))
+            } else {
+                None
+            };
+            if let Some(ref path) = null_check_path {
+                field_paths.push(path.as_slice());
+            }
 
             if field_paths.is_empty() {
                 return Arc::new(field.clone());
@@ -1311,7 +1440,7 @@ mod test {
     }
 
     #[test]
-    fn struct_data_structures_prevent_pushdown() {
+    fn struct_is_not_null_allows_pushdown() {
         let table_schema = Arc::new(Schema::new(vec![Field::new(
             "struct_col",
             DataType::Struct(
@@ -1320,17 +1449,56 @@ mod test {
             true,
         )]));
 
+        // IS NOT NULL on a struct column should be pushable — only the struct's
+        // null bitmap is needed, reconstructed from a single leaf's definition levels.
         let expr = col("struct_col").is_not_null();
+        let expr = logical2physical(&expr, &table_schema);
+
+        assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+    }
+
+    #[test]
+    fn struct_is_null_allows_pushdown() {
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "struct_col",
+            DataType::Struct(
+                vec![Arc::new(Field::new("a", DataType::Int32, true))].into(),
+            ),
+            true,
+        )]));
+
+        let expr = col("struct_col").is_null();
+        let expr = logical2physical(&expr, &table_schema);
+
+        assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+    }
+
+    #[test]
+    fn struct_bare_reference_prevents_pushdown() {
+        // A bare struct column reference (not wrapped in IS NULL / IS NOT NULL)
+        // should still block pushdown.
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "struct_col",
+                DataType::Struct(
+                    vec![Arc::new(Field::new("a", DataType::Int32, true))].into(),
+                ),
+                true,
+            ),
+            Field::new("int_col", DataType::Int32, false),
+        ]));
+
+        // Expression: struct_col = int_col — not a null check, should block
+        let expr = col("struct_col").eq(col("int_col"));
         let expr = logical2physical(&expr, &table_schema);
 
         assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
     }
 
     #[test]
-    fn mixed_primitive_and_struct_prevents_pushdown() {
-        // Even when a predicate contains both primitive and unsupported nested columns,
-        // the entire predicate should not be pushed down because the struct column
-        // cannot be evaluated during Parquet decoding.
+    fn mixed_struct_null_check_and_primitive_allows_pushdown() {
+        // When the struct column is used only in IS NOT NULL and the rest is
+        // primitive, the combined expression should be pushable.
         let table_schema = Arc::new(Schema::new(vec![
             Field::new(
                 "struct_col",
@@ -1343,17 +1511,14 @@ mod test {
         ]));
 
         // Expression: (struct_col IS NOT NULL) AND (int_col = 5)
-        // Even though int_col is primitive, the presence of struct_col in the
-        // conjunction should prevent pushdown of the entire expression.
         let expr = col("struct_col")
             .is_not_null()
             .and(col("int_col").eq(Expr::Literal(ScalarValue::Int32(Some(5)), None)));
         let expr = logical2physical(&expr, &table_schema);
 
-        // The entire expression should not be pushed down
-        assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+        assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
 
-        // However, just the int_col predicate alone should be pushable
+        // Just the int_col predicate alone should also be pushable
         let expr_int_only =
             col("int_col").eq(Expr::Literal(ScalarValue::Int32(Some(5)), None));
         let expr_int_only = logical2physical(&expr_int_only, &table_schema);
@@ -1361,6 +1526,147 @@ mod test {
             &expr_int_only,
             &table_schema
         ));
+    }
+
+    #[test]
+    fn not_is_null_struct_allows_pushdown() {
+        // NOT(IS NULL(struct_col)) — the NOT wrapping should not block pushdown.
+        // f_down visits NOT first (no-op), then IsNullExpr which is intercepted.
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "struct_col",
+            DataType::Struct(
+                vec![Arc::new(Field::new("a", DataType::Int32, true))].into(),
+            ),
+            true,
+        )]));
+
+        let expr = Expr::Not(Box::new(col("struct_col").is_null()));
+        let expr = logical2physical(&expr, &table_schema);
+
+        assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+    }
+
+    #[test]
+    fn struct_null_check_combined_with_field_access() {
+        // s IS NOT NULL OR get_field(s, 'value') > 5
+        // Both struct_null_checks and struct_field_accesses populated for same root.
+        // Verify the combined expression is accepted for pushdown and that
+        // the projected schema includes both the null-check's first leaf and
+        // the field-access leaf (no schema/mask mismatch).
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(
+                vec![
+                    Arc::new(Field::new("a", DataType::Int32, true)),
+                    Arc::new(Field::new("value", DataType::Int32, true)),
+                ]
+                .into(),
+            ),
+            true,
+        )]));
+
+        let get_field_expr = get_field().call(vec![
+            col("s"),
+            Expr::Literal(ScalarValue::Utf8(Some("value".to_string())), None),
+        ]);
+        let expr = col("s")
+            .is_not_null()
+            .or(get_field_expr.gt(Expr::Literal(ScalarValue::Int32(Some(5)), None)));
+        let expr = logical2physical(&expr, &table_schema);
+
+        assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+    }
+
+    /// Verify IS NOT NULL pushdown works correctly on a nested struct
+    /// (outer { inner { leaf: Int32 } }).
+    #[test]
+    fn nested_struct_is_not_null_pushdown_correctness() {
+        let inner_fields = Fields::from(vec![Field::new("leaf", DataType::Int32, true)]);
+        let outer_fields = Fields::from(vec![Field::new(
+            "inner",
+            DataType::Struct(inner_fields.clone()),
+            true,
+        )]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "outer",
+            DataType::Struct(outer_fields.clone()),
+            true,
+        )]));
+
+        // Row 0: outer={inner={leaf:1}}  → outer NOT null
+        // Row 1: outer={inner=NULL}      → outer NOT null, inner null
+        // Row 2: outer=NULL              → outer IS null
+        let leaf_values = Arc::new(Int32Array::from(vec![Some(1), None, None]));
+        let inner_array = StructArray::try_new(
+            inner_fields,
+            vec![leaf_values],
+            Some(vec![true, false, false].into()), // inner null bitmap
+        )
+        .unwrap();
+        let outer_array = StructArray::try_new(
+            outer_fields,
+            vec![Arc::new(inner_array)],
+            Some(vec![true, true, false].into()), // outer null bitmap
+        )
+        .unwrap();
+
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(outer_array)])
+                .unwrap();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader_file = file.reopen().expect("reopen file");
+        let builder = ParquetRecordBatchReaderBuilder::try_new(reader_file)
+            .expect("reader builder");
+        let metadata = builder.metadata().clone();
+        let file_schema = builder.schema().clone();
+
+        let expr = col("outer").is_not_null();
+        let expr = logical2physical(&expr, &file_schema);
+
+        let candidate = FilterCandidateBuilder::new(expr, file_schema.clone())
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("nested struct IS NOT NULL should be pushable");
+
+        // Should project only 1 leaf
+        let expected_mask =
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0]);
+        assert_eq!(candidate.read_plan.projection_mask, expected_mask);
+
+        // Evaluate the filter
+        let mut row_filter = DatafusionArrowPredicate::try_new(
+            candidate,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .expect("creating filter predicate");
+
+        let mut parquet_reader =
+            ParquetRecordBatchReaderBuilder::try_new(file.reopen().expect("reopen"))
+                .expect("reader builder")
+                .with_projection(row_filter.projection().clone())
+                .build()
+                .expect("building reader");
+
+        let rb = parquet_reader.next().unwrap().unwrap();
+        let result = row_filter.evaluate(rb).expect("evaluating filter");
+
+        // Row 0: outer non-null → true
+        // Row 1: outer non-null (inner null) → true
+        // Row 2: outer null → false
+        assert_eq!(
+            result,
+            BooleanArray::from(vec![true, true, false]),
+            "outer IS NOT NULL must reflect outer nullability only"
+        );
     }
 
     #[test]
@@ -1729,6 +2035,121 @@ mod test {
         let expr = logical2physical(&expr, &table_schema);
 
         assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+    }
+
+    /// Verifies that `struct_col IS NOT NULL` pushed down as a row filter
+    /// produces correct results when the struct is non-null but its leaf
+    /// fields are null. This is the critical correctness test: the struct's
+    /// null bitmap must come from parquet definition levels, not from any
+    /// leaf's null bitmap.
+    #[test]
+    fn struct_is_not_null_pushdown_correctness() {
+        // Schema: struct_col { a: Int32 nullable, b: Int32 nullable } nullable
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "struct_col",
+            DataType::Struct(fields.clone()),
+            true,
+        )]));
+
+        // Build a struct array with 4 rows:
+        //   Row 0: struct={a:1, b:10}     → struct NOT null, leaves NOT null
+        //   Row 1: struct={a:NULL, b:NULL} → struct NOT null, leaves ARE null
+        //   Row 2: struct=NULL             → struct IS null
+        //   Row 3: struct={a:3, b:NULL}    → struct NOT null, mixed leaves
+        let a_values = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None, // leaf null, struct non-null
+            None, // struct null
+            Some(3),
+        ]));
+        let b_values = Arc::new(Int32Array::from(vec![
+            Some(10),
+            None, // leaf null, struct non-null
+            None, // struct null
+            None, // leaf null, struct non-null
+        ]));
+
+        let struct_array = StructArray::try_new(
+            fields,
+            vec![a_values, b_values],
+            Some(vec![true, true, false, true].into()), // struct null bitmap
+        )
+        .unwrap();
+
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(struct_array)])
+                .unwrap();
+
+        // Write to parquet
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        // Read back and build filter
+        let reader_file = file.reopen().expect("reopen file");
+        let builder = ParquetRecordBatchReaderBuilder::try_new(reader_file)
+            .expect("reader builder");
+        let metadata = builder.metadata().clone();
+        let file_schema = builder.schema().clone();
+
+        // Build filter: struct_col IS NOT NULL
+        let expr = col("struct_col").is_not_null();
+        let expr = logical2physical(&expr, &file_schema);
+
+        let candidate = FilterCandidateBuilder::new(expr, file_schema.clone())
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("struct IS NOT NULL should be pushable");
+
+        // Verify only 1 leaf is projected (not both a and b)
+        let expected_mask = ProjectionMask::leaves(
+            metadata.file_metadata().schema_descr(),
+            [0], // only first leaf
+        );
+        assert_eq!(
+            candidate.read_plan.projection_mask, expected_mask,
+            "should project only the first leaf of the struct"
+        );
+
+        // Now actually evaluate the filter to verify correctness
+        let mut row_filter = DatafusionArrowPredicate::try_new(
+            candidate,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .expect("creating filter predicate");
+
+        let mut parquet_reader =
+            ParquetRecordBatchReaderBuilder::try_new(file.reopen().expect("reopen"))
+                .expect("reader builder")
+                .with_projection(row_filter.projection().clone())
+                .build()
+                .expect("building reader");
+
+        let rb = parquet_reader
+            .next()
+            .expect("expected record batch")
+            .expect("expected no error");
+
+        let result = row_filter.evaluate(rb).expect("evaluating filter");
+
+        // Row 0: struct non-null → true
+        // Row 1: struct non-null (leaves null) → true  ← critical case
+        // Row 2: struct null → false
+        // Row 3: struct non-null → true
+        assert_eq!(
+            result,
+            BooleanArray::from(vec![true, true, false, true]),
+            "struct IS NOT NULL must reflect struct nullability, not leaf nullability"
+        );
     }
 
     /// get_field returning a list inside a struct should allow pushdown when

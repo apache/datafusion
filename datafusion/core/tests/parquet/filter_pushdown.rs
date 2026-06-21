@@ -26,6 +26,8 @@
 //! select * from data limit 10;
 //! ```
 
+use std::sync::Arc;
+
 use arrow::compute::concat_batches;
 use arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::collect;
@@ -615,6 +617,91 @@ fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
             "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
         ),
     }
+}
+
+/// Verifies that `struct_col IS NOT NULL` is pushed into the parquet scan
+/// and produces correct results, including when the struct is non-null
+/// but all leaf fields are null.
+#[tokio::test]
+async fn struct_is_not_null_pushdown() {
+    use arrow::array::{Int32Array, StructArray};
+    use arrow::datatypes::{DataType, Field, Fields, Schema};
+
+    let fields = Fields::from(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+        Field::new("c", DataType::Int32, true),
+    ]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("s", DataType::Struct(fields.clone()), true),
+    ]));
+
+    //   Row 0: s={a:1, b:10, c:100}       → struct NOT null, leaves NOT null
+    //   Row 1: s={a:NULL, b:NULL, c:NULL}  → struct NOT null, ALL leaves null
+    //   Row 2: s=NULL                      → struct IS null
+    //   Row 3: s={a:3, b:NULL, c:300}      → struct NOT null, mixed leaves
+    let ids = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+    let a = Arc::new(Int32Array::from(vec![Some(1), None, None, Some(3)]));
+    let b = Arc::new(Int32Array::from(vec![Some(10), None, None, None]));
+    let c = Arc::new(Int32Array::from(vec![Some(100), None, None, Some(300)]));
+    let struct_array = StructArray::try_new(
+        fields,
+        vec![a, b, c],
+        Some(vec![true, true, false, true].into()),
+    )
+    .unwrap();
+    let batch =
+        RecordBatch::try_new(schema.clone(), vec![ids, Arc::new(struct_array)]).unwrap();
+
+    let tempdir = TempDir::new().unwrap();
+    let props = WriterProperties::builder().build();
+    let test_file = TestParquetFile::try_new(
+        tempdir.path().join("struct.parquet"),
+        props,
+        vec![batch],
+    )
+    .unwrap();
+
+    let scan_options = ParquetScanOptions {
+        pushdown_filters: true,
+        enable_page_index: false,
+        reorder_filters: false,
+    };
+    let ctx = SessionContext::new_with_config(scan_options.config());
+    let filter = col("s").is_not_null();
+    let exec = test_file.create_scan(&ctx, Some(filter)).await.unwrap();
+    let result = collect(exec.clone(), ctx.task_ctx()).await.unwrap();
+
+    // Verify correct rows: 1, 2, 4 (row 2 has non-null struct with null leaves)
+    let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total_rows, 3,
+        "Expected 3 rows (struct non-null), got {total_rows}"
+    );
+
+    let batch = concat_batches(&test_file.schema(), &result).unwrap();
+    let id_col = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
+    let ids: Vec<i32> = (0..id_col.len()).map(|i| id_col.value(i)).collect();
+    assert_eq!(
+        ids,
+        vec![1, 2, 4],
+        "Row 2 (null-leaves, non-null struct) must be included"
+    );
+
+    // Verify pushdown metrics: filter was evaluated at the row level
+    let metrics = TestParquetFile::parquet_metrics(&exec).expect("found metrics");
+    let pushdown_rows_pruned = get_value(&metrics, "pushdown_rows_pruned");
+    let pushdown_rows_matched = get_value(&metrics, "pushdown_rows_matched");
+    assert_eq!(
+        pushdown_rows_matched, 3,
+        "Expected 3 rows matched by pushdown"
+    );
+    assert_eq!(pushdown_rows_pruned, 1, "Expected 1 row pruned by pushdown");
 }
 
 #[tokio::test]
