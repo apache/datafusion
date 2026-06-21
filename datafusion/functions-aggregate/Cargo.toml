@@ -94,3 +94,7 @@ harness = false
 [[bench]]
 name = "percentile_cont"
 harness = false
+
+[[bench]]
+name = "any_value"
+harness = false
