@@ -468,9 +468,10 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use datafusion::execution::cache::default_cache::DefaultCache;
     use datafusion::{
         common::test_util::batches_to_string,
-        execution::cache::{DefaultListFilesCache, cache_manager::CacheManagerConfig},
+        execution::cache::cache_manager::CacheManagerConfig,
         prelude::{ParquetReadOptions, col, lit, split_part},
     };
     use insta::assert_snapshot;
@@ -640,9 +641,9 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 8794                | 2    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8794                | 1    | page_index=false |
         | alltypes_tiny_pages.parquet       | 454233          | 268970              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1331                | 2    | page_index=false |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1331                | 1    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
@@ -671,9 +672,9 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 8794                | 5    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8794                | 4    | page_index=false |
         | alltypes_tiny_pages.parquet       | 454233          | 268970              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1331                | 3    | page_index=false |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1331                | 2    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
@@ -727,7 +728,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_files_cache() -> Result<(), DataFusionError> {
-        let list_files_cache = Arc::new(DefaultListFilesCache::new(
+        let list_files_cache = Arc::new(DefaultCache::new_with_ttl(
             1024,
             Some(Duration::from_secs(1)),
         ));
