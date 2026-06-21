@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
+    plan_err,
 };
 
 use arrow::array::{
