@@ -374,18 +374,6 @@ pub fn parse_physical_expr_with_converter(
     Ok(pexpr)
 }
 
-fn parse_required_physical_expr(
-    expr: Option<&protobuf::PhysicalExprNode>,
-    ctx: &PhysicalPlanDecodeContext<'_>,
-    field: &str,
-    input_schema: &Schema,
-    proto_converter: &dyn PhysicalProtoConverterExtension,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.map(|e| proto_converter.proto_to_physical_expr(e, input_schema, ctx))
-        .transpose()?
-        .ok_or_else(|| internal_datafusion_err!("Missing required field {field:?}"))
-}
-
 pub fn parse_protobuf_hash_partitioning(
     partitioning: Option<&protobuf::PhysicalHashRepartition>,
     ctx: &PhysicalPlanDecodeContext<'_>,
