@@ -16,8 +16,6 @@
 // under the License.
 
 //! Benchmarks for `GroupValues` over multiple `Dictionary<UInt64, Utf8>` columns.
-//! Covers 4 and 8 group-by columns, batch sizes of 8 KiB and 64 KiB rows,
-//! and cardinalities realistic for multi-column GROUP BY workloads (20 / 100 / 500 / 1 000).
 
 use arrow::array::{Array, ArrayRef, DictionaryArray, PrimitiveArray, StringArray};
 use arrow::buffer::{Buffer, NullBuffer};
@@ -36,7 +34,7 @@ use std::sync::Arc;
 
 const SIZES: [usize; 2] = [8 * 1024, 64 * 1024];
 const N_COLS: [usize; 2] = [4, 8];
-const CARDS: [usize; 4] = [20, 100, 500, 1_000];
+const PER_COL_CARDS: [usize; 4] = [3, 4, 5, 6];
 const N_BATCHES: usize = 5;
 const NULL_DENSITY: f32 = 0.15;
 const SEED: u64 = 0xD1C7;
@@ -108,34 +106,26 @@ fn make_dict_col(
         as ArrayRef
 }
 
-/// Each row is assigned a `group_id` (0..`target_distinct`). Column keys are
-/// derived from `group_id` via mixed-radix decomposition (treating `group_id`
-/// as a base-k number and reading off one digit per column), so rows with the
-/// same `group_id` always produce the same tuple. This keeps distinct groups at
-/// exactly `target_distinct` regardless of column count.
+// Correlated columns: all columns are derived from a single group id, as in
+// GROUP BY (country, region) where region is a subdivision of country.
 fn make_batch(
     n_cols: usize,
     size: usize,
-    target_distinct: usize,
+    per_col_card: usize,
     null_density: f32,
     seed: u64,
 ) -> Vec<ArrayRef> {
     let mut rng = StdRng::seed_from_u64(seed);
 
-    // When nulls are present all null rows coalesce into one extra group
-    // (None, None, …), so we generate one fewer non-null group to keep the
-    // total at exactly target_distinct.
-    let n_groups = if null_density > 0.0 {
-        target_distinct.saturating_sub(1).max(1)
-    } else {
-        target_distinct
+    // When nulls are present all-null rows form one extra group; shrink by one to compensate.
+    let n_groups = {
+        let full = per_col_card.pow(n_cols as u32);
+        if null_density > 0.0 {
+            full.saturating_sub(1).max(1)
+        } else {
+            full
+        }
     };
-
-    let mut per_col_card = (n_groups as f64).powf(1.0 / n_cols as f64).ceil() as usize;
-    per_col_card = per_col_card.max(1);
-    while per_col_card.saturating_pow(n_cols as u32) < n_groups {
-        per_col_card += 1;
-    }
 
     let n_extra = size.saturating_sub(n_groups);
     let mut group_ids: Vec<usize> = (0..n_groups.min(size)).collect();
@@ -146,24 +136,22 @@ fn make_batch(
         .map(|col| make_dict_col(size, &group_ids, col, per_col_card, null_density, seed))
         .collect();
 
-    // run `BENCH_VALIDATE=1 cargo bench --bench multi_column_dictionary_group_values -- --list`  to validate that the generated batches have the expected number of distinct groups
     if std::env::var("BENCH_VALIDATE").is_ok() {
         let actual = count_distinct_tuples(&cols);
+        let cross_product = per_col_card.pow(n_cols as u32);
         eprintln!(
-            "validate: cols={n_cols} size={size} target={target_distinct} actual={actual}"
+            "validate: cols={n_cols} size={size} per_col_card={per_col_card} cross_product={cross_product} actual={actual}"
         );
     }
 
     cols
 }
 
-/// Each column independently samples from its own `target_distinct` value pool
-/// (like GROUP BY department, name, age), so actual distinct groups grow with
-/// the cross-product of column cardinalities.
+// Independent columns: each column drawn from its own pool, as in GROUP BY (department, status, region).
 fn make_batch_independent(
     n_cols: usize,
     size: usize,
-    target_distinct: usize,
+    per_col_card: usize,
     null_density: f32,
     seed: u64,
 ) -> Vec<ArrayRef> {
@@ -171,32 +159,27 @@ fn make_batch_independent(
         .map(|col| {
             let mut rng = StdRng::seed_from_u64(seed.wrapping_add(col as u64 * 0x9E37));
             let group_ids: Vec<usize> = (0..size)
-                .map(|_| rng.random_range(0..target_distinct))
+                .map(|_| rng.random_range(0..per_col_card))
                 .collect();
-            // col_idx=0, per_col_card=target_distinct → key == group_id directly
-            make_dict_col(size, &group_ids, 0, target_distinct, null_density, seed)
+            make_dict_col(size, &group_ids, 0, per_col_card, null_density, seed)
         })
         .collect();
 
     if std::env::var("BENCH_VALIDATE").is_ok() {
         let actual = count_distinct_tuples(&cols);
+        let cross_product = per_col_card.pow(n_cols as u32);
         eprintln!(
-            "validate_independent: cols={n_cols} size={size} per_col_card={target_distinct} actual={actual}"
+            "validate_independent: cols={n_cols} size={size} per_col_card={per_col_card} cross_product={cross_product} actual={actual}"
         );
     }
 
     cols
 }
 
-fn bench_id(
-    label: &str,
-    n_cols: usize,
-    size: usize,
-    target_distinct: usize,
-) -> BenchmarkId {
+fn bench_id(label: &str, n_cols: usize, size: usize, per_col_card: usize) -> BenchmarkId {
     BenchmarkId::new(
         format!("{label}/cols_{n_cols}"),
-        format!("size_{size}_card_{target_distinct}"),
+        format!("size_{size}_per_col_{per_col_card}"),
     )
 }
 
@@ -207,13 +190,13 @@ fn bench_multi_col_repeated_intern_emit(c: &mut Criterion) {
         let schema = schema_for_cols(n_cols);
 
         for &size in &SIZES {
-            for &target_distinct in &CARDS {
+            for &per_col_card in &PER_COL_CARDS {
                 let batches: Vec<Vec<ArrayRef>> = (0..N_BATCHES)
                     .map(|i| {
                         make_batch(
                             n_cols,
                             size,
-                            target_distinct,
+                            per_col_card,
                             NULL_DENSITY,
                             SEED.wrapping_add(i as u64 * 0x1F3D),
                         )
@@ -223,7 +206,7 @@ fn bench_multi_col_repeated_intern_emit(c: &mut Criterion) {
                 group.throughput(Throughput::Elements((size * N_BATCHES) as u64));
 
                 group.bench_function(
-                    bench_id("repeated", n_cols, size, target_distinct),
+                    bench_id("repeated", n_cols, size, per_col_card),
                     |b| {
                         b.iter_batched_ref(
                             || {
@@ -249,7 +232,7 @@ fn bench_multi_col_repeated_intern_emit(c: &mut Criterion) {
                 );
 
                 group.bench_function(
-                    bench_id("partial_emit", n_cols, size, target_distinct),
+                    bench_id("partial_emit", n_cols, size, per_col_card),
                     |b| {
                         b.iter_batched_ref(
                             || {
@@ -287,21 +270,17 @@ fn bench_multi_col_repeated_intern_emit(c: &mut Criterion) {
 fn bench_multi_col_independent_columns(c: &mut Criterion) {
     let mut group = c.benchmark_group("multi_column_dictionary_independent");
 
-    const INDEPENDENT_SIZE: usize = 8 * 1024;
-    const INDEPENDENT_CARDS: [usize; 3] = [20, 100, 500];
-
     for &n_cols in &N_COLS {
         let schema = schema_for_cols(n_cols);
 
-        for &target_distinct in &INDEPENDENT_CARDS {
-            let size = INDEPENDENT_SIZE;
-            {
+        for &size in &SIZES {
+            for &per_col_card in &PER_COL_CARDS {
                 let batches: Vec<Vec<ArrayRef>> = (0..N_BATCHES)
                     .map(|i| {
                         make_batch_independent(
                             n_cols,
                             size,
-                            target_distinct,
+                            per_col_card,
                             NULL_DENSITY,
                             SEED.wrapping_add(i as u64 * 0x1F3D),
                         )
@@ -311,7 +290,7 @@ fn bench_multi_col_independent_columns(c: &mut Criterion) {
                 group.throughput(Throughput::Elements((size * N_BATCHES) as u64));
 
                 group.bench_function(
-                    bench_id("repeated", n_cols, size, target_distinct),
+                    bench_id("repeated", n_cols, size, per_col_card),
                     |b| {
                         b.iter_batched_ref(
                             || {
@@ -337,7 +316,7 @@ fn bench_multi_col_independent_columns(c: &mut Criterion) {
                 );
 
                 group.bench_function(
-                    bench_id("partial_emit", n_cols, size, target_distinct),
+                    bench_id("partial_emit", n_cols, size, per_col_card),
                     |b| {
                         b.iter_batched_ref(
                             || {
