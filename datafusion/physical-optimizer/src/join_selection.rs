@@ -70,8 +70,13 @@ fn get_stats(
     }
 }
 
-// TODO: We need some performance test for Right Semi/Right Join swap to Left Semi/Left Join in case that the right side is smaller but not much smaller.
-// TODO: In PrestoSQL, the optimizer flips join sides only if one side is much smaller than the other by more than SIZE_DIFFERENCE_THRESHOLD times, by default is 8 times.
+// TODO: Joins that use this symmetric comparison swap their inputs on any size
+// difference, however small. In PrestoSQL, the optimizer flips join sides only
+// when one side is more than SIZE_DIFFERENCE_THRESHOLD times smaller than the
+// other (8 times by default). Semi, anti, and mark hash joins apply such a
+// threshold via `semi_join_swap_bias`; evaluate whether the join types compared
+// here would benefit from one as well, e.g. a Right join swapped to a Left join
+// when the right side is smaller but not much smaller.
 /// Checks whether join inputs should be swapped using available statistics.
 ///
 /// It follows these steps:
@@ -113,6 +118,109 @@ pub(crate) fn should_swap_join_order(
             _ => Ok(false),
         },
     }
+}
+
+/// Decides whether `hash_join` should swap its left and right inputs, subject
+/// to join-type legality, null-aware anti join restrictions, join reordering
+/// settings, and input statistics.
+///
+/// For semi, anti, and mark joins, one input's rows form the output (the
+/// preserved side), while the other input determines which rows should be kept
+/// (the filter side). `RightSemi`, `RightAnti`, and `RightMark` are usually
+/// preferable for these joins: because hash joins build their left input, the
+/// build side then carries no output columns, the preserved side streams
+/// through the right/probe input, and matching rows are emitted incrementally
+/// instead of being buffered until the probe side is exhausted. The optimizer
+/// therefore prefers `RightSemi`, `RightAnti`, or `RightMark` unless statistics
+/// show that the filter side is more than `semi_join_swap_bias` times larger
+/// than the preserved side. If statistics are partial or absent, the ratio is
+/// unknown, so the configured preference is used: `semi_join_swap_bias` values
+/// greater than or equal to 1 use `RightSemi`/`RightAnti`/`RightMark`, while
+/// values below 1 use `LeftSemi`/`LeftAnti`/`LeftMark`.
+fn should_swap_hash_join_inputs(
+    hash_join: &HashJoinExec,
+    config: &ConfigOptions,
+    registry: Option<&StatisticsRegistry>,
+) -> Result<bool> {
+    // Null-aware anti joins have specific side requirements, so never swap them.
+    if !config.optimizer.join_reordering
+        || !hash_join.join_type().supports_swap()
+        || hash_join.null_aware
+    {
+        return Ok(false);
+    }
+
+    // Never move an unbounded input to the build side: the build side must be
+    // fully consumed before probing can begin.
+    if hash_join.right().boundedness().is_unbounded() {
+        return Ok(false);
+    }
+
+    let left = &**hash_join.left();
+    let right = &**hash_join.right();
+
+    // For joins that preserve only one side (semi / anti / mark joins), compare
+    // the filter-to-preserved side ratio, factoring in `semi_join_swap_bias`.
+    let bias = config.optimizer.semi_join_swap_bias;
+    let builds_on_preserved_side = matches!(
+        hash_join.join_type(),
+        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
+    );
+    let builds_on_filter_side = matches!(
+        hash_join.join_type(),
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark
+    );
+    if builds_on_preserved_side || builds_on_filter_side {
+        let (filter, preserved) = if builds_on_preserved_side {
+            (right, left)
+        } else {
+            (left, right)
+        };
+        let should_build_on_filter_side =
+            match size_ratio_exceeds_threshold(filter, preserved, bias, registry)? {
+                Some(filter_side_too_large) => !filter_side_too_large,
+                // If nothing is known about the size ratio, use the configured
+                // bias to pick the join orientation.
+                None => bias >= 1.0,
+            };
+
+        return Ok(should_build_on_filter_side != builds_on_filter_side);
+    }
+
+    // Other hash join types fall back to the generic logic.
+    should_swap_join_order(left, right, config, registry)
+}
+
+/// Returns whether the available statistics show that `lhs / rhs > threshold`,
+/// comparing total byte sizes when both sides report them and falling back to
+/// row counts otherwise. Returns `None` when statistics are missing on either
+/// side, which shows nothing about the size ratio.
+fn size_ratio_exceeds_threshold(
+    lhs: &dyn ExecutionPlan,
+    rhs: &dyn ExecutionPlan,
+    threshold: f64,
+    registry: Option<&StatisticsRegistry>,
+) -> Result<Option<bool>> {
+    let lhs_stats = get_stats(lhs, registry)?;
+    let rhs_stats = get_stats(rhs, registry)?;
+
+    let exceeds = |lhs: &usize, rhs: &usize| (*lhs as f64) > threshold * (*rhs as f64);
+
+    Ok(
+        match (
+            lhs_stats.total_byte_size.get_value(),
+            rhs_stats.total_byte_size.get_value(),
+        ) {
+            (Some(lhs), Some(rhs)) => Some(exceeds(lhs, rhs)),
+            _ => match (
+                lhs_stats.num_rows.get_value(),
+                rhs_stats.num_rows.get_value(),
+            ) {
+                (Some(lhs), Some(rhs)) => Some(exceeds(lhs, rhs)),
+                _ => None,
+            },
+        },
+    )
 }
 
 fn supports_collect_by_thresholds(
@@ -197,6 +305,7 @@ impl PhysicalOptimizerRule for JoinSelection {
 /// - `config.optimizer.hash_join_single_partition_threshold`: byte threshold for `CollectLeft`
 /// - `config.optimizer.hash_join_single_partition_threshold_rows`: row threshold for `CollectLeft`
 /// - `config.optimizer.join_reordering`: allows or forbids input swapping
+/// - `config.optimizer.semi_join_swap_bias`: Right*/Left* preference for semi/anti/mark joins
 pub(crate) fn try_collect_left(
     hash_join: &HashJoinExec,
     ignore_threshold: bool,
@@ -224,11 +333,7 @@ pub(crate) fn try_collect_left(
 
     match (left_can_collect, right_can_collect) {
         (true, true) => {
-            // Don't swap null-aware anti joins as they have specific side requirements
-            if hash_join.join_type().supports_swap()
-                && !hash_join.null_aware
-                && should_swap_join_order(&**left, &**right, config, registry)?
-            {
+            if should_swap_hash_join_inputs(hash_join, config, registry)? {
                 Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
             } else {
                 Ok(Some(Arc::new(
@@ -268,18 +373,13 @@ pub(crate) fn try_collect_left(
 ///
 /// Used configurations inside arg `config`
 /// - `config.optimizer.join_reordering`: allows or forbids statistics-driven join swapping
+/// - `config.optimizer.semi_join_swap_bias`: Right*/Left* preference for semi/anti/mark joins
 pub(crate) fn partitioned_hash_join(
     hash_join: &HashJoinExec,
     config: &ConfigOptions,
     registry: Option<&StatisticsRegistry>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let left = hash_join.left();
-    let right = hash_join.right();
-    // Don't swap null-aware anti joins as they have specific side requirements
-    if hash_join.join_type().supports_swap()
-        && !hash_join.null_aware
-        && should_swap_join_order(&**left, &**right, config, registry)?
-    {
+    if should_swap_hash_join_inputs(hash_join, config, registry)? {
         hash_join.swap_inputs(PartitionMode::Partitioned)
     } else {
         // Null-aware anti joins must use CollectLeft mode because they track probe-side state
@@ -309,6 +409,7 @@ pub(crate) fn partitioned_hash_join(
 /// - `config.optimizer.hash_join_single_partition_threshold`: byte threshold for `CollectLeft`
 /// - `config.optimizer.hash_join_single_partition_threshold_rows`: row threshold for `CollectLeft`
 /// - `config.optimizer.join_reordering`: allows or forbids input swapping
+/// - `config.optimizer.semi_join_swap_bias`: Right*/Left* preference for semi/anti/mark joins
 fn statistical_join_selection_subrule(
     plan: Arc<dyn ExecutionPlan>,
     config: &ConfigOptions,
@@ -328,13 +429,7 @@ fn statistical_join_selection_subrule(
                 )?
             }
             PartitionMode::Partitioned => {
-                let left = hash_join.left();
-                let right = hash_join.right();
-                // Don't swap null-aware anti joins as they have specific side requirements
-                if hash_join.join_type().supports_swap()
-                    && !hash_join.null_aware
-                    && should_swap_join_order(&**left, &**right, config, registry)?
-                {
+                if should_swap_hash_join_inputs(hash_join, config, registry)? {
                     hash_join
                         .swap_inputs(PartitionMode::Partitioned)
                         .map(Some)?

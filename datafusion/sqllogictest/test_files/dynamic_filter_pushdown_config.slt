@@ -286,9 +286,12 @@ physical_plan
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet
 03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
 
-# LEFT SEMI JOIN (physical LeftSemi): reverse table roles so optimizer keeps LeftSemi
-# (right_parquet has 3 rows < left_parquet has 5 rows, so no swap occurs).
+# LEFT SEMI JOIN (physical LeftSemi): set the bias to 1 so the larger filter
+# side (left_parquet with 5 rows) causes the optimizer to choose LeftSemi.
 # Physical LeftSemi generates a self-generated dynamic filter on the probe side.
+statement ok
+set datafusion.optimizer.semi_join_swap_bias = 1;
+
 query TT
 EXPLAIN SELECT r.*
 FROM right_parquet r
@@ -315,6 +318,9 @@ WHERE r.id IN (SELECT l.id FROM left_parquet l);
 1 right1
 3 right3
 5 right5
+
+statement ok
+reset datafusion.optimizer.semi_join_swap_bias;
 
 # LEFT SEMI JOIN with ORDER BY: the join preserves probe-side ordering, so the
 # sort is pushed below the join. The join-generated dynamic filter should then
@@ -385,8 +391,12 @@ physical_plan
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
 03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ]
 
-# LEFT MARK JOIN: the OR prevents decorrelation to LeftSemi, so the optimizer
-# uses LeftMark. Self-generated dynamic filter pushes to the probe side.
+# LEFT MARK JOIN: the OR prevents decorrelation to LeftSemi. Set the bias to 1
+# so the larger filter side (left_parquet with 5 rows) causes the optimizer to
+# choose LeftMark. Self-generated dynamic filter pushes to the probe side.
+statement ok
+set datafusion.optimizer.semi_join_swap_bias = 1;
+
 query TT
 EXPLAIN SELECT r.id, r.info
 FROM right_parquet r
@@ -419,6 +429,9 @@ WHERE EXISTS (SELECT 1 FROM left_parquet l WHERE r.id = l.id)
 1 right1
 3 right3
 5 right5
+
+statement ok
+reset datafusion.optimizer.semi_join_swap_bias;
 
 # Test 2c: Parent dynamic filter (from TopK) pushed through semi/anti joins
 # Sort on the join key (id) so the TopK dynamic filter pushes to BOTH sides.
