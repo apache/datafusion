@@ -22358,18 +22358,18 @@ impl serde::Serialize for RangeRepartition {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if !self.expr.is_empty() {
+        if !self.sort_expr.is_empty() {
             len += 1;
         }
-        if !self.split_points.is_empty() {
+        if !self.split_point.is_empty() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.RangeRepartition", len)?;
-        if !self.expr.is_empty() {
-            struct_ser.serialize_field("expr", &self.expr)?;
+        if !self.sort_expr.is_empty() {
+            struct_ser.serialize_field("sortExpr", &self.sort_expr)?;
         }
-        if !self.split_points.is_empty() {
-            struct_ser.serialize_field("splitPoints", &self.split_points)?;
+        if !self.split_point.is_empty() {
+            struct_ser.serialize_field("splitPoint", &self.split_point)?;
         }
         struct_ser.end()
     }
@@ -22381,15 +22381,16 @@ impl<'de> serde::Deserialize<'de> for RangeRepartition {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "expr",
-            "split_points",
-            "splitPoints",
+            "sort_expr",
+            "sortExpr",
+            "split_point",
+            "splitPoint",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            Expr,
-            SplitPoints,
+            SortExpr,
+            SplitPoint,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22411,8 +22412,8 @@ impl<'de> serde::Deserialize<'de> for RangeRepartition {
                         E: serde::de::Error,
                     {
                         match value {
-                            "expr" => Ok(GeneratedField::Expr),
-                            "splitPoints" | "split_points" => Ok(GeneratedField::SplitPoints),
+                            "sortExpr" | "sort_expr" => Ok(GeneratedField::SortExpr),
+                            "splitPoint" | "split_point" => Ok(GeneratedField::SplitPoint),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22432,27 +22433,27 @@ impl<'de> serde::Deserialize<'de> for RangeRepartition {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut expr__ = None;
-                let mut split_points__ = None;
+                let mut sort_expr__ = None;
+                let mut split_point__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::Expr => {
-                            if expr__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("expr"));
+                        GeneratedField::SortExpr => {
+                            if sort_expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sortExpr"));
                             }
-                            expr__ = Some(map_.next_value()?);
+                            sort_expr__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::SplitPoints => {
-                            if split_points__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("splitPoints"));
+                        GeneratedField::SplitPoint => {
+                            if split_point__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("splitPoint"));
                             }
-                            split_points__ = Some(map_.next_value()?);
+                            split_point__ = Some(map_.next_value()?);
                         }
                     }
                 }
                 Ok(RangeRepartition {
-                    expr: expr__.unwrap_or_default(),
-                    split_points: split_points__.unwrap_or_default(),
+                    sort_expr: sort_expr__.unwrap_or_default(),
+                    split_point: split_point__.unwrap_or_default(),
                 })
             }
         }

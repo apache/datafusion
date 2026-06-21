@@ -233,9 +233,9 @@ pub struct RangeSplitPoint {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RangeRepartition {
     #[prost(message, repeated, tag = "1")]
-    pub expr: ::prost::alloc::vec::Vec<SortExprNode>,
+    pub sort_expr: ::prost::alloc::vec::Vec<SortExprNode>,
     #[prost(message, repeated, tag = "2")]
-    pub split_points: ::prost::alloc::vec::Vec<RangeSplitPoint>,
+    pub split_point: ::prost::alloc::vec::Vec<RangeSplitPoint>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HashRepartition {

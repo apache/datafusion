@@ -157,8 +157,8 @@ message RangeSplitPoint {
 }
 
 message RangeRepartition {
-  repeated SortExprNode expr = 1;
-  repeated RangeSplitPoint split_points = 2;
+  repeated SortExprNode sort_expr = 1;
+  repeated RangeSplitPoint split_point = 2;
 }
 
 message HashRepartition {
