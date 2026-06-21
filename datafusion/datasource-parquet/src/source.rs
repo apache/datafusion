@@ -217,6 +217,12 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 /// used to implement external indexes on top of parquet files and select only
 /// portions of the files.
 ///
+/// If the external index naturally produces a file-level
+/// [`RowSelection`](parquet::arrow::arrow_reader::RowSelection), wrap it in
+/// [`ParquetRowSelection`](crate::ParquetRowSelection) and provide it as an
+/// extension. DataFusion will use the parquet metadata to split the selection
+/// into row-group-level access.
+///
 /// The `DataSourceExec` will try and reduce any provided `ParquetAccessPlan`
 /// further based on the contents of `ParquetMetadata` and other settings.
 ///

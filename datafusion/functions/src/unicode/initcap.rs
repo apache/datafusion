@@ -166,12 +166,12 @@ fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if let Some(ref n) = nulls {
         for i in 0..len {
             if n.is_null(i) {
-                builder.append_placeholder();
+                builder.try_append_placeholder()?;
             } else {
                 // SAFETY: not null per check above.
                 let s = unsafe { string_array.value_unchecked(i) };
                 initcap_string(s, &mut container);
-                builder.append_value(&container);
+                builder.try_append_value(&container)?;
             }
         }
     } else {
@@ -179,7 +179,7 @@ fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             // SAFETY: no null buffer means every index is valid.
             let s = unsafe { string_array.value_unchecked(i) };
             initcap_string(s, &mut container);
-            builder.append_value(&container);
+            builder.try_append_value(&container)?;
         }
     }
 

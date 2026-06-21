@@ -33,7 +33,7 @@ use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::utils::{
-    OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap,
+    OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap, matchable_join_keys,
 };
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
@@ -48,6 +48,7 @@ use crate::{
 };
 
 use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
@@ -156,6 +157,10 @@ pub(super) struct ProcessProbeBatchState {
     batch: RecordBatch,
     /// Probe-side on expressions values
     values: Vec<ArrayRef>,
+    /// Combined validity of the probe-side key columns, set when NULL keys
+    /// exist and cannot match (`NullEquality::NullEqualsNothing`); NULL rows
+    /// are skipped during JoinHashMap lookups
+    valid_keys: Option<NullBuffer>,
     /// Starting offset for JoinHashMap lookups
     offset: MapOffset,
     /// Max joined probe-side index from current batch
@@ -394,6 +399,7 @@ pub(super) fn lookup_join_hashmap(
     probe_side_values: &[ArrayRef],
     null_equality: NullEquality,
     hashes_buffer: &[u64],
+    valid_keys: Option<&NullBuffer>,
     limit: usize,
     offset: MapOffset,
     probe_indices_buffer: &mut Vec<u32>,
@@ -401,6 +407,7 @@ pub(super) fn lookup_join_hashmap(
 ) -> Result<(UInt64Array, UInt32Array, Option<MapOffset>)> {
     let next_offset = build_hashmap.get_matched_indices_with_limit_offset(
         hashes_buffer,
+        valid_keys,
         limit,
         offset,
         probe_indices_buffer,
@@ -516,8 +523,15 @@ impl HashJoinStream {
         join_type: JoinType,
         left_data: &JoinLeftData,
     ) -> HashJoinStreamState {
-        if left_data.map().is_empty()
-            && join_type.empty_build_side_produces_empty_result()
+        let build_empty = left_data.batch().num_rows() == 0;
+        // The map can be empty even when the build side has rows: under
+        // `NullEqualsNothing`, build rows with a NULL join key are omitted. For
+        // join types whose every output row requires a build match, that still
+        // guarantees an empty result, so we can skip scanning the probe side.
+        let map_empty = left_data.map().is_empty();
+
+        if (build_empty && join_type.empty_build_side_produces_empty_result())
+            || (map_empty && join_type.empty_map_produces_empty_result())
         {
             HashJoinStreamState::Completed
         } else {
@@ -679,7 +693,9 @@ impl HashJoinStream {
                 // Precalculate hash values for fetched batch
                 let keys_values = evaluate_expressions_to_arrays(&self.on_right, &batch)?;
 
-                if let Map::HashMap(_) = self.build_side.try_as_ready()?.left_data.map() {
+                let valid_keys = if let Map::HashMap(_) =
+                    self.build_side.try_as_ready()?.left_data.map()
+                {
                     self.hashes_buffer.clear();
                     self.hashes_buffer.resize(batch.num_rows(), 0);
                     create_hashes(
@@ -687,7 +703,10 @@ impl HashJoinStream {
                         &self.random_state,
                         &mut self.hashes_buffer,
                     )?;
-                }
+                    matchable_join_keys(&keys_values, self.null_equality)
+                } else {
+                    None
+                };
 
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
@@ -696,6 +715,7 @@ impl HashJoinStream {
                     HashJoinStreamState::ProcessProbeBatch(ProcessProbeBatchState {
                         batch,
                         values: keys_values,
+                        valid_keys,
                         offset: (0, None),
                         joined_probe_idx: None,
                     });
@@ -759,14 +779,9 @@ impl HashJoinStream {
             }
         }
 
-        // If the build side is empty, this stream only reaches ProcessProbeBatch for
-        // join types whose output still depends on probe rows.
         let is_empty = build_side.left_data.map().is_empty();
 
         if is_empty {
-            // Invariant: state_after_build_ready should have already completed
-            // join types whose result is fixed to empty when the build side is empty.
-            debug_assert!(!self.join_type.empty_build_side_produces_empty_result());
             let result = build_batch_empty_build_side(
                 &self.schema,
                 build_side.left_data.batch(),
@@ -790,6 +805,7 @@ impl HashJoinStream {
                 &state.values,
                 self.null_equality,
                 &self.hashes_buffer,
+                state.valid_keys.as_ref(),
                 self.batch_size,
                 state.offset,
                 &mut self.probe_indices_buffer,
