@@ -18,6 +18,7 @@
 //! [`DFParquetMetadata`] for fetching Parquet file metadata, statistics
 //! and schema information.
 
+use crate::file_format::ObjectStoreFetch;
 use crate::{Int96Coercer, apply_file_schema_type_coercions};
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::cmp::eq;
@@ -42,8 +43,8 @@ use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
 use parquet::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, RowGroupMetaData,
-    SortingColumn,
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
+    RowGroupMetaData, SortingColumn,
 };
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
@@ -69,6 +70,7 @@ pub struct DFParquetMetadata<'a> {
     metadata_size_hint: Option<usize>,
     decryption_properties: Option<Arc<FileDecryptionProperties>>,
     file_metadata_cache: Option<Arc<FileMetadataCache>>,
+    page_index_policy: Option<PageIndexPolicy>,
     /// timeunit to coerce INT96 timestamps to
     pub coerce_int96: Option<TimeUnit>,
     /// Optional timezone applied to INT96-coerced timestamps.
@@ -83,6 +85,7 @@ impl<'a> DFParquetMetadata<'a> {
             metadata_size_hint: None,
             decryption_properties: None,
             file_metadata_cache: None,
+            page_index_policy: None,
             coerce_int96: None,
             coerce_int96_tz: None,
         }
@@ -112,6 +115,15 @@ impl<'a> DFParquetMetadata<'a> {
         self
     }
 
+    /// Sets the policy for loading parquet page index structures (column and offset indexes).
+    pub fn with_page_index_policy(
+        mut self,
+        page_index_policy: Option<PageIndexPolicy>,
+    ) -> Self {
+        self.page_index_policy = page_index_policy;
+        self
+    }
+
     /// Set timeunit to coerce INT96 timestamps to
     pub fn with_coerce_int96(mut self, time_unit: Option<TimeUnit>) -> Self {
         self.coerce_int96 = time_unit;
@@ -126,9 +138,27 @@ impl<'a> DFParquetMetadata<'a> {
 
     /// Fetch parquet metadata from the remote object store
     pub async fn fetch_metadata(&self) -> Result<Arc<ParquetMetaData>> {
-        // implementation to fetch parquet metadata
+        // fetch_metadata
+        // │
+        // ├─ cache_metadata = encryption check
+        // ├─ page_index_policy = caller override OR default
+        // │
+        // ├─ CACHE HIT?
+        // │   │
+        // │   ├─ has index OR policy=Skip?  → return cache
+        // │   │
+        // │   └─ else (footer only, wants index)
+        // │         → load_page_index (index bytes only)
+        // │         → cache_metadata() if allowed
+        // │         → return
+        // │
+        // └─ CACHE MISS
+        //       → fetch_metadata_from_store(policy)
+        //       → cache_metadata() if allowed
+        //       → return
         let cache_metadata =
             !cfg!(feature = "parquet_encryption") || self.decryption_properties.is_none();
+        let page_index_policy = self.effective_page_index_policy(cache_metadata);
 
         if cache_metadata
             && let Some(file_metadata_cache) = self.file_metadata_cache.as_ref()
@@ -139,9 +169,61 @@ impl<'a> DFParquetMetadata<'a> {
                 .as_any()
                 .downcast_ref::<CachedParquetMetaData>()
         {
-            return Ok(Arc::clone(cached_parquet.parquet_metadata()));
+            let cached_metadata = Arc::clone(cached_parquet.parquet_metadata());
+            // Reuse the cache when it already has page index, or when the caller
+            // asked to skip page index I/O (footer-only metadata is sufficient).
+            if Self::metadata_has_page_index(cached_metadata.as_ref())
+                || page_index_policy == PageIndexPolicy::Skip
+            {
+                return Ok(cached_metadata);
+            }
+            let metadata =
+                Self::load_page_index(self.store, self.object_meta, cached_metadata)
+                    .await?;
+            if cache_metadata {
+                self.cache_metadata(Arc::clone(&metadata)).await?;
+            }
+            return Ok(metadata);
         }
 
+        let metadata = self.fetch_metadata_from_store(page_index_policy).await?;
+        if cache_metadata {
+            self.cache_metadata(Arc::clone(&metadata)).await?;
+        }
+        Ok(metadata)
+    }
+
+    fn effective_page_index_policy(&self, cache_metadata: bool) -> PageIndexPolicy {
+        self.page_index_policy.unwrap_or_else(|| {
+            if cache_metadata && self.file_metadata_cache.is_some() {
+                PageIndexPolicy::Optional
+            } else {
+                PageIndexPolicy::Skip
+            }
+        })
+    }
+
+    fn metadata_has_page_index(metadata: &ParquetMetaData) -> bool {
+        metadata.column_index().is_some() && metadata.offset_index().is_some()
+    }
+
+    async fn cache_metadata(&self, metadata: Arc<ParquetMetaData>) -> Result<()> {
+        if let Some(file_metadata_cache) = &self.file_metadata_cache {
+            file_metadata_cache.put(
+                &self.object_meta.location,
+                CachedFileMetadataEntry::new(
+                    self.object_meta.clone(),
+                    Arc::new(CachedParquetMetaData::new(metadata)),
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    async fn fetch_metadata_from_store(
+        &self,
+        page_index_policy: PageIndexPolicy,
+    ) -> Result<Arc<ParquetMetaData>> {
         let file_size = self.object_meta.size;
         let mut decoder = ParquetMetaDataPushDecoder::try_new(file_size)
             .map_err(DataFusionError::from)?;
@@ -152,14 +234,8 @@ impl<'a> DFParquetMetadata<'a> {
                 .with_file_decryption_properties(Some(Arc::clone(decryption_properties)));
         }
 
-        if cache_metadata && self.file_metadata_cache.is_some() {
-            // Need to retrieve the entire metadata for the caching to be effective.
-            decoder = decoder.with_page_index_policy(PageIndexPolicy::Optional);
-        } else {
-            decoder = decoder.with_page_index_policy(PageIndexPolicy::Skip);
-        }
+        decoder = decoder.with_page_index_policy(page_index_policy);
 
-        // If we have a size hint, prefetch that many bytes from the end of the file
         if let Some(hint) = self.metadata_size_hint {
             let prefetch_start = file_size.saturating_sub(hint as u64);
             let prefetch_range = prefetch_start..file_size;
@@ -198,19 +274,27 @@ impl<'a> DFParquetMetadata<'a> {
             }
         };
 
-        let metadata = Arc::new(metadata);
+        Ok(Arc::new(metadata))
+    }
 
-        if cache_metadata && let Some(file_metadata_cache) = &self.file_metadata_cache {
-            file_metadata_cache.put(
-                &self.object_meta.location,
-                CachedFileMetadataEntry::new(
-                    self.object_meta.clone(),
-                    Arc::new(CachedParquetMetaData::new(Arc::clone(&metadata))),
-                ),
-            );
+    async fn load_page_index(
+        store: &dyn ObjectStore,
+        object_meta: &ObjectMeta,
+        metadata: Arc<ParquetMetaData>,
+    ) -> Result<Arc<ParquetMetaData>> {
+        if metadata.column_index().is_some() && metadata.offset_index().is_some() {
+            return Ok(metadata);
         }
-
-        Ok(metadata)
+        let metadata =
+            Arc::try_unwrap(metadata).unwrap_or_else(|shared| (*shared).clone());
+        let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
+            .with_page_index_policy(PageIndexPolicy::Optional);
+        let fetch = ObjectStoreFetch::new(store, object_meta);
+        reader
+            .load_page_index(fetch)
+            .await
+            .map_err(DataFusionError::from)?;
+        Ok(Arc::new(reader.finish().map_err(DataFusionError::from)?))
     }
 
     /// Read and parse the schema of the Parquet file
