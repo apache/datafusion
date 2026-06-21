@@ -536,7 +536,7 @@ WHERE (c2, c3) NOT IN (
 );
 ----
 logical_plan
-01)LeftAnti Join: t1.c2 = __correlated_sq_1.c2, t1.c3 = __correlated_sq_1.c3, t1.c1 = __correlated_sq_1.c1
+01)LeftAnti Join: t1.c2 = __correlated_sq_1.c2, t1.c3 = __correlated_sq_1.c3, t1.c1 = __correlated_sq_1.c1 null_aware
 02)--SubqueryAlias: t1
 03)----TableScan: test_multi projection=[c1, c2, c3]
 04)--SubqueryAlias: __correlated_sq_1
@@ -544,7 +544,7 @@ logical_plan
 06)------SubqueryAlias: t2
 07)--------TableScan: test_multi projection=[c1, c2, c3]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(c2@1, c2@0), (c3@2, c3@1), (c1@0, c1@2)]
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(c2@1, c2@0), (c3@2, c3@1), (c1@0, c1@2)], null_aware
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
