@@ -22,7 +22,7 @@ use crate::binaries::{
     ConcatBinaryBuilder, ConcatBinaryViewBuilder, ConcatLargeBinaryBuilder,
 };
 use crate::string::concat;
-use crate::string::concat::{coerce_arg_types, deduce_return_type, simplify_concat};
+use crate::string::concat::{coerce_arg_types, deduce_return_type};
 use crate::string::concat_ws;
 use crate::strings::{
     ColumnarValueRef, ConcatBuilder, ConcatLargeStringBuilder, ConcatStringBuilder,
@@ -397,17 +397,12 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
                 // When the delimiter is the empty string, replace `concat_ws`
                 // with `concat`
                 Some(delimiter) if delimiter.is_empty() => {
-                    match simplify_concat(args.to_vec())? {
-                        ExprSimplifyResult::Original(_) => {
-                            Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
-                                ScalarFunction {
-                                    func: concat(),
-                                    args: args.to_vec(),
-                                },
-                            )))
-                        }
-                        expr => Ok(expr),
-                    }
+                    Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
+                        ScalarFunction {
+                            func: concat(),
+                            args: args.to_vec(),
+                        },
+                    )))
                 }
                 Some(delimiter) => {
                     let mut new_args = Vec::with_capacity(args.len());
