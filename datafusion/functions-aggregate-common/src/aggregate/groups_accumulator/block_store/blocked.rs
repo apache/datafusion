@@ -225,7 +225,7 @@ mod tests {
         let blk0 = blocks.pop_block().unwrap();
         assert_block(&blk0, &[1, 42, 42]);
         assert_eq!(blocks.num_blocks(), 2);
-        assert!(!blocks.is_empty());
+        assert_ne!(blocks.num_blocks(), 0);
 
         let blk1 = blocks.pop_block().unwrap();
         assert_block(&blk1, &[2, 42, 42]);
@@ -234,7 +234,7 @@ mod tests {
         let blk2 = blocks.pop_block().unwrap();
         assert_block(&blk2, &[3]);
         assert_eq!(blocks.num_blocks(), 0);
-        assert!(blocks.is_empty());
+        assert_eq!(blocks.num_blocks(), 0);
         assert!(blocks.pop_block().is_none());
     }
 
@@ -391,7 +391,7 @@ mod tests {
         assert_eq!(store.num_blocks(), 2);
 
         store.clear();
-        assert!(store.is_empty());
+        assert_eq!(store.num_blocks(), 0);
 
         store.resize(1, 9);
         assert_eq!(store.num_blocks(), 1);

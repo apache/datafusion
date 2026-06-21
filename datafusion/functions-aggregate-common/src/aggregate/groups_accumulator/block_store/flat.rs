@@ -135,7 +135,7 @@ mod tests {
         store[0][1] = 7;
 
         assert_eq!(store.pop_block(), Some(vec![42, 7, 42]));
-        assert!(!store.is_empty());
+        assert_ne!(store.num_blocks(), 0);
         assert_eq!(store.num_blocks(), 1);
         assert_eq!(store.pop_block(), Some(vec![]));
 
@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn test_resize_grows_single_flat_block() {
         let mut store = FlatBlockStore::<TestBlock>::new();
-        assert!(!store.is_empty());
+        assert_ne!(store.num_blocks(), 0);
         assert_eq!(store.num_blocks(), 1);
 
         store.resize(3, 42);
@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(store[0], vec![42, 42, 42, 7, 7]);
 
         store.clear();
-        assert!(!store.is_empty());
+        assert_ne!(store.num_blocks(), 0);
         assert_eq!(store.num_blocks(), 1);
     }
 
@@ -203,7 +203,7 @@ mod tests {
     fn test_resize_keeps_backing_block_empty_when_requested_size_is_zero() {
         let mut store = FlatBlockStore::<TestBlock>::new();
         store.resize(0, 42);
-        assert!(!store.is_empty());
+        assert_ne!(store.num_blocks(), 0);
         assert_eq!(store.num_blocks(), 1);
         assert_eq!(store.pop_block(), Some(vec![]));
     }

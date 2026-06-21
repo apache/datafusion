@@ -158,7 +158,7 @@ where
     }
 
     fn size(&self) -> usize {
-        if self.values.is_empty() {
+        if self.values.num_blocks() == 0 {
             return 0;
         }
         self.values.num_blocks() * self.values[0].capacity() * size_of::<V>()

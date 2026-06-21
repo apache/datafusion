@@ -78,10 +78,6 @@ where
         self.inner.block_size()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
     pub fn clear(&mut self) {
         self.inner.clear();
     }
@@ -205,7 +201,7 @@ mod tests {
         let mut store = flat_store(vec![1, 2, 3]);
 
         assert_eq!(store.emit(EmitTo::All).unwrap(), vec![1, 2, 3]);
-        assert!(!store.is_empty());
+        assert_ne!(store.num_blocks(), 0);
         assert_eq!(store.num_blocks(), 1);
     }
 
@@ -238,7 +234,7 @@ mod tests {
         assert_eq!(store.emit(EmitTo::First(2)).unwrap(), vec![1, 2]);
         assert_eq!(store.num_blocks(), 1);
         assert_eq!(store.emit(EmitTo::All).unwrap(), vec![3, 4]);
-        assert!(!store.is_empty());
+        assert_ne!(store.num_blocks(), 0);
         assert_eq!(store.num_blocks(), 1);
     }
 
@@ -282,7 +278,7 @@ mod tests {
         assert_eq!(store.emit(EmitTo::NextBlock).unwrap(), vec![1, 2]);
         assert_eq!(store.num_blocks(), 1);
         assert_eq!(store.emit(EmitTo::NextBlock).unwrap(), vec![3, 4]);
-        assert!(store.is_empty());
+        assert_eq!(store.num_blocks(), 0);
         let error = store.emit(EmitTo::NextBlock).unwrap_err().to_string();
         assert!(error.contains("no more blocks to emit"));
     }
@@ -294,7 +290,7 @@ mod tests {
         let mut store = flat_store(vec![9]);
 
         assert_eq!(store.emit(EmitTo::NextBlock).unwrap(), vec![9]);
-        assert!(!store.is_empty());
+        assert_ne!(store.num_blocks(), 0);
         assert_eq!(store.num_blocks(), 1);
         assert_eq!(store.emit(EmitTo::NextBlock).unwrap(), Vec::<u32>::new());
     }

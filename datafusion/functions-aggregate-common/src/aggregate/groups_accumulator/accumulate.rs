@@ -143,7 +143,7 @@ where
     }
 
     pub fn size(&self) -> usize {
-        if self.inner.is_empty() {
+        if self.inner.num_blocks() == 0 {
             return 0;
         }
         self.inner[0].capacity() / 8 * self.inner.num_blocks()

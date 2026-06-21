@@ -74,14 +74,6 @@ pub trait BlockStore<B: Block>:
     /// Returns `None` for flat storage because it has no configured block size.
     fn block_size(&self) -> Option<usize>;
 
-    /// Return true when the store has no active blocks.
-    ///
-    /// This is equivalent to `self.num_blocks() == 0`, but implementations may
-    /// provide a cheaper specialized check.
-    fn is_empty(&self) -> bool {
-        self.num_blocks() == 0
-    }
-
     /// Clear all active blocks and reset the store to accumulation mode.
     ///
     /// Any in-progress emission state is discarded. After `clear`, the store
