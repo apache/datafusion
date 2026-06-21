@@ -3510,28 +3510,92 @@ async fn roundtrip_join_null_equality() -> Result<()> {
     Ok(())
 }
 
+// Single column, single split point range partitioning
 #[tokio::test]
-async fn roundtrip_range_partitioning() -> Result<()> {
+async fn roundtrip_range_partitioning_single_col() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
+        &schema,
+    )));
+
     let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
 
-    let schema = Schema::new(vec![
-        Field::new("a", DataType::Int64, true),
-        Field::new("b", DataType::Decimal128(15, 2), true),
-    ]);
-
-    ctx.register_csv(
-        "t1",
-        "tests/testdata/test.csv",
-        CsvReadOptions::default().schema(&schema),
-    )
-    .await?;
-
-    let scan_plan = ctx.sql("SELECT * FROM t1").await?.into_optimized_plan()?;
+    let scan_plan = ctx.table("empty").await?.into_optimized_plan()?;
     let plan = LogicalPlan::Repartition(Repartition {
         input: Arc::new(scan_plan),
         partitioning_scheme: Partitioning::Range(RangePartitioning::try_new(
-            vec![col("a").sort(true, true)],
-            vec![SplitPoint::new(vec![ScalarValue::Int64(Some(2))])],
+            vec![col("id").sort(true, true)],
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+        )?),
+    });
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+// Multi-column compound key with multiple split points for range partitioning
+#[tokio::test]
+async fn roundtrip_range_partitioning_multi_col() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("ts", DataType::Int64, false),
+        Field::new("region", DataType::Utf8, false),
+    ]));
+    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
+        &schema,
+    )));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let scan_plan = ctx.table("empty").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::Range(RangePartitioning::try_new(
+            vec![col("ts").sort(true, true), col("region").sort(true, true)],
+            vec![
+                SplitPoint::new(vec![
+                    ScalarValue::Int64(Some(1000)),
+                    ScalarValue::Utf8(Some("east".to_string())),
+                ]),
+                SplitPoint::new(vec![
+                    ScalarValue::Int64(Some(2000)),
+                    ScalarValue::Utf8(Some("west".to_string())),
+                ]),
+            ],
+        )?),
+    });
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+// Non-default sort options: descending with nulls last for range partitioning
+#[tokio::test]
+async fn roundtrip_range_partitioning_desc_nulls_last() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "score",
+        DataType::Float64,
+        true,
+    )]));
+    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
+        &schema,
+    )));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let scan_plan = ctx.table("empty").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::Range(RangePartitioning::try_new(
+            vec![col("score").sort(false, false)],
+            vec![SplitPoint::new(vec![ScalarValue::Float64(Some(50.0))])],
         )?),
     });
     let bytes = logical_plan_to_bytes(&plan)?;
