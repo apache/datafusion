@@ -46,6 +46,7 @@ use datafusion_sql::unparser::dialect::{
 };
 use datafusion_sql::unparser::{Unparser, expr_to_sql, plan_to_sql};
 use insta::assert_snapshot;
+use rstest::rstest;
 use sqlparser::ast::Statement;
 use std::hash::Hash;
 use std::ops::Add;
@@ -256,6 +257,48 @@ fn roundtrip_statement() -> Result<()> {
 
         assert_eq!(plan, plan_roundtrip);
     }
+
+    Ok(())
+}
+
+/// Regression for https://github.com/apache/datafusion/issues/22881.
+///
+/// A FULL JOIN USING / NATURAL merged key is `COALESCE(left, right)`, exposed
+/// as an *unqualified* column. Selecting that merged key while ordering by a
+/// *qualified* key of the same join (`ORDER BY ta.id`) must both plan and
+/// survive an unparser round-trip (`plan -> SQL -> plan`). Earlier fixes either
+/// errored at plan time or produced SQL that could not be re-planned. `USING`
+/// and `NATURAL` are covered separately since the unparser renders them
+/// differently.
+#[rstest]
+#[case::full_join_using(
+    "SELECT id FROM (SELECT j1_id AS id FROM j1) ta \
+     FULL JOIN (SELECT j2_id AS id FROM j2) tb USING (id) \
+     ORDER BY ta.id"
+)]
+#[case::natural_full_join(
+    "SELECT id FROM (SELECT j1_id AS id FROM j1) ta \
+     NATURAL FULL JOIN (SELECT j2_id AS id FROM j2) tb \
+     ORDER BY ta.id"
+)]
+fn roundtrip_full_join_merged_key_order_by_qualified(#[case] query: &str) -> Result<()> {
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan)?;
+    let plan_roundtrip = sql_to_rel
+        .sql_statement_to_plan(roundtrip_statement)
+        .unwrap();
+
+    assert_eq!(plan, plan_roundtrip);
 
     Ok(())
 }

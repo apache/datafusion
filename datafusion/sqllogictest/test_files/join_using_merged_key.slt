@@ -120,6 +120,48 @@ SELECT coalesce(a.k, b.k) AS k FROM a FULL JOIN b ON a.k = b.k ORDER BY k
 4
 
 ##########
+# Regression: ORDER BY a *qualified* key while selecting the FULL merged key.
+# The merged k is COALESCE(a.k, b.k), exposed unqualified; ORDER BY a.k folds
+# the qualified a.k into the same projection. This must plan (it regressed to a
+# schema-ambiguity error) and sort by a.k, not by the merged key: the right-only
+# row (a.k IS NULL) sorts last, the rest descend by a.k -- so the output differs
+# from ORDER BY k DESC (which would be 4, 3, 2, 1).
+##########
+
+query I nosort
+SELECT k FROM a FULL JOIN b USING (k) ORDER BY a.k DESC NULLS LAST
+----
+3
+2
+1
+4
+
+query I nosort
+SELECT k FROM a NATURAL FULL JOIN b ORDER BY a.k DESC NULLS LAST
+----
+3
+2
+1
+4
+
+##########
+# Regression: a *qualified* key and the *unqualified* merged key together in one
+# ORDER BY (`ORDER BY a.k DESC NULLS LAST, k`). On main this was legal (the merged
+# key resolved to a.k, so both sort keys were a.k); the merged-key fix must keep
+# it legal -- renaming the merged key to dodge the `{k, a.k}` collision must also
+# rewrite the unqualified `k` reference in the sort. a.k is unique here so the
+# secondary `k` never breaks a tie, but the shape still exercises that path.
+##########
+
+query I nosort
+SELECT k FROM a FULL JOIN b USING (k) ORDER BY a.k DESC NULLS LAST, k
+----
+3
+2
+1
+4
+
+##########
 # Wildcard over the join: the merged key must appear once and carry the right
 # value. (commit 2 target -- the materialized merged column must dedupe under *)
 ##########
