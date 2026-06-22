@@ -198,48 +198,43 @@ where
             null_buffer = None
         }
 
-        match null_buffer {
+        // Compute the required data buffer size, excluding any elements that are null
+        // or are small enough to be stored inline.
+        let data_size = match &null_buffer {
+            None => left
+                .lengths()
+                .zip(right.lengths())
+                .map(|(l, r)| l + r)
+                .filter(|len| *len > MAX_INLINE_VIEW_LEN)
+                .map(|len| len as usize)
+                .sum(),
+            Some(nb) => left
+                .lengths()
+                .zip(right.lengths())
+                .zip(nb.iter())
+                .filter(|((_, _), not_null)| *not_null)
+                .map(|((l, r), _)| l + r)
+                .filter(|len| *len > MAX_INLINE_VIEW_LEN)
+                .map(|len| len as usize)
+                .sum(),
+        };
+
+        if data_size > i32::MAX as usize {
+            return Err(ArrowError::ArithmeticOverflow(
+                "byte array offset overflow".to_string(),
+            ));
+        }
+        let mut builder = Self::with_capacity(len, data_size);
+
+        match &null_buffer {
             None => {
-                let data_size = left
-                    .lengths()
-                    .zip(right.lengths())
-                    .map(|(l, r)| l + r)
-                    .filter(|len| *len > MAX_INLINE_VIEW_LEN)
-                    .map(|len| len as usize)
-                    .sum();
-
-                if data_size > u32::MAX as usize {
-                    return Err(ArrowError::ArithmeticOverflow(
-                        "byte array offset overflow".to_string(),
-                    ));
-                }
-
-                let mut builder = Self::with_capacity(len, data_size);
                 for (l, r) in left.bytes_iter().zip(right.bytes_iter()) {
                     builder.append_concat_view(l, r);
                 }
-                builder.finish(None)
             }
-            Some(nulls) => {
-                let data_size = left
-                    .lengths()
-                    .zip(right.lengths())
-                    .zip(nulls.iter())
-                    .filter(|((_, _), not_null)| *not_null)
-                    .map(|((l, r), _)| l + r)
-                    .filter(|len| *len > MAX_INLINE_VIEW_LEN)
-                    .map(|len| len as usize)
-                    .sum();
-
-                if data_size > u32::MAX as usize {
-                    return Err(ArrowError::ArithmeticOverflow(
-                        "byte array offset overflow".to_string(),
-                    ));
-                }
-
-                let mut builder = Self::with_capacity(len, data_size);
+            Some(nb) => {
                 for ((l, r), not_null) in
-                    left.bytes_iter().zip(right.bytes_iter()).zip(nulls.iter())
+                    left.bytes_iter().zip(right.bytes_iter()).zip(nb.iter())
                 {
                     if not_null {
                         builder.append_concat_view(l, r);
@@ -247,10 +242,10 @@ where
                         builder.append_empty_view();
                     }
                 }
-
-                builder.finish(Some(nulls))
             }
-        }
+        };
+
+        builder.finish(null_buffer)
     }
 
     fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
@@ -268,12 +263,13 @@ where
         if total_len > MAX_INLINE_VIEW_LEN as usize {
             let offset = self.data.len();
 
-            // SAFETY: we've checked that the total data size is within u32::MAX
-            // so offset cannot exceed it.
+            // SAFETY: we've checked that the total data size is within i32::MAX
+            // in `concat_elements_view_array`, so offset cannot exceed it.
             // Not using `u32::try_from` on each insertion makes a ~5% difference
             // in benchmarking
-            debug_assert!(offset <= u32::MAX as usize);
+            debug_assert!(offset <= i32::MAX as usize);
             let view_offset: u32 = offset as u32;
+
             self.data.extend_from_slice(left);
             self.data.extend_from_slice(right);
             self.views
@@ -337,7 +333,7 @@ pub fn concat_elements_utf8view(
     right: &StringViewArray,
 ) -> std::result::Result<StringViewArray, ArrowError> {
     // TODO Use the kernel for arrow-rs once https://github.com/apache/arrow-rs/pull/10161
-    // has been merged
+    // is available in an arrow-rs release
     ConcatByteViewBuilder::concat_elements_view_array(left, right)
 }
 
@@ -352,7 +348,7 @@ pub fn concat_elements_binary_view_array(
     right: &BinaryViewArray,
 ) -> std::result::Result<BinaryViewArray, ArrowError> {
     // TODO Use the kernel for arrow-rs once https://github.com/apache/arrow-rs/pull/10161
-    // has been merged
+    // is available in an arrow-rs release
     ConcatByteViewBuilder::concat_elements_view_array(left, right)
 }
 
