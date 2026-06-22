@@ -264,23 +264,17 @@ impl ScalarUDFImpl for ConcatFunc {
         let mut new_args = Vec::with_capacity(args.len());
         let mut contiguous_scalar = "".to_string();
 
-        for arg in args.clone() {
+        for arg in &args {
             match arg {
-                Expr::Literal(ScalarValue::Utf8(None), _) => {}
-                Expr::Literal(ScalarValue::LargeUtf8(None), _) => {}
-                Expr::Literal(ScalarValue::Utf8View(None), _) => {}
+                Expr::Literal(sv, _) if sv.is_null() => {}
 
-                // filter out `null` args
-                // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
-                // Concatenate it with the `contiguous_scalar`.
-                Expr::Literal(ScalarValue::Utf8(Some(v)), _) => {
-                    contiguous_scalar += &v;
-                }
-                Expr::Literal(ScalarValue::LargeUtf8(Some(v)), _) => {
-                    contiguous_scalar += &v;
-                }
-                Expr::Literal(ScalarValue::Utf8View(Some(v)), _) => {
-                    contiguous_scalar += &v;
+                Expr::Literal(
+                    ScalarValue::Utf8(Some(v))
+                    | ScalarValue::LargeUtf8(Some(v))
+                    | ScalarValue::Utf8View(Some(v)),
+                    _,
+                ) => {
+                    contiguous_scalar += v;
                 }
 
                 Expr::Literal(x, _) => {
@@ -305,7 +299,7 @@ impl ScalarUDFImpl for ConcatFunc {
                         }
                         contiguous_scalar = "".to_string();
                     }
-                    new_args.push(arg);
+                    new_args.push(arg.clone());
                 }
             }
         }
@@ -323,7 +317,7 @@ impl ScalarUDFImpl for ConcatFunc {
             }
         }
 
-        if !args.eq(&new_args) {
+        if args.len() != new_args.len() {
             Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
                 ScalarFunction {
                     func: concat(),
