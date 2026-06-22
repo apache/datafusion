@@ -22,6 +22,7 @@
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::*;
+use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{HashSet, Result, exec_datafusion_err};
 use std::hash::{Hash, Hasher};
 
@@ -43,9 +44,25 @@ impl UInt8BitmapFilter {
             exec_datafusion_err!("UInt8BitmapFilter: expected UInt8 array")
         })?;
         let mut bits = [0u64; 4];
-        for v in prim_array.iter().flatten() {
-            let index = v as usize;
+        let mut set_bit = |v: u8| {
+            let index = usize::from(v);
             bits[index / 64] |= 1u64 << (index % 64);
+        };
+
+        let values = prim_array.values();
+        match prim_array.nulls() {
+            None => {
+                for &v in values {
+                    set_bit(v);
+                }
+            }
+            Some(nulls) => {
+                for i in
+                    BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
+                {
+                    set_bit(values[i]);
+                }
+            }
         }
         Ok(Self {
             null_count: prim_array.null_count(),
