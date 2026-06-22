@@ -18,8 +18,8 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UnionFields};
 use datafusion::common::{
-    DFSchema, DFSchemaRef, exec_err, not_impl_err, substrait_datafusion_err,
-    substrait_err, TableReference
+    DFSchema, DFSchemaRef, TableReference, exec_err, not_impl_err,
+    substrait_datafusion_err, substrait_err,
 };
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Cast, Expr, ExprSchemable};
