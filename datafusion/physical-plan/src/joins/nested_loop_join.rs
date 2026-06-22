@@ -1050,24 +1050,6 @@ impl FallbackCoordinator {
         loop {
             let mut inner = self.inner.lock().await;
 
-            // Lazily initialize the shared left stream and schema from
-            // the spill file.
-            if inner.left_stream.is_none() && !inner.left_exhausted {
-                let stream = spill_data
-                    .spill_manager
-                    .read_spill_as_stream(spill_data.spill_file.clone(), None)?;
-                inner.left_stream = Some(stream);
-                inner.left_schema = Some(Arc::clone(&spill_data.schema));
-            }
-            // Lazily register the coordinator's chunk reservation.
-            if inner.reservation.is_none() {
-                inner.reservation = Some(
-                    MemoryConsumer::new("NestedLoopJoinFallbackChunk".to_string())
-                        .with_can_spill(true)
-                        .register(task_context.memory_pool()),
-                );
-            }
-
             // Case 1: requested chunk is already loaded.
             if let Some(cur) = &inner.current
                 && cur.chunk_index == expected_chunk_index
@@ -1087,16 +1069,28 @@ impl FallbackCoordinator {
             // Case 3: no chunk loaded and no leader yet — claim leader.
             if inner.current.is_none() && !inner.loader_in_flight {
                 inner.loader_in_flight = true;
-                // Drop the lock while reading the stream + concatenating
-                // batches (this can take significant time and memory).
-                let mut left_stream = inner
-                    .left_stream
-                    .take()
-                    .expect("left_stream installed above");
-                let mut reservation = inner
-                    .reservation
-                    .take()
-                    .expect("reservation installed above");
+                // Lazily initialize the shared left stream, schema, and
+                // chunk reservation. Only the leader does this (under the
+                // `loader_in_flight` guard), so waiters never open a
+                // throwaway spill stream that the leader would overwrite.
+                let mut left_stream = match inner.left_stream.take() {
+                    Some(stream) => stream,
+                    None => {
+                        let stream = spill_data
+                            .spill_manager
+                            .read_spill_as_stream(spill_data.spill_file.clone(), None)?;
+                        inner.left_schema = Some(Arc::clone(&spill_data.schema));
+                        stream
+                    }
+                };
+                let mut reservation = match inner.reservation.take() {
+                    Some(reservation) => reservation,
+                    None => {
+                        MemoryConsumer::new("NestedLoopJoinFallbackChunk".to_string())
+                            .with_can_spill(true)
+                            .register(task_context.memory_pool())
+                    }
+                };
                 let left_schema = Arc::clone(
                     inner
                         .left_schema
