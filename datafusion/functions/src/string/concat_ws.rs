@@ -144,7 +144,6 @@ impl ScalarUDFImpl for ConcatWsFunc {
                     ScalarValue::Binary(Some(v))
                     | ScalarValue::LargeBinary(Some(v))
                     | ScalarValue::BinaryView(Some(v)) => v.as_slice(),
-                    ScalarValue::FixedSizeBinary(_, Some(v)) => v.as_slice(),
                     scalar if scalar.is_null() => {
                         return Ok(null_scalar(&return_datatype));
                     }
@@ -162,9 +161,6 @@ impl ScalarUDFImpl for ConcatWsFunc {
                         ScalarValue::Binary(Some(v))
                         | ScalarValue::LargeBinary(Some(v))
                         | ScalarValue::BinaryView(Some(v)) => values.push(v.as_slice()),
-                        ScalarValue::FixedSizeBinary(_, Some(v)) => {
-                            values.push(v.as_slice())
-                        }
                         // skip null
                         scalar if scalar.is_null() => {}
                         other => {
