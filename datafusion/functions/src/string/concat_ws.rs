@@ -22,7 +22,7 @@ use crate::binaries::{
     ConcatBinaryBuilder, ConcatBinaryViewBuilder, ConcatLargeBinaryBuilder,
 };
 use crate::string::concat;
-use crate::string::concat::{coerce_arg_types, deduce_return_type};
+use crate::string::concat::coerce_arg_types;
 use crate::string::concat_ws;
 use crate::strings::{
     ColumnarValueRef, ConcatBuilder, ConcatLargeStringBuilder, ConcatStringBuilder,
@@ -104,9 +104,8 @@ impl ScalarUDFImpl for ConcatWsFunc {
         }
     }
 
-    /// Match the return type to the input types. Delegates to `concat` implementation.
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(deduce_return_type(arg_types))
+        Ok(arg_types[0].clone())
     }
 
     /// Concatenates all but the first argument, with separators. The first

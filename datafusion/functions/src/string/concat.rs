@@ -344,24 +344,6 @@ impl ScalarUDFImpl for ConcatFunc {
     }
 }
 
-pub(crate) fn deduce_return_type(arg_types: &[DataType]) -> DataType {
-    use DataType::*;
-    if arg_types.contains(&BinaryView) {
-        BinaryView
-    } else if arg_types.contains(&LargeBinary) {
-        // Serves LargeBinary and FixedSizeBinary inputs
-        LargeBinary
-    } else if arg_types.contains(&Binary) {
-        Binary
-    } else if arg_types.contains(&Utf8View) {
-        Utf8View
-    } else if arg_types.contains(&LargeUtf8) {
-        LargeUtf8
-    } else {
-        Utf8
-    }
-}
-
 /// Coerce all arguments to the widest type within the binary / string family
 pub(crate) fn coerce_arg_types(arg_types: &[DataType]) -> Result<Vec<DataType>> {
     let has_binary = arg_types.iter().any(|dt| dt.is_binary());
