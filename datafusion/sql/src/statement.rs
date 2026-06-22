@@ -1805,7 +1805,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             name,
             columns,
             file_type,
-            location,
+            location: _,
+            locations,
             table_partition_cols,
             if_not_exists,
             temporary,
@@ -1854,9 +1855,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let name = self.object_name_to_table_reference(name)?;
         let constraints =
             self.new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
+
+        let Some(location) = locations.first().cloned() else {
+            return plan_err!("CREATE EXTERNAL TABLE requires at least one location");
+        };
+
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
             Box::new(
                 PlanCreateExternalTable::builder(name, location, file_type, df_schema)
+                    .with_locations(locations)
                     .with_partition_cols(table_partition_cols)
                     .with_if_not_exists(if_not_exists)
                     .with_or_replace(or_replace)

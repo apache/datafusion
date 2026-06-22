@@ -163,7 +163,8 @@ message EmptyRelationNode {
 message CreateExternalTableNode {
   reserved 1; // was string name
   TableReference name = 9;
-  string location = 2;
+  string location = 2; // deprecated; use repeated locations
+  repeated string locations = 16;
   string file_type = 3;
   datafusion_common.DfSchema schema = 4;
   repeated string table_partition_cols = 5;

@@ -788,6 +788,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     column_defaults.insert(col_name.clone(), expr);
                 }
 
+                let locations = if !create_extern_table.locations.is_empty() {
+                    create_extern_table.locations.clone()
+                } else if !create_extern_table.location.is_empty() {
+                    vec![create_extern_table.location.clone()]
+                } else {
+                    return Err(proto_error(
+                        "CreateExternalTableNode requires at least one location",
+                    ));
+                };
+                let location = locations[0].clone();
+
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
                     Box::new(
                         CreateExternalTable::builder(
@@ -795,10 +806,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 create_extern_table.name.as_ref(),
                                 "CreateExternalTable",
                             )?,
-                            create_extern_table.location.clone(),
+                            location,
                             create_extern_table.file_type.clone(),
                             pb_schema.try_into()?,
                         )
+                        .with_locations(locations)
                         .with_partition_cols(
                             create_extern_table.table_partition_cols.clone(),
                         )
@@ -1785,7 +1797,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Ddl(DdlStatement::CreateExternalTable(ce)) => {
                 let CreateExternalTable {
                     name,
-                    location,
+                    locations,
                     file_type,
                     schema: df_schema,
                     table_partition_cols,
@@ -1820,7 +1832,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             name: Some(protobuf::TableReference::from_proto(
                                 name.clone(),
                             )),
-                            location: location.clone(),
+                            location: locations.first().cloned().unwrap_or_default(),
+                            locations: locations.clone(),
                             file_type: file_type.clone(),
                             schema: Some(df_schema.try_into()?),
                             table_partition_cols: table_partition_cols.clone(),
