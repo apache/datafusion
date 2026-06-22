@@ -123,6 +123,10 @@ impl ScalarUDFImpl for MapExtract {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [map_type, _] = take_function_args(self.name(), arg_types)?;
 
+        if map_type.is_null() {
+            return Ok(arg_types.to_vec());
+        }
+
         let field = get_map_entry_field(map_type)?;
         Ok(vec![
             map_type.clone(),
