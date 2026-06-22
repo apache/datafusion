@@ -21,7 +21,7 @@ use arrow_ipc::CompressionType;
 
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
-use crate::error::_config_err;
+use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::DFParquetWriterVersion;
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
@@ -33,6 +33,7 @@ use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 #[cfg(feature = "parquet_encryption")]
 use std::sync::Arc;
@@ -582,6 +583,86 @@ impl Display for SpillCompression {
     }
 }
 
+/// A `usize` configuration value that rejects zero when set from strings.
+///
+/// Use this for options where zero is never a meaningful runtime value.
+/// Invalid values return a configuration error through [`ConfigField`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConfigNonZeroUsize(NonZeroUsize);
+
+/// Private helper for hard-coded defaults in `config_namespace!`, which cannot
+/// use `?`. All external construction should use [`ConfigNonZeroUsize::try_new`].
+const fn non_zero_usize_default(value: usize) -> ConfigNonZeroUsize {
+    match NonZeroUsize::new(value) {
+        Some(value) => ConfigNonZeroUsize(value),
+        None => panic!("value must be greater than 0"),
+    }
+}
+
+impl ConfigNonZeroUsize {
+    /// Creates a [`ConfigNonZeroUsize`], returning a configuration error if
+    /// `value` is zero.
+    pub fn try_new(value: usize) -> Result<Self> {
+        NonZeroUsize::new(value)
+            .map(Self)
+            .ok_or_else(|| _config_datafusion_err!("value must be greater than 0"))
+    }
+
+    /// Returns the wrapped `usize`.
+    pub const fn get(self) -> usize {
+        self.0.get()
+    }
+}
+
+impl From<ConfigNonZeroUsize> for usize {
+    fn from(value: ConfigNonZeroUsize) -> Self {
+        value.get()
+    }
+}
+
+impl FromStr for ConfigNonZeroUsize {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_new(default_config_transform(s)?)
+    }
+}
+
+impl ConfigField for ConfigNonZeroUsize {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field batch_size is a scalar ConfigNonZeroUsize and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = ConfigNonZeroUsize::from_str(value)?;
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field batch_size is a scalar ConfigNonZeroUsize and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
+impl Display for ConfigNonZeroUsize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get())
+    }
+}
+
 /// Policy for handling duplicate keys in Spark-compatible map-construction
 /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
 /// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
@@ -649,7 +730,7 @@ config_namespace! {
         /// Default batch size while creating new batches, it's especially useful for
         /// buffer-in-memory batches since creating tiny batches would result in too much
         /// metadata memory consumption
-        pub batch_size: usize, default = 8192
+        pub batch_size: ConfigNonZeroUsize, default = non_zero_usize_default(8192)
 
         /// A perfect hash join (see `HashJoinExec` for more details) will be considered
         /// if the range of keys (max - min) on the build side is < this threshold.
