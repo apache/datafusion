@@ -3422,6 +3422,7 @@ pub(crate) mod tests {
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::assert_contains;
     use datafusion_common::test_util::batches_to_sort_string;
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
@@ -3591,7 +3592,6 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn join_inner_with_filter(#[values(1, 2, 16)] batch_size: usize) -> Result<()> {
         let task_ctx = new_task_ctx(batch_size);
-        dbg!(&batch_size);
         let left = build_left_table();
         let right = build_right_table();
         let filter = prepare_join_filter();
@@ -4593,6 +4593,177 @@ pub(crate) mod tests {
         | 5  | 5  | 50  | true  |
         | 9  | 8  | 90  | false |
         +----+----+-----+-------+
+        "));
+        Ok(())
+    }
+
+    /// A left table with one batch per row, spanning enough rows that the
+    /// memory-limited fallback must split it across MULTIPLE chunks. Only
+    /// `(5,5,50)` matches the right side under `prepare_join_filter`
+    /// (`b1 != 8`); every other row has `b1 = 8` and is therefore an
+    /// unmatched left row.
+    fn build_left_table_multi_chunk() -> Arc<dyn ExecutionPlan> {
+        build_table(
+            ("a1", &vec![5, 9, 11, 13, 15, 17, 19, 21]),
+            ("b1", &vec![5, 8, 8, 8, 8, 8, 8, 8]),
+            ("c1", &vec![50, 90, 110, 130, 150, 170, 190, 210]),
+            // One row per batch, so the tight per-chunk memory budget forces
+            // the coordinator to load each row as a separate chunk.
+            Some(1),
+            Vec::new(),
+        )
+    }
+
+    /// Run a NLJ across 4 right partitions, collecting every output
+    /// partition CONCURRENTLY. This is required for the multi-chunk
+    /// coordinator path: a chunk is not released until all partitions
+    /// finish probing it, and a partition cannot advance to the next chunk
+    /// until the current one is released. Collecting partitions
+    /// sequentially would therefore deadlock; concurrent collection mirrors
+    /// how partitions actually run under the runtime.
+    async fn multi_partition_memory_limited_join_collect_concurrent(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        join_type: &JoinType,
+        join_filter: Option<JoinFilter>,
+        context: Arc<TaskContext>,
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
+        let partition_count = 4;
+        let right = Arc::new(RepartitionExec::try_new(
+            right,
+            Partitioning::RoundRobinBatch(partition_count),
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let nested_loop_join = Arc::new(NestedLoopJoinExec::try_new(
+            left,
+            right,
+            join_filter,
+            join_type,
+            None,
+        )?);
+        let columns = columns(&nested_loop_join.schema());
+
+        let mut handles = vec![];
+        for i in 0..partition_count {
+            let stream = nested_loop_join.execute(i, Arc::clone(&context))?;
+            handles.push(SpawnedTask::spawn(
+                async move { common::collect(stream).await },
+            ));
+        }
+
+        let mut batches = vec![];
+        for handle in handles {
+            let more = handle.join().await.expect("partition task panicked")?;
+            batches.extend(more.into_iter().filter(|b| b.num_rows() > 0));
+        }
+
+        let metrics = nested_loop_join.metrics().unwrap();
+        Ok((columns, batches, metrics))
+    }
+
+    /// Regression test for the multi-chunk coordinator path of a LEFT join.
+    ///
+    /// Unlike the other multi-partition tests, the left side here is split
+    /// into multiple chunks (one row per batch under a tight memory limit),
+    /// so this exercises `carryover` between chunks, `release_chunk`
+    /// advancing `next_chunk_index`, waiter notification, and re-entering
+    /// `BufferingLeft` for each subsequent chunk. Every left row must appear
+    /// exactly once: duplicates would indicate the per-chunk `JoinLeftData`
+    /// (visited bitmap + probe-thread counter) was not shared across right
+    /// partitions.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nlj_memory_limited_multi_partition_multi_chunk_left_join() -> Result<()>
+    {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table_multi_chunk();
+        let right = build_right_table_one_batch_per_row();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) =
+            multi_partition_memory_limited_join_collect_concurrent(
+                left,
+                right,
+                &JoinType::Left,
+                Some(filter),
+                task_ctx,
+            )
+            .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling under tight memory limit"
+        );
+
+        // (5,5,50) matches (2,2,80); all other left rows (b1 = 8) are
+        // unmatched and appear exactly once.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+----+----+----+
+        | a1 | b1 | c1  | a2 | b2 | c2 |
+        +----+----+-----+----+----+----+
+        | 11 | 8  | 110 |    |    |    |
+        | 13 | 8  | 130 |    |    |    |
+        | 15 | 8  | 150 |    |    |    |
+        | 17 | 8  | 170 |    |    |    |
+        | 19 | 8  | 190 |    |    |    |
+        | 21 | 8  | 210 |    |    |    |
+        | 5  | 5  | 50  | 2  | 2  | 80 |
+        | 9  | 8  | 90  |    |    |    |
+        +----+----+-----+----+----+----+
+        "));
+        Ok(())
+    }
+
+    /// Regression test for the multi-chunk coordinator path of a FULL join.
+    ///
+    /// In addition to the per-chunk left sharing exercised by the LEFT case,
+    /// this covers the global right-unmatched bitmap accumulated ACROSS all
+    /// left chunks and emitted once in `EmitGlobalRightUnmatched`. The two
+    /// right rows with `b2 = 10` are filtered out of every match and must
+    /// appear exactly once as unmatched-right rows, regardless of how many
+    /// left chunks were processed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nlj_memory_limited_multi_partition_multi_chunk_full_join() -> Result<()>
+    {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table_multi_chunk();
+        let right = build_right_table_one_batch_per_row();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) =
+            multi_partition_memory_limited_join_collect_concurrent(
+                left,
+                right,
+                &JoinType::Full,
+                Some(filter),
+                task_ctx,
+            )
+            .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling under tight memory limit"
+        );
+
+        // Matched: (5,5,50)+(2,2,80). Unmatched left: the seven b1 = 8 rows.
+        // Unmatched right: (12,10,40) and (10,10,100), each emitted once from
+        // the global right bitmap accumulated across all left chunks.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+----+----+-----+
+        | a1 | b1 | c1  | a2 | b2 | c2  |
+        +----+----+-----+----+----+-----+
+        |    |    |     | 10 | 10 | 100 |
+        |    |    |     | 12 | 10 | 40  |
+        | 11 | 8  | 110 |    |    |     |
+        | 13 | 8  | 130 |    |    |     |
+        | 15 | 8  | 150 |    |    |     |
+        | 17 | 8  | 170 |    |    |     |
+        | 19 | 8  | 190 |    |    |     |
+        | 21 | 8  | 210 |    |    |     |
+        | 5  | 5  | 50  | 2  | 2  | 80  |
+        | 9  | 8  | 90  |    |    |     |
+        +----+----+-----+----+----+-----+
         "));
         Ok(())
     }
