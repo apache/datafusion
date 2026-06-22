@@ -765,6 +765,30 @@ fn test_simplify_concat() -> Result<()> {
     let expected_datatype = expected.get_type(schema.as_ref())?;
     assert_eq!(expr_datatype, expected_datatype);
     test_simplify(expr, expected);
+
+    let null = lit(ScalarValue::Binary(None));
+    let expr = concat(vec![
+        null.clone(),
+        col("c1"),
+        lit(vec![0xde_u8]),
+        null.clone(),
+        lit(vec![0xad_u8]),
+        lit(vec![0xbe_u8, 0xef]),
+        col("c2"),
+        lit(Vec::new()),
+        null,
+        col("c5"),
+    ]);
+    let expr_datatype = expr.get_type(schema.as_ref())?;
+    let expected = concat(vec![
+        col("c1"),
+        lit(vec![0xde_u8, 0xad, 0xbe, 0xef]),
+        col("c2"),
+        col("c5"),
+    ]);
+    let expected_datatype = expected.get_type(schema.as_ref())?;
+    assert_eq!(expr_datatype, expected_datatype);
+    test_simplify(expr, expected);
     Ok(())
 }
 #[test]

@@ -250,19 +250,34 @@ impl ScalarUDFImpl for ConcatFunc {
             .collect::<Result<Vec<_>>>()?;
         let return_type = self.return_type(&data_types)?;
 
-        // Skip simplification when binary literals are present, because it
-        // handles only strings
-        for arg in &args {
-            match arg {
-                Expr::Literal(dt, _) if dt.data_type().is_binary() => {
-                    return Ok(ExprSimplifyResult::Original(args));
+        let mut new_args = Vec::with_capacity(args.len());
+        let mut contiguous_scalar: Vec<u8> = vec![];
+
+        fn form_scalar(scalar: &[u8], data_type: &DataType) -> Expr {
+            match data_type {
+                // Technically we're guaranteed UTF8 safety since all input types
+                // should be a common type, i.e. all strings or all binary.
+                // Using from_utf8_lossy here just for safety, as the performance
+                // impact is probably minimal on this simplification path.
+                DataType::Utf8 => lit(ScalarValue::Utf8(Some(
+                    String::from_utf8_lossy(scalar).to_string(),
+                ))),
+                DataType::LargeUtf8 => lit(ScalarValue::LargeUtf8(Some(
+                    String::from_utf8_lossy(scalar).to_string(),
+                ))),
+                DataType::Utf8View => lit(ScalarValue::Utf8View(Some(
+                    String::from_utf8_lossy(scalar).to_string(),
+                ))),
+                DataType::Binary => lit(ScalarValue::Binary(Some(scalar.to_vec()))),
+                DataType::LargeBinary => {
+                    lit(ScalarValue::LargeBinary(Some(scalar.to_vec())))
                 }
-                _ => {}
+                DataType::BinaryView => {
+                    lit(ScalarValue::BinaryView(Some(scalar.to_vec())))
+                }
+                _ => unreachable!(),
             }
         }
-
-        let mut new_args = Vec::with_capacity(args.len());
-        let mut contiguous_scalar = "".to_string();
 
         for arg in &args {
             match arg {
@@ -274,30 +289,30 @@ impl ScalarUDFImpl for ConcatFunc {
                     | ScalarValue::Utf8View(Some(v)),
                     _,
                 ) => {
-                    contiguous_scalar += v;
+                    contiguous_scalar.extend(v.as_bytes());
+                }
+                Expr::Literal(
+                    ScalarValue::Binary(Some(v))
+                    | ScalarValue::LargeBinary(Some(v))
+                    | ScalarValue::BinaryView(Some(v)),
+                    _,
+                ) => {
+                    contiguous_scalar.extend(v);
                 }
 
                 Expr::Literal(x, _) => {
                     return internal_err!(
-                        "The scalar {x} should be casted to string type during the type coercion."
+                        "Unexpected datatype during simplification, expected string or binary got {}",
+                        x.data_type()
                     );
                 }
-                // If the arg is not a literal, we should first push the current `contiguous_scalar`
-                // to the `new_args` (if it is not empty) and reset it to empty string.
-                // Then pushing this arg to the `new_args`.
+
+                // Non-literal blocks further simplification, finish what we've
+                // done so far and reset
                 arg => {
                     if !contiguous_scalar.is_empty() {
-                        match return_type {
-                            DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
-                            DataType::LargeUtf8 => new_args.push(lit(
-                                ScalarValue::LargeUtf8(Some(contiguous_scalar)),
-                            )),
-                            DataType::Utf8View => new_args.push(lit(
-                                ScalarValue::Utf8View(Some(contiguous_scalar)),
-                            )),
-                            _ => unreachable!(),
-                        }
-                        contiguous_scalar = "".to_string();
+                        new_args.push(form_scalar(&contiguous_scalar, &return_type));
+                        contiguous_scalar.clear();
                     }
                     new_args.push(arg.clone());
                 }
@@ -305,16 +320,7 @@ impl ScalarUDFImpl for ConcatFunc {
         }
 
         if !contiguous_scalar.is_empty() {
-            match return_type {
-                DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
-                DataType::LargeUtf8 => {
-                    new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar))))
-                }
-                DataType::Utf8View => {
-                    new_args.push(lit(ScalarValue::Utf8View(Some(contiguous_scalar))))
-                }
-                _ => unreachable!(),
-            }
+            new_args.push(form_scalar(&contiguous_scalar, &return_type));
         }
 
         if args.len() != new_args.len() {
