@@ -150,24 +150,6 @@ pub enum RowGroupAccess {
     Selection(RowSelection),
 }
 
-/// A consecutive set of row groups that share the same row filter requirement.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct RowGroupRun {
-    /// True if this run needs row filter evaluation.
-    pub(crate) needs_filter: bool,
-    /// The access plan for this run.
-    pub(crate) access_plan: ParquetAccessPlan,
-}
-
-impl RowGroupRun {
-    fn new(needs_filter: bool, access_plan: ParquetAccessPlan) -> Self {
-        Self {
-            needs_filter,
-            access_plan,
-        }
-    }
-}
-
 impl RowGroupAccess {
     /// Return true if this row group should be scanned
     pub fn should_scan(&self) -> bool {
@@ -398,12 +380,6 @@ impl ParquetAccessPlan {
         &self.fully_matched
     }
 
-    /// Return true if any scanned row group is fully matched.
-    fn has_fully_matched(&self) -> bool {
-        self.row_group_index_iter()
-            .any(|idx| self.is_fully_matched(idx))
-    }
-
     /// Set to scan only the [`RowSelection`] in the specified row group.
     ///
     /// Behavior is different depending on the existing access
@@ -587,54 +563,6 @@ impl ParquetAccessPlan {
     /// Covert into the inner row group accesses
     pub fn into_inner(self) -> Vec<RowGroupAccess> {
         self.row_groups
-    }
-
-    /// Split this plan into consecutive row group runs that share the same row
-    /// filter requirement.
-    pub(crate) fn split_runs(self, needs_filter: bool) -> Vec<RowGroupRun> {
-        if !needs_filter || !self.has_fully_matched() {
-            return vec![RowGroupRun::new(needs_filter, self)];
-        }
-
-        let num_row_groups = self.row_groups.len();
-        let row_groups = self.row_groups;
-        let fully_matched = self.fully_matched;
-        let mut runs: Vec<RowGroupRun> = Vec::new();
-
-        for (idx, (access, fully_matched)) in
-            row_groups.into_iter().zip(fully_matched).enumerate()
-        {
-            if !access.should_scan() {
-                continue;
-            }
-
-            let row_group_needs_filter = !fully_matched;
-            if let Some(run) = runs
-                .last_mut()
-                .filter(|run| run.needs_filter == row_group_needs_filter)
-            {
-                run.access_plan.set(idx, access);
-                if fully_matched {
-                    run.access_plan.mark_fully_matched(idx);
-                }
-            } else {
-                let mut run_plan = ParquetAccessPlan::new_none(num_row_groups);
-                run_plan.set(idx, access);
-                if fully_matched {
-                    run_plan.mark_fully_matched(idx);
-                }
-                runs.push(RowGroupRun::new(row_group_needs_filter, run_plan));
-            }
-        }
-
-        if runs.is_empty() {
-            vec![RowGroupRun::new(
-                needs_filter,
-                ParquetAccessPlan::new_none(num_row_groups),
-            )]
-        } else {
-            runs
-        }
     }
 
     /// Prepare this plan and resolve to the final `PreparedAccessPlan`
