@@ -18,6 +18,7 @@
 use std::fs;
 use std::sync::Arc;
 
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::TableProvider;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
@@ -26,9 +27,9 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::prelude::SessionContext;
-use datafusion_common::DFSchema;
+use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::stats::Precision;
+use datafusion_common::{DFSchema, TableReference};
 use datafusion_execution::cache::cache_manager::{
     CacheManagerConfig, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
     DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, FileStatisticsCache, ListFilesCache,
@@ -111,7 +112,9 @@ async fn check_stats_precision_with_filter_pushdown() {
 async fn load_table_stats_with_session_level_cache() {
     let testdata = datafusion::test_util::parquet_test_data();
     let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
-    let table_path = ListingTableUrl::parse(filename).unwrap();
+    let table_path = ListingTableUrl::parse(filename)
+        .unwrap()
+        .with_table_ref(TableReference::bare("alltypes_plain"));
 
     let (cache1, _, mut state1) = get_cache_runtime_state();
     let cfg_1 = state1.config_mut();
@@ -191,6 +194,68 @@ async fn load_table_stats_with_session_level_cache() {
     );
     // List same file no increase
     assert_eq!(get_static_cache_size(&state1), 1);
+}
+
+#[tokio::test]
+async fn anonymous_parquet_stats_cache_with_explicit_wider_schema() {
+    let temp_dir = tempdir().unwrap();
+    let parquet_path = temp_dir.path().join("data.parquet");
+    let parquet_path = parquet_path.to_string_lossy().to_string();
+
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_collect_statistics(true),
+    );
+    let cache = ctx
+        .runtime_env()
+        .cache_manager
+        .get_file_statistic_cache()
+        .unwrap();
+
+    ctx.sql(&format!(
+        "COPY (
+            SELECT 1::BIGINT AS id, 1000::BIGINT AS population
+        ) TO '{parquet_path}' STORED AS PARQUET"
+    ))
+    .await
+    .unwrap()
+    .collect()
+    .await
+    .unwrap();
+
+    assert_eq!(cache.len(), 0);
+
+    ctx.read_parquet(&parquet_path, ParquetReadOptions::default())
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    assert_eq!(cache.len(), 1);
+
+    let wider_schema = Schema::new(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new("population", DataType::Int64, true),
+        Field::new("extra", DataType::Int64, true),
+    ]);
+
+    let plan = ctx
+        .read_parquet(
+            &parquet_path,
+            ParquetReadOptions::default().schema(&wider_schema),
+        )
+        .await
+        .unwrap()
+        .select_columns(&["id", "extra"])
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+
+    let stats = plan.statistics_with_args(&StatisticsArgs::new()).unwrap();
+    assert_eq!(stats.column_statistics.len(), 2);
+    assert_eq!(stats.column_statistics[1].null_count, Precision::Exact(1));
+    assert_eq!(cache.len(), 1);
 }
 
 #[tokio::test]
