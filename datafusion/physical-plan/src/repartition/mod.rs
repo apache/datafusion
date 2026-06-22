@@ -1439,7 +1439,7 @@ impl ExecutionPlan for RepartitionExec {
                 }
                 Partitioning::Hash(new_partitions, *size)
             }
-            Partitioning::Range(_) => {
+            Partitioning::Range(_) | Partitioning::DynamicRange(_) => {
                 // Range partitioning optimizer propagation is tracked in
                 // https://github.com/apache/datafusion/issues/22395
                 return not_impl_err!(
@@ -1483,7 +1483,7 @@ impl ExecutionPlan for RepartitionExec {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
         match self.partitioning() {
-            Partitioning::Range(_) => {
+            Partitioning::Range(_) | Partitioning::DynamicRange(_) => {
                 // Range partitioning optimizer propagation is tracked in
                 // https://github.com/apache/datafusion/issues/22395
                 return not_impl_err!(
@@ -1517,7 +1517,7 @@ impl ExecutionPlan for RepartitionExec {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
             UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
-            Range(_) => {
+            Range(_) | DynamicRange(_) => {
                 // Range repartition execution is tracked in
                 // https://github.com/apache/datafusion/issues/22397
                 return not_impl_err!(

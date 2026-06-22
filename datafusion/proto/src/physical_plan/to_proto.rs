@@ -380,6 +380,15 @@ pub fn serialize_partitioning(
                 serialize_range_partitioning(range, codec, proto_converter)?,
             )),
         },
+        Partitioning::DynamicRange(_) => {
+            // Proto plumbing for DynamicRange is intentionally not
+            // implemented in the variant-introduction PR and will be
+            // added incrementally. See
+            // <https://github.com/apache/datafusion/issues/22395>.
+            return not_impl_err!(
+                "Serialization of DynamicRange partitioning is not implemented"
+            );
+        }
         Partitioning::UnknownPartitioning(partition_count) => protobuf::Partitioning {
             partition_method: Some(protobuf::partitioning::PartitionMethod::Unknown(
                 *partition_count as u64,
