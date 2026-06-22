@@ -1094,12 +1094,11 @@ pub fn build_row_filter(
         .map(|filters| Some(RowFilter::new(filters)))
 }
 
-/// Builds row filters for decoder runs.
+/// Builds row filters for a parquet decoder.
 ///
-/// A [`RowFilter`] must be owned by a decoder, so scans split across multiple
-/// decoder runs need a fresh filter for each run that evaluates row predicates.
-/// The first filter is built eagerly during construction so callers can cheaply
-/// query [`has_row_filter`](Self::has_row_filter) before splitting the scan.
+/// A [`RowFilter`] is owned by a decoder. The first filter is built eagerly
+/// during construction so the caller can attach it to the decoder via
+/// [`next_filter`](Self::next_filter) without a redundant build call.
 pub(crate) struct RowFilterGenerator<'a> {
     predicate: Option<&'a Arc<dyn PhysicalExpr>>,
     physical_file_schema: &'a SchemaRef,
@@ -1127,10 +1126,6 @@ impl<'a> RowFilterGenerator<'a> {
         };
         generator.first_row_filter = generator.build();
         generator
-    }
-
-    pub(crate) fn has_row_filter(&self) -> bool {
-        self.first_row_filter.is_some()
     }
 
     pub(crate) fn next_filter(&mut self) -> Option<RowFilter> {
