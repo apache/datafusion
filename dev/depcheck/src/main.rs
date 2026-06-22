@@ -15,24 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate cargo;
-
-use cargo::CargoResult;
 /// Check for circular dependencies between DataFusion crates
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::error::Error;
 use std::path::Path;
 
-use cargo::util::context::GlobalContext;
+use cargo_metadata::{CargoOpt, MetadataCommand};
 
 /// Verifies that there are no circular dependencies between DataFusion crates
 /// (which prevents publishing on crates.io) by parsing the Cargo.toml files and
 /// checking the dependency graph.
 ///
 /// See https://github.com/apache/datafusion/issues/9278 for more details
-fn main() -> CargoResult<()> {
-    let gctx = GlobalContext::default()?;
-    // This is the path for the depcheck binary
+fn main() -> Result<(), Box<dyn Error>> {
+    // this is the path for the depcheck binary
     let path = env::var("CARGO_MANIFEST_DIR").unwrap();
     let root_cargo_toml = Path::new(&path)
         // dev directory
@@ -47,21 +44,51 @@ fn main() -> CargoResult<()> {
         "Checking for circular dependencies in {}",
         root_cargo_toml.display()
     );
-    let workspace = cargo::core::Workspace::new(&root_cargo_toml, &gctx)?;
-    let (_, resolve) = cargo::ops::resolve_ws(&workspace, false)?;
+    let metadata = MetadataCommand::new()
+        .manifest_path(root_cargo_toml)
+        .features(CargoOpt::AllFeatures)
+        .exec()?;
 
-    let mut package_deps = HashMap::new();
-    for package_id in resolve
+    let package_names = metadata
+        .packages
         .iter()
-        .filter(|id| id.name().starts_with("datafusion"))
-    {
-        let deps: Vec<String> = resolve
-            .deps(package_id)
-            .filter(|(package_id, _)| package_id.name().starts_with("datafusion"))
-            .map(|(package_id, _)| package_id.name().to_string())
-            .collect();
-        package_deps.insert(package_id.name().to_string(), deps);
-    }
+        .map(|package| (package.id.clone(), package.name.to_string()))
+        .collect::<HashMap<_, _>>();
+
+    let datafusion_packages = package_names
+        .iter()
+        .filter(|(_, name)| name.starts_with("datafusion"))
+        .map(|(id, _)| id.clone())
+        .collect::<HashSet<_>>();
+
+    let resolve = metadata
+        .resolve
+        .expect("cargo metadata should include a resolve graph");
+
+    let package_deps = resolve
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            let package_name = package_names.get(&node.id)?;
+            if !package_name.starts_with("datafusion") {
+                return None;
+            }
+
+            let deps = node
+                .deps
+                .iter()
+                .filter_map(|dep| {
+                    if datafusion_packages.contains(&dep.pkg) {
+                        package_names.get(&dep.pkg).cloned()
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            Some((package_name.clone(), deps))
+        })
+        .collect::<HashMap<_, _>>();
 
     // check for circular dependencies
     for (root_package, deps) in &package_deps {
