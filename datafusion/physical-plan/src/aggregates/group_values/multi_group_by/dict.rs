@@ -32,6 +32,7 @@ use datafusion_common::hash_utils::{RandomState, combine_hashes, create_hashes};
 use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_execution::memory_pool::proxy::HashTableAllocExt;
 use datafusion_expr::EmitTo;
+use hashbrown::HashMap as HashbrownMap;
 use hashbrown::hash_table::HashTable;
 
 use crate::aggregates::group_values::GroupValues;
@@ -71,7 +72,8 @@ impl ColumnCache {
     }
 
     fn size(&self) -> usize {
-        self.value_hashes.len() * size_of::<u64>()
+        self.value_hashes.capacity() * size_of::<u64>()
+            + self.values.get_array_memory_size()
     }
 
     fn clear_shrink(&mut self, shrink_to: usize) {
@@ -104,18 +106,23 @@ pub struct GroupDictionaryColumn {
     /// Converts row-encoded bytes back into Arrow arrays for [`GroupValues::emit`].
     row_decoder: RowSetDecoder,
     random_state: RandomState,
+    /// Maps `(k1, k2, ..., kN)` dictionary key tuples to their group id.
+    /// Cleared at the start of every `intern` call (not stable across calls).
+    /// Bypassed entirely once it exceeds 10 000 entries.
+    key_tuple_cache: HashbrownMap<Box<[Option<usize>]>, usize>,
+    /// Scratch buffer for building the current row's key tuple; reused each row.
+    key_tuple_scratch: Vec<Option<usize>>,
 }
 
-pub fn all_dictionary_schema(schema: &Schema) -> bool {
-    schema
-        .fields()
-        .iter()
-        .all(|field| matches!(field.data_type(), DataType::Dictionary(_, _)))
-}
-
-fn is_supported_value_type(data_type: &DataType) -> bool {
-    matches!(data_type, DataType::Utf8)
-        || matches!(data_type, DataType::List(f) if f.data_type() == &DataType::Utf8)
+pub fn supported_dictionary_schema(schema: &Schema) -> bool {
+    schema.fields().iter().all(|field| {
+        if let DataType::Dictionary(_, value_type) = field.data_type() {
+            matches!(value_type.as_ref(), DataType::Utf8)
+                || matches!(value_type.as_ref(), DataType::List(f) if f.data_type() == &DataType::Utf8)
+        } else {
+            false
+        }
+    })
 }
 
 impl GroupDictionaryColumn {
@@ -127,28 +134,6 @@ impl GroupDictionaryColumn {
                 n_cols
             ));
         }
-        schema
-            .fields()
-            .iter()
-            .try_for_each(|field| match field.data_type() {
-                DataType::Dictionary(_, value_type)
-                    if is_supported_value_type(value_type) =>
-                {
-                    Ok(())
-                }
-                DataType::Dictionary(_, value_type) => Err(internal_datafusion_err!(
-                    "GroupDictionaryColumn: unsupported dictionary value type \
-                     '{}' in column '{}'",
-                    value_type,
-                    field.name()
-                )),
-                _ => Err(internal_datafusion_err!(
-                    "GroupDictionaryColumn requires all columns to be Dictionary, \
-                     but '{}' has type {}",
-                    field.name(),
-                    field.data_type()
-                )),
-            })?;
         let row_decoder = RowSetDecoder::new(&schema);
         Ok(Self {
             schema,
@@ -160,6 +145,8 @@ impl GroupDictionaryColumn {
             row_scratch: Vec::new(),
             row_decoder,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
+            key_tuple_cache: HashbrownMap::new(),
+            key_tuple_scratch: Vec::with_capacity(n_cols),
         })
     }
 }
@@ -209,13 +196,34 @@ impl GroupValues for GroupDictionaryColumn {
             })
             .collect::<Result<_>>()?;
 
-        let _ = groups.try_reserve(n_rows);
+        // keys are not stable across batches
+        self.key_tuple_cache.clear();
+
+        groups.reserve(n_rows);
         for _row in 0..n_rows {
+            // Collect the raw dictionary key indices for this row.
+            self.key_tuple_scratch.clear();
+            for key_iter in key_iters.iter_mut() {
+                self.key_tuple_scratch.push(key_iter.next().unwrap());
+            }
+
+            // Fast path: key-tuple cache lookup
+            // TODO: expose this threshold via SessionConfig so users can tune it for their
+            // workload (e.g. raise it for high-cardinality dictionaries, lower it to save memory).
+            let use_cache = self.key_tuple_cache.len() <= 10_000;
+            if use_cache {
+                if let Some(&group_id) =
+                    self.key_tuple_cache.get(self.key_tuple_scratch.as_slice())
+                {
+                    groups.push(group_id);
+                    continue;
+                }
+            }
+
+            // Cache miss: compute combined hash and encode the row from the collected tuple.
             let mut combined_hash = 0u64;
             self.row_scratch.clear();
-
-            for (col_idx, key_iter) in key_iters.iter_mut().enumerate() {
-                let key = key_iter.next().unwrap();
+            for (col_idx, &key) in self.key_tuple_scratch.iter().enumerate() {
                 let cache = &self.col_caches[col_idx];
                 let value_hash = key.map_or(0, |key_idx| cache.value_hashes[key_idx]);
                 combined_hash = combine_hashes(combined_hash, value_hash);
@@ -227,16 +235,16 @@ impl GroupValues for GroupDictionaryColumn {
                 let row_buffer = self.row_buffer.as_slice();
                 let row_offsets = self.row_offsets.as_slice();
                 self.map
-                    .find(combined_hash, |&(stored_hash, group_id)| {
+                    .find(combined_hash, |&(stored_hash, stored_group_id)| {
                         stored_hash == combined_hash && {
                             let end = row_offsets
-                                .get(group_id + 1)
+                                .get(stored_group_id + 1)
                                 .copied()
-                                .unwrap_or(row_buffer.len()); // last group has no g+1 entry
-                            row_buffer[row_offsets[group_id]..end] == *row_scratch
+                                .unwrap_or(row_buffer.len());
+                            row_buffer[row_offsets[stored_group_id]..end] == *row_scratch
                         }
                     })
-                    .map(|&(_, group_id)| group_id)
+                    .map(|&(_, stored_group_id)| stored_group_id)
             };
 
             let group_id = match found {
@@ -254,18 +262,26 @@ impl GroupValues for GroupDictionaryColumn {
                 }
             };
 
+            // Write back to the key-tuple cache.
+            if use_cache {
+                self.key_tuple_cache
+                    .insert(Box::from(self.key_tuple_scratch.as_slice()), group_id);
+            }
+
             groups.push(group_id);
         }
 
+        println!("cache: {:?}", self.key_tuple_cache);
         Ok(())
     }
 
     fn size(&self) -> usize {
         let cache_bytes: usize = self.col_caches.iter().map(|c| c.size()).sum();
         self.map_size
-            + self.row_buffer.len()
-            + self.row_offsets.len() * size_of::<usize>()
+            + self.row_buffer.capacity()
+            + self.row_offsets.capacity() * size_of::<usize>()
             + self.row_scratch.capacity()
+            + self.key_tuple_scratch.capacity() * size_of::<Option<usize>>()
             + cache_bytes
             + self.row_decoder.size()
     }
@@ -278,6 +294,21 @@ impl GroupValues for GroupDictionaryColumn {
         self.row_offsets.len()
     }
 
+    // the entire emit path is not optimized
+    /// groups
+    /// 0: (a, x)
+    /// 1: (a, y)
+    /// 2: (b, x)
+    /// 3: (b, y)
+    ///
+    /// logically colun 1 :[a, a, b, b]
+    /// currently we do
+    /// keys:   [0, 1, 2, 3]
+    /// values: [a, a, b, b]
+    ///
+    /// which is correct but we should do
+    /// keys:   [0, 0, 1, 1]
+    /// values: [a, b]
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let n_total = self.row_offsets.len();
         if n_total == 0 {
@@ -339,10 +370,13 @@ impl GroupValues for GroupDictionaryColumn {
         self.map.shrink_to(num_rows, |_| 0);
         self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.row_buffer.clear();
+        self.row_buffer.shrink_to(num_rows);
         self.row_offsets.clear();
         self.row_offsets.shrink_to(num_rows);
         self.row_scratch.clear();
         self.row_scratch.shrink_to(0);
+        self.key_tuple_cache.clear();
+        self.key_tuple_scratch.clear();
         self.row_decoder.finish();
         for cache in &mut self.col_caches {
             cache.clear_shrink(num_rows);
@@ -411,15 +445,6 @@ enum ColumnBuilder {
     ListUtf8(ListBuilder<StringBuilder>),
 }
 
-macro_rules! dispatch_builder {
-    ($self:expr, $b:ident => $body:expr) => {
-        match $self {
-            ColumnBuilder::Utf8($b) => $body,
-            ColumnBuilder::ListUtf8($b) => $body,
-        }
-    };
-}
-
 impl ColumnBuilder {
     fn from_value_type(value_type: &DataType) -> Self {
         match value_type {
@@ -430,7 +455,10 @@ impl ColumnBuilder {
     }
 
     fn append_null(&mut self) {
-        dispatch_builder!(self, b => b.append_null())
+        match self {
+            Self::Utf8(b) => b.append_null(),
+            Self::ListUtf8(b) => b.append_null(),
+        }
     }
 
     fn append_bytes(&mut self, bytes: &[u8]) {
@@ -472,7 +500,10 @@ impl ColumnBuilder {
     }
 
     fn finish(&mut self) -> ArrayRef {
-        dispatch_builder!(self, b => Arc::new(b.finish()))
+        match self {
+            Self::Utf8(b) => Arc::new(b.finish()),
+            Self::ListUtf8(b) => Arc::new(b.finish()),
+        }
     }
 }
 
@@ -598,7 +629,7 @@ fn wrap_as_dictionary(
     }
 }
 
-// in depth test exist on https://github.com/apache/datafusion/pull/22888 . these are mostly for correness and sanity check. --- IGNORE ---
+// in depth test exist on https://github.com/apache/datafusion/pull/22888 . these are mostly for correness and sanity check.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -621,7 +652,6 @@ mod tests {
         ]))
     }
 
-    /// Same row twice in one batch → same group id; distinct rows → different ids.
     #[test]
     fn test_basic_dedup() {
         let mut gv = GroupDictionaryColumn::new(dict_schema()).unwrap();

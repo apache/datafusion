@@ -35,7 +35,7 @@ pub use row::GroupValuesRows;
 mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
 use multi_group_by::GroupValuesColumn;
-use multi_group_by::dict::{GroupDictionaryColumn, all_dictionary_schema};
+use multi_group_by::dict::{GroupDictionaryColumn, supported_dictionary_schema};
 
 pub(crate) use single_group_by::primitive::HashValue;
 
@@ -202,7 +202,7 @@ pub fn new_group_values(
     }
 
     // Route 2+ all-dictionary columns to the specialised implementation.
-    if schema.fields().len() >= 2 && all_dictionary_schema(schema.as_ref()) {
+    if schema.fields().len() >= 2 && supported_dictionary_schema(schema.as_ref()) {
         return Ok(Box::new(GroupDictionaryColumn::new(schema)?));
     }
 
