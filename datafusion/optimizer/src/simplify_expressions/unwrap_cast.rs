@@ -59,7 +59,9 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{internal_err, tree_node::Transformed};
 use datafusion_expr::{BinaryExpr, lit};
 use datafusion_expr::{Cast, Expr, Operator, TryCast, simplify::SimplifyContext};
-use datafusion_expr_common::casts::{is_supported_type, try_cast_literal_to_type};
+use datafusion_expr_common::casts::{
+    is_supported_type, is_timestamp_precision_narrowing_cast, try_cast_literal_to_type,
+};
 
 pub(super) fn unwrap_cast_in_comparison_for_binary(
     info: &SimplifyContext,
@@ -113,10 +115,14 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
     match (expr, literal) {
         (
             Expr::TryCast(TryCast {
-                expr: left_expr, ..
+                expr: left_expr,
+                field,
+                ..
             })
             | Expr::Cast(Cast {
-                expr: left_expr, ..
+                expr: left_expr,
+                field,
+                ..
             }),
             Expr::Literal(lit_val, _),
         ) => {
@@ -127,6 +133,10 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
             let Ok(lit_type) = info.get_data_type(literal) else {
                 return false;
             };
+
+            if is_timestamp_precision_narrowing_cast(&expr_type, field.data_type()) {
+                return false;
+            }
 
             if cast_literal_to_type_with_op(lit_val, &expr_type, op).is_some() {
                 return true;
@@ -146,10 +156,14 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
     list: &[Expr],
 ) -> bool {
     let (Expr::TryCast(TryCast {
-        expr: left_expr, ..
+        expr: left_expr,
+        field,
+        ..
     })
     | Expr::Cast(Cast {
-        expr: left_expr, ..
+        expr: left_expr,
+        field,
+        ..
     })) = expr
     else {
         return false;
@@ -160,6 +174,10 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
     };
 
     if !is_supported_type(&expr_type) {
+        return false;
+    }
+
+    if is_timestamp_precision_narrowing_cast(&expr_type, field.data_type()) {
         return false;
     }
 
@@ -586,6 +604,25 @@ mod tests {
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
 
+    #[test]
+    fn test_not_unwrap_cast_timestamp_precision_narrowing() {
+        let schema = expr_test_schema();
+        let expr_input = cast(col("ts_nano_none"), timestamp_millis_none_type())
+            .eq(lit_timestamp_millis_none(1));
+
+        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+    }
+
+    #[test]
+    fn test_unwrap_cast_timestamp_precision_widening() {
+        let schema = expr_test_schema();
+        let expr_input = cast(col("ts_millis_none"), timestamp_nano_none_type())
+            .eq(lit_timestamp_nano_none(1_000_000));
+        let expected = col("ts_millis_none").eq(lit_timestamp_millis_none(1));
+
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+    }
+
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
         let simplifier = ExprSimplifier::new(
             SimplifyContext::builder()
@@ -607,6 +644,7 @@ mod tests {
                     Field::new("c5", DataType::Float32, false),
                     Field::new("c6", DataType::UInt32, false),
                     Field::new("ts_nano_none", timestamp_nano_none_type(), false),
+                    Field::new("ts_millis_none", timestamp_millis_none_type(), false),
                     Field::new("ts_nano_utf", timestamp_nano_utc_type(), false),
                     Field::new("str1", DataType::Utf8, false),
                     Field::new("largestr", DataType::LargeUtf8, false),
@@ -643,6 +681,10 @@ mod tests {
         lit(ScalarValue::TimestampNanosecond(Some(ts), None))
     }
 
+    fn lit_timestamp_millis_none(ts: i64) -> Expr {
+        lit(ScalarValue::TimestampMillisecond(Some(ts), None))
+    }
+
     fn lit_timestamp_nano_utc(ts: i64) -> Expr {
         let utc = Some("+0:00".into());
         lit(ScalarValue::TimestampNanosecond(Some(ts), utc))
@@ -650,6 +692,10 @@ mod tests {
 
     fn timestamp_nano_none_type() -> DataType {
         DataType::Timestamp(TimeUnit::Nanosecond, None)
+    }
+
+    fn timestamp_millis_none_type() -> DataType {
+        DataType::Timestamp(TimeUnit::Millisecond, None)
     }
 
     // this is the type that now() returns

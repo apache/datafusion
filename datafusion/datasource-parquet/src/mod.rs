@@ -46,7 +46,7 @@ mod test_util;
 mod virtual_column;
 mod writer;
 
-pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
+pub use access_plan::{ParquetAccessPlan, ParquetRowSelection, RowGroupAccess};
 pub use file_format::*;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;

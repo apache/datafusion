@@ -18,8 +18,8 @@
 use std::sync::Arc;
 
 use datafusion_common::{DataFusionError, Result, TableReference};
-use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::CachedFileList;
+use datafusion_execution::cache::cache_manager::TableScopedPath;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_session::Session;
 
