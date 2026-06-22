@@ -411,24 +411,6 @@ impl From<ObjectMeta> for PartitionedFile {
     }
 }
 
-/// Represents the possible outcomes of a range calculation.
-///
-/// This enum is used to encapsulate the result of calculating the range of
-/// bytes to read from an object (like a file) in an object store.
-///
-/// Variants:
-/// - `Range(Option<Range<usize>>)`:
-///   Represents a range of bytes to be read. It contains an `Option` wrapping a
-///   `Range<usize>`. `None` signifies that the entire object should be read,
-///   while `Some(range)` specifies the exact byte range to read.
-/// - `TerminateEarly`:
-///   Indicates that the range calculation determined no further action is
-///   necessary, possibly because the calculated range is empty or invalid.
-pub enum RangeCalculation {
-    Range(Option<Range<u64>>),
-    TerminateEarly,
-}
-
 /// Generates test files with min-max statistics in different overlap patterns.
 ///
 /// Used by tests and benchmarks.
