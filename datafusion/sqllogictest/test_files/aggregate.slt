@@ -1978,7 +1978,36 @@ true
 statement ok
 DROP TABLE approx_distinct_dense_test;
 
-## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
+# This test runs approx_distinct over float32 and float64 for the scalar and the grouped path.
+statement ok
+CREATE TABLE approx_distinct_typed_test (g INT, f32 FLOAT, f64 DOUBLE) AS VALUES
+  (1, 1.0,  1.0),
+  (1, 2.0,  2.0),
+  (1, 2.0,  2.0),
+  (2, 3.5,  3.5),
+  (2, -0.0, -0.0),
+  (2, 0.0,  0.0);
+
+# Scalar path
+query II
+SELECT approx_distinct(f32), approx_distinct(f64) FROM approx_distinct_typed_test;
+----
+4 4
+
+# Grouped path
+query III
+SELECT g, approx_distinct(f32), approx_distinct(f64)
+FROM approx_distinct_typed_test GROUP BY g ORDER BY g;
+----
+1 2 2
+2 2 2
+
+statement ok
+DROP TABLE approx_distinct_typed_test;
+
+
+
+## This test exectes the APPROX_PERCENTILE_CONT aggregation against the test
 ## data, asserting the estimated quantiles are ±5% their actual values.
 ##
 ## Actual quantiles calculated with:

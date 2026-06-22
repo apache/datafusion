@@ -758,7 +758,9 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 Box::new(NumericHLLAccumulator::<TimestampNanosecondType>::new())
             }
-            DataType::Utf8
+            DataType::Float32
+            | DataType::Float64
+            | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
             | DataType::Binary
@@ -818,6 +820,8 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
             | DataType::Timestamp(TimeUnit::Millisecond, _)
             | DataType::Timestamp(TimeUnit::Microsecond, _)
             | DataType::Timestamp(TimeUnit::Nanosecond, _)
+            | DataType::Float32
+            | DataType::Float64
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
@@ -834,7 +838,9 @@ mod tests {
     #[cfg(not(feature = "force_hash_collisions"))]
     mod real_hash_test {
         use super::*;
-        use arrow::array::{AsArray, Int64Array, StringViewArray};
+        use arrow::array::{
+            AsArray, Float32Array, Float64Array, Int64Array, StringViewArray,
+        };
         use std::sync::Arc;
         // A string longer than the 12-byte inline limit
         const LONG: &str = "this string is definitely longer than twelve bytes";
@@ -843,6 +849,69 @@ mod tests {
             match acc.evaluate().unwrap() {
                 ScalarValue::UInt64(Some(v)) => v,
                 other => panic!("unexpected evaluate result: {other:?}"),
+            }
+        }
+
+        fn groups_count(values: ArrayRef) -> u64 {
+            let group_indices = vec![0usize; values.len()];
+            let mut acc = HllGroupsAccumulator::new();
+            acc.update_batch(&[values], &group_indices, None, 1)
+                .unwrap();
+            let result = acc.evaluate(EmitTo::All).unwrap();
+            result
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .value(0)
+        }
+
+        #[test]
+        fn float_support_for_hll_accumulator_and_group_accumulator() {
+            let floats_32: ArrayRef = Arc::new(Float32Array::from(vec![
+                1.0,
+                2.0,
+                2.0,
+                3.5,
+                3.5,
+                3.5,
+                -0.0,
+                0.0,
+                f32::NAN,
+                f32::NAN,
+            ]));
+
+            let floats_64: ArrayRef = Arc::new(Float64Array::from(vec![
+                1.0,
+                2.0,
+                2.0,
+                3.5,
+                3.5,
+                3.5,
+                -0.0,
+                0.0,
+                f64::NAN,
+                f64::NAN,
+            ]));
+
+            for array in [floats_32, floats_64] {
+                assert!(
+                    is_hll_groups_type(array.data_type()),
+                    "{} should be groups-capable",
+                    array.data_type()
+                );
+
+                let mut acc = HLLAccumulator::new();
+                acc.update_batch(&[Arc::clone(&array)]).unwrap();
+                let per_group_count = distinct_count(&mut acc);
+                let groups_count = groups_count(Arc::clone(&array));
+
+                assert_eq!(
+                    per_group_count,
+                    groups_count,
+                    "paths disagree for {}",
+                    array.data_type()
+                );
+                assert_eq!(per_group_count, 5, "wrong count for {}", array.data_type());
             }
         }
 

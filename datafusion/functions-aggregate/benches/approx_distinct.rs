@@ -19,8 +19,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, Int8Array, Int16Array, Int64Array, StringArray, StringViewArray,
-    UInt8Array, UInt16Array,
+    ArrayRef, Float32Array, Float64Array, Int8Array, Int16Array, Int64Array, StringArray,
+    StringViewArray, UInt8Array, UInt16Array,
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -59,6 +59,24 @@ fn prepare_accumulator(data_type: DataType) -> Box<dyn Accumulator> {
         exprs: &[expr],
     };
     ApproxDistinct::new().accumulator(accumulator_args).unwrap()
+}
+
+/// Creates a `Float32Array` values from a pool of `n_distinct` floats.
+fn create_f32_array(n_distinct: usize) -> Float32Array {
+    let mut rng = StdRng::seed_from_u64(42);
+    let pool: Vec<f32> = (0..n_distinct).map(|i| i as f32 * 0.5).collect();
+    (0..BATCH_SIZE)
+        .map(|_| Some(pool[rng.random_range(0..pool.len())]))
+        .collect()
+}
+
+/// Creates a `Float64Array` values from a pool of `n_distinct` floats.
+fn create_f64_array(n_distinct: usize) -> Float64Array {
+    let mut rng = StdRng::seed_from_u64(42);
+    let pool: Vec<f64> = (0..n_distinct).map(|i| i as f64 * 0.5).collect();
+    (0..BATCH_SIZE)
+        .map(|_| Some(pool[rng.random_range(0..pool.len())]))
+        .collect()
 }
 
 /// Creates an Int64Array where values are drawn from `0..n_distinct`.
@@ -224,6 +242,28 @@ fn approx_distinct_benchmark(c: &mut Criterion) {
                 .unwrap()
         })
     });
+
+    // Float32
+    let values = Arc::new(create_f32_array(200)) as ArrayRef;
+    c.bench_function("approx_distinct f32", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_accumulator(DataType::Float32);
+            accumulator
+                .update_batch(std::slice::from_ref(&values))
+                .unwrap()
+        })
+    });
+
+    // Float64
+    let values = Arc::new(create_f64_array(200)) as ArrayRef;
+    c.bench_function("approx_distinct f64", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_accumulator(DataType::Float64);
+            accumulator
+                .update_batch(std::slice::from_ref(&values))
+                .unwrap()
+        })
+    });
 }
 
 /// Build a `GroupsAccumulator` the same way the aggregate operator does: use the
@@ -287,6 +327,16 @@ fn build_grouped_batches(data_type: &DataType) -> Vec<(ArrayRef, Vec<usize>)> {
                         .map(|_| Some(pool[rng.random_range(0..pool.len())].as_str()))
                         .collect::<StringViewArray>(),
                 ),
+                DataType::Float32 => Arc::new(
+                    (0..BATCH_SIZE)
+                        .map(|_| Some(rng.random::<f32>()))
+                        .collect::<Float32Array>(),
+                ),
+                DataType::Float64 => Arc::new(
+                    (0..BATCH_SIZE)
+                        .map(|_| Some(rng.random::<f64>()))
+                        .collect::<Float64Array>(),
+                ),
                 other => panic!("unsupported grouped bench type: {other}"),
             };
             (values, group_indices)
@@ -300,7 +350,13 @@ fn approx_distinct_grouped_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("approx_distinct_grouped");
     group.sample_size(10);
 
-    for data_type in [DataType::Int64, DataType::Utf8, DataType::Utf8View] {
+    for data_type in [
+        DataType::Int64,
+        DataType::Utf8,
+        DataType::Utf8View,
+        DataType::Float32,
+        DataType::Float64,
+    ] {
         let batches = build_grouped_batches(&data_type);
         let label = format!("{data_type:?} {N_GROUPS} groups");
         group.bench_function(&label, |b| {
