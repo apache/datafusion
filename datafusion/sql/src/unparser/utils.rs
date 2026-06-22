@@ -448,7 +448,7 @@ pub(crate) fn date_part_to_sql(
 ) -> Result<Option<ast::Expr>> {
     match (style, date_part_args.len()) {
         (DateFieldExtractStyle::Extract, 2) => {
-            let date_expr = unparser.expr_to_sql(&date_part_args[1])?;
+            let date_expr = unparser.expr_to_sql_with_nesting(&date_part_args[1])?;
             if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
                 let field = match field.to_lowercase().as_str() {
                     "year" => ast::DateTimeField::Year,
@@ -468,7 +468,7 @@ pub(crate) fn date_part_to_sql(
             }
         }
         (DateFieldExtractStyle::Strftime, 2) => {
-            let column = unparser.expr_to_sql(&date_part_args[1])?;
+            let column = unparser.expr_to_sql_with_nesting(&date_part_args[1])?;
 
             if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
                 let field = match field.to_lowercase().as_str() {

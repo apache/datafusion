@@ -61,6 +61,7 @@ use datafusion_physical_plan::joins::{
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec, can_interleave};
 use datafusion_physical_plan::windows::WindowAggExec;
@@ -1015,7 +1016,9 @@ fn get_repartition_requirement_status(
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match child.partition_statistics(None)?.num_rows
+        let roundrobin_beneficial_stats = match child
+            .statistics_with_args(&StatisticsArgs::new())?
+            .num_rows
         {
             Precision::Exact(n_rows) => n_rows > batch_size,
             Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
@@ -1077,7 +1080,7 @@ pub fn ensure_distribution(
     // When `false`, round robin repartition will not be added to increase parallelism
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
-    let batch_size = config.execution.batch_size;
+    let batch_size = config.execution.batch_size.get();
     let should_use_estimates = config
         .execution
         .use_row_number_estimates_to_optimize_partitioning;

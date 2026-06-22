@@ -19,7 +19,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use datafusion_common::{
     Result, ScalarValue,
-    config::{ConfigExtension, ConfigOptions, SpillCompression},
+    config::{ConfigExtension, ConfigNonZeroUsize, ConfigOptions, SpillCompression},
     extensions::Extensions,
 };
 
@@ -51,7 +51,7 @@ use datafusion_common::{
 ///     .set_bool("datafusion.execution.parquet.pushdown_filters", true);
 ///
 /// assert_eq!(config.batch_size(), 1234);
-/// assert_eq!(config.options().execution.batch_size, 1234);
+/// assert_eq!(config.options().execution.batch_size.get(), 1234);
 /// assert_eq!(config.options().execution.parquet.pushdown_filters, true);
 /// ```
 ///
@@ -60,15 +60,16 @@ use datafusion_common::{
 ///
 /// ```
 /// # use datafusion_execution::config::SessionConfig;
-/// # use datafusion_common::ScalarValue;
+/// # use datafusion_common::config::ConfigNonZeroUsize;
 /// #
 /// let mut config = SessionConfig::new();
-/// config.options_mut().execution.batch_size = 1234;
+/// config.options_mut().execution.batch_size = ConfigNonZeroUsize::try_new(1234)?;
 /// config.options_mut().execution.parquet.pushdown_filters = true;
 /// #
 /// # assert_eq!(config.batch_size(), 1234);
-/// # assert_eq!(config.options().execution.batch_size, 1234);
+/// # assert_eq!(config.options().execution.batch_size.get(), 1234);
 /// # assert_eq!(config.options().execution.parquet.pushdown_filters, true);
+/// # datafusion_common::Result::<()>::Ok(())
 /// ```
 ///
 /// ## Built-in options
@@ -137,7 +138,7 @@ impl SessionConfig {
     /// use datafusion_execution::config::SessionConfig;
     ///
     /// let config = SessionConfig::new();
-    /// assert!(config.options().execution.batch_size > 0);
+    /// assert!(config.options().execution.batch_size.get() > 0);
     /// ```
     pub fn options(&self) -> &Arc<ConfigOptions> {
         &self.options
@@ -148,11 +149,13 @@ impl SessionConfig {
     /// Can be used to set configuration options.
     ///
     /// ```
+    /// use datafusion_common::config::ConfigNonZeroUsize;
     /// use datafusion_execution::config::SessionConfig;
     ///
     /// let mut config = SessionConfig::new();
-    /// config.options_mut().execution.batch_size = 1024;
-    /// assert_eq!(config.options().execution.batch_size, 1024);
+    /// config.options_mut().execution.batch_size = ConfigNonZeroUsize::try_new(1024)?;
+    /// assert_eq!(config.options().execution.batch_size.get(), 1024);
+    /// # datafusion_common::Result::<()>::Ok(())
     /// ```
     pub fn options_mut(&mut self) -> &mut ConfigOptions {
         Arc::make_mut(&mut self.options)
@@ -186,9 +189,8 @@ impl SessionConfig {
 
     /// Customize batch size
     pub fn with_batch_size(mut self, n: usize) -> Self {
-        // batch size must be greater than zero
-        assert!(n > 0);
-        self.options_mut().execution.batch_size = n;
+        self.options_mut().execution.batch_size =
+            ConfigNonZeroUsize::try_new(n).expect("batch size must be greater than zero");
         self
     }
 
@@ -391,7 +393,7 @@ impl SessionConfig {
 
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
-        self.options.execution.batch_size
+        self.options.execution.batch_size.get()
     }
 
     /// Enables or disables the coalescence of small batches into larger batches
