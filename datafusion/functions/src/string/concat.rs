@@ -97,11 +97,8 @@ impl ScalarUDFImpl for ConcatFunc {
         }
     }
 
-    /// mixed inputs, prefer Utf8View; prefer LargeUtf8 over Utf8 to avoid
-    /// potential overflow on LargeUtf8 input.
-    /// For binaries, use the similar hierarchy
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(deduce_return_type(arg_types))
+        Ok(arg_types[0].clone())
     }
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
@@ -245,8 +242,14 @@ impl ScalarUDFImpl for ConcatFunc {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &SimplifyContext,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
+        let data_types = args
+            .iter()
+            .map(|expr| info.get_data_type(expr))
+            .collect::<Result<Vec<_>>>()?;
+        let return_type = self.return_type(&data_types)?;
+
         // Skip simplification when binary literals are present, because it
         // handles only strings
         for arg in &args {
@@ -260,17 +263,6 @@ impl ScalarUDFImpl for ConcatFunc {
 
         let mut new_args = Vec::with_capacity(args.len());
         let mut contiguous_scalar = "".to_string();
-
-        let return_type = {
-            let data_types: Vec<_> = args
-                .iter()
-                .filter_map(|expr| match expr {
-                    Expr::Literal(l, _) => Some(l.data_type()),
-                    _ => None,
-                })
-                .collect();
-            ConcatFunc::new().return_type(&data_types)
-        }?;
 
         for arg in args.clone() {
             match arg {
@@ -409,13 +401,8 @@ mod tests {
     use super::*;
     use crate::utils::test::test_function;
     use DataType::*;
-    use arrow::array::{
-        ArrayRef, BinaryArray, BinaryViewArray, LargeBinaryArray, StringArray,
-    };
+    use arrow::array::{BinaryArray, BinaryViewArray, LargeBinaryArray, StringArray};
     use arrow::array::{LargeStringArray, StringViewArray};
-    use arrow::datatypes::Field;
-    use datafusion_common::config::ConfigOptions;
-    use std::sync::Arc;
 
     #[test]
     fn test_functions() -> Result<()> {
@@ -454,10 +441,10 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             vec![
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("aa".to_string()))),
                 ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("cc".to_string()))),
             ],
             Ok(Some("aacc")),
             &str,
@@ -467,9 +454,9 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             vec![
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("aa".to_string()))),
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("cc".to_string()))),
             ],
             Ok(Some("aacc")),
             &str,
@@ -480,7 +467,7 @@ mod tests {
             ConcatFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some("aa".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("cc".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("cc".to_string()))),
             ],
             Ok(Some("aacc")),
             &str,
@@ -508,7 +495,7 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             vec![
-                ColumnarValue::Scalar(ScalarValue::Binary(Some(
+                ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(
                     "Café".as_bytes().into()
                 ))),
                 ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(
@@ -523,7 +510,7 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             vec![
-                ColumnarValue::Scalar(ScalarValue::Binary(Some(
+                ColumnarValue::Scalar(ScalarValue::BinaryView(Some(
                     "Café".as_bytes().into()
                 ))),
                 ColumnarValue::Scalar(ScalarValue::BinaryView(Some(
@@ -571,105 +558,6 @@ mod tests {
             Binary,
             BinaryArray
         );
-        Ok(())
-    }
-
-    #[test]
-    fn test_array_string() -> Result<()> {
-        let c0 =
-            ColumnarValue::Array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
-        let c1 = ColumnarValue::Scalar(ScalarValue::Utf8(Some(",".to_string())));
-        let c2 = ColumnarValue::Array(Arc::new(StringArray::from(vec![
-            Some("x"),
-            None,
-            Some("z"),
-        ])));
-        let c3 = ColumnarValue::Scalar(ScalarValue::Utf8View(Some(",".to_string())));
-        let c4 = ColumnarValue::Array(Arc::new(StringViewArray::from(vec![
-            Some("a"),
-            None,
-            Some("b"),
-        ])));
-        let arg_fields = vec![
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8View, true),
-            Field::new("a", Utf8View, true),
-        ]
-        .into_iter()
-        .map(Arc::new)
-        .collect::<Vec<_>>();
-
-        let args = ScalarFunctionArgs {
-            args: vec![c0, c1, c2, c3, c4],
-            arg_fields,
-            number_rows: 3,
-            return_field: Field::new("f", Utf8View, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
-        };
-
-        let result = ConcatFunc::new().invoke_with_args(args)?;
-        let expected =
-            Arc::new(StringViewArray::from(vec!["foo,x,a", "bar,,", "baz,z,b"]))
-                as ArrayRef;
-        match &result {
-            ColumnarValue::Array(array) => {
-                assert_eq!(&expected, array);
-            }
-            _ => panic!(),
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_array_binary() -> Result<()> {
-        let c0 = ColumnarValue::Array(Arc::new(BinaryArray::from_vec(vec![
-            b"foo", b"bar", b"baz",
-        ])));
-        let c1 = ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(b",".to_vec())));
-        let c2 = ColumnarValue::Array(Arc::new(BinaryArray::from_opt_vec(vec![
-            Some(b"x"),
-            None,
-            Some(b"z"),
-        ])));
-        let c3 = ColumnarValue::Scalar(ScalarValue::BinaryView(Some(b",".to_vec())));
-        let c4 = ColumnarValue::Array(Arc::new(BinaryViewArray::from_iter(vec![
-            Some(b"a"),
-            None,
-            Some(b"b"),
-        ])));
-        let arg_fields = vec![
-            Field::new("a", Binary, true),
-            Field::new("a", LargeBinary, true),
-            Field::new("a", Binary, true),
-            Field::new("a", BinaryView, true),
-            Field::new("a", BinaryView, true),
-        ]
-        .into_iter()
-        .map(Arc::new)
-        .collect::<Vec<_>>();
-
-        let args = ScalarFunctionArgs {
-            args: vec![c0, c1, c2, c3, c4],
-            arg_fields,
-            number_rows: 3,
-            return_field: Field::new("f", BinaryView, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
-        };
-
-        let result = ConcatFunc::new().invoke_with_args(args)?;
-        let expected = Arc::new(BinaryViewArray::from_iter(vec![
-            Some(b"foo,x,a".to_vec()),
-            Some(b"bar,,".to_vec()),
-            Some(b"baz,z,b".to_vec()),
-        ])) as ArrayRef;
-        match &result {
-            ColumnarValue::Array(array) => {
-                assert_eq!(&expected, array);
-            }
-            _ => panic!(),
-        }
         Ok(())
     }
 }

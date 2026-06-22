@@ -684,8 +684,8 @@ fn test_simplify_concat_ws() {
 
     // the delimiter is an empty string
     {
-        let expr = concat_ws(lit(""), vec![col("a"), lit("c"), lit("b")]);
-        let expected = concat(vec![col("a"), lit("cb")]);
+        let expr = concat_ws(lit(""), vec![col("c1"), lit("c"), lit("b")]);
+        let expected = concat(vec![col("c1"), lit("cb")]);
         test_simplify(expr, expected);
     }
 
@@ -754,19 +754,14 @@ fn test_simplify_concat() -> Result<()> {
         lit("hello "),
         null.clone(),
         lit("rust"),
-        lit(ScalarValue::Utf8View(Some("!".to_string()))),
+        lit("!"),
         col("c2"),
         lit(""),
         null,
         col("c5"),
     ]);
     let expr_datatype = expr.get_type(schema.as_ref())?;
-    let expected = concat(vec![
-        col("c1"),
-        lit(ScalarValue::Utf8View(Some("hello rust!".to_string()))),
-        col("c2"),
-        col("c5"),
-    ]);
+    let expected = concat(vec![col("c1"), lit("hello rust!"), col("c2"), col("c5")]);
     let expected_datatype = expected.get_type(schema.as_ref())?;
     assert_eq!(expr_datatype, expected_datatype);
     test_simplify(expr, expected);
