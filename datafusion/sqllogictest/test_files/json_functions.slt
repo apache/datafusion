@@ -1,0 +1,96 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## JSON Function Tests
+##########
+
+# Setup test table
+statement ok
+CREATE TABLE json_test AS VALUES
+  ('{"name": "Alice", "age": 30}'),
+  ('{"name": "Bob", "nested": {"key": "val"}}');
+
+# Simple key extraction
+query T
+SELECT json_get_str(column1, 'name') FROM json_test;
+----
+Alice
+Bob
+
+# Nested key extraction — first row has no "nested" key, returns NULL
+query T
+SELECT json_get_str(column1, 'nested', 'key') FROM json_test;
+----
+NULL
+val
+
+# Non-string value returns NULL
+query T
+SELECT json_get_str('{"count": 42}', 'count');
+----
+NULL
+
+# Missing key returns NULL
+query T
+SELECT json_get_str('{"a": "hello"}', 'nonexistent');
+----
+NULL
+
+# Invalid JSON returns NULL
+query T
+SELECT json_get_str('not valid json', 'key');
+----
+NULL
+
+# Null JSON input returns NULL
+query T
+SELECT json_get_str(NULL, 'key');
+----
+NULL
+
+# Zero arguments — should fail at planning time
+statement error
+SELECT json_get_str();
+
+# Empty path (jq `.` semantics): no keys → return the JSON value if it is a string
+query T
+SELECT json_get_str('"hello"');
+----
+hello
+
+# Empty path on non-string JSON → NULL
+query T
+SELECT json_get_str('42');
+----
+NULL
+
+# Empty path on object → NULL (object is not a string)
+query T
+SELECT json_get_str('{"a": 1}');
+----
+NULL
+
+# Empty path on invalid JSON → NULL (silent)
+query T
+SELECT json_get_str('not json');
+----
+NULL
+
+# Clean up
+statement ok
+DROP TABLE json_test;
