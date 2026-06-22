@@ -170,7 +170,6 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> datafusion_common::Result<()> {
         debug_assert_eq!(values.len(), 1);

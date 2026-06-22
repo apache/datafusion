@@ -18,7 +18,7 @@
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::vec;
 
 use crate::utils::make_decimal_type;
@@ -455,6 +455,7 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) context_provider: &'a S,
     pub(crate) options: ParserOptions,
     pub(crate) ident_normalizer: IdentNormalizer,
+    warnings: Mutex<Vec<Diagnostic>>,
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -477,7 +478,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             context_provider,
             options,
             ident_normalizer: IdentNormalizer::new(ident_normalize),
+            warnings: Mutex::new(vec![]),
         }
+    }
+
+    pub(crate) fn add_warning(&self, warning: Diagnostic) {
+        self.warnings
+            .lock()
+            .expect("warning diagnostic lock poisoned")
+            .push(warning);
+    }
+
+    /// Drain and return non-fatal warnings collected during SQL planning.
+    pub fn take_warnings(&self) -> Vec<Diagnostic> {
+        std::mem::take(
+            &mut self
+                .warnings
+                .lock()
+                .expect("warning diagnostic lock poisoned"),
+        )
     }
 
     pub fn build_schema(&self, columns: Vec<SQLColumnDef>) -> Result<Schema> {
@@ -574,7 +593,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             let fields = plan.schema().fields().clone();
             LogicalPlanBuilder::from(plan)
-                .project(fields.iter().zip(idents.into_iter()).map(|(field, ident)| {
+                .project(fields.iter().zip(idents).map(|(field, ident)| {
                     col(field.name()).alias(self.ident_normalizer.normalize(ident))
                 }))?
                 .build()

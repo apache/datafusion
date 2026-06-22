@@ -148,6 +148,32 @@ impl Unparser<'_> {
                 ))))
             }
             Expr::Column(col) => self.col_to_sql(col),
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::IsDistinctFrom,
+                right,
+            }) => {
+                let l = self.expr_to_sql_inner(left.as_ref())?;
+                let r = self.expr_to_sql_inner(right.as_ref())?;
+
+                Ok(ast::Expr::Nested(Box::new(ast::Expr::IsDistinctFrom(
+                    Box::new(l),
+                    Box::new(r),
+                ))))
+            }
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::IsNotDistinctFrom,
+                right,
+            }) => {
+                let l = self.expr_to_sql_inner(left.as_ref())?;
+                let r = self.expr_to_sql_inner(right.as_ref())?;
+
+                Ok(ast::Expr::Nested(Box::new(ast::Expr::IsNotDistinctFrom(
+                    Box::new(l),
+                    Box::new(r),
+                ))))
+            }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
@@ -291,7 +317,8 @@ impl Unparser<'_> {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
                 pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                escape_char: escape_char.map(|c| SingleQuotedString(c.to_string())),
+                escape_char: escape_char
+                    .map(|c| SingleQuotedString(c.to_string()).into()),
                 any: false,
             }),
             Expr::Like(Like {
@@ -307,7 +334,7 @@ impl Unparser<'_> {
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                         escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string())),
+                            .map(|c| SingleQuotedString(c.to_string()).into()),
                         any: false,
                     })
                 } else {
@@ -316,7 +343,7 @@ impl Unparser<'_> {
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                         escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string())),
+                            .map(|c| SingleQuotedString(c.to_string()).into()),
                         any: false,
                     })
                 }
@@ -572,7 +599,10 @@ impl Unparser<'_> {
                     params: ast::OneOrManyWithParens::Many(
                         params
                             .iter()
-                            .map(|param| self.new_ident_quoted_if_needs(param.clone()))
+                            .map(|param| ast::LambdaFunctionParameter {
+                                name: self.new_ident_quoted_if_needs(param.clone()),
+                                data_type: None,
+                            })
                             .collect(),
                     ),
                     body: Box::new(self.expr_to_sql_inner(body)?),
@@ -1338,19 +1368,27 @@ impl Unparser<'_> {
             ScalarValue::Utf8(None)
             | ScalarValue::Utf8View(None)
             | ScalarValue::LargeUtf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::Binary(Some(_)) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::Binary(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::BinaryView(Some(_)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+            ScalarValue::Binary(Some(bin))
+            | ScalarValue::BinaryView(Some(bin))
+            | ScalarValue::LargeBinary(Some(bin))
+            | ScalarValue::FixedSizeBinary(_, Some(bin)) => {
+                let hex = bin
+                    .iter()
+                    .flat_map(|x| {
+                        const HEX: [char; 16] = [
+                            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b',
+                            'c', 'd', 'e', 'f',
+                        ];
+                        let (hi, lo) = (((*x >> 4) & 0xfu8), (*x & 0xfu8));
+                        [HEX[hi as usize], HEX[lo as usize]]
+                    })
+                    .collect::<String>();
+                Ok(ast::Expr::value(ast::Value::HexStringLiteral(hex)))
             }
-            ScalarValue::BinaryView(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::FixedSizeBinary(..) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::LargeBinary(Some(_)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::LargeBinary(None) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Binary(None)
+            | ScalarValue::BinaryView(None)
+            | ScalarValue::FixedSizeBinary(_, None)
+            | ScalarValue::LargeBinary(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::FixedSizeList(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::List(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::LargeList(a) => self.scalar_value_list_to_sql(a.values()),
@@ -1876,13 +1914,14 @@ mod tests {
     use ast::ObjectName;
     use datafusion_common::datatype::DataTypeExt;
     use datafusion_common::{Spans, TableReference};
-    use datafusion_expr::expr::{LambdaVariable, WildcardOptions};
+    use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
-        ColumnarValue, HigherOrderUDF, LambdaParametersProgress, ScalarFunctionArgs,
-        ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda, Volatility, WindowFrame,
-        WindowFunctionDefinition, case, cast, col, cube, exists, grouping_set,
-        interval_datetime_lit, interval_year_month_lit, lambda, lit, not, not_exists,
-        out_ref_col, placeholder, rollup, table_scan, try_cast, when,
+        ColumnarValue, HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda,
+        Volatility, WindowFrame, WindowFunctionDefinition, case, cast, col, cube, exists,
+        grouping_set, interval_datetime_lit, interval_year_month_lit, lambda, lambda_var,
+        lit, not, not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast,
+        when,
     };
     use datafusion_expr::{ExprFunctionExt, interval_month_day_nano_lit};
     use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
@@ -1939,7 +1978,7 @@ mod tests {
     #[derive(Debug, Hash, Eq, PartialEq)]
     struct DummyHigherOrderUDF;
 
-    impl HigherOrderUDF for DummyHigherOrderUDF {
+    impl HigherOrderUDFImpl for DummyHigherOrderUDF {
         fn name(&self) -> &str {
             "dummy_higher_order_function"
         }
@@ -2057,17 +2096,8 @@ mod tests {
             ),
             (
                 Expr::HigherOrderFunction(HigherOrderFunction::new(
-                    Arc::new(DummyHigherOrderUDF),
-                    vec![
-                        col("a"),
-                        lambda(
-                            ["v"],
-                            -Expr::LambdaVariable(LambdaVariable::new(
-                                "v".to_string(),
-                                Some(Arc::new(Field::new("", DataType::Null, true))),
-                            )),
-                        ),
-                    ],
+                    Arc::new(HigherOrderUDF::new_from_impl(DummyHigherOrderUDF)),
+                    vec![col("a"), lambda(["v"], -lambda_var("v"))],
                 )),
                 r#"dummy_higher_order_function(a, (v) -> -v)"#,
             ),
@@ -3680,5 +3710,94 @@ mod tests {
         assert_eq!(actual, "CAST(`a` AS TIMESTAMP)");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_is_distinct_from() {
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("c1")),
+            Operator::IsDistinctFrom,
+            Box::new(lit(true)),
+        ));
+
+        let sql = expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(c1 IS DISTINCT FROM true)");
+
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("c1")),
+            Operator::IsNotDistinctFrom,
+            Box::new(lit(true)),
+        ));
+
+        let sql = expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(c1 IS NOT DISTINCT FROM true)");
+    }
+
+    #[test]
+    fn test_binary_literal() {
+        let value = vec![0xDEu8, 0xAD, 0xBE, 0xEF];
+        let expected_hex = "X'deadbeef'";
+
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::Binary(Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::BinaryView(Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::FixedSizeBinary(4, Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::LargeBinary(Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::Binary(None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::BinaryView(None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::FixedSizeBinary(1, None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::LargeBinary(None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
     }
 }

@@ -31,6 +31,8 @@ use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs,
 };
+use crate::statistics::StatisticsArgs;
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PlanProperties, RecordBatchStream,
@@ -41,13 +43,11 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinType, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
@@ -283,14 +283,6 @@ impl ExecutionPlan for CrossJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // CrossJoin has no join conditions or expressions
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -380,11 +372,14 @@ impl ExecutionPlan for CrossJoinExec {
         }
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        // Get the all partitions statistics of the left
-        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
-        let right_stats =
-            Arc::unwrap_or_clone(self.right.partition_statistics(partition)?);
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        // Left side is always broadcast, so it always needs overall stats
+        let left_stats =
+            Arc::unwrap_or_clone(args.compute_child_statistics(&self.left, None)?);
+        // Right side is partitioned, so it needs per-partition stats
+        let right_stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.right, args.partition())?,
+        );
 
         Ok(Arc::new(stats_cartesian_product(left_stats, right_stats)))
     }
@@ -439,13 +434,14 @@ fn stats_cartesian_product(
     let left_row_count = left_stats.num_rows;
     let right_row_count = right_stats.num_rows;
 
-    // calculate global stats
+    // Calculate global stats
     let num_rows = left_row_count.multiply(&right_row_count);
-    // the result size is two times a*b because you have the columns of both left and right
-    let total_byte_size = left_stats
-        .total_byte_size
-        .multiply(&right_stats.total_byte_size)
-        .multiply(&Precision::Exact(2));
+
+    // Each output row includes every left and right column, so the left side is
+    // repeated once per right row and the right side once per left row.
+    let left_byte_size = left_stats.total_byte_size.multiply(&right_row_count);
+    let right_byte_size = right_stats.total_byte_size.multiply(&left_row_count);
+    let total_byte_size = left_byte_size.add(&right_byte_size);
 
     let left_col_stats = left_stats.column_statistics;
     let right_col_stats = right_stats.column_statistics;
@@ -503,7 +499,7 @@ fn stats_cartesian_product(
     }
 }
 
-/// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
+/// A stream that issues [RecordBatch]es as they arrive from the right of the join.
 struct CrossJoinStream<T> {
     /// Input schema
     schema: Arc<Schema>,
@@ -645,7 +641,12 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
         let right_data = match ready!(self.right.poll_next_unpin(cx)) {
             Some(Ok(right_data)) => right_data,
             Some(Err(e)) => return Poll::Ready(Err(e)),
-            None => return Poll::Ready(Ok(StatefulStreamResult::Ready(None))),
+            None => {
+                // Release the right (probe) input pipeline's resources.
+                let right_schema = self.right.schema();
+                self.right = Box::pin(EmptyRecordBatchStream::new(right_schema));
+                return Poll::Ready(Ok(StatefulStreamResult::Ready(None)));
+            }
         };
         self.join_metrics.input_batches.add(1);
         self.join_metrics.input_rows.add(right_data.num_rows());
@@ -759,7 +760,9 @@ mod tests {
 
         let expected = Statistics {
             num_rows: Precision::Exact(left_row_count * right_row_count),
-            total_byte_size: Precision::Exact(2 * left_bytes * right_bytes),
+            total_byte_size: Precision::Exact(
+                left_bytes * right_row_count + right_bytes * left_row_count,
+            ),
             column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),

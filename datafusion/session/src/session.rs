@@ -114,7 +114,7 @@ pub trait Session: Send + Sync {
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>>;
 
     /// Return reference to higher_order_functions
-    fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>>;
+    fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>>;
 
     /// Return reference to aggregate_functions
     fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>>;

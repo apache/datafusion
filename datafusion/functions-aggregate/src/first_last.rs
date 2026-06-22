@@ -674,7 +674,6 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         self.resize_states(total_num_groups);
@@ -693,7 +692,7 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         let groups = self.get_filtered_extreme_of_each_group(
             &val_and_order_cols[1..],
             group_indices,
-            opt_filter,
+            None,
             vals,
             Some(is_set_arr),
         )?;
@@ -1590,12 +1589,7 @@ mod tests {
             group_acc.compute_size_of_orderings()
         );
 
-        group_acc.merge_batch(
-            &state,
-            &[0, 1, 2],
-            Some(&BooleanArray::from(vec![true, false, false])),
-            3,
-        )?;
+        group_acc.merge_batch(&state, &[0, 1, 2], 3)?;
 
         assert_eq!(
             group_acc.size_of_orderings,
@@ -1611,8 +1605,11 @@ mod tests {
         let binding = group_acc.evaluate(EmitTo::All)?;
         let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
 
+        // group 0 keeps merged value=1 (ordering=1).
+        // group 1 keeps merged value=-6 (ordering=-6 < 6, so -6 is "first").
+        // group 2 had no merged value (is_set=false), so update_batch value=6 wins.
         let expect: PrimitiveArray<Int64Type> =
-            Int64Array::from(vec![Some(1), Some(6), Some(6), None]);
+            Int64Array::from(vec![Some(1), Some(-6), Some(6), None]);
 
         assert_eq!(eval_result, &expect);
 
@@ -1683,7 +1680,7 @@ mod tests {
                 group_acc.compute_size_of_orderings()
             );
 
-            group_acc.merge_batch(&s, &Vec::from_iter(0..s[0].len()), None, 100)?;
+            group_acc.merge_batch(&s, &Vec::from_iter(0..s[0].len()), 100)?;
             assert_eq!(
                 group_acc.size_of_orderings,
                 group_acc.compute_size_of_orderings()
@@ -1756,12 +1753,7 @@ mod tests {
         ];
         assert_eq!(state, expected_state);
 
-        group_acc.merge_batch(
-            &state,
-            &[0, 1, 2],
-            Some(&BooleanArray::from(vec![true, false, false])),
-            3,
-        )?;
+        group_acc.merge_batch(&state, &[0, 1, 2], 3)?;
 
         val_with_orderings.clear();
         val_with_orderings.push(Arc::new(Int64Array::from(vec![66, 6])));
@@ -1772,6 +1764,10 @@ mod tests {
         let binding = group_acc.evaluate(EmitTo::All)?;
         let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
 
+        // group 0: merged value=1 (ordering=1, is_set=true), update not called.
+        // group 1: merged value=-6 (ordering=-6, is_set=true); update ordering=66 > -6
+        //          → LAST_VALUE keeps the higher ordering, so group 1 becomes 66.
+        // group 2: is_set=false after merge; update_batch sets it to 6.
         let expect: PrimitiveArray<Int64Type> =
             Int64Array::from(vec![Some(1), Some(66), Some(6), None]);
 

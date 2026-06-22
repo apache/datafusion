@@ -31,19 +31,23 @@ use arrow::array::{
     cast::AsArray,
 };
 use arrow::array::{
-    Datum, GenericListArray, Int32Array, Int64Array, MutableArrayData, make_array,
+    ArrowPrimitiveType, BooleanArray, Datum, GenericListArray, Int32Array, Int64Array,
+    MutableArrayData, PrimitiveArray, make_array,
 };
 use arrow::array::{LargeListViewArray, ListViewArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use arrow::compute::kernels::cmp::neq;
+use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::length::length;
 use arrow::compute::{SortColumn, SortOptions, partition};
-use arrow::datatypes::{DataType, Field, SchemaRef};
+use arrow::datatypes::{
+    ArrowNativeType, DataType, Field, Int32Type, Int64Type, SchemaRef,
+};
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{Ordering, min};
 use std::collections::HashSet;
+use std::iter::repeat_n;
 use std::num::NonZero;
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
@@ -391,6 +395,137 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     count
 }
 
+/// Splits `vec` at index `n`, returning the first `n` elements and leaving the
+/// remaining `vec.len() - n` elements in `vec`.
+///
+/// Allocates for whichever side is smaller, so the new allocation is
+/// `min(n, vec.len() - n)` rather than always `n` (as `vec.drain(0..n).collect()`
+/// would). This matters when the split emits a prefix under memory pressure,
+/// where `n` can be close to `vec.len()`.
+pub fn split_vec_min_alloc<T>(vec: &mut Vec<T>, n: usize) -> Vec<T> {
+    if n * 2 <= vec.len() {
+        vec.drain(0..n).collect()
+    } else {
+        let remaining = vec.split_off(n);
+        std::mem::replace(vec, remaining)
+    }
+}
+
+#[cfg(test)]
+mod split_vec_min_alloc_tests {
+    use super::split_vec_min_alloc;
+
+    #[test]
+    fn drain_branch() {
+        // n * 2 <= len  ->  drain+collect branch (allocates n elements)
+        let mut v = vec![1, 2, 3, 4, 5, 6];
+        let first = split_vec_min_alloc(&mut v, 2);
+        assert_eq!(first, vec![1, 2]);
+        assert_eq!(v, vec![3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn split_off_branch() {
+        // remaining < n  ->  split_off+replace branch (allocates remaining elements)
+        let mut v = vec![1, 2, 3, 4, 5, 6];
+        let first = split_vec_min_alloc(&mut v, 4);
+        assert_eq!(first, vec![1, 2, 3, 4]);
+        assert_eq!(v, vec![5, 6]);
+    }
+
+    #[test]
+    fn exactly_half() {
+        // n * 2 == len  ->  drain branch (boundary)
+        let mut v = vec![1, 2, 3, 4];
+        let first = split_vec_min_alloc(&mut v, 2);
+        assert_eq!(first, vec![1, 2]);
+        assert_eq!(v, vec![3, 4]);
+    }
+
+    #[test]
+    fn take_all() {
+        let mut v = vec![1, 2, 3];
+        let first = split_vec_min_alloc(&mut v, 3);
+        assert_eq!(first, vec![1, 2, 3]);
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn take_none() {
+        let mut v = vec![1, 2, 3];
+        let first = split_vec_min_alloc(&mut v, 0);
+        assert!(first.is_empty());
+        assert_eq!(v, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn emitted_prefix_does_not_realloc_on_push() {
+        // Demonstrates *why* the split-off branch must NOT call `shrink_to_fit`.
+        //
+        // Downstream callers (e.g. `multi_group_by/bytes.rs`, which does
+        // `first_n_offsets.push(offset_n)` right after the split) push onto the
+        // emitted prefix immediately. The split-off branch hands the original
+        // backing allocation to that prefix, so the prefix already has spare
+        // capacity for the very next push.
+        //
+        // If we shrank the prefix to fit, that next push would have to
+        // reallocate, and Vec's growth strategy would land it at a *larger*
+        // capacity than the original allocation we started with -- the opposite
+        // of the memory saving `shrink_to_fit` was meant to deliver.
+
+        // A Vec with a known, deliberately large capacity. n*2 > len, so this
+        // takes the split-off branch.
+        let mut v: Vec<u32> = Vec::with_capacity(64);
+        v.extend(0..10);
+        let original_capacity = v.capacity();
+        assert!(original_capacity >= 64);
+
+        // Emit a prefix that is most of the Vec (n = 8, remaining = 2).
+        let mut prefix = split_vec_min_alloc(&mut v, 8);
+        assert_eq!(prefix, vec![0, 1, 2, 3, 4, 5, 6, 7]);
+
+        // The split-off branch moved the original backing store into `prefix`,
+        // so it keeps the original (large) capacity -- no shrink happened.
+        assert_eq!(
+            prefix.capacity(),
+            original_capacity,
+            "split-off branch must hand the original allocation to the prefix"
+        );
+
+        // The caller's very next operation: push one element onto the prefix.
+        prefix.push(99);
+
+        // Because the capacity was preserved, the push reused the existing
+        // allocation: post-push capacity is unchanged and still <= original.
+        // This is the realloc that `shrink_to_fit` would have forced.
+        assert_eq!(
+            prefix.capacity(),
+            original_capacity,
+            "push must reuse the preserved allocation (no realloc)"
+        );
+        assert!(prefix.capacity() <= original_capacity);
+
+        // Counter-demonstration: had we shrunk the prefix to fit (capacity 8),
+        // the same push would have reallocated. Vec doubles on growth, so the
+        // post-push capacity (16) ends up LARGER than where a length-8 prefix
+        // started -- and we paid a realloc for it.
+        let mut shrunk: Vec<u32> = prefix[..8].to_vec();
+        shrunk.shrink_to_fit();
+        let shrunk_capacity = shrink_then_push_capacity(&mut shrunk);
+        assert!(
+            shrunk_capacity > 8,
+            "shrink-to-fit then push reallocates to a larger capacity"
+        );
+    }
+
+    /// Helper for the counter-demonstration above: push one element and report
+    /// the resulting capacity.
+    fn shrink_then_push_capacity(v: &mut Vec<u32>) -> usize {
+        v.push(99);
+        v.capacity()
+    }
+}
+
 /// Creates single element [`ListArray`], [`LargeListArray`] and
 /// [`FixedSizeListArray`] from other arrays
 ///
@@ -599,11 +734,17 @@ pub fn base_type(data_type: &DataType) -> DataType {
     match data_type {
         DataType::List(field)
         | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
         | DataType::FixedSizeList(field, _) => base_type(field.data_type()),
         _ => data_type.to_owned(),
     }
 }
 
+// TODO: Modify this to also allow specifying how listviews should be treated.
+//       For example if cast to List (default) or maintain as ListView (requires
+//       function to implement support for ListViews)
+//       https://github.com/apache/datafusion/issues/21777
 /// Information about how to coerce lists.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum ListCoercion {
@@ -657,6 +798,19 @@ pub fn coerced_type_with_base_type_only(
                 *len,
             )
         }
+        (DataType::ListView(field), _) => {
+            let field_type = coerced_type_with_base_type_only(
+                field.data_type(),
+                base_type,
+                array_coercion,
+            );
+
+            DataType::ListView(Arc::new(Field::new(
+                field.name(),
+                field_type,
+                field.is_nullable(),
+            )))
+        }
         (DataType::LargeList(field), _) => {
             let field_type = coerced_type_with_base_type_only(
                 field.data_type(),
@@ -665,6 +819,19 @@ pub fn coerced_type_with_base_type_only(
             );
 
             DataType::LargeList(Arc::new(Field::new(
+                field.name(),
+                field_type,
+                field.is_nullable(),
+            )))
+        }
+        (DataType::LargeListView(field), _) => {
+            let field_type = coerced_type_with_base_type_only(
+                field.data_type(),
+                base_type,
+                array_coercion,
+            );
+
+            DataType::LargeListView(Arc::new(Field::new(
                 field.name(),
                 field_type,
                 field.is_nullable(),
@@ -687,10 +854,28 @@ pub fn coerced_fixed_size_list_to_list(data_type: &DataType) -> DataType {
                 field.is_nullable(),
             )))
         }
+        DataType::ListView(field) => {
+            let field_type = coerced_fixed_size_list_to_list(field.data_type());
+
+            DataType::ListView(Arc::new(Field::new(
+                field.name(),
+                field_type,
+                field.is_nullable(),
+            )))
+        }
         DataType::LargeList(field) => {
             let field_type = coerced_fixed_size_list_to_list(field.data_type());
 
             DataType::LargeList(Arc::new(Field::new(
+                field.name(),
+                field_type,
+                field.is_nullable(),
+            )))
+        }
+        DataType::LargeListView(field) => {
+            let field_type = coerced_fixed_size_list_to_list(field.data_type());
+
+            DataType::LargeListView(Arc::new(Field::new(
                 field.name(),
                 field_type,
                 field.is_nullable(),
@@ -706,6 +891,8 @@ pub fn list_ndims(data_type: &DataType) -> u64 {
     match data_type {
         DataType::List(field)
         | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
         | DataType::FixedSizeList(field, _) => 1 + list_ndims(field.data_type()),
         _ => 0,
     }
@@ -1073,6 +1260,7 @@ pub fn remove_list_null_values(array: &ArrayRef) -> Result<ArrayRef> {
     }
 }
 
+/// Create a new list array where all the nulls point to empty lists
 fn truncate_list_nulls<O: OffsetSizeTrait>(
     list: &GenericListArray<O>,
 ) -> Result<GenericListArray<O>> {
@@ -1086,17 +1274,18 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
             &Int64Array::new_scalar(0)
         };
 
-        let not_empty = neq(&lengths, zero)?;
-        let null_and_non_empty = &!nulls.inner() & not_empty.values();
+        let (mut valid_or_empty, _nulls) = eq(&lengths, zero)?.into_parts();
+        valid_or_empty |= nulls.inner();
+        let valid_or_empty = BooleanArray::from(valid_or_empty);
 
-        if null_and_non_empty.count_set_bits() > 0 {
+        if valid_or_empty.has_false() {
             let array_data = list.values().to_data();
             let offsets = list.offsets();
             let capacity = offsets[offsets.len() - 1] - offsets[0];
             let mut mutable_array_data =
                 MutableArrayData::new(vec![&array_data], false, capacity.as_usize());
 
-            let valid_or_empty = nulls.inner() | &!not_empty.values();
+            let (valid_or_empty, _nulls) = valid_or_empty.into_parts();
 
             for (start, end) in valid_or_empty.set_slices() {
                 mutable_array_data.extend(
@@ -1129,6 +1318,163 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
     Ok(list.clone())
 }
 
+/// If `array` is a list or a map, returns a new array of the same length as it's inner values
+/// where each value is the 1-based index of the sublist it's contained. Example:
+///
+/// `[[1], [2, 3], [4, 5, 6]] =>  [1, 2, 2, 3, 3, 3]`
+///
+/// Otherwise returns an error
+pub fn list_values_row_number(array: &dyn Array) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::List(_) => Ok(Arc::new(variable_size_list_values_row_number::<
+            Int32Type,
+        >(array.as_list().offsets()))),
+        DataType::LargeList(_) => Ok(Arc::new(variable_size_list_values_row_number::<
+            Int64Type,
+        >(array.as_list().offsets()))),
+        DataType::ListView(_) => Ok(Arc::new(variable_size_list_values_row_number::<
+            Int32Type,
+        >(array.as_list_view().offsets()))),
+        DataType::LargeListView(_) => {
+            Ok(Arc::new(variable_size_list_values_row_number::<Int64Type>(
+                array.as_list_view().offsets(),
+            )))
+        }
+        DataType::FixedSizeList(_, _) => {
+            let fixed_size_list = array.as_fixed_size_list();
+
+            Ok(Arc::new(fsl_values_row_number(
+                fixed_size_list.value_length(),
+                fixed_size_list.len(),
+            )?))
+        }
+        DataType::Map(_, _) => Ok(Arc::new(variable_size_list_values_row_number::<
+            Int32Type,
+        >(array.as_map().offsets()))),
+        other => _exec_err!("expected list, got {other}"),
+    }
+}
+
+/// [0, 2, 2, 5, 6] -> [0, 0, 2, 2, 2, 3]
+fn variable_size_list_values_row_number<T: ArrowPrimitiveType>(
+    offsets: &[T::Native],
+) -> PrimitiveArray<T> {
+    let mut rows_number = Vec::with_capacity(
+        offsets[offsets.len() - 1].to_usize().unwrap() - offsets[0].to_usize().unwrap(),
+    );
+
+    for (i, w) in offsets.windows(2).enumerate() {
+        let len = w[1].as_usize() - w[0].as_usize();
+        rows_number.extend(repeat_n(T::Native::usize_as(i), len));
+    }
+
+    PrimitiveArray::new(rows_number.into(), None)
+}
+
+/// (2, 3) -> [0, 0, 1, 1, 2, 2]
+fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array> {
+    let list_size = list_size.to_usize().ok_or_else(|| {
+        _exec_datafusion_err!("fsl_values_index: invalid list_size {list_size}")
+    })?;
+
+    let mut rows_number = Vec::with_capacity(list_size * array_len);
+
+    for i in 0..array_len {
+        rows_number.extend(repeat_n(i as i32, list_size));
+    }
+
+    Ok(PrimitiveArray::new(rows_number.into(), None))
+}
+
+/// Replace `-0.0` with `+0.0` in any `Float16`, `Float32`, or `Float64` array.
+/// For non-float arrays returns the input unchanged. NaN payloads are
+/// preserved.
+///
+/// Arrow's comparison kernels (`arrow::compute::kernels::cmp::eq` etc.) and
+/// row-encoding (`arrow::row::RowConverter`) use IEEE 754 totalOrder
+/// semantics, which treats `-0.0` and `+0.0` as distinct. SQL semantics
+/// (PostgreSQL / IEEE 754 equality) require them to compare equal, so
+/// callers normalize before invoking those kernels.
+///
+/// The common case - no `-0.0` present - is allocation-free: a single
+/// read-only scan of the underlying buffer (auto-vectorizable to an
+/// OR-reduction) decides whether to fall through to the rewriting path.
+/// Only arrays that actually contain `-0.0` pay for a new buffer.
+pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
+    use arrow::array::{Float16Array, Float32Array, Float64Array};
+    use arrow::datatypes::{Float16Type, Float32Type, Float64Type};
+    // -0.0 has only the sign bit set; no other finite or NaN value shares
+    // this bit pattern, so a strict-equality scan reliably gates the rewrite.
+    const NEG_ZERO_F16_BITS: u16 = half::f16::NEG_ZERO.to_bits();
+    const NEG_ZERO_F32_BITS: u32 = (-0.0_f32).to_bits();
+    const NEG_ZERO_F64_BITS: u64 = (-0.0_f64).to_bits();
+    match array.data_type() {
+        DataType::Float32 => {
+            let arr: &Float32Array = array.as_primitive::<Float32Type>();
+            if !arr
+                .values()
+                .iter()
+                .any(|v| v.to_bits() == NEG_ZERO_F32_BITS)
+            {
+                return Arc::clone(array);
+            }
+            let normalized: Float32Array =
+                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f32 } else { v });
+            Arc::new(normalized)
+        }
+        DataType::Float64 => {
+            let arr: &Float64Array = array.as_primitive::<Float64Type>();
+            if !arr
+                .values()
+                .iter()
+                .any(|v| v.to_bits() == NEG_ZERO_F64_BITS)
+            {
+                return Arc::clone(array);
+            }
+            let normalized: Float64Array =
+                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f64 } else { v });
+            Arc::new(normalized)
+        }
+        DataType::Float16 => {
+            let arr: &Float16Array = array.as_primitive::<Float16Type>();
+            if !arr
+                .values()
+                .iter()
+                .any(|v| v.to_bits() == NEG_ZERO_F16_BITS)
+            {
+                return Arc::clone(array);
+            }
+            let normalized: Float16Array = arr.unary(|v| {
+                if v.to_bits() << 1 == 0 {
+                    half::f16::from_bits(0)
+                } else {
+                    v
+                }
+            });
+            Arc::new(normalized)
+        }
+        _ => Arc::clone(array),
+    }
+}
+
+/// Replace `-0.0` with `+0.0` in `Float16`, `Float32`, or `Float64` scalar
+/// values. Other variants are returned unchanged. See [`normalize_float_zero`]
+/// for context.
+pub fn normalize_float_zero_scalar(scalar: ScalarValue) -> ScalarValue {
+    match scalar {
+        ScalarValue::Float32(Some(v)) if v.to_bits() << 1 == 0 => {
+            ScalarValue::Float32(Some(0.0))
+        }
+        ScalarValue::Float64(Some(v)) if v.to_bits() << 1 == 0 => {
+            ScalarValue::Float64(Some(0.0))
+        }
+        ScalarValue::Float16(Some(v)) if v.to_bits() << 1 == 0 => {
+            ScalarValue::Float16(Some(half::f16::from_bits(0)))
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1140,6 +1486,7 @@ mod tests {
         buffer::NullBuffer,
         datatypes::Int32Type,
     };
+    #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
 
     #[test]
@@ -1564,5 +1911,86 @@ mod tests {
         // check above skips inner value of nulls
         assert_eq!(res.values(), expected.values());
         assert_eq!(res.offsets(), expected.offsets());
+    }
+
+    #[test]
+    fn test_list_array_values_row_number() {
+        assert_eq!(
+            variable_size_list_values_row_number::<Int32Type>(
+                &OffsetBuffer::from_lengths([1, 3, 0, 2,])
+            ),
+            Int32Array::from(vec![0, 1, 1, 1, 3, 3])
+        );
+
+        assert_eq!(
+            variable_size_list_values_row_number::<Int32Type>(
+                &OffsetBuffer::from_lengths([])
+            ),
+            Int32Array::new_null(0)
+        );
+
+        assert_eq!(
+            variable_size_list_values_row_number::<Int32Type>(
+                &OffsetBuffer::from_lengths([0])
+            ),
+            Int32Array::new_null(0)
+        );
+
+        assert_eq!(
+            variable_size_list_values_row_number::<Int32Type>(
+                &OffsetBuffer::from_lengths([0, 0])
+            ),
+            Int32Array::new_null(0)
+        );
+
+        assert_eq!(
+            variable_size_list_values_row_number::<Int32Type>(
+                &OffsetBuffer::from_lengths([1])
+            ),
+            Int32Array::from(vec![0])
+        );
+
+        assert_eq!(
+            variable_size_list_values_row_number::<Int32Type>(
+                &OffsetBuffer::from_lengths([2])
+            ),
+            Int32Array::from(vec![0, 0])
+        );
+    }
+
+    #[test]
+    fn test_fsl_values_row_number() {
+        assert_eq!(
+            fsl_values_row_number(2, 3).unwrap(),
+            Int32Array::from(vec![0, 0, 1, 1, 2, 2])
+        );
+
+        assert_eq!(
+            fsl_values_row_number(1, 3).unwrap(),
+            Int32Array::from(vec![0, 1, 2])
+        );
+
+        assert_eq!(
+            fsl_values_row_number(2, 1).unwrap(),
+            Int32Array::from(vec![0, 0])
+        );
+
+        assert_eq!(
+            fsl_values_row_number(2, 0).unwrap(),
+            Int32Array::new_null(0),
+        );
+
+        assert_eq!(
+            fsl_values_row_number(0, 2).unwrap(),
+            Int32Array::new_null(0),
+        );
+
+        assert_eq!(
+            fsl_values_row_number(0, 0).unwrap(),
+            Int32Array::new_null(0),
+        );
+
+        fsl_values_row_number(-1, 2).unwrap_err();
+        fsl_values_row_number(-1, 0).unwrap_err();
     }
 }

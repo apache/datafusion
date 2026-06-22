@@ -1,0 +1,110 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#############
+## array_any_match Tests
+#############
+
+statement ok
+set datafusion.sql_parser.dialect = databricks;
+
+statement ok
+CREATE TABLE t (list array<int>, number int)
+AS VALUES
+([1, 50], 10),
+([4, 50], 40),
+([7, 50], 60);
+
+# basic: some elements match
+query B
+SELECT array_any_match([1, 2, 3], x -> x > 2);
+----
+true
+
+# basic: no elements match
+query B
+SELECT array_any_match([1, 2, 3], x -> x > 5);
+----
+false
+
+# empty array returns false
+query B
+SELECT array_any_match(arrow_cast(make_array(), 'List(Int32)'), x -> x > 0);
+----
+false
+
+# null array returns null
+query B
+SELECT array_any_match(arrow_cast(NULL, 'List(Int32)'), x -> x > 0);
+----
+NULL
+
+# predicate returns null for some elements, false for others -> null
+query B
+SELECT array_any_match([1, 2, NULL], x -> x > 5);
+----
+NULL
+
+# predicate returns null for some elements but true for others -> true
+query B
+SELECT array_any_match([1, NULL, 10], x -> x > 5);
+----
+true
+
+# multiple rows
+query B
+SELECT array_any_match(list, x -> x > 5) FROM t;
+----
+true
+true
+true
+
+# predicate always returns null -> null
+query B
+SELECT array_any_match([1, 2, 3], x -> NULL::boolean);
+----
+NULL
+
+# all elements null, predicate always null -> null
+query B
+SELECT array_any_match(arrow_cast([NULL, NULL, NULL], 'List(Int32)'), x -> x > 5);
+----
+NULL
+
+# predicate returns true for null elements -> true
+query B
+SELECT array_any_match(arrow_cast([NULL, NULL], 'List(Int32)'), x -> x IS NULL);
+----
+true
+
+# alias any_match works
+query B
+SELECT any_match([1, 2, 3], x -> x > 2);
+----
+true
+
+# alias list_any_match works
+query B
+SELECT list_any_match([1, 2, 3], x -> x > 2);
+----
+true
+
+statement ok
+drop table t;
+
+statement ok
+set datafusion.sql_parser.dialect = generic;

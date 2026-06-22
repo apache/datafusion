@@ -761,6 +761,7 @@
 //! [`RecordBatch`]: arrow::array::RecordBatch
 //! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
 //! [`Array`]: arrow::array::Array
+#![doc = include_str!("optimizer_rule_reference.md")]
 
 extern crate core;
 #[cfg(feature = "sql")]
@@ -785,6 +786,9 @@ pub use parquet;
 
 #[cfg(feature = "avro")]
 pub use datafusion_datasource_avro::arrow_avro;
+
+#[cfg(test)]
+mod optimizer_rule_reference;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs

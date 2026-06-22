@@ -23,6 +23,7 @@ use arrow::compute::kernels::cmp::{
 };
 use arrow::compute::{SortOptions, ilike, like, nilike, nlike};
 use arrow::error::ArrowError;
+use datafusion_common::utils::{normalize_float_zero, normalize_float_zero_scalar};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{arrow_datafusion_err, assert_or_internal_err, internal_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -84,7 +85,22 @@ pub fn apply_cmp(
             }
         };
 
-        apply(lhs, rhs, |l, r| Ok(Arc::new(f(l, r)?)))
+        // Arrow's comparison kernels use IEEE 754 totalOrder semantics for
+        // floats, which treats `-0.0` and `+0.0` as distinct. Normalize float
+        // operands so SQL semantics (`+0.0 == -0.0`) hold. No-op for
+        // non-float types.
+        let lhs = normalize_cmp_input(lhs);
+        let rhs = normalize_cmp_input(rhs);
+        apply(&lhs, &rhs, |l, r| Ok(Arc::new(f(l, r)?)))
+    }
+}
+
+fn normalize_cmp_input(cv: &ColumnarValue) -> ColumnarValue {
+    match cv {
+        ColumnarValue::Array(a) => ColumnarValue::Array(normalize_float_zero(a)),
+        ColumnarValue::Scalar(s) => {
+            ColumnarValue::Scalar(normalize_float_zero_scalar(s.clone()))
+        }
     }
 }
 

@@ -48,6 +48,7 @@ use arrow::ipc::{
 };
 use arrow::record_batch::RecordBatch;
 use arrow_data::ArrayDataBuilder;
+use arrow_ipc::CompressionType;
 
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{DataFusionError, Result, exec_datafusion_err, exec_err};
@@ -290,10 +291,21 @@ struct IPCStreamWriter {
 
 impl IPCStreamWriter {
     /// Create new writer
+    ///
+    /// # Codec contract
+    ///
+    /// `arrow-ipc` must be compiled with the `lz4` and `zstd` features
+    /// (declared explicitly in `datafusion-physical-plan/Cargo.toml`). If
+    /// those features are absent, `try_with_compression` will return an
+    /// error at runtime for [`SpillCompression::Lz4Frame`] and
+    /// [`SpillCompression::Zstd`] variants. The Cargo dependency keeps this
+    /// contract local and build-visible during Cargo feature resolution,
+    /// rather than relying solely on workspace-level feature unification;
+    /// see #21917.
     pub fn new(
         path: &Path,
         schema: &Schema,
-        compression_type: SpillCompression,
+        spill_compression: SpillCompression,
     ) -> Result<Self> {
         let file = File::create(path).map_err(|e| {
             exec_datafusion_err!("(Hint: you may increase the file descriptor limit with shell command 'ulimit -n 4096') Failed to create partition file at {path:?}: {e:?}")
@@ -308,7 +320,8 @@ impl IPCStreamWriter {
         let alignment = get_max_alignment_for_schema(schema);
         let mut write_options =
             IpcWriteOptions::try_new(alignment, false, metadata_version)?;
-        write_options = write_options.try_with_compression(compression_type.into())?;
+        let compression_type = Option::<CompressionType>::from(spill_compression);
+        write_options = write_options.try_with_compression(compression_type)?;
 
         let writer = StreamWriter::try_new_with_options(file, schema, write_options)?;
         Ok(Self {

@@ -40,6 +40,9 @@ mod partitioning;
 mod physical_expr;
 pub mod planner;
 pub mod projection;
+/// Shared test helpers for the `try_to_proto` / `try_from_proto` unit tests
+#[cfg(all(test, feature = "proto"))]
+pub(crate) mod proto_test_util;
 mod scalar_function;
 pub mod scalar_subquery;
 pub mod simplifier;
@@ -57,10 +60,12 @@ pub use aggregate::groups_accumulator::{
     FlatBlockStore, FlatNullState, GroupsAccumulatorAdapter,
 };
 pub use analysis::{AnalysisContext, ExprBoundaries, analyze};
+pub use datafusion_common::SplitPoint;
 pub use equivalence::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, calculate_union,
 };
-pub use partitioning::{Distribution, Partitioning};
+pub use expressions::{DynamicFilterTracker, DynamicFilterTracking};
+pub use partitioning::{Distribution, Partitioning, RangePartitioning};
 pub use physical_expr::{
     add_offset_to_expr, add_offset_to_physical_sort_exprs, create_lex_ordering,
     create_ordering, create_physical_sort_expr, create_physical_sort_exprs,

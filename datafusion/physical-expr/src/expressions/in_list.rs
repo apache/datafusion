@@ -123,6 +123,23 @@ fn try_evaluate_constant_list(
     }
 }
 
+/// Asserts that the InList expression's data type matches a list element's
+/// data type. `DataType::Null` list elements are accepted unconditionally so
+/// that null literals and `NullArray` haystacks remain compatible with any
+/// expression type.
+fn assert_inlist_data_types_match(
+    expr_data_type: &DataType,
+    list_data_type: &DataType,
+) -> Result<()> {
+    if *list_data_type != DataType::Null {
+        assert_or_internal_err!(
+            DFSchema::datatype_is_logically_equal(expr_data_type, list_data_type),
+            "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_data_type}"
+        );
+    }
+    Ok(())
+}
+
 impl InListExpr {
     /// Create a new InList expression
     fn new(
@@ -164,20 +181,28 @@ impl InListExpr {
 
     /// Create a new InList expression directly from an array, bypassing expression evaluation.
     ///
-    /// This is more efficient than `in_list()` when you already have the list as an array,
-    /// as it avoids the conversion: `ArrayRef -> Vec<PhysicalExpr> -> ArrayRef -> StaticFilter`.
-    /// Instead it goes directly: `ArrayRef -> StaticFilter`.
+    /// This is more efficient than [`InListExpr::try_new`] when you already have the list
+    /// as an array, as it builds the static filter directly from the array instead of
+    /// reconstructing an intermediate array from literal expressions.
     ///
-    /// The `list` field will be empty when using this constructor, as the array is stored
-    /// directly in the static filter.
+    /// The `list` field is populated with literal expressions extracted from
+    /// the array, and the array is used to build a static filter for
+    /// efficient set membership evaluation.
     ///
-    /// This does not make the expression any more performant at runtime, but it does make it slightly
-    /// cheaper to build.
+    /// The `array` may be dictionary-encoded — it will be flattened to its
+    /// value type such that specialized filters are used.
+    ///
+    /// Returns an error if the expression's data type and the array's data type
+    /// are not logically equal. Null arrays are always accepted.
     pub fn try_new_from_array(
         expr: Arc<dyn PhysicalExpr>,
         array: ArrayRef,
         negated: bool,
+        schema: &Schema,
     ) -> Result<Self> {
+        let expr_data_type = expr.data_type(schema)?;
+        assert_inlist_data_types_match(&expr_data_type, array.data_type())?;
+
         let list = (0..array.len())
             .map(|i| {
                 let scalar = ScalarValue::try_from_array(array.as_ref(), i)?;
@@ -210,13 +235,7 @@ impl InListExpr {
         let expr_data_type = expr.data_type(schema)?;
         for list_expr in list.iter() {
             let list_expr_data_type = list_expr.data_type(schema)?;
-            assert_or_internal_err!(
-                DFSchema::datatype_is_logically_equal(
-                    &expr_data_type,
-                    &list_expr_data_type
-                ),
-                "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
-            );
+            assert_inlist_data_types_match(&expr_data_type, &list_expr_data_type)?;
         }
 
         // Try to create a static filter if all list expressions are constants
@@ -226,6 +245,32 @@ impl InListExpr {
         };
 
         Ok(Self::new(expr, list, negated, static_filter))
+    }
+
+    #[cfg(feature = "proto")]
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_proto_models::protobuf;
+
+        let node = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::InList,
+            "InList",
+        );
+
+        let expr =
+            ctx.decode_required_expression(node.expr.as_deref(), "InListExpr", "expr")?;
+        let list = ctx.decode_children_expressions(&node.list)?;
+
+        Ok(Arc::new(InListExpr::try_new(
+            expr,
+            list,
+            node.negated,
+            ctx.schema(),
+        )?))
     }
 }
 impl std::fmt::Display for InListExpr {
@@ -377,7 +422,7 @@ impl PhysicalExpr for InListExpr {
                 for expr in self.list.iter().skip(1) {
                     // Short-circuit: if every non-null row is already true,
                     // no further list items can change the result.
-                    if found.null_count() == 0 && found.true_count() == num_rows {
+                    if found.null_count() == 0 && !found.has_false() {
                         break;
                     }
                     found = or_kleene(&found, &compare_one(expr)?)?;
@@ -422,6 +467,25 @@ impl PhysicalExpr for InListExpr {
             expr.fmt_sql(f)?;
         }
         write!(f, ")")
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::InList(Box::new(
+                protobuf::PhysicalInListNode {
+                    expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
+                    list: ctx.encode_children_expressions(&self.list)?,
+                    negated: self.negated,
+                },
+            ))),
+        }))
     }
 }
 
@@ -1835,6 +1899,7 @@ mod tests {
             Arc::clone(&col_a),
             array,
             false,
+            &schema,
         )?) as Arc<dyn PhysicalExpr>;
 
         // Create test data: [1, 2, 3, 4, null]
@@ -1964,6 +2029,7 @@ mod tests {
             Arc::clone(&col_a),
             null_array,
             false,
+            &schema,
         )?) as Arc<dyn PhysicalExpr>;
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
@@ -1992,6 +2058,7 @@ mod tests {
             Arc::clone(&col_a),
             null_array,
             false,
+            &schema,
         )?) as Arc<dyn PhysicalExpr>;
 
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
@@ -3428,8 +3495,9 @@ mod tests {
         let schema =
             Schema::new(vec![Field::new("a", needle.data_type().clone(), false)]);
         let col_a = col("a", &schema)?;
-        let expr = Arc::new(InListExpr::try_new_from_array(col_a, in_array, false)?)
-            as Arc<dyn PhysicalExpr>;
+        let expr = Arc::new(InListExpr::try_new_from_array(
+            col_a, in_array, false, &schema,
+        )?) as Arc<dyn PhysicalExpr>;
         let batch = RecordBatch::try_new(Arc::new(schema), vec![needle])?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         Ok(as_boolean_array(&result).clone())
@@ -3562,43 +3630,399 @@ mod tests {
         Ok(())
     }
 
+    fn make_int32_dict_array(values: Vec<Option<i32>>) -> ArrayRef {
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+        for v in values {
+            match v {
+                Some(val) => builder.append_value(val),
+                None => builder.append_null(),
+            }
+        }
+        Arc::new(builder.finish())
+    }
+
+    fn make_f64_dict_array(values: Vec<Option<f64>>) -> ArrayRef {
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Float64Type>::new();
+        for v in values {
+            match v {
+                Some(val) => builder.append_value(val),
+                None => builder.append_null(),
+            }
+        }
+        Arc::new(builder.finish())
+    }
+
     #[test]
-    fn test_in_list_from_array_type_mismatch_errors() -> Result<()> {
-        // Utf8 needle, Dict(Utf8) in_array
-        let err = eval_in_list_from_array(
-            Arc::new(StringArray::from(vec!["a", "d", "b"])),
-            wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            err.contains("Can't compare arrays of different types"),
-            "{err}"
+    fn test_try_new_from_array_dict_haystack_int32() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let needle = Int32Array::from(vec![1, 2, 3, 4]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(needle)])?;
+
+        let haystack = make_int32_dict_array(vec![Some(1), None, Some(3)]);
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), None, Some(true), None])
         );
 
-        // Dict(Utf8) needle, Int64 in_array: specialized Int64StaticFilter
-        // rejects the Utf8 dictionary values at construction time
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_from_array_type_mismatch_errors() -> Result<()> {
+        // Utf8 needle, Dict(Utf8) in_array: now works with dict haystack support
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), Some(false), Some(true)]),
+            eval_in_list_from_array(
+                Arc::new(StringArray::from(vec!["a", "d", "b"])),
+                wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
+            )?
+        );
+
+        // Dict(Utf8) needle, Int64 in_array: type validation rejects at construction
         let err = eval_in_list_from_array(
             wrap_in_dict(Arc::new(StringArray::from(vec!["a", "d", "b"]))),
             Arc::new(Int64Array::from(vec![1, 2, 3])),
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("Failed to downcast"), "{err}");
+        assert!(err.contains("The data type inlist should be same"), "{err}");
 
         // Dict(Int64) needle, Dict(Utf8) in_array: both Dict but different
-        // value types, make_comparator rejects the comparison
+        // value types, type validation rejects at construction
         let err = eval_in_list_from_array(
             wrap_in_dict(Arc::new(Int64Array::from(vec![1, 4, 2]))),
             wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
         )
         .unwrap_err()
         .to_string();
-        assert!(
-            err.contains("Can't compare arrays of different types"),
-            "{err}"
+        assert!(err.contains("The data type inlist should be same"), "{err}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_haystack_negated() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let needle = Int32Array::from(vec![1, 2, 3, 4]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(needle)])?;
+
+        let haystack = make_int32_dict_array(vec![Some(1), None, Some(3)]);
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, true, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(false), None, Some(false), None])
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_haystack_utf8() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let needle = StringArray::from(vec!["a", "b", "c"]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(needle)])?;
+
+        let dict_builder = StringDictionaryBuilder::<Int8Type>::new();
+        let mut builder = dict_builder;
+        builder.append_value("a");
+        builder.append_value("c");
+        let haystack: ArrayRef = Arc::new(builder.finish());
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_needle_and_plain_haystack() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+            false,
+        )]);
+
+        let needle = make_int32_dict_array(vec![Some(1), Some(2), Some(3), Some(4)]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::clone(&needle)])?;
+
+        let haystack: ArrayRef = Arc::new(Int32Array::from(vec![1, 3]));
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), Some(true), Some(false)])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_haystack_float64() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let needle = Float64Array::from(vec![1.0, 2.0, 3.0]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(needle)])?;
+
+        let haystack = make_f64_dict_array(vec![Some(1.0), Some(3.0)]);
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_type_mismatch_rejects() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let col_a = col("a", &schema)?;
+        let haystack: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
+
+        let result = InListExpr::try_new_from_array(col_a, haystack, false, &schema);
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_struct_haystack() -> Result<()> {
+        let struct_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Utf8, false),
+        ]);
+        let struct_dt = DataType::Struct(struct_fields.clone());
+        let schema = Schema::new(vec![Field::new("a", struct_dt, true)]);
+
+        // Needle: [{1,"a"}, {2,"b"}, NULL, {4,"d"}]
+        let needle = Arc::new(StructArray::new(
+            struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            ],
+            Some(vec![true, true, false, true].into()),
+        ));
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![needle])?;
+
+        // Haystack: [{1,"a"}, {4,"d"}]
+        let haystack: ArrayRef = Arc::new(StructArray::new(
+            struct_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 4])),
+                Arc::new(StringArray::from(vec!["a", "d"])),
+            ],
+            None,
+        ));
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(
+            Arc::clone(&col_a),
+            Arc::clone(&haystack),
+            false,
+            &schema,
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        // {1,"a"} -> true, {2,"b"} -> false, NULL -> NULL, {4,"d"} -> true
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), None, Some(true)])
+        );
+
+        // Negated path
+        let expr = InListExpr::try_new_from_array(col_a, haystack, true, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(false), Some(true), None, Some(false)])
+        );
+
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::expressions::{Column, col, lit};
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use arrow::datatypes::Field;
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{
+        PhysicalExprNode, PhysicalInListNode, physical_expr_node,
+    };
+
+    /// Build an `InListExpr` proto node with the given children.
+    fn in_list_node(
+        expr: Option<Box<PhysicalExprNode>>,
+        list: Vec<PhysicalExprNode>,
+        negated: bool,
+    ) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::InList(Box::new(
+                PhysicalInListNode {
+                    expr,
+                    list,
+                    negated,
+                },
+            ))),
+        }
+    }
+
+    /// An `InListExpr` over a column with one literal value.
+    fn in_list_fixture() -> InListExpr {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        InListExpr::try_new(col("a", &schema).unwrap(), vec![lit(1)], false, &schema)
+            .unwrap()
+    }
+
+    #[test]
+    fn try_to_proto_encodes_in_list() {
+        let in_list = in_list_fixture();
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = in_list
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("InListExpr should encode to Some(node)");
+
+        // Built-in exprs never set expr_id; only dynamic filters do.
+        assert!(node.expr_id.is_none());
+        let in_list_node = match node.expr_type {
+            Some(physical_expr_node::ExprType::InList(boxed)) => *boxed,
+            other => panic!("expected an InList node, got {other:?}"),
+        };
+        assert!(!in_list_node.negated);
+        assert!(in_list_node.expr.is_some());
+        assert_eq!(in_list_node.list.len(), 1);
+    }
+
+    #[test]
+    fn try_to_proto_propagates_expr_encode_error() {
+        let in_list = in_list_fixture();
+        let encoder = StubEncoder::failing_on(1);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let err = in_list.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
+    }
+
+    #[test]
+    fn try_to_proto_propagates_list_encode_error() {
+        let in_list = in_list_fixture();
+        // Call 1 is for `expr`, Call 2 is for the first element of `list`
+        let encoder = StubEncoder::failing_on(2);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let err = in_list.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 2")));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_in_list() {
+        let node = in_list_node(
+            Some(Box::new(column_node("a"))),
+            vec![column_node("b")],
+            true,
+        );
+        let schema = Schema::new(vec![Field::new("decoded", DataType::Int32, true)]);
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = InListExpr::try_from_proto(&node, &ctx).unwrap();
+        let in_list = decoded
+            .downcast_ref::<InListExpr>()
+            .expect("decoded expr should be an InListExpr");
+
+        assert!(in_list.negated());
+        assert!(in_list.expr().downcast_ref::<Column>().is_some());
+        assert_eq!(in_list.list().len(), 1);
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_in_list_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a InList")
+        ));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_expr() {
+        let node = in_list_node(None, vec![column_node("b")], false);
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg) if msg.contains("InListExpr is missing required field 'expr'")
+        ));
+    }
+
+    #[test]
+    fn try_from_proto_propagates_expr_decode_error() {
+        let node = in_list_node(
+            Some(Box::new(column_node("a"))),
+            vec![column_node("b")],
+            false,
+        );
+        let schema = Schema::empty();
+        let decoder = StubDecoder::failing_on(1);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
+    }
+
+    #[test]
+    fn try_from_proto_propagates_list_decode_error() {
+        let node = in_list_node(
+            Some(Box::new(column_node("a"))),
+            vec![column_node("b")],
+            false,
+        );
+        let schema = Schema::empty();
+        // Call 1 is `expr`, Call 2 is the first element of `list`
+        let decoder = StubDecoder::failing_on(2);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 2")));
     }
 }

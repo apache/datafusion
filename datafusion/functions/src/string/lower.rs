@@ -211,6 +211,146 @@ mod tests {
     }
 
     #[test]
+    fn lower_ascii_utf8view() -> Result<()> {
+        // Mix of inlined (≤12 bytes) and referenced (>12 bytes) strings, plus
+        // a null and an empty, to exercise the all-ASCII Utf8View fast path.
+        let input = Arc::new(StringViewArray::from(vec![
+            Some("ARROW"), // inlined short
+            None,
+            Some("HELLO WORLD 123"), // referenced (15 bytes)
+            Some(""),
+            Some("0123456789"),         // inlined, no case change
+            Some("DATAFUSION IS COOL"), // referenced
+        ])) as ArrayRef;
+
+        let expected = Arc::new(StringViewArray::from(vec![
+            Some("arrow"),
+            None,
+            Some("hello world 123"),
+            Some(""),
+            Some("0123456789"),
+            Some("datafusion is cool"),
+        ])) as ArrayRef;
+
+        to_lower(input, expected)
+    }
+
+    #[test]
+    fn lower_sliced_ascii_utf8view() -> Result<()> {
+        // Slice of a parent that contains a non-ASCII string outside the
+        // slice. The slice is all-ASCII, so the fast path must run and produce
+        // correct output while the parent's unaddressed non-ASCII bytes are
+        // irrelevant to the result.
+        let parent = Arc::new(StringViewArray::from(vec![
+            Some("农历新年LONG ENOUGH FOR BUFFER"),
+            Some("HELLO WORLD 123"),
+            Some("DATAFUSION ROCKS!"),
+            Some("ZZZZZZZZZZZZZZZZ"),
+        ])) as ArrayRef;
+        let sliced = parent.slice(1, 2);
+        let result = invoke_lower(sliced)?;
+        let result_sv = result.as_any().downcast_ref::<StringViewArray>().unwrap();
+
+        let expected = StringViewArray::from(vec![
+            Some("hello world 123"),
+            Some("datafusion rocks!"),
+        ]);
+        assert_eq!(result_sv, &expected);
+        // The slice's two long views address 15 + 17 = 32 bytes; the ASCII
+        // fast path must produce a single packed buffer of exactly that
+        // size, not one scaled to the parent's data buffer.
+        assert_eq!(result_sv.data_buffers().len(), 1);
+        assert_eq!(result_sv.data_buffers()[0].len(), 32);
+        Ok(())
+    }
+
+    #[test]
+    fn lower_utf8view_inline_only_no_buffers() -> Result<()> {
+        // An array whose values are all ≤ 12 bytes is fully inline; the ASCII
+        // fast path should produce no data buffers at all.
+        let input = Arc::new(StringViewArray::from(vec![
+            Some("HELLO"),
+            None,
+            Some(""),
+            Some("0123456789ab"), // 12 bytes — inline boundary
+        ])) as ArrayRef;
+        let result = invoke_lower(input)?;
+        let result_sv = result.as_any().downcast_ref::<StringViewArray>().unwrap();
+
+        let expected = StringViewArray::from(vec![
+            Some("hello"),
+            None,
+            Some(""),
+            Some("0123456789ab"),
+        ]);
+        assert_eq!(result_sv, &expected);
+        assert_eq!(
+            result_sv.data_buffers().len(),
+            0,
+            "inline-only Utf8View should produce no data buffers"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lower_utf8view_long_packs_tight() -> Result<()> {
+        // Mix of long and inline values; the long values should be packed into
+        // a single tight output buffer whose size is exactly the sum of their
+        // lengths (inline values do not contribute).
+        let input = Arc::new(StringViewArray::from(vec![
+            Some("HELLO WORLD 123"), // 15 bytes (long)
+            Some("ABC"),             // inline
+            None,
+            Some("DATAFUSION ROCKS!"),   // 17 bytes (long)
+            Some("ANOTHER LONG STRING"), // 19 bytes (long)
+        ])) as ArrayRef;
+        let result = invoke_lower(input)?;
+        let result_sv = result.as_any().downcast_ref::<StringViewArray>().unwrap();
+
+        let expected = StringViewArray::from(vec![
+            Some("hello world 123"),
+            Some("abc"),
+            None,
+            Some("datafusion rocks!"),
+            Some("another long string"),
+        ]);
+        assert_eq!(result_sv, &expected);
+        assert_eq!(result_sv.data_buffers().len(), 1);
+        assert_eq!(result_sv.data_buffers()[0].len(), 15 + 17 + 19);
+        Ok(())
+    }
+
+    #[test]
+    fn lower_utf8view_splits_into_multiple_buffers() -> Result<()> {
+        // Produce enough long-string output to overflow the first data block
+        // (≈16 KiB after the initial doubling) and confirm the fast path
+        // splits across buffers rather than packing everything into one and
+        // risking the i32::MAX offset limit.
+        const STR_LEN: usize = 500;
+        const N: usize = 40; // 40 × 500 B = 20 KiB total — crosses the first block.
+        let value = "X".repeat(STR_LEN);
+        let inputs: Vec<Option<String>> = (0..N).map(|_| Some(value.clone())).collect();
+        let input = Arc::new(StringViewArray::from(inputs.clone())) as ArrayRef;
+        let result = invoke_lower(input)?;
+        let result_sv = result.as_any().downcast_ref::<StringViewArray>().unwrap();
+
+        let expected_value = "x".repeat(STR_LEN);
+        let expected: Vec<Option<&str>> =
+            (0..N).map(|_| Some(expected_value.as_str())).collect();
+        assert_eq!(result_sv, &StringViewArray::from(expected));
+        assert!(
+            result_sv.data_buffers().len() >= 2,
+            "expected the output to span more than one data buffer, got {}",
+            result_sv.data_buffers().len()
+        );
+        // Total bytes across buffers must equal total long-value bytes
+        // (no row was inlined since each value is > 12 bytes).
+        let total: usize = result_sv.data_buffers().iter().map(|b| b.len()).sum();
+        assert_eq!(total, N * STR_LEN);
+        Ok(())
+    }
+
+    #[test]
     fn lower_sliced_utf8() -> Result<()> {
         let parent = Arc::new(StringArray::from(vec![
             Some("AAAAAAAA"),

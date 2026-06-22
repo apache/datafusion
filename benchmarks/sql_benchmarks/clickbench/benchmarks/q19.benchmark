@@ -1,0 +1,18 @@
+name Q19
+group clickbench
+
+init sql_benchmarks/clickbench/init/set_config.sql
+
+load sql_benchmarks/clickbench/init/load-${CLICKBENCH_TYPE:-single}.sql
+
+assert I
+SELECT COUNT(*) > 0 from hits;
+----
+true
+
+run
+SELECT "UserID"
+FROM hits
+WHERE "UserID" = 435090932899640449;
+
+result sql_benchmarks/clickbench/results/${CLICKBENCH_TYPE:-single}/q19.csv

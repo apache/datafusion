@@ -68,7 +68,7 @@ pub(crate) mod test_util {
         // Each batch writes to their own file
         let files: Vec<_> = batches
             .into_iter()
-            .zip(tmp_files.into_iter())
+            .zip(tmp_files)
             .map(|(batch, mut output)| {
                 let mut builder = parquet::file::properties::WriterProperties::builder();
                 if multi_page {
@@ -141,6 +141,7 @@ mod tests {
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::dml::InsertOp;
+    use datafusion_physical_plan::statistics::StatisticsArgs;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion_physical_plan::{ExecutionPlan, collect};
 
@@ -715,12 +716,13 @@ mod tests {
 
         // test metadata
         assert_eq!(
-            exec.partition_statistics(None)?.num_rows,
+            exec.statistics_with_args(&StatisticsArgs::new())?.num_rows,
             Precision::Exact(8)
         );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
-            exec.partition_statistics(None)?.total_byte_size,
+            exec.statistics_with_args(&StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent,
         );
 
@@ -764,11 +766,12 @@ mod tests {
 
         // note: even if the limit is set, the executor rounds up to the batch size
         assert_eq!(
-            exec.partition_statistics(None)?.num_rows,
+            exec.statistics_with_args(&StatisticsArgs::new())?.num_rows,
             Precision::Exact(8)
         );
         assert_eq!(
-            exec.partition_statistics(None)?.total_byte_size,
+            exec.statistics_with_args(&StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent,
         );
         let batches = collect(exec, task_ctx).await?;

@@ -32,11 +32,9 @@ use datafusion_datasource::file_sink_config::{FileOutputMode, FileSinkConfig};
 #[expect(deprecated)]
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
-    ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
+    ListingTableUrl, PartitionedFile, TableSchemaBuilder, compute_all_files_statistics,
 };
-use datafusion_execution::cache::TableScopedPath;
-use datafusion_execution::cache::cache_manager::FileStatisticsCache;
-use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
+use datafusion_execution::cache::cache_manager::{FileStatisticsCache, TableScopedPath};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
@@ -187,7 +185,7 @@ pub struct ListingTable {
     /// The SQL definition for this table, if any
     definition: Option<String>,
     /// Cache for collected file statistics
-    collected_statistics: Arc<dyn FileStatisticsCache>,
+    collected_statistics: Option<Arc<FileStatisticsCache>>,
     /// Constraints applied to this table
     constraints: Constraints,
     /// Column default expressions for columns that are not physically present in the data files
@@ -231,7 +229,7 @@ impl ListingTable {
             schema_source,
             options,
             definition: None,
-            collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
+            collected_statistics: None,
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             expr_adapter_factory: config.expr_adapter_factory,
@@ -260,11 +258,24 @@ impl ListingTable {
     /// Setting a statistics cache on the `SessionContext` can avoid refetching statistics
     /// multiple times in the same session.
     ///
-    /// If `None`, creates a new [`DefaultFileStatisticsCache`] scoped to this query.
-    pub fn with_cache(mut self, cache: Option<Arc<dyn FileStatisticsCache>>) -> Self {
-        self.collected_statistics =
-            cache.unwrap_or_else(|| Arc::new(DefaultFileStatisticsCache::default()));
+    pub fn with_cache(mut self, cache: Option<Arc<FileStatisticsCache>>) -> Self {
+        self.collected_statistics = cache;
         self
+    }
+
+    fn statistics_cache(
+        &self,
+        has_table_reference: bool,
+    ) -> Option<&Arc<FileStatisticsCache>> {
+        let shared_cache = self.collected_statistics.as_ref()?;
+        if has_table_reference || self.schema_source == SchemaSource::Inferred {
+            Some(shared_cache)
+        } else {
+            // Anonymous specified-schema reads can use the same file path with
+            // different logical schemas. File statistics are schema-dependent,
+            // so avoid reusing stats computed for a different read schema.
+            None
+        }
     }
 
     /// Specify the SQL definition for this table, if any
@@ -324,14 +335,15 @@ impl ListingTable {
 
     /// Creates a file source for this table
     fn create_file_source(&self) -> Arc<dyn FileSource> {
-        let table_schema = TableSchema::new(
-            Arc::clone(&self.file_schema),
-            self.options
-                .table_partition_cols
-                .iter()
-                .map(|(col, field)| Arc::new(Field::new(col, field.clone(), false)))
-                .collect(),
-        );
+        let table_schema = TableSchemaBuilder::from(&self.file_schema)
+            .with_table_partition_cols(
+                self.options
+                    .table_partition_cols
+                    .iter()
+                    .map(|(col, field)| Arc::new(Field::new(col, field.clone(), false)))
+                    .collect::<Vec<_>>(),
+            )
+            .build();
 
         self.options.format.file_source(table_schema)
     }
@@ -535,7 +547,7 @@ impl TableProvider for ListingTable {
                         &self.table_schema,
                         &partitioned_file_lists,
                         output_ordering,
-                        self.options.target_partitions,
+                        state.config().target_partitions(),
                     )
                 })
             })
@@ -543,7 +555,7 @@ impl TableProvider for ListingTable {
         {
             Some(Err(e)) => log::debug!("failed to split file groups by statistics: {e}"),
             Some(Ok(new_groups)) => {
-                if new_groups.len() <= self.options.target_partitions {
+                if new_groups.len() <= state.config().target_partitions() {
                     partitioned_file_lists = new_groups;
                 } else {
                     log::debug!(
@@ -726,7 +738,7 @@ impl ListingTable {
         let files = file_list
             .map(|part_file| async {
                 let part_file = part_file?;
-                let (statistics, ordering) = if self.options.collect_stat {
+                let (statistics, ordering) = if ctx.config().collect_statistics() {
                     self.do_collect_statistics_and_ordering(ctx, &store, &part_file)
                         .await?
                 } else {
@@ -740,7 +752,7 @@ impl ListingTable {
             .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
 
         let (file_group, inexact_stats) =
-            get_files_with_limit(files, limit, self.options.collect_stat).await?;
+            get_files_with_limit(files, limit, ctx.config().collect_statistics()).await?;
 
         // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
         //
@@ -749,32 +761,32 @@ impl ListingTable {
         // hash repartitioning for aggregates and joins on partition columns.
         let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
-        let (file_groups, grouped_by_partition) = if threshold > 0
-            && !self.options.table_partition_cols.is_empty()
-        {
-            let grouped =
-                file_group.group_by_partition_values(self.options.target_partitions);
-            if grouped.len() >= threshold {
-                (grouped, true)
+        let (file_groups, grouped_by_partition) =
+            if threshold > 0 && !self.options.table_partition_cols.is_empty() {
+                let grouped = file_group
+                    .group_by_partition_values(ctx.config().target_partitions());
+                if grouped.len() >= threshold {
+                    (grouped, true)
+                } else {
+                    let all_files: Vec<_> =
+                        grouped.into_iter().flat_map(|g| g.into_inner()).collect();
+                    (
+                        FileGroup::new(all_files)
+                            .split_files(ctx.config().target_partitions()),
+                        false,
+                    )
+                }
             } else {
-                let all_files: Vec<_> =
-                    grouped.into_iter().flat_map(|g| g.into_inner()).collect();
                 (
-                    FileGroup::new(all_files).split_files(self.options.target_partitions),
+                    file_group.split_files(ctx.config().target_partitions()),
                     false,
                 )
-            }
-        } else {
-            (
-                file_group.split_files(self.options.target_partitions),
-                false,
-            )
-        };
+            };
 
         let (file_groups, stats) = compute_all_files_statistics(
             file_groups,
             self.schema(),
-            self.options.collect_stat,
+            ctx.config().collect_statistics(),
             inexact_stats,
         )?;
 
@@ -802,11 +814,15 @@ impl ListingTable {
     ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
         use datafusion_execution::cache::cache_manager::CachedFileMetadata;
 
-        let path = &part_file.object_meta.location;
+        let path = TableScopedPath {
+            table: part_file.table_reference.clone(),
+            path: part_file.object_meta.location.clone(),
+        };
         let meta = &part_file.object_meta;
 
         // Check cache first - if we have valid cached statistics and ordering
-        if let Some(cached) = self.collected_statistics.get(path)
+        if let Some(cache) = self.statistics_cache(path.table.is_some())
+            && let Some(cached) = cache.get(&path)
             && cached.is_valid_for(meta)
         {
             // Return cached statistics and ordering
@@ -823,14 +839,16 @@ impl ListingTable {
         let statistics = Arc::new(file_meta.statistics);
 
         // Store in cache
-        self.collected_statistics.put(
-            path,
-            CachedFileMetadata::new(
-                meta.clone(),
-                Arc::clone(&statistics),
-                file_meta.ordering.clone(),
-            ),
-        );
+        if let Some(cache) = self.statistics_cache(path.table.is_some()) {
+            cache.put(
+                &path,
+                CachedFileMetadata::new(
+                    meta.clone(),
+                    Arc::clone(&statistics),
+                    file_meta.ordering.clone(),
+                ),
+            );
+        }
 
         Ok((statistics, file_meta.ordering))
     }

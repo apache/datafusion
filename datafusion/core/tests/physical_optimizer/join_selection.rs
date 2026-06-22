@@ -25,7 +25,6 @@ use std::{
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{ColumnStatistics, JoinType, ScalarValue, stats::Precision};
 use datafusion_common::{JoinSide, NullEquality};
 use datafusion_common::{Result, Statistics};
@@ -45,7 +44,7 @@ use datafusion_physical_plan::joins::utils::JoinFilter;
 use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
     execution_plan::{Boundedness, EmissionType},
 };
 
@@ -251,7 +250,7 @@ async fn test_join_with_swap() {
     assert_eq!(
         swapped_join
             .left()
-            .partition_statistics(None)
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
@@ -259,7 +258,7 @@ async fn test_join_with_swap() {
     assert_eq!(
         swapped_join
             .right()
-            .partition_statistics(None)
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -299,7 +298,7 @@ async fn test_left_join_no_swap() {
     assert_eq!(
         swapped_join
             .left()
-            .partition_statistics(None)
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
@@ -307,7 +306,7 @@ async fn test_left_join_no_swap() {
     assert_eq!(
         swapped_join
             .right()
-            .partition_statistics(None)
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -350,7 +349,7 @@ async fn test_join_with_swap_semi() {
         assert_eq!(
             swapped_join
                 .left()
-                .partition_statistics(None)
+                .statistics_with_args(&StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(8192)
@@ -358,7 +357,7 @@ async fn test_join_with_swap_semi() {
         assert_eq!(
             swapped_join
                 .right()
-                .partition_statistics(None)
+                .statistics_with_args(&StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(2097152)
@@ -403,7 +402,7 @@ async fn test_join_with_swap_mark() {
         assert_eq!(
             swapped_join
                 .left()
-                .partition_statistics(None)
+                .statistics_with_args(&StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(8192)
@@ -411,7 +410,7 @@ async fn test_join_with_swap_mark() {
         assert_eq!(
             swapped_join
                 .right()
-                .partition_statistics(None)
+                .statistics_with_args(&StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(2097152)
@@ -531,7 +530,7 @@ async fn test_join_no_swap() {
     assert_eq!(
         swapped_join
             .left()
-            .partition_statistics(None)
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
@@ -539,7 +538,7 @@ async fn test_join_no_swap() {
     assert_eq!(
         swapped_join
             .right()
-            .partition_statistics(None)
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -606,7 +605,7 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     assert_eq!(
         swapped_join
             .left()
-            .partition_statistics(None)
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
@@ -614,7 +613,7 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     assert_eq!(
         swapped_join
             .right()
-            .partition_statistics(None)
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -679,7 +678,7 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
     assert_eq!(
         swapped_join
             .left()
-            .partition_statistics(None)
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
@@ -687,7 +686,7 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
     assert_eq!(
         swapped_join
             .right()
-            .partition_statistics(None)
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -1059,20 +1058,6 @@ impl ExecutionPlan for UnboundedExec {
             batch: self.batch.clone(),
         }))
     }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.cache.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
-    }
 }
 
 #[derive(Eq, PartialEq, Debug)]
@@ -1167,26 +1152,12 @@ impl ExecutionPlan for StatisticsExec {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        Ok(Arc::new(if partition.is_some() {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(if args.partition().is_some() {
             Statistics::new_unknown(&self.schema)
         } else {
             self.stats.clone()
         }))
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.cache.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
     }
 }
 

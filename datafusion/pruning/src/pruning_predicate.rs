@@ -41,6 +41,7 @@ use datafusion_common::{
     ScalarValue, internal_datafusion_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
 };
+use datafusion_expr_common::casts::try_cast_literal_to_type;
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
@@ -1155,8 +1156,16 @@ fn rewrite_expr_to_prunable(
         Ok((left, reverse_operator(op)?, right))
     } else if let Some(not) = column_expr.downcast_ref::<phys_expr::NotExpr>() {
         // `!col = true` --> `col = !true`
-        if op != Operator::Eq && op != Operator::NotEq {
-            return plan_err!("Not with operator other than Eq / NotEq is not supported");
+        if !matches!(
+            op,
+            Operator::Eq
+                | Operator::NotEq
+                | Operator::IsDistinctFrom
+                | Operator::IsNotDistinctFrom
+        ) {
+            return plan_err!(
+                "Not with operator other than Eq / NotEq / IsDistinctFrom / IsNotDistinctFrom is not supported"
+            );
         }
         if not.arg().downcast_ref::<phys_expr::Column>().is_some() {
             let left = Arc::clone(not.arg());
@@ -1193,6 +1202,8 @@ fn is_compare_op(op: Operator) -> bool {
             | Operator::LtEq
             | Operator::Gt
             | Operator::GtEq
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
             | Operator::LikeMatch
             | Operator::NotLikeMatch
     )
@@ -1616,45 +1627,14 @@ fn build_statistics_expr(
     expr_builder: &mut PruningExpressionBuilder,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let statistics_expr: Arc<dyn PhysicalExpr> = match expr_builder.op() {
-        Operator::NotEq => {
-            // column != literal => (min, max) = literal =>
-            // !(min != literal && max != literal) ==>
-            // min != literal || literal != max
-            let min_column_expr = expr_builder.min_column_expr()?;
-            let max_column_expr = expr_builder.max_column_expr()?;
-            Arc::new(phys_expr::BinaryExpr::new(
-                Arc::new(phys_expr::BinaryExpr::new(
-                    min_column_expr,
-                    Operator::NotEq,
-                    Arc::clone(expr_builder.scalar_expr()),
-                )),
-                Operator::Or,
-                Arc::new(phys_expr::BinaryExpr::new(
-                    Arc::clone(expr_builder.scalar_expr()),
-                    Operator::NotEq,
-                    max_column_expr,
-                )),
-            ))
-        }
+        Operator::NotEq => build_ne_statistics_expr(expr_builder)?,
         Operator::Eq => {
             // column = literal => (min, max) = literal => min <= literal && literal <= max
             // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
-            let min_column_expr = expr_builder.min_column_expr()?;
-            let max_column_expr = expr_builder.max_column_expr()?;
-            Arc::new(phys_expr::BinaryExpr::new(
-                Arc::new(phys_expr::BinaryExpr::new(
-                    min_column_expr,
-                    Operator::LtEq,
-                    Arc::clone(expr_builder.scalar_expr()),
-                )),
-                Operator::And,
-                Arc::new(phys_expr::BinaryExpr::new(
-                    Arc::clone(expr_builder.scalar_expr()),
-                    Operator::LtEq,
-                    max_column_expr,
-                )),
-            ))
+            build_eq_statistics_expr(expr_builder)?
         }
+        Operator::IsDistinctFrom => return build_is_distinct_from(expr_builder),
+        Operator::IsNotDistinctFrom => return build_is_not_distinct_from(expr_builder),
         Operator::NotLikeMatch => build_not_like_match(expr_builder)?,
         Operator::LikeMatch => build_like_match(expr_builder).ok_or_else(|| {
             plan_datafusion_err!(
@@ -1704,6 +1684,126 @@ fn build_statistics_expr(
     Ok(statistics_expr)
 }
 
+fn binary_expr(
+    left: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    right: Arc<dyn PhysicalExpr>,
+) -> Arc<dyn PhysicalExpr> {
+    Arc::new(phys_expr::BinaryExpr::new(left, op, right))
+}
+
+fn and_expr(
+    left: Arc<dyn PhysicalExpr>,
+    right: Arc<dyn PhysicalExpr>,
+) -> Arc<dyn PhysicalExpr> {
+    binary_expr(left, Operator::And, right)
+}
+
+fn or_expr(
+    left: Arc<dyn PhysicalExpr>,
+    right: Arc<dyn PhysicalExpr>,
+) -> Arc<dyn PhysicalExpr> {
+    binary_expr(left, Operator::Or, right)
+}
+
+fn build_eq_statistics_expr(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let min_column_expr = expr_builder.min_column_expr()?;
+    let max_column_expr = expr_builder.max_column_expr()?;
+    Ok(and_expr(
+        binary_expr(
+            min_column_expr,
+            Operator::LtEq,
+            Arc::clone(expr_builder.scalar_expr()),
+        ),
+        binary_expr(
+            Arc::clone(expr_builder.scalar_expr()),
+            Operator::LtEq,
+            max_column_expr,
+        ),
+    ))
+}
+
+fn build_ne_statistics_expr(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let min_column_expr = expr_builder.min_column_expr()?;
+    let max_column_expr = expr_builder.max_column_expr()?;
+    Ok(or_expr(
+        binary_expr(
+            min_column_expr,
+            Operator::NotEq,
+            Arc::clone(expr_builder.scalar_expr()),
+        ),
+        binary_expr(
+            Arc::clone(expr_builder.scalar_expr()),
+            Operator::NotEq,
+            max_column_expr,
+        ),
+    ))
+}
+
+fn column_has_nulls_expr(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(binary_expr(
+        expr_builder.null_count_column_expr()?,
+        Operator::Gt,
+        Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
+    ))
+}
+
+fn column_has_non_nulls_expr(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(binary_expr(
+        expr_builder.null_count_column_expr()?,
+        Operator::NotEq,
+        expr_builder.row_count_column_expr()?,
+    ))
+}
+
+fn build_is_distinct_from(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let scalar_expr = Arc::clone(expr_builder.scalar_expr());
+
+    Ok(or_expr(
+        and_expr(
+            Arc::new(phys_expr::IsNullExpr::new(Arc::clone(&scalar_expr))),
+            column_has_non_nulls_expr(expr_builder)?,
+        ),
+        and_expr(
+            Arc::new(phys_expr::IsNotNullExpr::new(scalar_expr)),
+            or_expr(
+                column_has_nulls_expr(expr_builder)?,
+                build_ne_statistics_expr(expr_builder)?,
+            ),
+        ),
+    ))
+}
+
+fn build_is_not_distinct_from(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let scalar_expr = Arc::clone(expr_builder.scalar_expr());
+
+    Ok(or_expr(
+        and_expr(
+            Arc::new(phys_expr::IsNullExpr::new(Arc::clone(&scalar_expr))),
+            column_has_nulls_expr(expr_builder)?,
+        ),
+        and_expr(
+            Arc::new(phys_expr::IsNotNullExpr::new(scalar_expr)),
+            and_expr(
+                column_has_non_nulls_expr(expr_builder)?,
+                build_eq_statistics_expr(expr_builder)?,
+            ),
+        ),
+    ))
+}
+
 /// returns the string literal of the scalar value if it is a string
 fn unpack_string(s: &ScalarValue) -> Option<&str> {
     s.try_as_str().flatten()
@@ -1717,14 +1817,23 @@ fn extract_string_literal(expr: &Arc<dyn PhysicalExpr>) -> Option<&str> {
     None
 }
 
+/// Wrap a string in a `Literal` whose `ScalarValue` matches `target_type`
+fn string_literal_as(value: String, target_type: &DataType) -> Arc<dyn PhysicalExpr> {
+    let utf8 = ScalarValue::Utf8(Some(value));
+    let scalar = try_cast_literal_to_type(&utf8, target_type).unwrap_or(utf8);
+    Arc::new(phys_expr::Literal::new(scalar))
+}
+
 /// Convert `column LIKE literal` where P is a constant prefix of the literal
 /// to a range check on the column: `P <= column && column < P'`, where P' is the
 /// lowest string after all P* strings.
 fn build_like_match(
     expr_builder: &mut PruningExpressionBuilder,
 ) -> Option<Arc<dyn PhysicalExpr>> {
-    // column LIKE literal => (min, max) LIKE literal split at % => min <= split literal && split literal <= max
+    // column LIKE literal => (min, max) LIKE literal split at unescaped % => min <= split literal && split literal <= max
     // column LIKE 'foo%' => min <= 'foo' && 'foo' <= max
+    // column LIKE 'foo\_%' => min <= 'foo_' && 'foo_' <= max (the _ is escaped)
+    // column LIKE 'foo\%%' => min <= 'foo%' && 'foo%' <= max (the % is escaped)
     // column LIKE '%foo' => min <= '' && '' <= max => true
     // column LIKE '%foo%' => min <= '' && '' <= max => true
     // column LIKE 'foo' => min <= 'foo' && 'foo' <= max
@@ -1734,28 +1843,25 @@ fn build_like_match(
     let min_column_expr = expr_builder.min_column_expr().ok()?;
     let max_column_expr = expr_builder.max_column_expr().ok()?;
     let scalar_expr = expr_builder.scalar_expr();
+    // Synthesized bounds must match the column type (e.g. `Utf8View`).
+    let target_type = expr_builder.field.data_type();
     // check that the scalar is a string literal
     let s = extract_string_literal(scalar_expr)?;
     // ANSI SQL specifies two wildcards: % and _. % matches zero or more characters, _ matches exactly one character.
-    let first_wildcard_index = s.find(['%', '_']);
-    if first_wildcard_index == Some(0) {
-        // there's no filtering we could possibly do, return an error and have this be handled by the unhandled hook
+    let (decoded_prefix, rest) = split_constant_prefix(s);
+    let has_wildcard = !rest.is_empty();
+    if has_wildcard && decoded_prefix.is_empty() {
+        // there's no filtering we could possibly do, return None and have this be handled by the unhandled hook
         return None;
     }
-    let (lower_bound, upper_bound) = if let Some(wildcard_index) = first_wildcard_index {
-        let prefix = &s[..wildcard_index];
-        let lower_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
-            prefix.to_string(),
-        ))));
-        let upper_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
-            increment_utf8(prefix)?,
-        ))));
+    let (lower_bound, upper_bound) = if has_wildcard {
+        let incremented_prefix = increment_utf8(&decoded_prefix)?;
+        let lower_bound_lit = string_literal_as(decoded_prefix, target_type);
+        let upper_bound_lit = string_literal_as(incremented_prefix, target_type);
         (lower_bound_lit, upper_bound_lit)
     } else {
         // the like expression is a literal and can be converted into a comparison
-        let bound = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
-            s.to_string(),
-        ))));
+        let bound = string_literal_as(decoded_prefix, target_type);
         (Arc::clone(&bound), bound)
     };
     let lower_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
@@ -1835,19 +1941,20 @@ fn build_not_like_match(
 }
 
 /// Returns unescaped constant prefix of a LIKE pattern (possibly empty) and the remaining pattern (possibly empty)
-fn split_constant_prefix(pattern: &str) -> (&str, &str) {
-    let char_indices = pattern.char_indices().collect::<Vec<_>>();
-    for i in 0..char_indices.len() {
-        let (idx, char) = char_indices[i];
-        if char == '%' || char == '_' {
-            if i != 0 && char_indices[i - 1].1 == '\\' {
-                // ecsaped by `\`
-                continue;
-            }
-            return (&pattern[..idx], &pattern[idx..]);
+fn split_constant_prefix(pattern: &str) -> (String, &str) {
+    let mut prefix = String::with_capacity(pattern.len());
+    let mut iter = pattern.char_indices();
+    while let Some((idx, c)) = iter.next() {
+        match c {
+            '%' | '_' => return (prefix, &pattern[idx..]),
+            '\\' => match iter.next() {
+                Some((_, escaped)) => prefix.push(escaped),
+                None => prefix.push('\\'),
+            },
+            _ => prefix.push(c),
         }
     }
-    (pattern, "")
+    (prefix, "")
 }
 
 /// Increment a UTF8 string by one, returning `None` if it can't be incremented.
@@ -1920,19 +2027,11 @@ fn wrap_null_count_check_expr(
     statistics_expr: Arc<dyn PhysicalExpr>,
     expr_builder: &mut PruningExpressionBuilder,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    // x_null_count != x_row_count
-    let not_when_null_count_eq_row_count = Arc::new(phys_expr::BinaryExpr::new(
-        expr_builder.null_count_column_expr()?,
-        Operator::NotEq,
-        expr_builder.row_count_column_expr()?,
-    ));
-
     // (x_null_count != x_row_count) AND (<statistics_expr>)
-    Ok(Arc::new(phys_expr::BinaryExpr::new(
-        not_when_null_count_eq_row_count,
-        Operator::And,
+    Ok(and_expr(
+        column_has_non_nulls_expr(expr_builder)?,
         statistics_expr,
-    )))
+    ))
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -1960,7 +2059,7 @@ mod tests {
         datatypes::TimeUnit,
     };
     use datafusion_expr::expr::InList;
-    use datafusion_expr::{Expr, cast, is_null, try_cast};
+    use datafusion_expr::{BinaryExpr, Expr, cast, is_null, try_cast};
     use datafusion_functions_nested::expr_fn::{array_has, make_array};
     use datafusion_physical_expr::expressions::{
         self as phys_expr, DynamicFilterPhysicalExpr,
@@ -3993,6 +4092,90 @@ mod tests {
     }
 
     #[test]
+    fn prune_int32_col_is_not_distinct_from() {
+        let (schema, statistics) = int32_setup();
+
+        // Without null counts, IS NOT DISTINCT FROM a non-null literal can
+        // still use min/max ranges, but unknown all-null containers must be kept.
+        let expected_ret = &[true, false, false, true, false];
+
+        prune_with_expr(
+            is_not_distinct_from(col("i"), lit(0)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // The operator is symmetric, so the scalar-left form should prune the
+        // same row groups.
+        prune_with_expr(
+            is_not_distinct_from(lit(0), col("i")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        let statistics = statistics
+            .with_row_counts("i", vec![Some(10), Some(9), None, Some(4), Some(10)])
+            .with_null_counts("i", vec![Some(0), Some(1), None, Some(4), Some(0)]);
+
+        let expected_ret = &[true, false, false, false, false];
+        prune_with_expr(
+            is_not_distinct_from(col("i"), lit(0)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        let expected_ret = &[false, true, true, true, false];
+        prune_with_expr(
+            is_not_distinct_from(col("i"), lit(ScalarValue::Int32(None))),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+    }
+
+    #[test]
+    fn prune_int32_col_is_distinct_from() {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let statistics = TestStatistics::new().with(
+            "i",
+            ContainerStats::new_i32(
+                vec![Some(0), Some(0), Some(5), None],
+                vec![Some(0), Some(2), Some(5), None],
+            )
+            .with_row_counts(vec![Some(2), Some(2), Some(2), Some(2)])
+            .with_null_counts(vec![Some(0), Some(0), Some(0), Some(2)]),
+        );
+
+        let expected_ret = &[false, true, true, true];
+        prune_with_expr(
+            is_distinct_from(col("i"), lit(0)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // The operator is symmetric, so the scalar-left form should prune the
+        // same row groups.
+        prune_with_expr(
+            is_distinct_from(lit(0), col("i")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        let expected_ret = &[true, true, true, false];
+        prune_with_expr(
+            is_distinct_from(col("i"), lit(ScalarValue::Int32(None))),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+    }
+
+    #[test]
     fn prune_int32_col_eq_zero_cast() {
         let (schema, statistics) = int32_setup();
 
@@ -4636,6 +4819,174 @@ mod tests {
             // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
             false,
             // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+    }
+
+    // `build_like_match()` must honor `\` escapes when scanning the pattern for
+    // wildcards.
+    #[test]
+    fn prune_utf8_like_escaped_chars() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s1", DataType::Utf8, true)]));
+        let statistics = TestStatistics::new().with(
+            "s1",
+            ContainerStats::new_utf8(
+                vec![
+                    Some("foo_aaa"),
+                    Some(r#"foo\aaa"#),
+                    Some("foo"),
+                    Some("bar"),
+                    Some("foo%aaa"),
+                    Some("%foo_aaa"),
+                ], // min
+                vec![
+                    Some("foo_zzz"),
+                    Some(r#"foo\zzz"#),
+                    Some("foozzz"),
+                    Some("baz"),
+                    Some("foo%zzz"),
+                    Some("%foo_zzz"),
+                ], // max
+            ),
+        );
+
+        let expr = col("s1").like(lit(r#"foo\_%"#));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => every value starts with literal
+            // "foo_" and matches the pattern; must keep.
+            true,
+            // s1 ["foo\aaa", "foo\zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo", "foozzz"] => stats don't prove "foo_" is or isn't in
+            // range; must conservatively keep.
+            true,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["%foo_aaa", "%foo_zzz"] => no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit(r#"foo\\%"#));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo\aaa", "foo\zzz"] => every value starts with literal
+            // "foo\" and matches the pattern; must keep.
+            true,
+            // s1 ["foo", "foozzz"] => stats don't prove "foo\" is or isn't in
+            // range; must conservatively keep.
+            true,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["%foo_aaa", "%foo_zzz"] => no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit(r#"foo\%%"#));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo\aaa", "foo\zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo", "foozzz"] => range straddles "foo%"; must keep.
+            true,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => every value starts with literal
+            // "foo%" and matches the pattern; must keep.
+            true,
+            // s1 ["%foo_aaa", "%foo_zzz"] => no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        // No wildcard after escapes: pattern reduces to an equality check on
+        // the literal "foo_".
+        let expr = col("s1").like(lit(r#"foo\_"#));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo\aaa", "foo\zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo", "foozzz"] => "foo_" is within the range; must keep.
+            true,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["%foo_aaa", "%foo_zzz"] => no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        // Leading escaped `%`: prefix is "%foo" (non-empty), so the guard
+        // for "all wildcards" must NOT bail out here.
+        let expr = col("s1").like(lit(r#"\%foo%"#));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo\aaa", "foo\zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo", "foozzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["%foo_aaa", "%foo_zzz"] => every value starts with literal
+            // "%foo" and matches the pattern; must keep.
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        // Two escaped wildcards, no real wildcard: equality on "foo%_".
+        let expr = col("s1").like(lit(r#"foo\%\_"#));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo\aaa", "foo\zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo", "foozzz"] => "foo%_" is within the range; must keep.
+            true,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["%foo_aaa", "%foo_zzz"] => no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        // Escaped backslash followed by more literal chars before the
+        // wildcard: prefix is "foo\bar".
+        let expr = col("s1").like(lit(r#"foo\\bar%"#));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo\aaa", "foo\zzz"] => range straddles "foo\bar"; must
+            // keep.
+            true,
+            // s1 ["foo", "foozzz"] => range straddles "foo\bar"; must keep.
+            true,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["%foo_aaa", "%foo_zzz"] => no rows can pass (not keep)
             false,
         ];
         prune_with_expr(expr, &schema, &statistics, expected_ret);
@@ -5379,6 +5730,22 @@ mod tests {
         let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
+    }
+
+    fn is_not_distinct_from(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            Operator::IsNotDistinctFrom,
+            Box::new(right),
+        ))
+    }
+
+    fn is_distinct_from(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            Operator::IsDistinctFrom,
+            Box::new(right),
+        ))
     }
 
     fn test_build_predicate_expression(

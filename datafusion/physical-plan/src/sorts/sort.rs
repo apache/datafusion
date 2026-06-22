@@ -45,6 +45,7 @@ use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
+use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::stream::ReservationStream;
 use crate::topk::TopK;
@@ -59,7 +60,6 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
     unwrap_or_internal_err,
@@ -978,6 +978,30 @@ impl SortExec {
         self.fetch
     }
 
+    /// Returns the dynamic filter expression for this sort (TopK), if set.
+    pub fn dynamic_filter_expr(&self) -> Option<Arc<DynamicFilterPhysicalExpr>> {
+        self.filter.as_ref().map(|f| f.read().expr())
+    }
+
+    /// Replace the dynamic filter expression for this sort.
+    ///
+    ///
+    /// Resets any internal state which may depend on the previous dynamic filter.
+    ///
+    /// Validates that the filter's children reference valid columns in
+    /// the sort's input schema.
+    pub fn with_dynamic_filter_expr(
+        mut self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        let input_schema = self.input.schema();
+        for child in filter.children() {
+            child.data_type(&input_schema)?;
+        }
+        self.filter = Some(Arc::new(RwLock::new(TopKDynamicFilters::new(filter))));
+        Ok(self)
+    }
+
     fn output_partitioning_helper(
         input: &Arc<dyn ExecutionPlan>,
         preserve_partitioning: bool,
@@ -1118,32 +1142,14 @@ impl ExecutionPlan for SortExec {
             vec![Distribution::UnspecifiedDistribution]
         } else {
             // global sort
-            // TODO support RangePartition and OrderedDistribution
+            // TODO support range partitioning and OrderedDistribution.
+            // See https://github.com/apache/datafusion/issues/22395
             vec![Distribution::SinglePartition]
         }
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to sort expressions
-        let mut tnr = TreeNodeRecursion::Continue;
-        for sort_expr in &self.expr {
-            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-        }
-
-        // Apply to dynamic filter expression if present (when fetch is Some, TopK mode)
-        if let Some(filter) = &self.filter {
-            let filter_guard = filter.read();
-            tnr = tnr.visit_sibling(|| f(filter_guard.expr().as_ref()))?;
-        }
-
-        Ok(tnr)
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -1240,6 +1246,7 @@ impl ExecutionPlan for SortExec {
                                 break;
                             }
                         }
+                        drop(input);
                         topk.emit()
                     })
                     .try_flatten(),
@@ -1264,6 +1271,7 @@ impl ExecutionPlan for SortExec {
                             let batch = batch?;
                             sorter.insert_batch(batch).await?;
                         }
+                        drop(input);
                         sorter.sort().await
                     })
                     .try_flatten(),
@@ -1276,13 +1284,14 @@ impl ExecutionPlan for SortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let p = if !self.preserve_partitioning() {
-            None
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let partition = if self.preserve_partitioning() {
+            args.partition()
         } else {
-            partition
+            None
         };
-        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(p)?);
+        let child_stats = args.compute_child_statistics(&self.input, partition)?;
+        let stats = Arc::unwrap_or_clone(child_stats);
         Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
@@ -1502,13 +1511,6 @@ mod tests {
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
-        }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(
@@ -2720,6 +2722,71 @@ mod tests {
         // The reserved memory for the sliced batch should be less than that of the full batch
         assert!(reserved > sliced_reserved);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_dynamic_filter() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let sort = SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            }])
+            .unwrap(),
+            child,
+        )
+        .with_fetch(Some(10));
+
+        // SortExec with fetch creates a dynamic filter automatically.
+        let original_id = sort
+            .dynamic_filter_expr()
+            .expect("should have dynamic filter with fetch")
+            .expression_id()
+            .expect("DynamicFilterPhysicalExpr always has an expression_id");
+
+        // with_dynamic_filter replaces it with a new TopKDynamicFilters.
+        let new_df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("a", 0)) as _],
+            lit(true),
+        ));
+        let new_id = new_df
+            .expression_id()
+            .expect("DynamicFilterPhysicalExpr always has an expression_id");
+        let sort = sort.with_dynamic_filter_expr(Arc::clone(&new_df))?;
+        let restored_id = sort
+            .dynamic_filter_expr()
+            .expect("should still have dynamic filter")
+            .expression_id()
+            .expect("DynamicFilterPhysicalExpr always has an expression_id");
+        assert_eq!(restored_id, new_id);
+        assert_ne!(restored_id, original_id);
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_dynamic_filter_rejects_invalid_columns() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let sort = SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            }])
+            .unwrap(),
+            child,
+        )
+        .with_fetch(Some(10));
+
+        // Column index 99 is out of bounds for the input schema.
+        let df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("bad", 99)) as _],
+            lit(true),
+        ));
+        assert!(sort.with_dynamic_filter_expr(df).is_err());
         Ok(())
     }
 

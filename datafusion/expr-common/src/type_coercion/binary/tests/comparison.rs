@@ -575,6 +575,24 @@ fn test_type_coercion_compare() -> Result<()> {
         Operator::Eq,
         DataType::Timestamp(Second, Some("Europe/Brussels".into()))
     );
+    test_coercion_binary_rule!(
+        DataType::Timestamp(Second, None),
+        DataType::Timestamp(Millisecond, None),
+        Operator::Eq,
+        DataType::Timestamp(Millisecond, None)
+    );
+    test_coercion_binary_rule!(
+        DataType::Timestamp(Second, Some("America/New_York".into())),
+        DataType::Timestamp(Nanosecond, Some("Europe/Brussels".into())),
+        Operator::Lt,
+        DataType::Timestamp(Nanosecond, Some("America/New_York".into()))
+    );
+    test_coercion_binary_rule!(
+        DataType::Timestamp(Microsecond, None),
+        DataType::Timestamp(Nanosecond, None),
+        Operator::GtEq,
+        DataType::Timestamp(Nanosecond, None)
+    );
 
     // list
     let inner_field = Arc::new(Field::new_list_field(DataType::Int64, true));
@@ -872,6 +890,24 @@ fn test_type_union_coercion_prefers_string() {
     );
 }
 
+#[test]
+fn test_type_union_coercion_prefers_finer_timestamp_unit() {
+    assert_eq!(
+        type_union_coercion(
+            &DataType::Timestamp(Second, None),
+            &DataType::Timestamp(Millisecond, None),
+        ),
+        Some(DataType::Timestamp(Millisecond, None))
+    );
+    assert_eq!(
+        type_union_resolution(&[
+            DataType::Timestamp(Second, None),
+            DataType::Timestamp(Nanosecond, None),
+        ]),
+        Some(DataType::Timestamp(Nanosecond, None))
+    );
+}
+
 /// Tests that comparison operators coerce to numeric when comparing
 /// numeric and string types.
 #[test]
@@ -895,5 +931,110 @@ fn test_binary_comparison_string_numeric_coercion() -> Result<()> {
         assert_eq!(lhs, DataType::Float64, "Op {op}: Utf8 vs Float64 -> lhs");
         assert_eq!(rhs, DataType::Float64, "Op {op}: Utf8 vs Float64 -> rhs");
     }
+    Ok(())
+}
+
+#[test]
+fn test_string_concat_coercion() -> Result<()> {
+    // Binary
+    test_coercion_binary_rule!(
+        DataType::Binary,
+        DataType::Binary,
+        Operator::StringConcat,
+        DataType::Binary
+    );
+    test_coercion_binary_rule!(
+        DataType::LargeBinary,
+        DataType::LargeBinary,
+        Operator::StringConcat,
+        DataType::LargeBinary
+    );
+    test_coercion_binary_rule!(
+        DataType::BinaryView,
+        DataType::BinaryView,
+        Operator::StringConcat,
+        DataType::BinaryView
+    );
+    test_coercion_binary_rule!(
+        DataType::Binary,
+        DataType::LargeBinary,
+        Operator::StringConcat,
+        DataType::LargeBinary
+    );
+    test_coercion_binary_rule!(
+        DataType::BinaryView,
+        DataType::Binary,
+        Operator::StringConcat,
+        DataType::BinaryView
+    );
+    test_coercion_binary_rule!(
+        DataType::FixedSizeBinary(4),
+        DataType::FixedSizeBinary(16),
+        Operator::StringConcat,
+        DataType::Binary
+    );
+    test_coercion_binary_rule!(
+        DataType::FixedSizeBinary(4),
+        DataType::LargeBinary,
+        Operator::StringConcat,
+        DataType::LargeBinary
+    );
+    test_coercion_binary_rule!(
+        DataType::FixedSizeBinary(4),
+        DataType::BinaryView,
+        Operator::StringConcat,
+        DataType::BinaryView
+    );
+
+    // String
+    test_coercion_binary_rule!(
+        DataType::Utf8,
+        DataType::Utf8,
+        Operator::StringConcat,
+        DataType::Utf8
+    );
+    test_coercion_binary_rule!(
+        DataType::LargeUtf8,
+        DataType::LargeUtf8,
+        Operator::StringConcat,
+        DataType::LargeUtf8
+    );
+    test_coercion_binary_rule!(
+        DataType::Utf8View,
+        DataType::Utf8View,
+        Operator::StringConcat,
+        DataType::Utf8View
+    );
+
+    // Mixed string-binary
+    for string_dt in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+        for binary_dt in [
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::BinaryView,
+        ] {
+            test_coercion_binary_rule!(
+                &binary_dt,
+                &string_dt,
+                Operator::StringConcat,
+                string_dt
+            );
+            test_coercion_binary_rule!(
+                &string_dt,
+                &binary_dt,
+                Operator::StringConcat,
+                string_dt
+            );
+        }
+    }
+
+    // Mixed string-other
+    test_coercion_binary_rule!(
+        DataType::Utf8,
+        DataType::Timestamp(Second, None),
+        Operator::StringConcat,
+        DataType::Utf8
+    );
+
     Ok(())
 }

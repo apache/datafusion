@@ -413,11 +413,10 @@ impl GroupsAccumulator for StringAggGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         // State is always LargeUtf8, which update_batch already handles.
-        self.update_batch(values, group_indices, opt_filter, total_num_groups)
+        self.update_batch(values, group_indices, None, total_num_groups)
     }
 
     fn convert_to_state(
@@ -898,7 +897,7 @@ mod tests {
 
         // Simulate a second accumulator's state (LargeUtf8 partial strings)
         let partial_state: ArrayRef = Arc::new(LargeStringArray::from(vec!["c,d", "e"]));
-        acc.merge_batch(&[partial_state], &[0, 1], None, 2)?;
+        acc.merge_batch(&[partial_state], &[0, 1], 2)?;
 
         let result = evaluate_groups(&mut acc, EmitTo::All);
         assert_eq!(

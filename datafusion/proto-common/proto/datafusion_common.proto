@@ -627,13 +627,27 @@ message ParquetOptions {
     uint64 max_predicate_cache_size = 33;
   }
 
-  CdcOptions content_defined_chunking = 35;
+  oneof max_row_group_bytes_opt {
+    uint64 max_row_group_bytes = 37;
+  }
+
+  ParquetCdcOptions content_defined_chunking = 35;
+
+  // Optional timezone applied to INT96-coerced timestamps when `coerce_int96`
+  // is set. When `Some`, INT96 columns coerce to
+  // `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default
+  // `Timestamp(<coerce_int96>, None)`. No effect when `coerce_int96` is unset.
+  oneof coerce_int96_tz_opt {
+    string coerce_int96_tz = 36;
+  }
 }
 
-message CdcOptions {
-  uint64 min_chunk_size = 1;
-  uint64 max_chunk_size = 2;
-  int32 norm_level = 3;
+// Content-defined chunking (CDC) options for writing parquet files.
+message ParquetCdcOptions {
+  bool enabled = 1;
+  uint64 min_chunk_size = 2;
+  uint64 max_chunk_size = 3;
+  int32 norm_level = 4;
 }
 
 enum JoinSide {
@@ -668,4 +682,37 @@ message ColumnStats {
   Precision null_count = 3;
   Precision distinct_count = 4;
   Precision byte_size = 6;
+}
+
+enum ExplainFormat {
+  EXPLAIN_FORMAT_INDENT = 0;
+  EXPLAIN_FORMAT_TREE = 1;
+  EXPLAIN_FORMAT_PGJSON = 2;
+  EXPLAIN_FORMAT_GRAPHVIZ = 3;
+}
+
+// Verbosity level for `EXPLAIN ANALYZE`. Mirrors
+// `datafusion_common::format::MetricType`.
+enum MetricType {
+  METRIC_TYPE_SUMMARY = 0;
+  METRIC_TYPE_DEV = 1;
+}
+
+// Category of an `EXPLAIN ANALYZE` metric. Mirrors
+// `datafusion_common::format::MetricCategory`.
+enum MetricCategory {
+  METRIC_CATEGORY_ROWS = 0;
+  METRIC_CATEGORY_BYTES = 1;
+  METRIC_CATEGORY_TIMING = 2;
+  METRIC_CATEGORY_UNCATEGORIZED = 3;
+}
+
+// Wire encoding for `datafusion_common::format::ExplainAnalyzeCategories`.
+//
+// If `all` is true, every category is shown (the `only` list is ignored).
+// If `all` is false, only the categories listed in `only` are shown — an
+// empty `only` means "plan only", i.e. suppress all metrics.
+message ExplainAnalyzeCategoriesNode {
+  bool all = 1;
+  repeated MetricCategory only = 2;
 }

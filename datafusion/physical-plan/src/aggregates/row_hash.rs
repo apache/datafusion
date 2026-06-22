@@ -21,17 +21,20 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use super::AggregateExec;
 use super::order::GroupOrdering;
+use super::skip_partial::SkipAggregationProbe;
+use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
-    create_schema, evaluate_group_by, evaluate_many, evaluate_optional,
+    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, group_id_array,
+    max_duplicate_ordinal,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
@@ -121,100 +124,6 @@ struct SpillState {
     // Metrics related to spilling are managed inside `spill_manager`
 }
 
-/// Tracks if the aggregate should skip partial aggregations
-///
-/// See "partial aggregation" discussion on [`GroupedHashAggregateStream`]
-struct SkipAggregationProbe {
-    // ========================================================================
-    // PROPERTIES:
-    // These fields are initialized at the start and remain constant throughout
-    // the execution.
-    // ========================================================================
-    /// Aggregation ratio check performed when the number of input rows exceeds
-    /// this threshold (from `SessionConfig`)
-    probe_rows_threshold: usize,
-    /// Maximum ratio of `num_groups` to `input_rows` for continuing aggregation
-    /// (from `SessionConfig`). If the ratio exceeds this value, aggregation
-    /// is skipped and input rows are directly converted to output
-    probe_ratio_threshold: f64,
-
-    // ========================================================================
-    // STATES:
-    // Fields changes during execution. Can be buffer, or state flags that
-    // influence the execution in parent `GroupedHashAggregateStream`
-    // ========================================================================
-    /// Number of processed input rows (updated during probing)
-    input_rows: usize,
-    /// Number of total group values for `input_rows` (updated during probing)
-    num_groups: usize,
-
-    /// Flag indicating further data aggregation may be skipped (decision made
-    /// when probing complete)
-    should_skip: bool,
-    /// Flag indicating further updates of `SkipAggregationProbe` state won't
-    /// make any effect (set either while probing or on probing completion)
-    is_locked: bool,
-
-    // ========================================================================
-    // METRICS:
-    // ========================================================================
-    /// Number of rows where state was output without aggregation.
-    ///
-    /// * If 0, all input rows were aggregated (should_skip was always false)
-    ///
-    /// * if greater than zero, the number of rows which were output directly
-    ///   without aggregation
-    skipped_aggregation_rows: metrics::Count,
-}
-
-impl SkipAggregationProbe {
-    fn new(
-        probe_rows_threshold: usize,
-        probe_ratio_threshold: f64,
-        skipped_aggregation_rows: metrics::Count,
-    ) -> Self {
-        Self {
-            input_rows: 0,
-            num_groups: 0,
-            probe_rows_threshold,
-            probe_ratio_threshold,
-            should_skip: false,
-            is_locked: false,
-            skipped_aggregation_rows,
-        }
-    }
-
-    /// Updates `SkipAggregationProbe` state:
-    /// - increments the number of input rows
-    /// - replaces the number of groups with the new value
-    /// - on `probe_rows_threshold` exceeded calculates
-    ///   aggregation ratio and sets `should_skip` flag
-    /// - if `should_skip` is set, locks further state updates
-    fn update_state(&mut self, input_rows: usize, num_groups: usize) {
-        if self.is_locked {
-            return;
-        }
-        self.input_rows += input_rows;
-        self.num_groups = num_groups;
-        if self.input_rows >= self.probe_rows_threshold {
-            self.should_skip = self.num_groups as f64 / self.input_rows as f64
-                >= self.probe_ratio_threshold;
-            // Set is_locked to true only if we have decided to skip, otherwise we can try to skip
-            // during processing the next record_batch.
-            self.is_locked = self.should_skip;
-        }
-    }
-
-    fn should_skip(&self) -> bool {
-        self.should_skip
-    }
-
-    /// Record the number of rows that were output directly without aggregation
-    fn record_skipped(&mut self, batch: &RecordBatch) {
-        self.skipped_aggregation_rows.add(batch.num_rows());
-    }
-}
-
 /// Controls the behavior when an out-of-memory condition occurs.
 #[derive(PartialEq, Debug)]
 enum OutOfMemoryMode {
@@ -265,7 +174,7 @@ enum OutOfMemoryMode {
 ///
 ///         group_values                             accumulators
 ///
-///  ```
+/// ```
 ///
 /// For example, given a query like `COUNT(x), SUM(y) ... GROUP BY z`,
 /// [`group_values`] will store the distinct values of `z`. There will
@@ -394,6 +303,7 @@ pub(crate) struct GroupedHashAggregateStream {
     // the execution.
     // ========================================================================
     schema: SchemaRef,
+    input_schema: SchemaRef,
     input: SendableRecordBatchStream,
     mode: AggregateMode,
 
@@ -598,7 +508,11 @@ impl GroupedHashAggregateStream {
 
         let agg_fn_names = aggregate_exprs
             .iter()
-            .map(|expr| expr.human_display())
+            .map(|expr| {
+                format_human_display(expr.human_display(), expr.human_display_alias())
+                    .map(|display| display.into_owned())
+                    .unwrap_or_else(|| expr.name().to_string())
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
@@ -677,14 +591,20 @@ impl GroupedHashAggregateStream {
                 options.skip_partial_aggregation_probe_rows_threshold;
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;
-            let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
-                .with_category(MetricCategory::Rows)
-                .counter("skipped_aggregation_rows", partition);
-            Some(SkipAggregationProbe::new(
-                probe_rows_threshold,
-                probe_ratio_threshold,
-                skipped_aggregation_rows,
-            ))
+            // A threshold >= 1.0 means the ratio (num_groups / input_rows) can
+            // never exceed it, so the feature is effectively disabled.
+            if probe_ratio_threshold >= 1.0 {
+                None
+            } else {
+                let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
+                    .with_category(MetricCategory::Rows)
+                    .counter("skipped_aggregation_rows", partition);
+                Some(SkipAggregationProbe::new(
+                    probe_rows_threshold,
+                    probe_ratio_threshold,
+                    skipped_aggregation_rows,
+                ))
+            }
         } else {
             None
         };
@@ -724,6 +644,7 @@ impl GroupedHashAggregateStream {
 
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
+            input_schema: agg.input().schema(),
             input,
             mode: agg.mode,
             accumulators,
@@ -927,6 +848,10 @@ impl Stream for GroupedHashAggregateStream {
                                     self.group_values.len()
                                 )));
                             }
+                            // Release the input pipeline's resources.
+                            let input_schema = self.input.schema();
+                            self.input =
+                                Box::pin(EmptyRecordBatchStream::new(input_schema));
                             self.exec_state = ExecutionState::Done;
                         }
                     }
@@ -1118,7 +1043,7 @@ impl GroupedHashAggregateStream {
 
                     // if aggregation is over intermediate states,
                     // use merge
-                    acc.merge_batch(values, group_indices, None, total_num_groups)?;
+                    acc.merge_batch(values, group_indices, total_num_groups)?;
                 }
                 self.group_by_metrics
                     .aggregation_time
@@ -1245,6 +1170,114 @@ impl GroupedHashAggregateStream {
         Ok(Some(batch))
     }
 
+    /// Registers groups for empty grouping sets when no input rows were seen.
+    ///
+    /// `GROUP BY GROUPING SETS (())` must always produce one row even when there
+    /// are no input rows (standard SQL semantics for a "grand total" group).
+    /// Mixed grouping sets like `GROUPING SETS (a, ())` also produce one row for
+    /// the empty set `()` on empty input.
+    ///
+    /// This method interns the group keys and primes the accumulators so they
+    /// produce their zero-row aggregate values (e.g. `NULL` for `SUM`,
+    /// `0` for `COUNT`).
+    fn init_empty_grouping_sets(&mut self) -> Result<()> {
+        if !self.group_by.has_grouping_set() || !self.group_values.is_empty() {
+            return Ok(());
+        }
+
+        let max_ordinal = max_duplicate_ordinal(self.group_by.groups());
+        let mut ordinals: std::collections::HashMap<&[bool], usize> =
+            std::collections::HashMap::new();
+        let group_schema = self.group_by.group_schema(&self.input_schema)?;
+        let n_expr = self.group_by.expr().len();
+        let mut any_interned = false;
+
+        for group in self.group_by.groups() {
+            let ordinal = {
+                let entry = ordinals.entry(group.as_slice()).or_insert(0);
+                let o = *entry;
+                *entry += 1;
+                o
+            };
+
+            if !group.iter().all(|&is_null| is_null) {
+                continue;
+            }
+
+            // Build the group key: one NULL per group-by expression, then the grouping_id.
+            let mut cols: Vec<ArrayRef> = group_schema
+                .fields()
+                .iter()
+                .take(n_expr)
+                .map(|f| new_null_array(f.data_type(), 1))
+                .collect();
+            cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
+
+            let starting_groups = self.group_values.len();
+            self.group_values
+                .intern(&cols, &mut self.current_group_indices)?;
+            let total_groups = self.group_values.len();
+            if total_groups > starting_groups {
+                self.group_ordering.new_groups(
+                    &cols,
+                    &self.current_group_indices,
+                    total_groups,
+                )?;
+            }
+            any_interned = true;
+        }
+
+        if any_interned {
+            // Prime each accumulator for the registered group count with no data.
+            //
+            // We build 1-row null arrays for each aggregate argument and pass them
+            // with an all-false filter to update_batch.  The filter ensures no row
+            // is accumulated into any group, which keeps every group in its "zero"
+            // initial state (NULL for SUM/AVG/MIN/MAX, 0 for COUNT).
+            //
+            // Using a 1-row batch rather than 0 rows is required to avoid a fast
+            // path in `NullState::accumulate` that treats "0 nulls in a 0-row
+            // array" as "all groups have been seen", which would cause SUM to
+            // return 0 instead of NULL.
+            //
+            // This path always runs in a Raw input mode, so `update_batch` (not
+            // `merge_batch`) is the right entry point:
+            //
+            // - `has_grouping_set()` can only be true for the Partial / Single /
+            //   SinglePartitioned modes, whose `input_mode()` is `Raw`. The final
+            //   modes rebuild their group-by via `PhysicalGroupBy::as_final()`,
+            //   which clears `has_grouping_set`, so this method returns early for
+            //   them and never reaches here.
+            //
+            // Since every row is filtered out, the actual data content never
+            // matters. The assert documents and guards the invariant above.
+            debug_assert_eq!(
+                self.mode.input_mode(),
+                AggregateInputMode::Raw,
+                "init_empty_grouping_sets must only run in a Raw input mode"
+            );
+            let total_groups = self.group_values.len();
+            let null_args: Vec<Vec<ArrayRef>> = self
+                .aggregate_arguments
+                .iter()
+                .map(|args| {
+                    args.iter()
+                        .map(|expr| {
+                            let dt = expr.data_type(&self.input_schema)?;
+                            Ok(new_null_array(&dt, 1))
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let false_filter = BooleanArray::from(vec![false]);
+            for (acc, args) in self.accumulators.iter_mut().zip(null_args.iter()) {
+                acc.update_batch(args, &[0], Some(&false_filter), total_groups)?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Emit all intermediate aggregation states, sort them, and store them on disk.
     /// This process helps in reducing memory pressure by allowing the data to be
     /// read back with streaming merge.
@@ -1339,10 +1372,16 @@ impl GroupedHashAggregateStream {
     fn set_input_done_and_produce_output(&mut self) -> Result<()> {
         self.input_done = true;
         self.group_ordering.input_done();
+        // Release the original input pipeline's resources now that we're done
+        // reading from it. In the spill branch below, `self.input` is replaced
+        // again with a stream that merges spill files.
+        let input_schema = self.input.schema();
+        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
             // Input has been entirely processed without spilling to disk.
+            self.init_empty_grouping_sets()?;
             if !self.enable_blocked_groups {
                 // Flush any remaining group values.
                 let batch = self.emit(EmitTo::All, false)?;
@@ -1497,7 +1536,6 @@ impl GroupedHashAggregateStream {
 mod tests {
     use super::*;
     use crate::InputOrderMode;
-    use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1506,6 +1544,8 @@ mod tests {
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
 
+    // Migrated to PartialHashAggregateStream coverage in hash_aggregate.rs;
+    // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {
         // Fix for https://github.com/apache/datafusion/issues/18701
@@ -1612,152 +1652,9 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_skip_aggregation_probe_not_locked_until_skip() -> Result<()> {
-        // Test that the probe is not locked until we actually decide to skip.
-        // This allows us to continue evaluating the skip condition across multiple batches.
-        //
-        // Scenario:
-        // - Batch 1: Hits rows threshold but NOT ratio threshold (low cardinality) -> don't skip
-        // - Batch 2: Now hits ratio threshold (high cardinality) -> skip
-        //
-        // Without the fix, the probe would be locked after batch 1, preventing the skip
-        // decision from being made on batch 2.
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("group_col", DataType::Int32, false),
-            Field::new("value_col", DataType::Int32, false),
-        ]));
-
-        // Configure thresholds:
-        // - probe_rows_threshold: 100 rows
-        // - probe_ratio_threshold: 0.8 (80%)
-        let probe_rows_threshold = 100;
-        let probe_ratio_threshold = 0.8;
-
-        // Batch 1: 100 rows with only 10 unique groups
-        // Ratio: 10/100 = 0.1 (10%) < 0.8 -> should NOT skip
-        // This will hit the rows threshold but not the ratio threshold
-        let batch1_rows = 100;
-        let batch1_groups = 10;
-        let mut group_ids_batch1 = Vec::new();
-        for i in 0..batch1_rows {
-            group_ids_batch1.push((i % batch1_groups) as i32);
-        }
-        let values_batch1: Vec<i32> = vec![1; batch1_rows];
-
-        let batch1 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(Int32Array::from(group_ids_batch1)),
-                Arc::new(Int32Array::from(values_batch1)),
-            ],
-        )?;
-
-        // Batch 2: 350 rows with 350 unique NEW groups (starting from group 10)
-        // After batch 2, total: 450 rows, 360 groups
-        // Ratio: 360/450 = 0.8 (80%) >= 0.8 -> SHOULD decide to skip
-        let batch2_rows = 350;
-        let batch2_groups = 350;
-        let group_ids_batch2: Vec<i32> = (batch1_groups..(batch1_groups + batch2_groups))
-            .map(|x| x as i32)
-            .collect();
-        let values_batch2: Vec<i32> = vec![1; batch2_rows];
-
-        let batch2 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(Int32Array::from(group_ids_batch2)),
-                Arc::new(Int32Array::from(values_batch2)),
-            ],
-        )?;
-
-        // Batch 3: This batch should be skipped since we decided to skip after batch 2
-        // 100 rows with 100 unique groups (continuing from where batch 2 left off)
-        let batch3_rows = 100;
-        let batch3_groups = 100;
-        let batch3_start_group = batch1_groups + batch2_groups;
-        let group_ids_batch3: Vec<i32> = (batch3_start_group
-            ..(batch3_start_group + batch3_groups))
-            .map(|x| x as i32)
-            .collect();
-        let values_batch3: Vec<i32> = vec![1; batch3_rows];
-
-        let batch3 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(Int32Array::from(group_ids_batch3)),
-                Arc::new(Int32Array::from(values_batch3)),
-            ],
-        )?;
-
-        let input_partitions = vec![vec![batch1, batch2, batch3]];
-
-        let runtime = RuntimeEnvBuilder::default().build_arc()?;
-        let mut task_ctx = TaskContext::default().with_runtime(runtime);
-
-        // Configure skip aggregation settings
-        let mut session_config = task_ctx.session_config().clone();
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            &datafusion_common::ScalarValue::UInt64(Some(probe_rows_threshold)),
-        );
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &datafusion_common::ScalarValue::Float64(Some(probe_ratio_threshold)),
-        );
-        task_ctx = task_ctx.with_session_config(session_config);
-        let task_ctx = Arc::new(task_ctx);
-
-        // Create aggregate: COUNT(*) GROUP BY group_col
-        let group_expr = vec![(col("group_col", &schema)?, "group_col".to_string())];
-        let aggr_expr = vec![Arc::new(
-            AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("count_value")
-                .build()?,
-        )];
-
-        let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
-        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
-
-        // Use Partial mode
-        let aggregate_exec = AggregateExec::try_new(
-            AggregateMode::Partial,
-            PhysicalGroupBy::new_single(group_expr),
-            aggr_expr,
-            vec![None],
-            exec,
-            Arc::clone(&schema),
-        )?;
-
-        // Execute and collect results
-        let mut stream =
-            GroupedHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?;
-        let mut results = Vec::new();
-
-        while let Some(result) = stream.next().await {
-            let batch = result?;
-            results.push(batch);
-        }
-
-        // Check that skip aggregation actually happened
-        // The key metric is skipped_aggregation_rows
-        let metrics = aggregate_exec.metrics().unwrap();
-        let skipped_rows = metrics
-            .sum_by_name("skipped_aggregation_rows")
-            .map(|m| m.as_usize())
-            .unwrap_or(0);
-
-        // We expect batch 3's rows to be skipped (100 rows)
-        assert_eq!(
-            skipped_rows, batch3_rows,
-            "Expected batch 3's rows ({batch3_rows}) to be skipped",
-        );
-
-        Ok(())
-    }
-
+    // TODO: migrate to PartialHashAggregateStream when it supports
+    // InputOrderMode::PartiallySorted; kept here for the legacy
+    // GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_emit_early_with_partially_sorted() -> Result<()> {
         // Reproducer for #20445: EmitEarly with PartiallySorted panics in

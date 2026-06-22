@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{
     Result, not_impl_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
@@ -127,15 +128,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // in the case of DataFusion).
         //
         // Since we can't simply register a table during planning stage (it is
-        // an execution problem), we'll use a relation object that preserves the
-        // schema of the input perfectly and also knows which recursive CTE it is
-        // bound to.
+        // an execution problem), we'll use a relation object that knows which
+        // recursive CTE it is bound to.
 
         // ---------- Step 2: Create a temporary relation ------------------
         // Step 2.1: Create a table source for the temporary relation
-        let work_table_source = self
-            .context_provider
-            .create_cte_work_table(cte_name, Arc::clone(static_plan.schema().inner()))?;
+        // Recursive self-references must expose conservative (nullable)
+        // columns. Deriving them from the static term's possibly non-nullable
+        // schema would let the recursive term treat values from previous
+        // iterations as non-nullable.
+        let work_table_source = self.context_provider.create_cte_work_table(
+            cte_name,
+            nullable_schema(static_plan.schema().inner()),
+        )?;
 
         // Step 2.2: Create a temporary relation logical plan that will be used
         // as the input to the recursive term
@@ -182,6 +187,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .to_recursive_query(name, recursive_plan, distinct)?
             .build()
     }
+}
+
+/// Return a copy of `schema` with every field marked nullable, preserving field
+/// and schema metadata.
+fn nullable_schema(schema: &Schema) -> SchemaRef {
+    Arc::new(Schema::new_with_metadata(
+        schema
+            .fields()
+            .iter()
+            .map(|field| field.as_ref().clone().with_nullable(true))
+            .collect::<Vec<_>>(),
+        schema.metadata().clone(),
+    ))
 }
 
 fn has_work_table_reference(

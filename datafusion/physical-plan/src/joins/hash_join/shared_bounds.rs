@@ -120,11 +120,12 @@ fn create_membership_predicate(
                 )) as Arc<dyn PhysicalExpr>
             };
 
-            // Use in_list_from_array() helper to create InList with static_filter optimization (hash-based lookup)
+            // Use InListExpr::try_new_from_array() to build an InList with static_filter optimization (hash-based lookup)
             Ok(Some(Arc::new(InListExpr::try_new_from_array(
                 expr,
                 in_list_array,
                 false,
+                schema,
             )?)))
         }
         // Use hash table lookup for large build sides
@@ -699,31 +700,47 @@ impl fmt::Debug for SharedBuildAccumulator {
 }
 
 #[cfg(test)]
+pub(super) fn make_partitioned_accumulator_for_test(
+    num_partitions: usize,
+) -> SharedBuildAccumulator {
+    let probe_schema = Arc::new(Schema::new(vec![Field::new(
+        "probe_key",
+        DataType::Int32,
+        false,
+    )]));
+    let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+    SharedBuildAccumulator {
+        inner: Mutex::new(AccumulatorState {
+            data: AccumulatedBuildData::Partitioned {
+                partitions: vec![PartitionStatus::Pending; num_partitions],
+                completed_partitions: 0,
+            },
+            completion: CompletionState::Pending,
+        }),
+        completion_notify: Notify::new(),
+        dynamic_filter,
+        on_right: vec![],
+        repartition_random_state: SeededRandomState::with_seed(1),
+        probe_schema,
+    }
+}
+
+#[cfg(test)]
+pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usize {
+    let guard = acc.inner.lock();
+    let AccumulatedBuildData::Partitioned {
+        completed_partitions,
+        ..
+    } = &guard.data
+    else {
+        panic!("expected partitioned accumulator");
+    };
+    *completed_partitions
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-
-    fn make_partitioned_accumulator(num_partitions: usize) -> SharedBuildAccumulator {
-        let probe_schema = Arc::new(Schema::new(vec![Field::new(
-            "probe_key",
-            DataType::Int32,
-            false,
-        )]));
-        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
-        SharedBuildAccumulator {
-            inner: Mutex::new(AccumulatorState {
-                data: AccumulatedBuildData::Partitioned {
-                    partitions: vec![PartitionStatus::Pending; num_partitions],
-                    completed_partitions: 0,
-                },
-                completion: CompletionState::Pending,
-            }),
-            completion_notify: Notify::new(),
-            dynamic_filter,
-            on_right: vec![],
-            repartition_random_state: SeededRandomState::with_seed(1),
-            probe_schema,
-        }
-    }
 
     fn partitioned_state(acc: &SharedBuildAccumulator) -> (Vec<PartitionStatus>, usize) {
         let guard = acc.inner.lock();
@@ -747,7 +764,7 @@ mod tests {
     // `Reported`. This test pins that invariant.
     #[test]
     fn report_canceled_partition_is_noop_after_report() {
-        let acc = make_partitioned_accumulator(2);
+        let acc = make_partitioned_accumulator_for_test(2);
 
         {
             let mut guard = acc.inner.lock();
@@ -779,7 +796,7 @@ mod tests {
     // which is what unblocks sibling partitions waiting on the coordinator.
     #[test]
     fn report_canceled_partition_marks_pending_partition_canceled() {
-        let acc = make_partitioned_accumulator(2);
+        let acc = make_partitioned_accumulator_for_test(2);
 
         acc.report_canceled_partition(0);
         let (partitions, completed) = partitioned_state(&acc);

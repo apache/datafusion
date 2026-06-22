@@ -15,375 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::mem::size_of;
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
-
-use datafusion_common::TableReference;
-use datafusion_common::instant::Instant;
-use object_store::{ObjectMeta, path::Path};
-
-use crate::cache::{
-    CacheAccessor,
-    cache_manager::{CachedFileList, ListFilesCache},
-    lru_queue::LruQueue,
-};
-
-pub trait TimeProvider: Send + Sync + 'static {
-    fn now(&self) -> Instant;
-}
-
-#[derive(Debug, Default)]
-pub struct SystemTimeProvider;
-
-impl TimeProvider for SystemTimeProvider {
-    fn now(&self) -> Instant {
-        Instant::now()
-    }
-}
-
-/// Default implementation of [`ListFilesCache`]
-///
-/// Caches file metadata for file listing operations.
-///
-/// # Internal details
-///
-/// The `memory_limit` parameter controls the maximum size of the cache, which uses a Least
-/// Recently Used eviction algorithm. When adding a new entry, if the total number of entries in
-/// the cache exceeds `memory_limit`, the least recently used entries are evicted until the total
-/// size is lower than the `memory_limit`.
-///
-/// # Cache API
-///
-/// Uses `get` and `put` methods for cache operations. TTL validation is handled internally -
-/// expired entries return `None` from `get`.
-pub struct DefaultListFilesCache {
-    state: Mutex<DefaultListFilesCacheState>,
-    time_provider: Arc<dyn TimeProvider>,
-}
-
-impl Default for DefaultListFilesCache {
-    fn default() -> Self {
-        Self::new(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, None)
-    }
-}
-
-impl DefaultListFilesCache {
-    /// Creates a new instance of [`DefaultListFilesCache`].
-    ///
-    /// # Arguments
-    /// * `memory_limit` - The maximum size of the cache, in bytes.
-    /// * `ttl` - The TTL (time-to-live) of entries in the cache.
-    pub fn new(memory_limit: usize, ttl: Option<Duration>) -> Self {
-        Self {
-            state: Mutex::new(DefaultListFilesCacheState::new(memory_limit, ttl)),
-            time_provider: Arc::new(SystemTimeProvider),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_time_provider(mut self, provider: Arc<dyn TimeProvider>) -> Self {
-        self.time_provider = provider;
-        self
-    }
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub struct ListFilesEntry {
-    pub metas: CachedFileList,
-    pub size_bytes: usize,
-    pub expires: Option<Instant>,
-}
-
-impl ListFilesEntry {
-    fn try_new(
-        cached_file_list: CachedFileList,
-        ttl: Option<Duration>,
-        now: Instant,
-    ) -> Option<Self> {
-        let size_bytes = (cached_file_list.files.capacity() * size_of::<ObjectMeta>())
-            + cached_file_list
-                .files
-                .iter()
-                .map(meta_heap_bytes)
-                .reduce(|acc, b| acc + b)?;
-
-        Some(Self {
-            metas: cached_file_list,
-            size_bytes,
-            expires: ttl.map(|t| now + t),
-        })
-    }
-}
-
-/// Calculates the number of bytes an [`ObjectMeta`] occupies in the heap.
-fn meta_heap_bytes(object_meta: &ObjectMeta) -> usize {
-    let mut size = object_meta.location.as_ref().len();
-
-    if let Some(e) = &object_meta.e_tag {
-        size += e.len();
-    }
-    if let Some(v) = &object_meta.version {
-        size += v.len();
-    }
-
-    size
-}
-
-/// The default memory limit for the [`DefaultListFilesCache`]
-pub const DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT: usize = 1024 * 1024; // 1MiB
-
-/// The default cache TTL for the [`DefaultListFilesCache`]
-pub const DEFAULT_LIST_FILES_CACHE_TTL: Option<Duration> = None; // Infinite
-
-/// Key for [`DefaultListFilesCache`]
-///
-/// Each entry is scoped to its use within a specific table so that the cache
-/// can differentiate between identical paths in different tables, and
-/// table-level cache invalidation.
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub struct TableScopedPath {
-    pub table: Option<TableReference>,
-    pub path: Path,
-}
-
-/// Handles the inner state of the [`DefaultListFilesCache`] struct.
-pub struct DefaultListFilesCacheState {
-    lru_queue: LruQueue<TableScopedPath, ListFilesEntry>,
-    memory_limit: usize,
-    memory_used: usize,
-    ttl: Option<Duration>,
-}
-
-impl Default for DefaultListFilesCacheState {
-    fn default() -> Self {
-        Self {
-            lru_queue: LruQueue::new(),
-            memory_limit: DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
-            memory_used: 0,
-            ttl: DEFAULT_LIST_FILES_CACHE_TTL,
-        }
-    }
-}
-
-impl DefaultListFilesCacheState {
-    fn new(memory_limit: usize, ttl: Option<Duration>) -> Self {
-        Self {
-            lru_queue: LruQueue::new(),
-            memory_limit,
-            memory_used: 0,
-            ttl,
-        }
-    }
-
-    /// Gets an entry from the cache, checking for expiration.
-    ///
-    /// Returns the cached file list if it exists and hasn't expired.
-    /// If the entry has expired, it is removed from the cache.
-    fn get(&mut self, key: &TableScopedPath, now: Instant) -> Option<CachedFileList> {
-        let entry = self.lru_queue.get(key)?;
-
-        // Check expiration
-        if let Some(exp) = entry.expires
-            && now > exp
-        {
-            self.remove(key);
-            return None;
-        }
-
-        Some(entry.metas.clone())
-    }
-
-    /// Checks if the respective entry is currently cached.
-    ///
-    /// If the entry has expired by `now` it is removed from the cache.
-    ///
-    /// The LRU queue is not updated.
-    fn contains_key(&mut self, k: &TableScopedPath, now: Instant) -> bool {
-        let Some(entry) = self.lru_queue.peek(k) else {
-            return false;
-        };
-
-        match entry.expires {
-            Some(exp) if now > exp => {
-                self.remove(k);
-                false
-            }
-            _ => true,
-        }
-    }
-
-    /// Adds a new key-value pair to cache expiring at `now` + the TTL.
-    ///
-    /// This means that LRU entries might be evicted if required.
-    /// If the key is already in the cache, the previous entry is returned.
-    /// If the size of the entry is greater than the `memory_limit`, the value is not inserted.
-    fn put(
-        &mut self,
-        key: &TableScopedPath,
-        value: CachedFileList,
-        now: Instant,
-    ) -> Option<CachedFileList> {
-        let entry = ListFilesEntry::try_new(value, self.ttl, now)?;
-        let entry_size = entry.size_bytes;
-
-        // no point in trying to add this value to the cache if it cannot fit entirely
-        if entry_size > self.memory_limit {
-            return None;
-        }
-
-        // if the key is already in the cache, the old value is removed
-        let old_value = self.lru_queue.put(key.clone(), entry);
-        self.memory_used += entry_size;
-
-        if let Some(entry) = &old_value {
-            self.memory_used -= entry.size_bytes;
-        }
-
-        self.evict_entries();
-
-        old_value.map(|v| v.metas)
-    }
-
-    /// Evicts entries from the LRU cache until `memory_used` is lower than `memory_limit`.
-    fn evict_entries(&mut self) {
-        while self.memory_used > self.memory_limit {
-            if let Some(removed) = self.lru_queue.pop() {
-                self.memory_used -= removed.1.size_bytes;
-            } else {
-                // cache is empty while memory_used > memory_limit, cannot happen
-                debug_assert!(
-                    false,
-                    "cache is empty while memory_used > memory_limit, cannot happen"
-                );
-                return;
-            }
-        }
-    }
-
-    /// Removes an entry from the cache and returns it, if it exists.
-    fn remove(&mut self, k: &TableScopedPath) -> Option<CachedFileList> {
-        if let Some(entry) = self.lru_queue.remove(k) {
-            self.memory_used -= entry.size_bytes;
-            Some(entry.metas)
-        } else {
-            None
-        }
-    }
-
-    /// Returns the number of entries currently cached.
-    fn len(&self) -> usize {
-        self.lru_queue.len()
-    }
-
-    /// Removes all entries from the cache.
-    fn clear(&mut self) {
-        self.lru_queue.clear();
-        self.memory_used = 0;
-    }
-}
-
-impl CacheAccessor<TableScopedPath, CachedFileList> for DefaultListFilesCache {
-    fn get(&self, key: &TableScopedPath) -> Option<CachedFileList> {
-        let mut state = self.state.lock().unwrap();
-        let now = self.time_provider.now();
-        state.get(key, now)
-    }
-
-    fn put(
-        &self,
-        key: &TableScopedPath,
-        value: CachedFileList,
-    ) -> Option<CachedFileList> {
-        let mut state = self.state.lock().unwrap();
-        let now = self.time_provider.now();
-        state.put(key, value, now)
-    }
-
-    fn remove(&self, k: &TableScopedPath) -> Option<CachedFileList> {
-        let mut state = self.state.lock().unwrap();
-        state.remove(k)
-    }
-
-    fn contains_key(&self, k: &TableScopedPath) -> bool {
-        let mut state = self.state.lock().unwrap();
-        let now = self.time_provider.now();
-        state.contains_key(k, now)
-    }
-
-    fn len(&self) -> usize {
-        let state = self.state.lock().unwrap();
-        state.len()
-    }
-
-    fn clear(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.clear();
-    }
-
-    fn name(&self) -> String {
-        String::from("DefaultListFilesCache")
-    }
-}
-
-impl ListFilesCache for DefaultListFilesCache {
-    fn cache_limit(&self) -> usize {
-        let state = self.state.lock().unwrap();
-        state.memory_limit
-    }
-
-    fn cache_ttl(&self) -> Option<Duration> {
-        let state = self.state.lock().unwrap();
-        state.ttl
-    }
-
-    fn update_cache_limit(&self, limit: usize) {
-        let mut state = self.state.lock().unwrap();
-        state.memory_limit = limit;
-        state.evict_entries();
-    }
-
-    fn update_cache_ttl(&self, ttl: Option<Duration>) {
-        let mut state = self.state.lock().unwrap();
-        state.ttl = ttl;
-        state.evict_entries();
-    }
-
-    fn list_entries(&self) -> HashMap<TableScopedPath, ListFilesEntry> {
-        let state = self.state.lock().unwrap();
-        let mut entries = HashMap::<TableScopedPath, ListFilesEntry>::new();
-        for (path, entry) in state.lru_queue.list_entries() {
-            entries.insert(path.clone(), entry.clone());
-        }
-        entries
-    }
-
-    fn drop_table_entries(
-        &self,
-        table_ref: &Option<TableReference>,
-    ) -> datafusion_common::Result<()> {
-        let mut state = self.state.lock().unwrap();
-        let mut table_paths = vec![];
-        for (path, _) in state.lru_queue.list_entries() {
-            if path.table == *table_ref {
-                table_paths.push(path.clone());
-            }
-        }
-        for path in table_paths {
-            state.remove(&path);
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::cache::cache_manager::{
+        CachedFileList, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, meta_heap_bytes,
+    };
+    use crate::cache::default_cache::{DefaultCache, TimeProvider};
+    use crate::cache::{Cache, CacheEntryInfo, CacheKey, CacheValue, TableScopedPath};
     use chrono::DateTime;
+    use datafusion_common::HashMap;
+    use datafusion_common::TableReference;
+    use datafusion_common::instant::Instant;
+    use object_store::{ObjectMeta, path::Path};
+    use std::sync::{Arc, Mutex};
     use std::thread;
+    use std::time::Duration;
 
     struct MockTimeProvider {
         base: Instant,
@@ -430,26 +76,27 @@ mod tests {
         }
     }
 
-    /// Helper function to create a CachedFileList with at least meta_size bytes
+    /// Helper function to create a TableScopedPath and a CachedFileList with at least meta_size bytes
     fn create_test_list_files_entry(
         path: &str,
         count: usize,
         meta_size: usize,
-    ) -> (Path, CachedFileList, usize) {
+        table: Option<TableReference>,
+    ) -> (TableScopedPath, CachedFileList) {
+        let key = TableScopedPath {
+            table,
+            path: Path::from(path),
+        };
         let metas: Vec<ObjectMeta> = (0..count)
             .map(|i| create_test_object_meta(&format!("file{i}"), meta_size))
             .collect();
-
-        // Calculate actual size using the same logic as ListFilesEntry::try_new
-        let size = (metas.capacity() * size_of::<ObjectMeta>())
-            + metas.iter().map(meta_heap_bytes).sum::<usize>();
-
-        (Path::from(path), CachedFileList::new(metas), size)
+        let value = CachedFileList::new(metas);
+        (key, value)
     }
 
     #[test]
     fn test_basic_operations() {
-        let cache = DefaultListFilesCache::default();
+        let cache = DefaultCache::new(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT);
         let table_ref = Some(TableReference::from("table"));
         let path = Path::from("test_path");
         let key = TableScopedPath {
@@ -481,16 +128,9 @@ mod tests {
         assert_eq!(cache.len(), 0);
 
         // Put multiple entries
-        let (path1, value1, size1) = create_test_list_files_entry("path1", 2, 50);
-        let (path2, value2, size2) = create_test_list_files_entry("path2", 3, 50);
-        let key1 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path1,
-        };
-        let key2 = TableScopedPath {
-            table: table_ref,
-            path: path2,
-        };
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 2, 50, table_ref.clone());
+        let (key2, value2) = create_test_list_files_entry("path2", 3, 50, table_ref);
         cache.put(&key1, value1.clone());
         cache.put(&key2, value2.clone());
         assert_eq!(cache.len(), 2);
@@ -501,17 +141,19 @@ mod tests {
             HashMap::from([
                 (
                     key1.clone(),
-                    ListFilesEntry {
-                        metas: value1,
-                        size_bytes: size1,
+                    CacheEntryInfo {
+                        value: value1.clone(),
+                        size_bytes: value1.size(),
+                        hits: 0,
                         expires: None,
                     }
                 ),
                 (
                     key2.clone(),
-                    ListFilesEntry {
-                        metas: value2,
-                        size_bytes: size2,
+                    CacheEntryInfo {
+                        value: value2.clone(),
+                        size_bytes: value2.size(),
+                        hits: 0,
                         expires: None,
                     }
                 )
@@ -527,26 +169,18 @@ mod tests {
 
     #[test]
     fn test_lru_eviction_basic() {
-        let (path1, value1, size) = create_test_list_files_entry("path1", 1, 100);
-        let (path2, value2, _) = create_test_list_files_entry("path2", 1, 100);
-        let (path3, value3, _) = create_test_list_files_entry("path3", 1, 100);
-
-        // Set cache limit to exactly fit all three entries
-        let cache = DefaultListFilesCache::new(size * 3, None);
-
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path1,
-        };
-        let key2 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path2,
-        };
-        let key3 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path3,
-        };
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 1, 100, table_ref.clone());
+        let (key2, value2) =
+            create_test_list_files_entry("path2", 1, 100, table_ref.clone());
+        let (key3, value3) =
+            create_test_list_files_entry("path3", 1, 100, table_ref.clone());
+
+        let entry_size = key1.size() + value1.size();
+
+        // Set cache limit to exactly fit all 3 entries
+        let cache = DefaultCache::new(entry_size * 3);
 
         // All three entries should fit
         cache.put(&key1, value1);
@@ -558,11 +192,7 @@ mod tests {
         assert!(cache.contains_key(&key3));
 
         // Adding a new entry should evict path1 (LRU)
-        let (path4, value4, _) = create_test_list_files_entry("path4", 1, 100);
-        let key4 = TableScopedPath {
-            table: table_ref,
-            path: path4,
-        };
+        let (key4, value4) = create_test_list_files_entry("path4", 1, 100, table_ref);
         cache.put(&key4, value4);
 
         assert_eq!(cache.len(), 3);
@@ -574,26 +204,16 @@ mod tests {
 
     #[test]
     fn test_lru_ordering_after_access() {
-        let (path1, value1, size) = create_test_list_files_entry("path1", 1, 100);
-        let (path2, value2, _) = create_test_list_files_entry("path2", 1, 100);
-        let (path3, value3, _) = create_test_list_files_entry("path3", 1, 100);
+        let table_ref = Some(TableReference::from("table"));
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 1, 100, table_ref.clone());
+        let (key2, value2) =
+            create_test_list_files_entry("path2", 1, 100, table_ref.clone());
+        let (key3, value3) =
+            create_test_list_files_entry("path3", 1, 100, table_ref.clone());
 
         // Set cache limit to fit exactly three entries
-        let cache = DefaultListFilesCache::new(size * 3, None);
-
-        let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path1,
-        };
-        let key2 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path2,
-        };
-        let key3 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path3,
-        };
+        let cache = DefaultCache::new((key1.size() + value1.size()) * 3);
 
         cache.put(&key1, value1);
         cache.put(&key2, value2);
@@ -605,11 +225,7 @@ mod tests {
         let _ = cache.get(&key1);
 
         // Adding a new entry should evict path2 (the LRU)
-        let (path4, value4, _) = create_test_list_files_entry("path4", 1, 100);
-        let key4 = TableScopedPath {
-            table: table_ref,
-            path: path4,
-        };
+        let (key4, value4) = create_test_list_files_entry("path4", 1, 100, table_ref);
         cache.put(&key4, value4);
 
         assert_eq!(cache.len(), 3);
@@ -621,32 +237,23 @@ mod tests {
 
     #[test]
     fn test_reject_too_large() {
-        let (path1, value1, size) = create_test_list_files_entry("path1", 1, 100);
-        let (path2, value2, _) = create_test_list_files_entry("path2", 1, 100);
+        let table_ref = Some(TableReference::from("table"));
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 1, 100, table_ref.clone());
+        let (key2, value2) =
+            create_test_list_files_entry("path2", 1, 100, table_ref.clone());
 
         // Set cache limit to fit both entries
-        let cache = DefaultListFilesCache::new(size * 2, None);
+        let cache = DefaultCache::new((key1.size() + value1.size()) * 2);
 
-        let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path1,
-        };
-        let key2 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path2,
-        };
         cache.put(&key1, value1);
         cache.put(&key2, value2);
         assert_eq!(cache.len(), 2);
 
         // Try to add an entry that's too large to fit in the cache
         // The entry is not stored (too large)
-        let (path_large, value_large, _) = create_test_list_files_entry("large", 1, 1000);
-        let key_large = TableScopedPath {
-            table: table_ref,
-            path: path_large,
-        };
+        let (key_large, value_large) =
+            create_test_list_files_entry("large", 1, 1000, table_ref);
         cache.put(&key_large, value_large);
 
         // Large entry should not be added
@@ -658,37 +265,27 @@ mod tests {
 
     #[test]
     fn test_multiple_evictions() {
-        let (path1, value1, size) = create_test_list_files_entry("path1", 1, 100);
-        let (path2, value2, _) = create_test_list_files_entry("path2", 1, 100);
-        let (path3, value3, _) = create_test_list_files_entry("path3", 1, 100);
+        let table_ref = Some(TableReference::from("table"));
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 1, 100, table_ref.clone());
+        let (key2, value2) =
+            create_test_list_files_entry("path2", 1, 100, table_ref.clone());
+        let (key3, value3) =
+            create_test_list_files_entry("path3", 1, 100, table_ref.clone());
+
+        let entry_size = key1.size() + value1.size();
 
         // Set cache limit for exactly 3 entries
-        let cache = DefaultListFilesCache::new(size * 3, None);
+        let cache = DefaultCache::new(entry_size * 3);
 
-        let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path1,
-        };
-        let key2 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path2,
-        };
-        let key3 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path3,
-        };
         cache.put(&key1, value1);
         cache.put(&key2, value2);
         cache.put(&key3, value3);
         assert_eq!(cache.len(), 3);
 
         // Add a large entry that requires evicting 2 entries
-        let (path_large, value_large, _) = create_test_list_files_entry("large", 1, 200);
-        let key_large = TableScopedPath {
-            table: table_ref,
-            path: path_large,
-        };
+        let (key_large, value_large) =
+            create_test_list_files_entry("large", 1, 200, table_ref);
         cache.put(&key_large, value_large);
 
         // path1 and path2 should be evicted (both LRU), path3 and path_large remain
@@ -701,25 +298,17 @@ mod tests {
 
     #[test]
     fn test_cache_limit_resize() {
-        let (path1, value1, size) = create_test_list_files_entry("path1", 1, 100);
-        let (path2, value2, _) = create_test_list_files_entry("path2", 1, 100);
-        let (path3, value3, _) = create_test_list_files_entry("path3", 1, 100);
-
-        let cache = DefaultListFilesCache::new(size * 3, None);
-
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path1,
-        };
-        let key2 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path2,
-        };
-        let key3 = TableScopedPath {
-            table: table_ref,
-            path: path3,
-        };
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 1, 100, table_ref.clone());
+        let (key2, value2) =
+            create_test_list_files_entry("path2", 1, 100, table_ref.clone());
+        let (key3, value3) = create_test_list_files_entry("path3", 1, 100, table_ref);
+
+        let entry_size = key1.size() + value1.size();
+
+        let cache = DefaultCache::new(entry_size * 3);
+
         // Add three entries
         cache.put(&key1, value1);
         cache.put(&key2, value2);
@@ -727,7 +316,7 @@ mod tests {
         assert_eq!(cache.len(), 3);
 
         // Resize cache to only fit one entry
-        cache.update_cache_limit(size);
+        cache.update_cache_limit(entry_size);
 
         // Should keep only the most recent entry (path3, the MRU)
         assert_eq!(cache.len(), 1);
@@ -739,25 +328,18 @@ mod tests {
 
     #[test]
     fn test_entry_update_with_size_change() {
-        let (path1, value1, size) = create_test_list_files_entry("path1", 1, 100);
-        let (path2, value2, size2) = create_test_list_files_entry("path2", 1, 100);
-        let (path3, value3_v1, _) = create_test_list_files_entry("path3", 1, 100);
-
-        let cache = DefaultListFilesCache::new(size * 3, None);
-
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path1,
-        };
-        let key2 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path2,
-        };
-        let key3 = TableScopedPath {
-            table: table_ref,
-            path: path3,
-        };
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 1, 100, table_ref.clone());
+        let (key2, value2) =
+            create_test_list_files_entry("path2", 1, 100, table_ref.clone());
+        let (key3, value3_v1) =
+            create_test_list_files_entry("path3", 1, 100, table_ref.clone());
+
+        let entry_size = key1.size() + value1.size();
+
+        let cache = DefaultCache::new(entry_size * 3);
+
         // Add three entries
         cache.put(&key1, value1);
         cache.put(&key2, value2.clone());
@@ -765,7 +347,8 @@ mod tests {
         assert_eq!(cache.len(), 3);
 
         // Update path3 with same size - should not cause eviction
-        let (_, value3_v2, _) = create_test_list_files_entry("path3", 1, 100);
+        let (_, value3_v2) =
+            create_test_list_files_entry("path3", 1, 100, table_ref.clone());
         cache.put(&key3, value3_v2);
 
         assert_eq!(cache.len(), 3);
@@ -774,7 +357,7 @@ mod tests {
         assert!(cache.contains_key(&key3));
 
         // Update path3 with larger size that requires evicting path1 (LRU)
-        let (_, value3_v3, size3_v3) = create_test_list_files_entry("path3", 1, 200);
+        let (_, value3_v3) = create_test_list_files_entry("path3", 1, 200, table_ref);
         cache.put(&key3, value3_v3.clone());
 
         assert_eq!(cache.len(), 2);
@@ -788,17 +371,19 @@ mod tests {
             HashMap::from([
                 (
                     key2,
-                    ListFilesEntry {
-                        metas: value2,
-                        size_bytes: size2,
+                    CacheEntryInfo {
+                        value: value2.clone(),
+                        size_bytes: value2.size(),
+                        hits: 0,
                         expires: None,
                     }
                 ),
                 (
                     key3,
-                    ListFilesEntry {
-                        metas: value3_v3,
-                        size_bytes: size3_v3,
+                    CacheEntryInfo {
+                        value: value3_v3.clone(),
+                        size_bytes: value3_v3.size(),
+                        hits: 0,
                         expires: None,
                     }
                 )
@@ -811,21 +396,13 @@ mod tests {
         let ttl = Duration::from_millis(100);
 
         let mock_time = Arc::new(MockTimeProvider::new());
-        let cache = DefaultListFilesCache::new(10000, Some(ttl))
+        let cache = DefaultCache::new_with_ttl(10000, Some(ttl))
             .with_time_provider(Arc::clone(&mock_time) as Arc<dyn TimeProvider>);
 
-        let (path1, value1, size1) = create_test_list_files_entry("path1", 2, 50);
-        let (path2, value2, size2) = create_test_list_files_entry("path2", 2, 50);
-
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path1,
-        };
-        let key2 = TableScopedPath {
-            table: table_ref,
-            path: path2,
-        };
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 2, 50, table_ref.clone());
+        let (key2, value2) = create_test_list_files_entry("path2", 2, 50, table_ref);
         cache.put(&key1, value1.clone());
         cache.put(&key2, value2.clone());
 
@@ -838,17 +415,19 @@ mod tests {
             HashMap::from([
                 (
                     key1.clone(),
-                    ListFilesEntry {
-                        metas: value1,
-                        size_bytes: size1,
+                    CacheEntryInfo {
+                        value: value1.clone(),
+                        size_bytes: value1.size(),
+                        hits: 1,
                         expires: mock_time.now().checked_add(ttl),
                     }
                 ),
                 (
                     key2.clone(),
-                    ListFilesEntry {
-                        metas: value2,
-                        size_bytes: size2,
+                    CacheEntryInfo {
+                        value: value2.clone(),
+                        size_bytes: value2.size(),
+                        hits: 1,
                         expires: mock_time.now().checked_add(ttl),
                     }
                 )
@@ -869,26 +448,16 @@ mod tests {
         let ttl = Duration::from_millis(200);
 
         let mock_time = Arc::new(MockTimeProvider::new());
-        let cache = DefaultListFilesCache::new(1000, Some(ttl))
+        let cache = DefaultCache::new_with_ttl(1100, Some(ttl))
             .with_time_provider(Arc::clone(&mock_time) as Arc<dyn TimeProvider>);
 
-        let (path1, value1, _) = create_test_list_files_entry("path1", 1, 400);
-        let (path2, value2, _) = create_test_list_files_entry("path2", 1, 400);
-        let (path3, value3, _) = create_test_list_files_entry("path3", 1, 400);
-
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path1,
-        };
-        let key2 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path2,
-        };
-        let key3 = TableScopedPath {
-            table: table_ref,
-            path: path3,
-        };
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 1, 400, table_ref.clone());
+        let (key2, value2) =
+            create_test_list_files_entry("path2", 1, 400, table_ref.clone());
+
+        let (key3, value3) = create_test_list_files_entry("path3", 1, 400, table_ref);
         cache.put(&key1, value1);
         mock_time.inc(Duration::from_millis(50));
         cache.put(&key2, value2);
@@ -909,14 +478,10 @@ mod tests {
     #[test]
     fn test_ttl_expiration_in_get() {
         let ttl = Duration::from_millis(100);
-        let cache = DefaultListFilesCache::new(10000, Some(ttl));
+        let cache = DefaultCache::new_with_ttl(10000, Some(ttl));
 
-        let (path, value, _) = create_test_list_files_entry("path", 2, 50);
         let table_ref = Some(TableReference::from("table"));
-        let key = TableScopedPath {
-            table: table_ref,
-            path,
-        };
+        let (key, value) = create_test_list_files_entry("path", 2, 50, table_ref);
 
         // Cache the entry
         cache.put(&key, value.clone());
@@ -978,80 +543,44 @@ mod tests {
     }
 
     #[test]
-    fn test_entry_creation() {
-        // Test with empty vector
-        let empty_list = CachedFileList::new(vec![]);
-        let now = Instant::now();
-        let entry = ListFilesEntry::try_new(empty_list, None, now);
-        assert!(entry.is_none());
-
-        // Validate entry size
-        let metas: Vec<ObjectMeta> = (0..5)
-            .map(|i| create_test_object_meta(&format!("file{i}"), 30))
-            .collect();
-        let cached_list = CachedFileList::new(metas);
-        let entry = ListFilesEntry::try_new(cached_list, None, now).unwrap();
-        assert_eq!(entry.metas.files.len(), 5);
-        // Size should be: capacity * sizeof(ObjectMeta) + (5 * 30) for heap bytes
-        let expected_size = (entry.metas.files.capacity() * size_of::<ObjectMeta>())
-            + (entry.metas.files.len() * 30);
-        assert_eq!(entry.size_bytes, expected_size);
-
-        // Test with TTL
-        let meta = create_test_object_meta("file", 50);
-        let ttl = Duration::from_secs(10);
-        let cached_list = CachedFileList::new(vec![meta]);
-        let entry = ListFilesEntry::try_new(cached_list, Some(ttl), now).unwrap();
-        assert!(entry.expires.unwrap() > now);
-    }
-
-    #[test]
     fn test_memory_tracking() {
-        let cache = DefaultListFilesCache::new(1000, None);
+        let cache = DefaultCache::new(1000);
 
         // Verify cache starts with 0 memory used
         {
-            let state = cache.state.lock().unwrap();
-            assert_eq!(state.memory_used, 0);
+            assert_eq!(cache.memory_used(), 0);
         }
 
         // Add entry and verify memory tracking
-        let (path1, value1, size1) = create_test_list_files_entry("path1", 1, 100);
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path1,
-        };
-        cache.put(&key1, value1);
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 1, 100, table_ref.clone());
+        cache.put(&key1, value1.clone());
+        let entry_size_1 = key1.size() + value1.size();
         {
-            let state = cache.state.lock().unwrap();
-            assert_eq!(state.memory_used, size1);
+            assert_eq!(cache.memory_used(), entry_size_1);
         }
 
         // Add another entry
-        let (path2, value2, size2) = create_test_list_files_entry("path2", 1, 200);
-        let key2 = TableScopedPath {
-            table: table_ref.clone(),
-            path: path2,
-        };
-        cache.put(&key2, value2);
+        let (key2, value2) =
+            create_test_list_files_entry("path2", 1, 200, table_ref.clone());
+        cache.put(&key2, value2.clone());
+        let entry_size_2 = key2.size() + value2.size();
+
         {
-            let state = cache.state.lock().unwrap();
-            assert_eq!(state.memory_used, size1 + size2);
+            assert_eq!(cache.memory_used(), entry_size_1 + entry_size_2);
         }
 
         // Remove first entry and verify memory decreases
         cache.remove(&key1);
         {
-            let state = cache.state.lock().unwrap();
-            assert_eq!(state.memory_used, size2);
+            assert_eq!(cache.memory_used(), entry_size_2);
         }
 
         // Clear and verify memory is 0
         cache.clear();
         {
-            let state = cache.state.lock().unwrap();
-            assert_eq!(state.memory_used, 0);
+            assert_eq!(cache.memory_used(), 0);
         }
     }
 
@@ -1072,7 +601,7 @@ mod tests {
 
     #[test]
     fn test_prefix_filtering() {
-        let cache = DefaultListFilesCache::new(100000, None);
+        let cache = DefaultCache::new(100000);
 
         // Create files for a partitioned table
         let table_base = Path::from("my_table");
@@ -1120,7 +649,7 @@ mod tests {
 
     #[test]
     fn test_prefix_no_matching_files() {
-        let cache = DefaultListFilesCache::new(100000, None);
+        let cache = DefaultCache::new(100000);
 
         let table_base = Path::from("my_table");
         let files = vec![
@@ -1144,7 +673,7 @@ mod tests {
 
     #[test]
     fn test_nested_partitions() {
-        let cache = DefaultListFilesCache::new(100000, None);
+        let cache = DefaultCache::new(100000);
 
         let table_base = Path::from("events");
         let files = vec![
@@ -1183,27 +712,16 @@ mod tests {
 
     #[test]
     fn test_drop_table_entries() {
-        let cache = DefaultListFilesCache::default();
+        let cache = DefaultCache::new(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT);
 
-        let (path1, value1, _) = create_test_list_files_entry("path1", 1, 100);
-        let (path2, value2, _) = create_test_list_files_entry("path2", 1, 100);
-        let (path3, value3, _) = create_test_list_files_entry("path3", 1, 100);
-
-        let table_ref1 = Some(TableReference::from("table1"));
-        let key1 = TableScopedPath {
-            table: table_ref1.clone(),
-            path: path1,
-        };
-        let key2 = TableScopedPath {
-            table: table_ref1.clone(),
-            path: path2,
-        };
-
-        let table_ref2 = Some(TableReference::from("table2"));
-        let key3 = TableScopedPath {
-            table: table_ref2.clone(),
-            path: path3,
-        };
+        let table_ref1 = TableReference::from("table1");
+        let table_ref2 = TableReference::from("table2");
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 1, 100, Some(table_ref1.clone()));
+        let (key2, value2) =
+            create_test_list_files_entry("path2", 1, 100, Some(table_ref1.clone()));
+        let (key3, value3) =
+            create_test_list_files_entry("path3", 1, 100, Some(table_ref2.clone()));
 
         cache.put(&key1, value1);
         cache.put(&key2, value2);

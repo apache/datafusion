@@ -1,0 +1,25 @@
+subgroup window
+
+name Q04
+group h2o
+
+echo Loading ${H2O_BENCH_SIZE:-small} window ${H2O_FILE_TYPE:-csv} h2o data
+
+load sql_benchmarks/h2o/init/load_window_${H2O_BENCH_SIZE:-small}_${H2O_FILE_TYPE:-csv}.sql
+
+assert I
+SELECT COUNT(*) > 0 FROM x
+----
+true
+
+run
+-- PARTITION BY ORDER BY
+SELECT
+    id1,
+    id2,
+    id3,
+    v2,
+    first_value(v2) OVER (PARTITION BY id2 ORDER BY id3) AS first_by_id2_ordered_by_id3
+FROM x;
+
+result sql_benchmarks/h2o/results/window/${H2O_BENCH_SIZE:-small}/q04.csv

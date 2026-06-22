@@ -1,0 +1,438 @@
+{
+  "version": {
+    "minorNumber": 85,
+    "producer": "datafusion"
+  },
+  "extensions": [
+    {
+      "extensionFunction": {
+        "extensionUrnReference": 2,
+        "functionAnchor": 2,
+        "name": "array_transform2"
+      }
+    },
+    {
+      "extensionFunction": {
+        "extensionUrnReference": 2,
+        "name": "make_array"
+      }
+    },
+    {
+      "extensionFunction": {
+        "extensionUrnReference": 2,
+        "functionAnchor": 3,
+        "name": "array_concat"
+      }
+    },
+    {
+      "extensionFunction": {
+        "extensionUrnReference": 1,
+        "functionAnchor": 1,
+        "name": "multiply"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "project": {
+            "common": {
+              "emit": {
+                "outputMapping": [
+                  1
+                ]
+              }
+            },
+            "input": {
+              "read": {
+                "baseSchema": {
+                  "names": [
+                    "p1"
+                  ],
+                  "struct": {
+                    "types": [
+                      {
+                        "i64": {
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      }
+                    ],
+                    "nullability": "NULLABILITY_REQUIRED"
+                  }
+                },
+                "projection": {
+                  "select": {
+                    "structItems": [
+                      {}
+                    ]
+                  }
+                },
+                "namedTable": {
+                  "names": [
+                    "data3"
+                  ]
+                }
+              }
+            },
+            "expressions": [
+              {
+                "scalarFunction": {
+                  "functionReference": 2,
+                  "arguments": [
+                    {
+                      "value": {
+                        "scalarFunction": {
+                          "arguments": [
+                            {
+                              "value": {
+                                "scalarFunction": {
+                                  "arguments": [
+                                    {
+                                      "value": {
+                                        "selection": {
+                                          "directReference": {
+                                            "structField": {}
+                                          },
+                                          "rootReference": {}
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "outputType": {
+                                    "list": {
+                                      "type": {
+                                        "i64": {
+                                          "nullability": "NULLABILITY_NULLABLE"
+                                        }
+                                      },
+                                      "nullability": "NULLABILITY_NULLABLE"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ],
+                          "outputType": {
+                            "list": {
+                              "type": {
+                                "list": {
+                                  "type": {
+                                    "i64": {
+                                      "nullability": "NULLABILITY_NULLABLE"
+                                    }
+                                  },
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              },
+                              "nullability": "NULLABILITY_NULLABLE"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "value": {
+                        "lambda": {
+                          "parameters": {
+                            "types": [
+                              {
+                                "list": {
+                                  "type": {
+                                    "i64": {
+                                      "nullability": "NULLABILITY_NULLABLE"
+                                    }
+                                  },
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              },
+                              {
+                                "i64": {
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              }
+                            ],
+                            "nullability": "NULLABILITY_REQUIRED"
+                          },
+                          "body": {
+                            "scalarFunction": {
+                              "functionReference": 3,
+                              "arguments": [
+                                {
+                                  "value": {
+                                    "scalarFunction": {
+                                      "functionReference": 2,
+                                      "arguments": [
+                                        {
+                                          "value": {
+                                            "selection": {
+                                              "directReference": {
+                                                "structField": {}
+                                              },
+                                              "lambdaParameterReference": {}
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "value": {
+                                            "lambda": {
+                                              "parameters": {
+                                                "types": [
+                                                  {
+                                                    "i64": {
+                                                      "nullability": "NULLABILITY_NULLABLE"
+                                                    }
+                                                  },
+                                                  {
+                                                    "i64": {
+                                                      "nullability": "NULLABILITY_NULLABLE"
+                                                    }
+                                                  }
+                                                ],
+                                                "nullability": "NULLABILITY_REQUIRED"
+                                              },
+                                              "body": {
+                                                "scalarFunction": {
+                                                  "functionReference": 1,
+                                                  "arguments": [
+                                                    {
+                                                      "value": {
+                                                        "scalarFunction": {
+                                                          "functionReference": 1,
+                                                          "arguments": [
+                                                            {
+                                                              "value": {
+                                                                "selection": {
+                                                                  "directReference": {
+                                                                    "structField": {}
+                                                                  },
+                                                                  "lambdaParameterReference": {}
+                                                                }
+                                                              }
+                                                            },
+                                                            {
+                                                              "value": {
+                                                                "selection": {
+                                                                  "directReference": {
+                                                                    "structField": {
+                                                                      "field": 1
+                                                                    }
+                                                                  },
+                                                                  "lambdaParameterReference": {
+                                                                    "stepsOut": 1
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          ],
+                                                          "outputType": {
+                                                            "i64": {
+                                                              "nullability": "NULLABILITY_NULLABLE"
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    },
+                                                    {
+                                                      "value": {
+                                                        "selection": {
+                                                          "directReference": {
+                                                            "structField": {
+                                                              "field": 1
+                                                            }
+                                                          },
+                                                          "lambdaParameterReference": {}
+                                                        }
+                                                      }
+                                                    }
+                                                  ],
+                                                  "outputType": {
+                                                    "i64": {
+                                                      "nullability": "NULLABILITY_NULLABLE"
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "outputType": {
+                                        "list": {
+                                          "type": {
+                                            "i64": {
+                                              "nullability": "NULLABILITY_NULLABLE"
+                                            }
+                                          },
+                                          "nullability": "NULLABILITY_NULLABLE"
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "value": {
+                                    "scalarFunction": {
+                                      "functionReference": 2,
+                                      "arguments": [
+                                        {
+                                          "value": {
+                                            "selection": {
+                                              "directReference": {
+                                                "structField": {}
+                                              },
+                                              "lambdaParameterReference": {}
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "value": {
+                                            "lambda": {
+                                              "parameters": {
+                                                "types": [
+                                                  {
+                                                    "i64": {
+                                                      "nullability": "NULLABILITY_NULLABLE"
+                                                    }
+                                                  },
+                                                  {
+                                                    "i64": {
+                                                      "nullability": "NULLABILITY_NULLABLE"
+                                                    }
+                                                  }
+                                                ],
+                                                "nullability": "NULLABILITY_REQUIRED"
+                                              },
+                                              "body": {
+                                                "scalarFunction": {
+                                                  "functionReference": 1,
+                                                  "arguments": [
+                                                    {
+                                                      "value": {
+                                                        "scalarFunction": {
+                                                          "functionReference": 1,
+                                                          "arguments": [
+                                                            {
+                                                              "value": {
+                                                                "selection": {
+                                                                  "directReference": {
+                                                                    "structField": {}
+                                                                  },
+                                                                  "lambdaParameterReference": {}
+                                                                }
+                                                              }
+                                                            },
+                                                            {
+                                                              "value": {
+                                                                "selection": {
+                                                                  "directReference": {
+                                                                    "structField": {
+                                                                      "field": 1
+                                                                    }
+                                                                  },
+                                                                  "lambdaParameterReference": {
+                                                                    "stepsOut": 1
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          ],
+                                                          "outputType": {
+                                                            "i64": {
+                                                              "nullability": "NULLABILITY_NULLABLE"
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    },
+                                                    {
+                                                      "value": {
+                                                        "selection": {
+                                                          "directReference": {
+                                                            "structField": {
+                                                              "field": 1
+                                                            }
+                                                          },
+                                                          "lambdaParameterReference": {}
+                                                        }
+                                                      }
+                                                    }
+                                                  ],
+                                                  "outputType": {
+                                                    "i64": {
+                                                      "nullability": "NULLABILITY_NULLABLE"
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "outputType": {
+                                        "list": {
+                                          "type": {
+                                            "i64": {
+                                              "nullability": "NULLABILITY_NULLABLE"
+                                            }
+                                          },
+                                          "nullability": "NULLABILITY_NULLABLE"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ],
+                              "outputType": {
+                                "list": {
+                                  "type": {
+                                    "i64": {
+                                      "nullability": "NULLABILITY_NULLABLE"
+                                    }
+                                  },
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "outputType": {
+                    "list": {
+                      "type": {
+                        "list": {
+                          "type": {
+                            "i64": {
+                              "nullability": "NULLABILITY_NULLABLE"
+                            }
+                          },
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      },
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "names": [
+          "array_transform2(make_array(make_array(data3.p1)),(v, i) -> array_concat(array_transform2(v,(v, j) -> v * i * j),array_transform2(v,(v, j) -> v * i * j)))"
+        ]
+      }
+    }
+  ],
+  "extensionUrns": [
+    {
+      "extensionUrnAnchor": 1,
+      "urn": "extension:io.substrait:functions_arithmetic"
+    },
+    {
+      "extensionUrnAnchor": 2,
+      "urn": "extension:io.substrait:functions_list"
+    }
+  ]
+}
