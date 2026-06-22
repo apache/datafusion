@@ -541,9 +541,12 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     ///
     /// Operators that are pipeline-breaking along their output ordering
     /// (e.g. `SortExec`) may override to expose the lex-min / lex-max tuple
-    /// once the partition's input has been fully consumed. See the
-    /// [`PartitionExtrema`] type-level doc for the dual *observed*-vs-*intended*
-    /// semantics, the caller's progress contract, and passthrough guidance.
+    /// once the partition's input has been fully consumed. The returned
+    /// [`PartitionExtrema::kind`] tells the caller which interpretation
+    /// applies — [`ExtremaKind::Observed`] when no row falls outside the
+    /// range, [`ExtremaKind::Expanded`] when the partition deliberately
+    /// carries rows outside the range as halo. See [`PartitionExtrema`]
+    /// for the caller's progress contract and passthrough guidance.
     ///
     /// Callers must drive `execute(partition)` to the point where the
     /// implementing operator has filled in its slot before relying on the
@@ -800,15 +803,14 @@ pub enum ExtremaKind {
     /// once it has read all input rows and sorted them, it knows the
     /// endpoints exactly.
     Observed,
-    /// The reported `min` / `max` describe the partition's *intended
-    /// primary range*. The partition's data has been **expanded** with
-    /// extra rows outside that range — typically a "halo" routed in by an
-    /// upstream range-shuffle so a downstream window or filter pass can
-    /// see the full neighborhood at each seam. A downstream operator is
+    /// The reported `min` / `max` describe the partition's primary range.
+    /// The partition's data has been **expanded** with extra rows outside
+    /// that range — typically a "halo" routed in by an upstream
+    /// range-shuffle so a downstream window or filter pass can see the
+    /// full neighborhood at each seam. A downstream operator is
     /// contracted to read the primary range from
     /// [`ExecutionPlan::runtime_partition_extrema`] and discard the halo
-    /// rows lying outside it. No operator in this PR returns `Expanded`;
-    /// the planned `RangeRepartitionExec` will.
+    /// rows lying outside it.
     Expanded,
 }
 
@@ -816,19 +818,11 @@ pub enum ExtremaKind {
 /// declared output ordering (the `PhysicalSortExpr` list returned by
 /// `equivalence_properties().output_ordering()`).
 ///
-/// "Extrema" is the plural of *extremum* — the lex-min and lex-max rows of
+/// The lex-min and lex-max rows of
 /// the partition along its output ordering. `min` and `max` are tuples of
 /// values, one entry per sort key, taken from those two rows. For the
 /// leading sort key these are exactly the natural min/max of that key
-/// (after honoring `ASC`/`DESC` and `NULLS FIRST/LAST`). For trailing sort
-/// keys the entries hold the value of that key at the lex-extreme row, not
-/// that key's own natural extremum.
-///
-/// `kind` distinguishes whether the reported `min` / `max` bound the data
-/// the partition actually carries ([`ExtremaKind::Observed`]) or describe a
-/// narrower primary range that the partition's data extends beyond
-/// ([`ExtremaKind::Expanded`]). See [`ExtremaKind`] for the contract each
-/// implementer signs.
+/// (after honoring `ASC`/`DESC` and `NULLS FIRST/LAST`).
 ///
 /// # Caller contract
 ///
@@ -838,7 +832,7 @@ pub enum ExtremaKind {
 ///   least one `execute(partition)` poll must have reached the point where
 ///   the input is fully consumed and the first sorted chunk is produced.
 ///   Until then `Ok(None)` is returned. Reading too early silently
-///   degrades to "no extrema" rather than panicking.
+///   degrades to "no extrema".
 /// - **`Ok(None)` is the streaming-operator answer.** Operators that emit
 ///   batches as soon as input arrives cannot know their extrema ahead of
 ///   time and should return `Ok(None)` — which is the default trait
