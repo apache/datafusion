@@ -364,6 +364,8 @@ impl FileOpener for CsvOpener {
 
         let baseline_metrics =
             BaselineMetrics::new(&self.config.metrics, self.partition_index);
+        let bytes_scanned = datafusion_physical_plan::metrics::MetricBuilder::new(&self.config.metrics)
+            .counter("bytes_scanned", self.partition_index);
 
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
@@ -389,6 +391,7 @@ impl FileOpener for CsvOpener {
             let result = store
                 .get_opts(&partitioned_file.object_meta.location, options)
                 .await?;
+            bytes_scanned.add((result.range.end - result.range.start) as usize);
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -427,6 +430,7 @@ impl FileOpener for CsvOpener {
                         input,
                         DecoderDeserializer::new(CsvDecoder::new(decoder)),
                     );
+
                     Ok(stream.map_err(Into::into).boxed())
                 }
             }
