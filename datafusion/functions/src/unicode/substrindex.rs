@@ -813,10 +813,7 @@ mod tests {
             GenericStringArrayBuilder::<i32>::with_capacity(strings.len(), 0),
         )?;
         let result = result.as_string::<i32>();
-
-        assert_eq!(result.len(), 2);
-        assert!(result.is_null(0));
-        assert!(result.is_null(1));
+        assert_eq!(result, &StringArray::from(vec![None::<&str>, None]));
 
         Ok(())
     }
