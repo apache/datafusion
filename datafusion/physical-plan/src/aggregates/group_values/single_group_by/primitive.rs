@@ -24,7 +24,6 @@ use arrow::array::{
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
-use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::block_store::{
@@ -189,9 +188,8 @@ where
                     // so the bit-equal `is_eq` matches and the stored value is
                     // the canonical representative.
                     let key = key.canonicalize();
-                    let state = &self.random_state;
-                    let hash = key.hash(state);
-                    let insert = self.map.entry(
+                    let hash = key.hash(random_state);
+                    let insert = map.entry(
                         hash,
                         |&(idx, h)| unsafe {
                             if hash != h {
@@ -343,10 +341,6 @@ where
     }
 
     fn len(&self) -> usize {
-        if self.values.is_empty() {
-            return 0;
-        }
-
         (0..self.values.num_blocks())
             .map(|block_id| self.values[block_id].len())
             .sum::<usize>()
@@ -488,8 +482,9 @@ mod tests {
 
     use crate::aggregates::group_values::single_group_by::primitive::GroupValuesPrimitive;
     use crate::aggregates::group_values::GroupValues;
-    use arrow::array::{AsArray, UInt32Array};
-    use arrow::datatypes::{DataType, UInt32Type};
+    use arrow::array::{ArrayRef, AsArray, Int32Array, UInt32Array};
+    use arrow::datatypes::{DataType, Int32Type, UInt32Type};
+    use datafusion_common::Result;
     use datafusion_expr::EmitTo;
     use datafusion_functions_aggregate_common::aggregate::groups_accumulator::group_index_operations::{
         BlockedGroupIndexOperations, GroupIndexOperations,
@@ -648,16 +643,17 @@ mod tests {
 
         assert_eq!(actual, expected);
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::array::types::Int32Type;
-    use arrow::array::{ArrayRef, Int32Array};
-    use arrow::datatypes::DataType;
-    use datafusion_expr::EmitTo;
-    use std::sync::Arc;
+    fn flat_values_capacity(gv: &GroupValuesPrimitive<Int32Type>) -> usize {
+        match &gv.state {
+            super::GroupValuesPrimitiveStateAdapter::Flat(state) => {
+                state.values[0].capacity()
+            }
+            super::GroupValuesPrimitiveStateAdapter::Blocked(_) => {
+                panic!("expected flat primitive group values")
+            }
+        }
+    }
 
     /// Mirror of the `EmitTo::take_needed` regression test, applied to the
     /// concrete `GroupValuesPrimitive` accumulator.
@@ -677,7 +673,7 @@ mod tests {
         let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..20i32));
         let mut groups = vec![];
         gv.intern(&[arr], &mut groups)?;
-        let capacity_before = gv.values.capacity(); // 128
+        let capacity_before = flat_values_capacity(&gv); // 128
 
         // n=4, n*2=8 <= len=20 -> drain branch
         let emitted = gv.emit(EmitTo::First(4))?;
@@ -687,10 +683,10 @@ mod tests {
         // `self.values` must retain its original large allocation.
         // Old split_off+swap left it with a fresh small allocation (~16).
         assert_eq!(
-            gv.values.capacity(),
+            flat_values_capacity(&gv),
             capacity_before,
             "self.values capacity {} should equal original {} after small First(n) emit",
-            gv.values.capacity(),
+            flat_values_capacity(&gv),
             capacity_before,
         );
 

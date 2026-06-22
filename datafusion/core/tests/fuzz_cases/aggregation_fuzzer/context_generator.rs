@@ -247,7 +247,7 @@ impl GeneratedSessionContextBuilder {
         );
         session_config = session_config.set(
             "datafusion.execution.enable_aggregation_blocked_groups",
-            &ScalarValue::Boolean(Some(self.enable_aggregation_blocked_groups))
+            &ScalarValue::Boolean(Some(self.enable_aggregation_blocked_groups)),
         );
         session_config = session_config.set_bool(
             "datafusion.execution.enable_migration_aggregate",

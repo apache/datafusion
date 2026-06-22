@@ -18,7 +18,7 @@
 //! See `main.rs` for how to run it.
 
 use arrow::datatypes::{Field, Schema};
-use datafusion::physical_expr::{FlatBlockStore, FlatNullState};
+use datafusion::physical_expr::FlatNullState;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use std::sync::Arc;
 
@@ -225,7 +225,7 @@ impl GeometricMeanGroupsAccumulator {
             return_data_type: DataType::Float64,
             counts: vec![],
             prods: vec![],
-            null_state: FlatNullState::new(FlatBlockStore::new(), None),
+            null_state: FlatNullState::new(),
         }
     }
 }

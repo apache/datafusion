@@ -18,7 +18,9 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use arrow::array::{ArrayRef, BooleanArray};
-use datafusion_common::{DataFusionError, Result, not_impl_err, utils::split_vec_min_alloc};
+use datafusion_common::{
+    DataFusionError, Result, not_impl_err, utils::split_vec_min_alloc,
+};
 
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -23,10 +23,10 @@ use arrow::array::{
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
-use datafusion_common::{Result, internal_err};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::normalize_float_zero;
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use hashbrown::hash_table::HashTable;

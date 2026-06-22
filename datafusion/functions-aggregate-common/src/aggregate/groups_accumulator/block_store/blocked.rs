@@ -77,10 +77,21 @@ impl<B: Block> BlockedBlockStore<B> {
             block_size,
         }
     }
+
+    fn reset_exhausted_emit_context(&mut self) {
+        if self
+            .emit_ctx
+            .as_ref()
+            .is_some_and(|ctx| ctx.pop_cursor >= ctx.inner.len())
+        {
+            self.emit_ctx = None;
+        }
+    }
 }
 
 impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
     fn push_block(&mut self, block: B) {
+        self.reset_exhausted_emit_context();
         self.inner.push(block);
     }
 
@@ -100,6 +111,7 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
     }
 
     fn reserve_blocks(&mut self) {
+        self.reset_exhausted_emit_context();
         let block_size = self.block_size;
         if self.inner.is_empty()
             || self
@@ -112,6 +124,7 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
     }
 
     fn resize(&mut self, total_num_groups: usize, default_value: B::T) {
+        self.reset_exhausted_emit_context();
         let block_size = self.block_size;
         let n = self.inner.len();
         let current_len = if n == 0 {
@@ -261,6 +274,22 @@ mod tests {
         blocks.push_block(vec![6]);
         assert_eq!(blocks.num_blocks(), 1);
         assert_eq!(blocks.pop_block(), Some(vec![6]));
+    }
+
+    // Covers appending a fresh block after the current emission context is exhausted.
+    // Example: after [1] is emitted, pushing [2] starts the next emission context.
+    #[test]
+    fn test_push_block_resets_exhausted_emit_context() {
+        let mut blocks = TestBlocks::new(2);
+        blocks.push_block(vec![1]);
+
+        assert_eq!(blocks.pop_block(), Some(vec![1]));
+        assert_eq!(blocks.pop_block(), None);
+
+        blocks.push_block(vec![2]);
+        assert_eq!(blocks.num_blocks(), 1);
+        assert_eq!(blocks.pop_block(), Some(vec![2]));
+        assert_eq!(blocks.pop_block(), None);
     }
 
     // ---- reserve_blocks ----

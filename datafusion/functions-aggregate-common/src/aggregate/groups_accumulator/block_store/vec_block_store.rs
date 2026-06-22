@@ -22,6 +22,7 @@ use std::iter;
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
+use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, internal_datafusion_err, internal_err};
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
@@ -112,9 +113,9 @@ where
                         first.len()
                     );
                 }
-                let rest = first.split_off(n);
-                self.inner.push_block(rest);
-                Ok(first)
+                let first_n = split_vec_min_alloc(&mut first, n);
+                self.inner.push_block(first);
+                Ok(first_n)
             }
             EmitTo::NextBlock => self
                 .inner
