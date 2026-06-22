@@ -319,7 +319,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
             .collect::<Result<Vec<_>>>()?;
         let return_type = self.return_type(&data_types)?;
 
-        // Shortcut for binary delimiters
+        // No implementation for binary, only simple null filtering
         if return_type.is_binary() {
             let mut filtered_args = other_args
                 .iter()
@@ -338,14 +338,6 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 return Ok(ExprSimplifyResult::Original(args));
             }
         }
-
-        let typed_lit = |s: String| -> Expr {
-            match return_type {
-                DataType::LargeUtf8 => lit(ScalarValue::LargeUtf8(Some(s))),
-                DataType::Utf8View => lit(ScalarValue::Utf8View(Some(s))),
-                _ => lit(s),
-            }
-        };
 
         match delimiter {
             // If the delimiter is null, then the value of the whole expression is null.
@@ -373,6 +365,14 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 | ScalarValue::Utf8View(Some(delimiter)),
                 _,
             ) => {
+                let typed_lit = |s: String| -> Expr {
+                    match return_type {
+                        DataType::LargeUtf8 => lit(ScalarValue::LargeUtf8(Some(s))),
+                        DataType::Utf8View => lit(ScalarValue::Utf8View(Some(s))),
+                        _ => lit(s),
+                    }
+                };
+
                 let mut new_args = Vec::with_capacity(other_args.len());
                 new_args.push(typed_lit(delimiter.to_string()));
                 let mut contiguous_scalar = None;
@@ -414,12 +414,16 @@ impl ScalarUDFImpl for ConcatWsFunc {
                     new_args.push(typed_lit(val));
                 }
 
-                Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
-                    ScalarFunction {
-                        func: concat_ws(),
-                        args: new_args,
-                    },
-                )))
+                if args.len() != new_args.len() {
+                    Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
+                        ScalarFunction {
+                            func: concat_ws(),
+                            args: new_args,
+                        },
+                    )))
+                } else {
+                    Ok(ExprSimplifyResult::Original(args))
+                }
             }
             Expr::Literal(d, _) => internal_err!(
                 "The scalar {d} should be casted to string type during the type coercion."
