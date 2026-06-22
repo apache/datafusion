@@ -118,7 +118,7 @@ pub fn supported_dictionary_schema(schema: &Schema) -> bool {
     schema.fields().iter().all(|field| {
         if let DataType::Dictionary(_, value_type) = field.data_type() {
             matches!(value_type.as_ref(), DataType::Utf8)
-                || matches!(value_type.as_ref(), DataType::List(f) if f.data_type() == &DataType::Utf8)
+                || matches!(value_type.as_ref(), DataType::List(list_field) if list_field.data_type() == &DataType::Utf8)
         } else {
             false
         }
@@ -189,38 +189,36 @@ impl GroupValues for GroupDictionaryColumn {
             .iter()
             .enumerate()
             .map(|(col_idx, col)| {
-                // update hash cache for each column
                 self.col_caches[col_idx]
                     .update(dict_values_array(col.as_ref()), &self.random_state)?;
                 Ok(fill_keys(col.as_ref()))
             })
             .collect::<Result<_>>()?;
-
-        // keys are not stable across batches
         self.key_tuple_cache.clear();
+        self.key_tuple_scratch.clear();
 
-        groups.reserve(n_rows);
+        groups.try_reserve(n_rows).map_err(|e| {
+            datafusion_common::DataFusionError::ArrowError(
+                Box::new(arrow::error::ArrowError::MemoryError(e.to_string())),
+                None,
+            )
+        })?;
         for _row in 0..n_rows {
-            // Collect the raw dictionary key indices for this row.
             self.key_tuple_scratch.clear();
             for key_iter in key_iters.iter_mut() {
                 self.key_tuple_scratch.push(key_iter.next().unwrap());
             }
 
-            // Fast path: key-tuple cache lookup
-            // TODO: expose this threshold via SessionConfig so users can tune it for their
-            // workload (e.g. raise it for high-cardinality dictionaries, lower it to save memory).
-            let use_cache = self.key_tuple_cache.len() <= 10_000;
-            if use_cache {
-                if let Some(&group_id) =
+            // Fast path: key-tuple cache lookup (bypassed once the cache exceeds the threshold).
+            let use_cache = self.key_tuple_cache.len() <= 1000;
+            if use_cache
+                && let Some(&group_id) =
                     self.key_tuple_cache.get(self.key_tuple_scratch.as_slice())
-                {
-                    groups.push(group_id);
-                    continue;
-                }
+            {
+                groups.push(group_id);
+                continue;
             }
 
-            // Cache miss: compute combined hash and encode the row from the collected tuple.
             let mut combined_hash = 0u64;
             self.row_scratch.clear();
             for (col_idx, &key) in self.key_tuple_scratch.iter().enumerate() {
@@ -262,7 +260,6 @@ impl GroupValues for GroupDictionaryColumn {
                 }
             };
 
-            // Write back to the key-tuple cache.
             if use_cache {
                 self.key_tuple_cache
                     .insert(Box::from(self.key_tuple_scratch.as_slice()), group_id);
@@ -271,17 +268,24 @@ impl GroupValues for GroupDictionaryColumn {
             groups.push(group_id);
         }
 
-        println!("cache: {:?}", self.key_tuple_cache);
+        self.key_tuple_cache.clear();
+        self.key_tuple_scratch.clear();
         Ok(())
     }
 
     fn size(&self) -> usize {
-        let cache_bytes: usize = self.col_caches.iter().map(|c| c.size()).sum();
+        let cache_bytes: usize = self
+            .col_caches
+            .iter()
+            .map(|col_cache| col_cache.size())
+            .sum();
         self.map_size
             + self.row_buffer.capacity()
             + self.row_offsets.capacity() * size_of::<usize>()
             + self.row_scratch.capacity()
             + self.key_tuple_scratch.capacity() * size_of::<Option<usize>>()
+            + self.key_tuple_cache.capacity()
+                * (size_of::<Box<[Option<usize>]>>() + size_of::<usize>())
             + cache_bytes
             + self.row_decoder.size()
     }
@@ -316,7 +320,7 @@ impl GroupValues for GroupDictionaryColumn {
         }
         let n_emit = match emit_to {
             EmitTo::All => n_total,
-            EmitTo::First(n) => n.min(n_total),
+            EmitTo::First(first_n) => first_n.min(n_total),
         };
 
         for row_idx in 0..n_emit {
@@ -350,14 +354,16 @@ impl GroupValues for GroupDictionaryColumn {
         } else {
             let retain_start = self.row_offsets[n_emit];
             self.row_offsets.drain(0..n_emit);
-            self.row_offsets.iter_mut().for_each(|o| *o -= retain_start);
+            self.row_offsets
+                .iter_mut()
+                .for_each(|offset| *offset -= retain_start);
             self.row_buffer.drain(0..retain_start);
             // Shift remaining group ids in-place; retain gives &mut access so no rehashing occurs.
-            self.map.retain(|(_, gid)| {
-                if *gid < n_emit {
+            self.map.retain(|(_, group_id)| {
+                if *group_id < n_emit {
                     return false;
                 }
-                *gid -= n_emit;
+                *group_id -= n_emit;
                 true
             });
         }
@@ -400,7 +406,7 @@ fn encode_value(key: Option<usize>, values: &dyn Array, buf: &mut Vec<u8>) {
             buf.push(0);
             return;
         }
-        Some(k) => k,
+        Some(key_index) => key_index,
     };
     if values.is_null(key_idx) {
         buf.push(0);
@@ -435,7 +441,9 @@ fn encode_value(key: Option<usize>, values: &dyn Array, buf: &mut Vec<u8>) {
             let content_len = (buf.len() - content_start) as u64;
             buf[len_pos..len_pos + 8].copy_from_slice(&content_len.to_le_bytes());
         }
-        dt => panic!("unsupported dictionary value type: {dt}"),
+        unsupported_type => {
+            panic!("unsupported dictionary value type: {unsupported_type}")
+        }
     }
 }
 
@@ -456,53 +464,54 @@ impl ColumnBuilder {
 
     fn append_null(&mut self) {
         match self {
-            Self::Utf8(b) => b.append_null(),
-            Self::ListUtf8(b) => b.append_null(),
+            Self::Utf8(builder) => builder.append_null(),
+            Self::ListUtf8(builder) => builder.append_null(),
         }
     }
 
     fn append_bytes(&mut self, bytes: &[u8]) {
         match self {
             // SAFETY: bytes come from Arrow string arrays, always valid UTF-8.
-            Self::Utf8(b) => {
-                b.append_value(unsafe { std::str::from_utf8_unchecked(bytes) })
+            Self::Utf8(builder) => {
+                builder.append_value(unsafe { std::str::from_utf8_unchecked(bytes) })
             }
-            Self::ListUtf8(b) => {
+            Self::ListUtf8(builder) => {
                 let mut cursor = 0;
-                let n = u64::from_le_bytes(bytes[cursor..cursor + 8].try_into().unwrap())
-                    as usize;
+                let n_elements =
+                    u64::from_le_bytes(bytes[cursor..cursor + 8].try_into().unwrap())
+                        as usize;
                 cursor += 8;
-                for _ in 0..n {
+                for _ in 0..n_elements {
                     match bytes[cursor] {
                         0 => {
-                            b.values().append_null();
+                            builder.values().append_null();
                             cursor += 1;
                         }
                         _ => {
                             cursor += 1;
-                            let len = u64::from_le_bytes(
+                            let elem_len = u64::from_le_bytes(
                                 bytes[cursor..cursor + 8].try_into().unwrap(),
                             ) as usize;
                             cursor += 8;
                             // SAFETY: bytes come from Arrow string arrays, always valid UTF-8.
-                            b.values().append_value(unsafe {
+                            builder.values().append_value(unsafe {
                                 std::str::from_utf8_unchecked(
-                                    &bytes[cursor..cursor + len],
+                                    &bytes[cursor..cursor + elem_len],
                                 )
                             });
-                            cursor += len;
+                            cursor += elem_len;
                         }
                     }
                 }
-                b.append(true);
+                builder.append(true);
             }
         }
     }
 
     fn finish(&mut self) -> ArrayRef {
         match self {
-            Self::Utf8(b) => Arc::new(b.finish()),
-            Self::ListUtf8(b) => Arc::new(b.finish()),
+            Self::Utf8(builder) => Arc::new(builder.finish()),
+            Self::ListUtf8(builder) => Arc::new(builder.finish()),
         }
     }
 }
@@ -551,7 +560,10 @@ impl RowSetDecoder {
     }
 
     fn finish(&mut self) -> Vec<ArrayRef> {
-        self.builders.iter_mut().map(|b| b.finish()).collect()
+        self.builders
+            .iter_mut()
+            .map(|builder| builder.finish())
+            .collect()
     }
 
     fn size(&self) -> usize {
@@ -569,7 +581,10 @@ macro_rules! make_keys {
                 $max
             ));
         }
-        Ok(Arc::new(<$ArrayType>::from_iter_values((0..$n).map(|i| i as _))) as ArrayRef)
+        Ok(
+            Arc::new(<$ArrayType>::from_iter_values((0..$n).map(|idx| idx as _)))
+                as ArrayRef,
+        )
     }};
 }
 
@@ -629,7 +644,6 @@ fn wrap_as_dictionary(
     }
 }
 
-// in depth test exist on https://github.com/apache/datafusion/pull/22888 . these are mostly for correness and sanity check.
 #[cfg(test)]
 mod tests {
     use super::*;
