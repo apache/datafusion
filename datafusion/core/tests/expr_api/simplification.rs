@@ -695,7 +695,7 @@ fn test_simplify_concat_ws() {
             lit("-"),
             vec![
                 null.clone(),
-                col("c0"),
+                col("c1"),
                 lit("hello"),
                 null.clone(),
                 lit("rust"),
@@ -707,7 +707,7 @@ fn test_simplify_concat_ws() {
         );
         let expected = concat_ws(
             lit("-"),
-            vec![col("c0"), lit("hello-rust"), col("c1"), lit("-")],
+            vec![col("c1"), lit("hello-rust"), col("c1"), lit("-")],
         );
         test_simplify(expr, expected)
     }
@@ -738,8 +738,8 @@ fn test_simplify_concat_ws_with_null() {
 
     // null delimiter (nested)
     {
-        let sub_expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
-        let expr = concat_ws(sub_expr, vec![col("c3"), col("c4")]);
+        let sub_expr = concat_ws(null.clone(), vec![col("c1"), col("c1")]);
+        let expr = concat_ws(sub_expr, vec![col("c1"), col("c1")]);
         test_simplify(expr, null);
     }
 }
