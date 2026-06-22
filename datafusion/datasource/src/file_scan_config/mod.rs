@@ -198,16 +198,16 @@ pub struct FileScanConfig {
     /// would be incorrect if there are filters being applied, thus this should be accessed
     /// via [`FileScanConfig::statistics`].
     pub(crate) statistics: Statistics,
-    /// When true, `file_groups` are organized by partition column values and
-    /// [`Self::output_partitioning`] derives hash partitioning on those columns.
-    /// This allows the optimizer to skip hash repartitioning for aggregates and
-    /// joins on partition columns.
-    ///
-    /// Because grouping is by whole file, this may reduce I/O parallelism when
-    /// partition sizes are uneven.
+    /// When true, file_groups are organized by partition column values
+    /// and output_partitioning will return Hash partitioning on partition columns.
+    /// This allows the optimizer to skip hash repartitioning for aggregates and joins
+    /// on partition columns.
     ///
     /// If the number of file partitions > target_partitions, the file partitions will be grouped
     /// in a round-robin fashion such that number of file partitions = target_partitions.
+    ///
+    /// Follow-up: remove this redundant field in favor of
+    /// `output_partitioning`, see <https://github.com/apache/datafusion/issues/23099>.
     pub partitioned_by_file_group: bool,
     /// Declared physical output partitioning for this scan.
     ///
@@ -773,15 +773,27 @@ impl DataSource for FileScanConfig {
         Ok(source.map(|s| Arc::new(s) as _))
     }
 
-    /// Returns declared or derived output partitioning for this file scan.
+    /// Returns the output partitioning for this file scan.
     ///
-    /// Declared partitioning is projected through the scan projection. If it
-    /// cannot be projected, or its partition count differs from `file_groups`,
-    /// this returns `UnknownPartitioning`.
+    /// When `output_partitioning` is set, this returns the declared partitioning
+    /// after applying scan projection. When `partitioned_by_file_group` is true,
+    /// this returns `Partitioning::Hash` on the Hive partition columns, allowing
+    /// the optimizer to skip hash repartitioning for aggregates and joins on
+    /// those columns.
     ///
-    /// Without a declaration, `partitioned_by_file_group` derives hash
-    /// partitioning from Hive partition columns. Otherwise this returns
+    /// If projection or partition count validation fails, this returns
     /// `UnknownPartitioning`.
+    ///
+    /// Tradeoffs
+    /// - Benefit: Eliminates `RepartitionExec` and `SortExec` for queries whose
+    ///   required distribution is satisfied by the scan's output partitioning.
+    /// - Cost: Files are grouped by partition values rather than split by byte
+    ///   ranges, which may reduce I/O parallelism when partition sizes are uneven.
+    ///   For simple aggregations without `ORDER BY`, this cost may outweigh the benefit.
+    ///
+    /// Follow-up Work
+    /// - Idea: Could allow byte-range splitting within partition-aware groups,
+    ///   preserving I/O parallelism while maintaining partition semantics.
     fn output_partitioning(&self) -> Partitioning {
         let Some(output_partitioning) = self.output_partitioning.clone().or_else(|| {
             self.partitioned_by_file_group.then(|| {

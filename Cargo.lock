@@ -1819,7 +1819,6 @@ dependencies = [
  "datafusion-datasource-parquet",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-expr-common",
  "datafusion-physical-expr",
  "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",

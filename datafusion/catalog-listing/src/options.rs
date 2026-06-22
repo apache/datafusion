@@ -57,15 +57,41 @@ pub struct ListingOptions {
     ///
     /// Expressions are logical expressions over the full table schema. When set,
     /// [`ListingTable`](crate::ListingTable) creates one file group per
-    /// declared output partition, preserving empty groups. When unset, file
-    /// grouping uses the scan-time
+    /// declared output partition. When unset, file grouping uses the scan-time
     /// [`SessionConfig::target_partitions`](datafusion_execution::config::SessionConfig::target_partitions).
-    /// Declarations are limited to partitioning that can be represented by
-    /// assigning whole files to file groups.
     ///
-    /// Files are assigned to groups in path order. DataFusion does not validate
-    /// row placement, and callers must ensure file group `i` contains rows for
-    /// partition `i`.
+    /// Files are listed in path order, split into whole-file groups across the
+    /// declared partition count, and then padded with trailing empty groups when
+    /// needed. DataFusion does not route files by partition values or validate
+    /// row placement, so callers must ensure file group `i` contains rows for
+    /// partition `i`. Layouts that require explicit file-to-partition assignment
+    /// are not supported.
+    ///
+    /// For example, range partitioning on column `a` with split points
+    /// `[10, 20, 30]` declares four output partitions. With three path-ordered
+    /// files, the trailing partition is preserved as empty:
+    ///
+    /// ```text
+    /// files in path order: f0, f1, f2
+    ///
+    /// file groups:
+    ///   partition 0: [f0]
+    ///   partition 1: [f1]
+    ///   partition 2: [f2]
+    ///   partition 3: []
+    /// ```
+    ///
+    /// With five path-ordered files, a partition can contain multiple files:
+    ///
+    /// ```text
+    /// files in path order: f0, f1, f2, f3, f4
+    ///
+    /// file groups:
+    ///   partition 0: [f0, f1]
+    ///   partition 1: [f2, f3]
+    ///   partition 2: [f4]
+    ///   partition 3: []
+    /// ```
     pub output_partitioning: Option<Partitioning>,
 }
 
