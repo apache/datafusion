@@ -45,6 +45,7 @@ use std::vec;
 
 use datafusion::catalog::{TableProvider, TableProviderFactory};
 use datafusion::datasource::DefaultTableSource;
+use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
@@ -3379,9 +3380,7 @@ async fn roundtrip_empty_table_scan() -> Result<()> {
         Field::new("id", DataType::Int32, false),
         Field::new("name", DataType::Utf8, true),
     ]));
-    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
-        &schema,
-    )));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
     let ctx = SessionContext::new();
     ctx.register_table("empty", table)?;
@@ -3403,9 +3402,7 @@ async fn roundtrip_empty_table_scan_with_projection() -> Result<()> {
         Field::new("id", DataType::Int32, false),
         Field::new("name", DataType::Utf8, true),
     ]));
-    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
-        &schema,
-    )));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
     let ctx = SessionContext::new();
     ctx.register_table("empty", table)?;
@@ -3481,14 +3478,8 @@ async fn roundtrip_join_null_equality() -> Result<()> {
     let left_schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
     let right_schema =
         Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
-    ctx.register_table(
-        "t1",
-        Arc::new(datafusion::datasource::empty::EmptyTable::new(left_schema)),
-    )?;
-    ctx.register_table(
-        "t2",
-        Arc::new(datafusion::datasource::empty::EmptyTable::new(right_schema)),
-    )?;
+    ctx.register_table("t1", Arc::new(EmptyTable::new(left_schema)))?;
+    ctx.register_table("t2", Arc::new(EmptyTable::new(right_schema)))?;
     let left = ctx.table("t1").await?.into_optimized_plan()?;
     let right = ctx.table("t2").await?.into_optimized_plan()?;
 
@@ -3517,9 +3508,7 @@ async fn roundtrip_range_partitioning_single_col() -> Result<()> {
         Field::new("id", DataType::Int32, false),
         Field::new("name", DataType::Utf8, true),
     ]));
-    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
-        &schema,
-    )));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
     let ctx = SessionContext::new();
     ctx.register_table("empty", table)?;
@@ -3545,9 +3534,7 @@ async fn roundtrip_range_partitioning_multi_col() -> Result<()> {
         Field::new("ts", DataType::Int64, false),
         Field::new("region", DataType::Utf8, false),
     ]));
-    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
-        &schema,
-    )));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
     let ctx = SessionContext::new();
     ctx.register_table("empty", table)?;
@@ -3583,9 +3570,7 @@ async fn roundtrip_range_partitioning_desc_nulls_last() -> Result<()> {
         DataType::Float64,
         true,
     )]));
-    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
-        &schema,
-    )));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
     let ctx = SessionContext::new();
     ctx.register_table("empty", table)?;
