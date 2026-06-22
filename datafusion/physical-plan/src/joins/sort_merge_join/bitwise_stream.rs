@@ -1177,13 +1177,13 @@ impl BitwiseSortMergeJoinStream {
                                 self.emit_outer_batch()?;
                                 self.pending_boundary =
                                     Some(PendingBoundary::NoFilter { saved_keys });
+                                // Clear stale batch before polling
                                 self.outer_batch = None;
 
                                 match ready!(self.poll_next_outer_batch(cx)) {
                                     Err(e) => return Poll::Ready(Err(e)),
                                     Ok(false) => {
                                         self.pending_boundary = None;
-                                        self.outer_batch = None;
                                         break;
                                     }
                                     Ok(true) => {
