@@ -308,12 +308,12 @@ impl ScalarUDFImpl for ConcatWsFunc {
         args: Vec<Expr>,
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let (delimiter, args) = match &args[..] {
+        let (delimiter, other_args) = match &args[..] {
             [delimiter, vals @ ..] => (delimiter, vals),
             _ => return Ok(ExprSimplifyResult::Original(args)),
         };
 
-        let data_types = args
+        let data_types = other_args
             .iter()
             .map(|expr| info.get_data_type(expr))
             .collect::<Result<Vec<_>>>()?;
@@ -321,13 +321,22 @@ impl ScalarUDFImpl for ConcatWsFunc {
 
         // Shortcut for binary delimiters
         if return_type.is_binary() {
-            let mut args = args
+            let mut filtered_args = other_args
                 .iter()
                 .filter(|x| !is_null(x))
                 .cloned()
                 .collect::<Vec<_>>();
-            args.insert(0, delimiter.clone());
-            return Ok(ExprSimplifyResult::Original(args));
+            filtered_args.insert(0, delimiter.clone());
+            if filtered_args.len() != args.len() {
+                return Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
+                    ScalarFunction {
+                        func: concat_ws(),
+                        args: filtered_args,
+                    },
+                )));
+            } else {
+                return Ok(ExprSimplifyResult::Original(args));
+            }
         }
 
         let typed_lit = |s: String| -> Expr {
@@ -355,7 +364,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
             ) if delimiter.is_empty() => Ok(ExprSimplifyResult::Simplified(
                 Expr::ScalarFunction(ScalarFunction {
                     func: concat(),
-                    args: args.to_vec(),
+                    args: other_args.to_vec(),
                 }),
             )),
             Expr::Literal(
@@ -364,10 +373,10 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 | ScalarValue::Utf8View(Some(delimiter)),
                 _,
             ) => {
-                let mut new_args = Vec::with_capacity(args.len());
+                let mut new_args = Vec::with_capacity(other_args.len());
                 new_args.push(typed_lit(delimiter.to_string()));
                 let mut contiguous_scalar = None;
-                for arg in args {
+                for arg in other_args {
                     match arg {
                         // filter out null args
                         Expr::Literal(scalar, _) if scalar.is_null() => {}
@@ -416,9 +425,22 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 "The scalar {d} should be casted to string type during the type coercion."
             ),
             _ => {
-                let mut new_args = vec![delimiter.clone()];
-                new_args.extend(args.iter().filter(|&x| !is_null(x)).cloned());
-                Ok(ExprSimplifyResult::Original(new_args))
+                let mut new_args = other_args
+                    .iter()
+                    .filter(|x| !is_null(x))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                new_args.insert(0, delimiter.clone());
+                if new_args.len() != args.len() {
+                    Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
+                        ScalarFunction {
+                            func: concat_ws(),
+                            args: new_args,
+                        },
+                    )))
+                } else {
+                    Ok(ExprSimplifyResult::Original(args))
+                }
             }
         }
     }
