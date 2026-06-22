@@ -708,20 +708,7 @@ impl StringViewArrayBuilder {
             return Ok(());
         }
 
-        let required_cap = self
-            .in_progress
-            .len()
-            .checked_add(length as usize)
-            .ok_or_else(|| string_view_overflow_error("string view block size"))?;
-        if self.in_progress.capacity() < required_cap {
-            self.flush_in_progress();
-            let to_reserve = (length as usize).max(self.next_block_size() as usize);
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "StringView's block size bounds growth, so reserve cannot overflow capacity arithmetically. This hot loop intentionally avoids the extra `try_reserve` checks. It remains subject to allocator failure/OOM, which must be managed externally."
-            )]
-            self.in_progress.reserve(to_reserve);
-        }
+        self.try_ensure_long_capacity(length)?;
 
         let offset: u32 = i32::try_from(self.in_progress.len())
             .map_err(|_| string_view_overflow_error("offset"))?
@@ -755,6 +742,11 @@ impl StringViewArrayBuilder {
     }
 
     /// Fallible variant of [`Self::append_placeholder`].
+    ///
+    /// # Errors
+    ///
+    /// This currently cannot fail; it returns `Result` for API symmetry with
+    /// other fallible append methods.
     #[inline]
     pub fn try_append_placeholder(&mut self) -> Result<()> {
         self.append_placeholder();
@@ -772,13 +764,14 @@ impl StringViewArrayBuilder {
         self.placeholder_count += 1;
     }
 
-    /// Ensure the in-progress block has room for `length` more bytes,
-    /// flushing the current block and starting a new (doubled) one if not.
-    /// Caller must invoke this only when no bytes of the current row are
-    /// yet in `in_progress` — flushing mid-row would orphan partial data.
+    /// Fallible variant of [`Self::ensure_long_capacity`].
     #[inline]
-    fn ensure_long_capacity(&mut self, length: u32) {
-        let required_cap = self.in_progress.len() + length as usize;
+    fn try_ensure_long_capacity(&mut self, length: u32) -> Result<()> {
+        let required_cap = self
+            .in_progress
+            .len()
+            .checked_add(length as usize)
+            .ok_or_else(|| string_view_overflow_error("string view block size"))?;
         if self.in_progress.capacity() < required_cap {
             self.flush_in_progress();
             let to_reserve = (length as usize).max(self.next_block_size() as usize);
@@ -788,6 +781,17 @@ impl StringViewArrayBuilder {
             )]
             self.in_progress.reserve(to_reserve);
         }
+        Ok(())
+    }
+
+    /// Ensure the in-progress block has room for `length` more bytes,
+    /// flushing the current block and starting a new (doubled) one if not.
+    /// Caller must invoke this only when no bytes of the current row are
+    /// yet in `in_progress` — flushing mid-row would orphan partial data.
+    #[inline]
+    fn ensure_long_capacity(&mut self, length: u32) {
+        self.try_ensure_long_capacity(length)
+            .expect("byte array offset overflow");
     }
 
     /// Encode a long-form view referencing `length` bytes already written
