@@ -22,7 +22,7 @@ use crate::{
     expressions::UnKnownColumn, physical_exprs_equal,
 };
 pub use datafusion_common::SplitPoint;
-use datafusion_common::{Result, validate_range_split_points};
+use datafusion_common::{Result, ScalarValue, validate_range_split_points};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use std::fmt;
@@ -349,6 +349,68 @@ fn format_range_split_points(split_points: &[SplitPoint]) -> String {
         .join(", ")
 }
 
+/// Per-side halo distances for a [`DynamicRangePartitioning`].
+///
+/// Halo rows are extra rows deliberately routed beyond a bucket's primary
+/// `[min, max]` range so a downstream operator (typically a windowing or
+/// filter pass) can see the full neighborhood at each seam. Each side's
+/// distance is measured in the **leading sort key's domain** — the same
+/// `DataType` as the first expression in
+/// [`DynamicRangePartitioning::ordering`].
+///
+/// For example, for a `RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING` window
+/// frame over an `Int64` sort key, the halo is `preceding = 5, following
+/// = 3` — bucket `i`'s output contains its own primary range plus 5
+/// units of overlap to the left and 3 units to the right.
+///
+/// Halo here is RANGE-frame style: a distance in the sort key's domain.
+/// ROWS-frame halo (a count of neighboring rows) is not represented;
+/// that interpretation will need a separate variant if and when it is
+/// motivated.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HaloSpec {
+    /// Distance the bucket extends below its primary `min` (toward
+    /// lex-smaller values along the leading sort key). Must share its
+    /// `DataType` with the leading sort key expression.
+    preceding: ScalarValue,
+    /// Distance the bucket extends above its primary `max` (toward
+    /// lex-larger values along the leading sort key). Must share its
+    /// `DataType` with the leading sort key expression.
+    following: ScalarValue,
+}
+
+impl HaloSpec {
+    /// Creates a halo spec. `preceding` and `following` must share their
+    /// `DataType` with the leading sort key expression of the partitioning
+    /// they will be attached to; this is not validated at construction.
+    pub fn new(preceding: ScalarValue, following: ScalarValue) -> Self {
+        Self {
+            preceding,
+            following,
+        }
+    }
+
+    /// Distance the bucket extends below its primary `min`.
+    pub fn preceding(&self) -> &ScalarValue {
+        &self.preceding
+    }
+
+    /// Distance the bucket extends above its primary `max`.
+    pub fn following(&self) -> &ScalarValue {
+        &self.following
+    }
+}
+
+impl Display for HaloSpec {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "halo(preceding={}, following={})",
+            self.preceding, self.following
+        )
+    }
+}
+
 /// Physical range partitioning where split points are discovered at execution
 /// time from upstream data, not declared at plan time.
 ///
@@ -367,7 +429,10 @@ fn format_range_split_points(split_points: &[SplitPoint]) -> String {
 ///
 /// Once the operator has computed split points, the partition contract is
 /// the same as [`RangePartitioning`]: lexicographic ordering, half-open
-/// intervals, one row per output partition.
+/// intervals, one row per output partition — unless [`Self::halo`] is set,
+/// in which case the operator deliberately routes extra rows beyond each
+/// bucket's primary range so a downstream pass can see the full
+/// neighborhood at each seam. See [`HaloSpec`].
 ///
 /// NOTE: Optimizer and execution behavior for this partitioning is
 /// intentionally not implemented and will be introduced incrementally.
@@ -379,17 +444,36 @@ pub struct DynamicRangePartitioning {
     /// Number of output partitions. Fixed at plan time; split points
     /// between them are discovered at execute time.
     partition_count: usize,
+    /// Optional per-side halo distance. When set, the implementing
+    /// operator routes extra rows beyond each bucket's primary range; a
+    /// downstream operator is expected to strip them back to the primary
+    /// range by reading [`ExtremaKind::Expanded`] extrema. When unset, the
+    /// partitioning produces disjoint buckets and a downstream consumer
+    /// sees [`ExtremaKind::Observed`] extrema.
+    ///
+    /// [`ExtremaKind::Expanded`]: https://docs.rs/datafusion/latest/datafusion_physical_plan/enum.ExtremaKind.html#variant.Expanded
+    /// [`ExtremaKind::Observed`]: https://docs.rs/datafusion/latest/datafusion_physical_plan/enum.ExtremaKind.html#variant.Observed
+    halo: Option<HaloSpec>,
 }
 
 impl DynamicRangePartitioning {
-    /// Creates dynamic range partitioning metadata.
+    /// Creates dynamic range partitioning metadata with no halo.
     ///
     /// `partition_count` must be at least 1.
     pub fn new(ordering: LexOrdering, partition_count: usize) -> Self {
         Self {
             ordering,
             partition_count,
+            halo: None,
         }
+    }
+
+    /// Attaches a [`HaloSpec`] to this partitioning, declaring that the
+    /// implementing operator routes extra rows beyond each bucket's
+    /// primary range. Builder-style.
+    pub fn with_halo(mut self, halo: HaloSpec) -> Self {
+        self.halo = Some(halo);
+        self
     }
 
     /// Returns the ordering that defines the range key.
@@ -402,13 +486,19 @@ impl DynamicRangePartitioning {
         self.partition_count
     }
 
+    /// Returns the halo spec, if set.
+    pub fn halo(&self) -> Option<&HaloSpec> {
+        self.halo.as_ref()
+    }
+
     /// Returns true when `self` and `other` describe the same dynamic range
     /// partition map.
     ///
     /// Single-partition dynamic range partitionings are always compatible.
-    /// Otherwise the two partitionings must have the same partition count
-    /// and equivalent ordering expressions with the same sort options.
-    /// Split points are not compared because neither side has them yet.
+    /// Otherwise the two partitionings must have the same partition count,
+    /// matching halo (or both `None`), and equivalent ordering expressions
+    /// with the same sort options. Split points are not compared because
+    /// neither side has them yet.
     pub fn compatible_with(
         &self,
         other: &Self,
@@ -420,6 +510,7 @@ impl DynamicRangePartitioning {
 
         if self.partition_count != other.partition_count
             || self.ordering.len() != other.ordering.len()
+            || self.halo != other.halo
         {
             return false;
         }
@@ -452,6 +543,9 @@ impl DynamicRangePartitioning {
     ///
     /// Returns `None` if any range key cannot be projected or if projection
     /// collapses distinct range keys into duplicate output expressions.
+    /// Halo (if any) is preserved unchanged — halo is measured in the
+    /// leading sort key's domain, which the projection must keep stable
+    /// for the result to be valid.
     fn project(
         &self,
         mapping: &ProjectionMapping,
@@ -479,17 +573,25 @@ impl DynamicRangePartitioning {
         Some(Self {
             ordering,
             partition_count: self.partition_count,
+            halo: self.halo.clone(),
         })
     }
 }
 
 impl Display for DynamicRangePartitioning {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "DynamicRange([{}], {})",
-            self.ordering, self.partition_count
-        )
+        match &self.halo {
+            Some(halo) => write!(
+                f,
+                "DynamicRange([{}], {}, {})",
+                self.ordering, self.partition_count, halo
+            ),
+            None => write!(
+                f,
+                "DynamicRange([{}], {})",
+                self.ordering, self.partition_count
+            ),
+        }
     }
 }
 
@@ -1576,6 +1678,78 @@ mod tests {
             panic!("expected UnknownPartitioning, got {projected:?}");
         };
         assert_eq!(partition_count, 4);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_range_partitioning_halo_metadata() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let halo =
+            HaloSpec::new(ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(3)));
+        let with_halo = fixture.dynamic_range([0], 4).with_halo(halo.clone());
+
+        assert_eq!(with_halo.halo(), Some(&halo));
+        assert_eq!(
+            with_halo.to_string(),
+            "DynamicRange([a@0 ASC], 4, halo(preceding=5, following=3))"
+        );
+
+        // No halo round-trips unchanged.
+        let no_halo = fixture.dynamic_range([0], 4);
+        assert_eq!(no_halo.halo(), None);
+        assert_eq!(no_halo.to_string(), "DynamicRange([a@0 ASC], 4)");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_range_partitioning_halo_affects_compatible_with() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let halo_a =
+            HaloSpec::new(ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(3)));
+        let halo_b =
+            HaloSpec::new(ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(7)));
+
+        let plain = fixture.dynamic_range([0], 4);
+        let with_a = fixture.dynamic_range([0], 4).with_halo(halo_a.clone());
+        let with_a_same = fixture.dynamic_range([0], 4).with_halo(halo_a.clone());
+        let with_b = fixture.dynamic_range([0], 4).with_halo(halo_b);
+
+        // Identical halos → compatible.
+        assert!(with_a.compatible_with(&with_a_same, &fixture.eq_properties));
+        // Mismatched halos → not compatible.
+        assert!(!with_a.compatible_with(&with_b, &fixture.eq_properties));
+        // No-halo vs halo → not compatible.
+        assert!(!plain.compatible_with(&with_a, &fixture.eq_properties));
+        assert!(!with_a.compatible_with(&plain, &fixture.eq_properties));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_range_partitioning_project_preserves_halo() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let halo =
+            HaloSpec::new(ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(3)));
+        let dynamic_range = Partitioning::DynamicRange(
+            DynamicRangePartitioning::new(
+                [fixture.range_sort_expr(1, SortOptions::new(true, false))].into(),
+                4,
+            )
+            .with_halo(halo.clone()),
+        );
+
+        let keep_b_mapping = ProjectionMapping::from_indices(&[1], &fixture.schema)?;
+        let projected = dynamic_range.project(&keep_b_mapping, &fixture.eq_properties);
+        let Partitioning::DynamicRange(projected_inner) = &projected else {
+            panic!("expected DynamicRange, got {projected:?}");
+        };
+        assert_eq!(projected_inner.halo(), Some(&halo));
+        assert_eq!(
+            projected.to_string(),
+            "DynamicRange([b@0 DESC NULLS LAST], 4, halo(preceding=5, following=3))"
+        );
 
         Ok(())
     }
