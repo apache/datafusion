@@ -65,7 +65,7 @@ pub(crate) fn coerce_single_list_arg(
             DataType::List(Arc::clone(field))
         }
         DataType::LargeListView(field) => DataType::LargeList(Arc::clone(field)),
-        DataType::Null => DataType::Null,
+        DataType::Null => DataType::new_list(DataType::Null, true),
         _ => return plan_err!("{name} expected a list as first argument, got {list}"),
     };
 
