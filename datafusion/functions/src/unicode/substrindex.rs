@@ -281,7 +281,7 @@ where
 
     for i in 0..num_rows {
         if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            builder.append_placeholder();
+            builder.try_append_placeholder()?;
             continue;
         }
         // SAFETY: `i < num_rows` and the union of input nulls is valid at i,
@@ -289,7 +289,7 @@ where
         let string = unsafe { string_array.value_unchecked(i) };
         let delimiter = unsafe { delimiter_array.value_unchecked(i) };
         let n = unsafe { count_array.value_unchecked(i) };
-        builder.append_value(substr_index_slice(string, delimiter, n));
+        builder.try_append_value(substr_index_slice(string, delimiter, n))?;
     }
 
     Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
@@ -487,13 +487,13 @@ where
     let nulls = string_array.nulls().cloned();
     for i in 0..string_array.len() {
         if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            builder.append_placeholder();
+            builder.try_append_placeholder()?;
             continue;
         }
         // SAFETY: `i < string_array.len()` and `nulls` is valid at i, so the
         // input is also valid at i.
         let s = unsafe { string_array.value_unchecked(i) };
-        builder.append_value(f(s));
+        builder.try_append_value(f(s))?;
     }
     Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
 }
@@ -793,6 +793,30 @@ mod tests {
         assert_eq!(result.value(0), "alpha");
         assert_eq!(result.value(1), "short");
         assert!(result.is_null(2));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_substr_index_all_nulls() -> Result<()> {
+        use super::substr_index_general;
+        use crate::strings::GenericStringArrayBuilder;
+
+        let strings = StringArray::from(vec![None::<&str>, None]);
+        let delimiters = StringArray::from(vec![None::<&str>, Some(".")]);
+        let counts = Int64Array::from(vec![None, None]);
+
+        let result = substr_index_general(
+            &strings,
+            &delimiters,
+            &counts,
+            GenericStringArrayBuilder::<i32>::with_capacity(strings.len(), 0),
+        )?;
+        let result = result.as_string::<i32>();
+
+        assert_eq!(result.len(), 2);
+        assert!(result.is_null(0));
+        assert!(result.is_null(1));
 
         Ok(())
     }

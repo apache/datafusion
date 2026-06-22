@@ -339,6 +339,10 @@ fn offset_overflow_error<O: OffsetSizeTrait>() -> DataFusionError {
     )
 }
 
+fn string_view_overflow_error(limit: &str) -> DataFusionError {
+    exec_datafusion_err!("byte array offset overflow: {limit} exceeds i32::MAX")
+}
+
 fn try_offset<O: OffsetSizeTrait>(len: usize) -> Result<O> {
     if len > O::MAX_OFFSET {
         return Err(offset_overflow_error::<O>());
@@ -684,26 +688,31 @@ impl StringViewArrayBuilder {
         self.block_size
     }
 
-    /// See [`BulkNullStringArrayBuilder::append_value`].
+    /// Fallible variant of [`Self::append_value`].
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the value length, the in-progress buffer offset, or the
-    /// number of completed buffers exceeds `i32::MAX`. The ByteView spec
-    /// uses signed 32-bit integers for these fields; exceeding `i32::MAX`
-    /// would produce an array that does not round-trip through Arrow IPC
-    /// (see <https://github.com/apache/arrow-rs/issues/6172>).
+    /// Returns an error if the value length, in-progress buffer offset, or
+    /// number of completed buffers exceeds `i32::MAX`. The ByteView spec uses
+    /// signed 32-bit integers for these fields; exceeding `i32::MAX` would
+    /// produce an array that does not round-trip through Arrow IPC (see
+    /// <https://github.com/apache/arrow-rs/issues/6172>).
     #[inline]
-    pub fn append_value(&mut self, value: &str) {
+    pub fn try_append_value(&mut self, value: &str) -> Result<()> {
         let v = value.as_bytes();
-        let length: u32 =
-            i32::try_from(v.len()).expect("value length exceeds i32::MAX") as u32;
+        let length: u32 = i32::try_from(v.len())
+            .map_err(|_| string_view_overflow_error("value length"))?
+            as u32;
         if length <= 12 {
             self.views.push(make_view(v, 0, 0));
-            return;
+            return Ok(());
         }
 
-        let required_cap = self.in_progress.len() + length as usize;
+        let required_cap = self
+            .in_progress
+            .len()
+            .checked_add(length as usize)
+            .ok_or_else(|| string_view_overflow_error("string view block size"))?;
         if self.in_progress.capacity() < required_cap {
             self.flush_in_progress();
             let to_reserve = (length as usize).max(self.next_block_size() as usize);
@@ -715,17 +724,49 @@ impl StringViewArrayBuilder {
         }
 
         let offset: u32 = i32::try_from(self.in_progress.len())
-            .expect("offset exceeds i32::MAX") as u32;
+            .map_err(|_| string_view_overflow_error("offset"))?
+            as u32;
+        let buffer_index: u32 = i32::try_from(self.completed.len())
+            .map_err(|_| string_view_overflow_error("buffer count"))?
+            as u32;
         self.in_progress.extend_from_slice(v);
-        self.views.push(self.make_long_view(length, offset, v));
+        self.views
+            .push(Self::make_long_view(length, buffer_index, offset, v));
+        Ok(())
     }
 
-    /// See [`BulkNullStringArrayBuilder::append_placeholder`].
+    /// See [`BulkNullStringArrayBuilder::append_value`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_value`].
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions that [`Self::try_append_value`] returns
+    /// an error.
     #[inline]
-    pub fn append_placeholder(&mut self) {
+    pub fn append_value(&mut self, value: &str) {
+        self.try_append_value(value)
+            .expect("byte array offset overflow");
+    }
+
+    /// Fallible variant of [`Self::append_placeholder`].
+    #[inline]
+    pub fn try_append_placeholder(&mut self) -> Result<()> {
         // Zero-length inline view — `length` field is 0, no buffer ref.
         self.views.push(0);
         self.placeholder_count += 1;
+        Ok(())
+    }
+
+    /// See [`BulkNullStringArrayBuilder::append_placeholder`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_placeholder`].
+    #[inline]
+    pub fn append_placeholder(&mut self) {
+        self.try_append_placeholder()
+            .expect("byte array offset overflow");
     }
 
     /// Ensure the in-progress block has room for `length` more bytes,
@@ -754,10 +795,12 @@ impl StringViewArrayBuilder {
     /// function is `[inline(never)]` and has to handle short strings, so
     /// building the view here ourselves is faster.
     #[inline]
-    fn make_long_view(&self, length: u32, offset: u32, prefix_bytes: &[u8]) -> u128 {
-        let buffer_index: u32 = i32::try_from(self.completed.len())
-            .expect("buffer count exceeds i32::MAX")
-            as u32;
+    fn make_long_view(
+        length: u32,
+        buffer_index: u32,
+        offset: u32,
+        prefix_bytes: &[u8],
+    ) -> u128 {
         ByteView {
             length,
             // length > 12, so prefix_bytes has at least 4 bytes.
@@ -797,9 +840,16 @@ impl StringViewArrayBuilder {
 
         let cursor = self.in_progress.len();
         let offset: u32 = i32::try_from(cursor).expect("offset exceeds i32::MAX") as u32;
+        let buffer_index: u32 = i32::try_from(self.completed.len())
+            .expect("buffer count exceeds i32::MAX")
+            as u32;
         self.in_progress.extend(src.iter().map(|&b| map(b)));
-        self.views
-            .push(self.make_long_view(length, offset, &self.in_progress[cursor..]));
+        self.views.push(Self::make_long_view(
+            length,
+            buffer_index,
+            offset,
+            &self.in_progress[cursor..],
+        ));
     }
 
     /// See [`BulkNullStringArrayBuilder::append_with`].
@@ -843,8 +893,12 @@ impl StringViewArrayBuilder {
                     as u32;
                 let offset: u32 =
                     i32::try_from(start).expect("offset exceeds i32::MAX") as u32;
-                self.views.push(self.make_long_view(
+                let buffer_index: u32 = i32::try_from(self.completed.len())
+                    .expect("buffer count exceeds i32::MAX")
+                    as u32;
+                self.views.push(Self::make_long_view(
                     length,
+                    buffer_index,
                     offset,
                     &self.in_progress[start..],
                 ));
@@ -1599,6 +1653,20 @@ mod tests {
             &array,
             &StringArray::from(vec![Some("ab"), Some("cd"), Some("EF"), Some("GH")])
         );
+    }
+
+    #[test]
+    fn string_view_builder_try_append_success_path() {
+        let mut builder = StringViewArrayBuilder::with_capacity(3);
+        builder.try_append_value("abc").unwrap();
+        builder.try_append_placeholder().unwrap();
+        builder.try_append_value("a long string value").unwrap();
+
+        let nulls = Some(NullBuffer::from(vec![true, false, true]));
+        let array = builder.finish(nulls).unwrap();
+        assert_eq!(array.value(0), "abc");
+        assert!(array.is_null(1));
+        assert_eq!(array.value(2), "a long string value");
     }
 
     #[test]
