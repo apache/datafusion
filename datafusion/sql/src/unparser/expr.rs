@@ -3378,6 +3378,17 @@ mod tests {
                 Unparser::default()
                     .expr_to_sql(&nested_binary)
                     .expect("deeply nested binary expression should unparse");
+
+                // 3. Same binary chain in pretty mode. Pretty mode runs
+                //    `remove_unnecessary_nesting` at every level, which recurses
+                //    alongside the unparse itself; this locks down that second
+                //    recursion site fixed by this PR.
+                Unparser::default()
+                    .with_pretty(true)
+                    .expr_to_sql(&nested_binary)
+                    .expect(
+                        "deeply nested binary expression should unparse in pretty mode",
+                    );
             })
             .unwrap();
 
