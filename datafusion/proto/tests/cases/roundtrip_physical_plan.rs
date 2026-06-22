@@ -3666,6 +3666,53 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_hash_join_swap_clears_dynamic_filter_before_roundtrip() -> Result<()> {
+    let build_schema = Arc::new(Schema::new(vec![Field::new(
+        "build_key",
+        DataType::Int64,
+        false,
+    )]));
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("probe_payload_0", DataType::Int64, false),
+        Field::new("probe_payload_1", DataType::Int64, false),
+        Field::new("probe_key", DataType::Int64, false),
+    ]));
+
+    let build_child = Arc::new(EmptyExec::new(Arc::clone(&build_schema)));
+    let probe_child = Arc::new(EmptyExec::new(Arc::clone(&probe_schema)));
+    let on: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = vec![(
+        Arc::new(Column::new("build_key", 0)),
+        Arc::new(Column::new("probe_key", 2)),
+    )];
+
+    let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![Arc::new(Column::new("probe_key", 2))],
+        lit(true),
+    ));
+    let join = HashJoinExec::try_new(
+        build_child,
+        probe_child,
+        on,
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?
+    .with_dynamic_filter_expr(dynamic_filter)?;
+
+    let swapped = join.swap_inputs(PartitionMode::CollectLeft)?;
+
+    // If HashJoinExec::swap_inputs keeps the old dynamic filter, the swapped
+    // join still serializes a filter whose child is `probe_key@2`. During
+    // deserialization, HashJoinExec validates that filter against the new
+    // right/probe schema (`build_key` only), and fails with an out-of-bounds
+    // column reference.
+    roundtrip_test(swapped)
+}
+
 /// returns a SessionContext with an empty `netflow` table registered
 fn netflow_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
