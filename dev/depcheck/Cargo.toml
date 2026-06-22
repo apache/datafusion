@@ -23,4 +23,4 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cargo_metadata = "0.23.1"
+cargo = "0.92.0"
