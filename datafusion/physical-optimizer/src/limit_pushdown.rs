@@ -76,6 +76,7 @@ use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
 /// the parent to the child if applicable.
@@ -351,7 +352,9 @@ fn limit_eliminable_exact_num_rows(
     }
 
     if matches!(
-        current.partition_statistics(None)?.num_rows,
+        current
+            .statistics_with_args(&StatisticsArgs::new())?
+            .num_rows,
         Precision::Exact(0)
     ) {
         return Ok(Some(0));

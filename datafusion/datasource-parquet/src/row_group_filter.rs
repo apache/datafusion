@@ -18,7 +18,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::{ParquetAccessPlan, ParquetFileMetrics};
+use super::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccess};
 // Re-exported so the existing `crate::row_group_filter::BloomFilterStatistics`
 // path keeps resolving for in-crate callers (e.g. `opener`).
 pub(crate) use crate::bloom_filter::BloomFilterStatistics;
@@ -190,7 +190,11 @@ impl RowGroupAccessPlanFilter {
         // find a set of matching row groups that can satisfy the limit
         for &idx in self.access_plan.row_group_indexes().iter() {
             if self.access_plan.is_fully_matched(idx) {
-                let row_group_row_count = rg_metadata[idx].num_rows() as usize;
+                let row_group_row_count = match &self.access_plan.inner()[idx] {
+                    RowGroupAccess::Skip => continue,
+                    RowGroupAccess::Scan => rg_metadata[idx].num_rows() as usize,
+                    RowGroupAccess::Selection(selection) => selection.row_count(),
+                };
                 fully_matched_row_group_indexes.push(idx);
                 fully_matched_rows_count += row_group_row_count;
                 if fully_matched_rows_count >= limit {
@@ -211,7 +215,7 @@ impl RowGroupAccessPlanFilter {
 
             let mut new_access_plan = ParquetAccessPlan::new_none(rg_metadata.len());
             for &idx in &fully_matched_row_group_indexes {
-                new_access_plan.scan(idx);
+                new_access_plan.set(idx, self.access_plan.inner()[idx].clone());
                 new_access_plan.mark_fully_matched(idx);
             }
             self.access_plan = new_access_plan;
@@ -453,12 +457,16 @@ impl RowGroupAccessPlanFilter {
     }
 }
 
-/// Wraps a slice of [`RowGroupMetaData`] in a way that implements [`PruningStatistics`]
-struct RowGroupPruningStatistics<'a> {
-    parquet_schema: &'a SchemaDescriptor,
-    row_group_metadatas: Vec<&'a RowGroupMetaData>,
-    arrow_schema: &'a Schema,
-    missing_null_counts_as_zero: bool,
+/// Wraps a slice of [`RowGroupMetaData`] in a way that implements [`PruningStatistics`].
+///
+/// Visible to sibling modules so runtime row-group pruners (e.g. the dynamic
+/// TopK pruner in `push_decoder.rs`) can reuse this adapter without
+/// duplicating the statistics-to-`PruningStatistics` plumbing.
+pub(crate) struct RowGroupPruningStatistics<'a> {
+    pub(crate) parquet_schema: &'a SchemaDescriptor,
+    pub(crate) row_group_metadatas: Vec<&'a RowGroupMetaData>,
+    pub(crate) arrow_schema: &'a Schema,
+    pub(crate) missing_null_counts_as_zero: bool,
 }
 
 impl<'a> RowGroupPruningStatistics<'a> {
@@ -535,6 +543,7 @@ mod tests {
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use parquet::arrow::ArrowSchemaConverter;
+    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::metadata::ColumnChunkMetaData;
@@ -699,6 +708,71 @@ mod tests {
 
         assert_eq!(row_groups.access_plan.row_group_indexes(), vec![0, 1, 2]);
         assert_eq!(row_groups.is_fully_matched(), &vec![false, true, false]);
+    }
+
+    #[test]
+    fn prune_by_limit_preserves_row_selection() {
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT32);
+        let schema_descr = get_test_schema_descr(vec![field]);
+        let rgm1 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::int32(None, None, None, Some(0), false)],
+        );
+        let rgm2 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::int32(None, None, None, Some(0), false)],
+        );
+        let groups = &[rgm1, rgm2];
+
+        let selection =
+            RowSelection::from(vec![RowSelector::skip(900), RowSelector::select(100)]);
+        let mut access_plan = ParquetAccessPlan::new_all(2);
+        access_plan.scan_selection(0, selection.clone());
+        access_plan.mark_fully_matched(0);
+        access_plan.mark_fully_matched(1);
+
+        let metrics = parquet_file_metrics();
+        let mut row_groups = RowGroupAccessPlanFilter::new(access_plan);
+        row_groups.prune_by_limit(50, groups, &metrics);
+
+        assert_eq!(row_groups.access_plan.row_group_indexes(), vec![0]);
+        assert_eq!(
+            row_groups.access_plan.inner(),
+            &[RowGroupAccess::Selection(selection), RowGroupAccess::Skip]
+        );
+        assert_eq!(row_groups.is_fully_matched(), &vec![true, false]);
+    }
+
+    #[test]
+    fn prune_by_limit_counts_only_selected_rows() {
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT32);
+        let schema_descr = get_test_schema_descr(vec![field]);
+        let rgm1 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::int32(None, None, None, Some(0), false)],
+        );
+        let rgm2 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::int32(None, None, None, Some(0), false)],
+        );
+        let groups = &[rgm1, rgm2];
+
+        let selection =
+            RowSelection::from(vec![RowSelector::select(10), RowSelector::skip(990)]);
+        let mut access_plan = ParquetAccessPlan::new_all(2);
+        access_plan.scan_selection(0, selection.clone());
+        access_plan.mark_fully_matched(0);
+
+        let metrics = parquet_file_metrics();
+        let mut row_groups = RowGroupAccessPlanFilter::new(access_plan);
+        row_groups.prune_by_limit(50, groups, &metrics);
+
+        assert_eq!(row_groups.access_plan.row_group_indexes(), vec![0, 1]);
+        assert_eq!(
+            row_groups.access_plan.inner(),
+            &[RowGroupAccess::Selection(selection), RowGroupAccess::Scan]
+        );
+        assert_eq!(row_groups.is_fully_matched(), &vec![true, false]);
     }
 
     #[test]
@@ -955,10 +1029,7 @@ mod tests {
         let schema =
             Arc::new(Schema::new(vec![Field::new("c1", Decimal128(9, 2), false)]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT32)
-            .with_logical_type(LogicalType::Decimal {
-                scale: 2,
-                precision: 9,
-            })
+            .with_logical_type(LogicalType::decimal(2, 9))
             .with_scale(2)
             .with_precision(9);
         let schema_descr = get_test_schema_descr(vec![field]);
@@ -1023,10 +1094,7 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("c1", Decimal128(9, 0), false)]));
 
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT32)
-            .with_logical_type(LogicalType::Decimal {
-                scale: 0,
-                precision: 9,
-            })
+            .with_logical_type(LogicalType::decimal(0, 9))
             .with_scale(0)
             .with_precision(9);
         let schema_descr = get_test_schema_descr(vec![field]);
@@ -1118,10 +1186,7 @@ mod tests {
             false,
         )]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT64)
-            .with_logical_type(LogicalType::Decimal {
-                scale: 2,
-                precision: 18,
-            })
+            .with_logical_type(LogicalType::decimal(2, 18))
             .with_scale(2)
             .with_precision(18);
         let schema_descr = get_test_schema_descr(vec![field]);
@@ -1176,10 +1241,7 @@ mod tests {
             false,
         )]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::FIXED_LEN_BYTE_ARRAY)
-            .with_logical_type(LogicalType::Decimal {
-                scale: 2,
-                precision: 18,
-            })
+            .with_logical_type(LogicalType::decimal(2, 18))
             .with_scale(2)
             .with_precision(18)
             .with_byte_len(16);
@@ -1254,10 +1316,7 @@ mod tests {
             false,
         )]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::BYTE_ARRAY)
-            .with_logical_type(LogicalType::Decimal {
-                scale: 2,
-                precision: 18,
-            })
+            .with_logical_type(LogicalType::decimal(2, 18))
             .with_scale(2)
             .with_precision(18)
             .with_byte_len(16);

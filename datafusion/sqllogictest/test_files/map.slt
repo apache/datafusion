@@ -901,3 +901,18 @@ NULL
 
 statement ok
 drop table tt;
+
+# mixed scalar/array inputs
+query ?
+SELECT map(['a','b'], [column1, column1 * 10]) FROM (VALUES (1), (2), (3)) t;
+----
+{a: 1, b: 10}
+{a: 2, b: 20}
+{a: 3, b: 30}
+
+query ?
+SELECT map([column1, column1 * 10], ['x','y']) FROM (VALUES (1), (2), (3)) t;
+----
+{1: x, 10: y}
+{2: x, 20: y}
+{3: x, 30: y}

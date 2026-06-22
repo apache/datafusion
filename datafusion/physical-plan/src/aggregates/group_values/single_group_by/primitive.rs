@@ -35,8 +35,21 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 /// A trait to allow hashing of floating point numbers
-pub(crate) trait HashValue {
+pub trait HashValue {
     fn hash(&self, state: &RandomState) -> u64;
+
+    /// Return a canonical representative whose bit pattern is identical for
+    /// all values that should be grouped together. Default is the identity;
+    /// floats override this to fold `-0.0` into `+0.0` so the bit-equal
+    /// `is_eq` check used during insertion treats them as the same group.
+    /// NaN payload bits are preserved.
+    #[inline]
+    fn canonicalize(self) -> Self
+    where
+        Self: Sized,
+    {
+        self
+    }
 }
 
 macro_rules! hash_integer {
@@ -63,12 +76,19 @@ macro_rules! hash_float {
         $(impl HashValue for $t {
             #[cfg(not(feature = "force_hash_collisions"))]
             fn hash(&self, state: &RandomState) -> u64 {
-                state.hash_one(self.to_bits())
+                state.hash_one(self.canonicalize().to_bits())
             }
 
             #[cfg(feature = "force_hash_collisions")]
             fn hash(&self, _state: &RandomState) -> u64 {
                 0
+            }
+
+            #[inline]
+            fn canonicalize(self) -> Self {
+                let bits = self.to_bits();
+                let bits = if bits << 1 == 0 { 0 } else { bits };
+                Self::from_bits(bits)
             }
         })+
     };
@@ -127,6 +147,10 @@ where
                     group_id
                 }),
                 Some(key) => {
+                    // Fold equivalence-class duplicates (e.g. `-0.0` → `+0.0`)
+                    // so the bit-equal `is_eq` matches and the stored value is
+                    // the canonical representative.
+                    let key = key.canonicalize();
                     let state = &self.random_state;
                     let hash = key.hash(state);
                     let insert = self.map.entry(

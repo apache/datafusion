@@ -65,13 +65,14 @@
 //! - `WHERE s['value'] > 5` — pushed down (accesses a primitive leaf)
 //! - `WHERE s IS NOT NULL`  — not pushed down (references the whole struct)
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
+use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_functions::core::getfield::GetFieldFunc;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
@@ -260,6 +261,9 @@ struct PushdownChecker<'schema> {
     non_primitive_columns: bool,
     /// Does the expression reference any columns not present in the file schema?
     projected_columns: bool,
+    /// Does the expression references a ScalarUDF that requires some rewrite
+    /// and therefore can't be pushed down into the row-filter.
+    has_unpushable_udfs: bool,
     /// Indices into the file schema of columns required to evaluate the expression.
     /// Does not include struct columns accessed via `get_field`.
     required_columns: Vec<usize>,
@@ -276,6 +280,7 @@ impl<'schema> PushdownChecker<'schema> {
         Self {
             non_primitive_columns: false,
             projected_columns: false,
+            has_unpushable_udfs: false,
             required_columns: Vec::new(),
             struct_field_accesses: Vec::new(),
             allow_list_columns,
@@ -372,7 +377,7 @@ impl<'schema> PushdownChecker<'schema> {
 
     #[inline]
     fn prevents_pushdown(&self) -> bool {
-        self.non_primitive_columns || self.projected_columns
+        self.non_primitive_columns || self.projected_columns || self.has_unpushable_udfs
     }
 
     /// Consumes the checker and returns sorted, deduplicated column indices
@@ -482,6 +487,13 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
             && let Some(recursion) = self.check_single_column(column.name())
         {
             return Ok(recursion);
+        }
+
+        if ScalarFunctionExpr::try_downcast_func::<FileRowIndexFunc>(node.as_ref())
+            .is_some()
+        {
+            self.has_unpushable_udfs = true;
+            return Ok(TreeNodeRecursion::Jump);
         }
 
         Ok(TreeNodeRecursion::Continue)
@@ -796,15 +808,12 @@ fn build_filter_schema(
     struct_field_accesses: &[StructFieldAccess],
 ) -> SchemaRef {
     let regular_set: BTreeSet<usize> = regular_indices.iter().copied().collect();
+    let paths_by_root = group_access_paths_by_root(struct_field_accesses);
 
     let all_indices = regular_indices
         .iter()
         .copied()
-        .chain(
-            struct_field_accesses
-                .iter()
-                .map(|&StructFieldAccess { root_index, .. }| root_index),
-        )
+        .chain(paths_by_root.keys().copied())
         .collect::<BTreeSet<_>>();
 
     let fields = all_indices
@@ -821,24 +830,11 @@ fn build_filter_schema(
                 return Arc::new(field.clone());
             }
 
-            // collect all field paths that access this root struct column
-            let field_paths = struct_field_accesses
-                .iter()
-                .filter_map(
-                    |&StructFieldAccess {
-                         root_index,
-                         ref field_path,
-                     }| {
-                        (root_index == idx).then_some(field_path.as_slice())
-                    },
-                )
-                .collect::<Vec<_>>();
-
-            if field_paths.is_empty() {
+            let Some(field_paths) = paths_by_root.get(&idx) else {
                 return Arc::new(field.clone());
-            }
+            };
 
-            let pruned_data_type = prune_struct_type(field.data_type(), &field_paths);
+            let pruned_data_type = prune_struct_type(field.data_type(), field_paths);
             Arc::new(Field::new(
                 field.name(),
                 pruned_data_type,
@@ -853,41 +849,68 @@ fn build_filter_schema(
     ))
 }
 
+/// Groups struct field access paths once for the root schema level.
+///
+/// Each map entry contains the complete field paths accessed below a root
+/// column. Recursive pruning groups these paths by their next component at each
+/// nested struct level.
+fn group_access_paths_by_root(
+    struct_field_accesses: &[StructFieldAccess],
+) -> BTreeMap<usize, Vec<&[String]>> {
+    let mut paths_by_root: BTreeMap<usize, Vec<&[String]>> = BTreeMap::new();
+    for StructFieldAccess {
+        root_index,
+        field_path,
+    } in struct_field_accesses
+    {
+        paths_by_root
+            .entry(*root_index)
+            .or_default()
+            .push(field_path.as_slice());
+    }
+
+    paths_by_root
+}
+
+/// Groups access paths once for the current struct level.
+///
+/// The map key is the field name at this level. The map value is the list of
+/// remaining path suffixes below that field. An empty suffix means the access
+/// path terminates at that field, so the full field must be preserved.
+fn group_paths_by_next_field<'a>(
+    paths: &'a [&'a [String]],
+) -> BTreeMap<&'a str, Vec<&'a [String]>> {
+    let mut paths_by_field: BTreeMap<&str, Vec<&[String]>> = BTreeMap::new();
+    for path in paths {
+        if let Some((field, sub_path)) = path.split_first() {
+            paths_by_field
+                .entry(field.as_str())
+                .or_default()
+                .push(sub_path);
+        }
+    }
+
+    paths_by_field
+}
+
 fn prune_struct_type(dt: &DataType, paths: &[&[String]]) -> DataType {
     let DataType::Struct(fields) = dt else {
         return dt.clone();
     };
 
-    let needed = paths
-        .iter()
-        .filter_map(|p| p.first().map(|s| s.as_str()))
-        .collect::<BTreeSet<_>>();
+    let paths_by_field = group_paths_by_next_field(paths);
 
     let pruned_fields = fields
         .iter()
         .filter_map(|f| {
-            if !needed.contains(f.name().as_str()) {
-                return None;
-            }
+            let sub_paths = paths_by_field.get(f.name().as_str())?;
 
-            let sub_paths = paths
-                .iter()
-                .filter_map(|path| {
-                    if path.first().map(|s| s.as_str()) == Some(f.name()) {
-                        Some(&path[1..])
-                    } else {
-                        None
-                    }
-                })
-                .filter(|sub| !sub.is_empty())
-                .collect::<Vec<_>>();
-
-            let out = if sub_paths.is_empty() {
+            let out = if sub_paths.iter().any(|sub| sub.is_empty()) {
                 // Leaf of access path — keep the field as-is.
                 Arc::clone(f)
             } else {
                 // Recurse into nested struct.
-                let pruned = prune_struct_type(f.data_type(), &sub_paths);
+                let pruned = prune_struct_type(f.data_type(), sub_paths);
                 Arc::new(Field::new(f.name(), pruned, f.is_nullable()))
             };
 
@@ -1082,12 +1105,11 @@ pub fn build_row_filter(
         .map(|filters| Some(RowFilter::new(filters)))
 }
 
-/// Builds row filters for decoder runs.
+/// Builds row filters for a parquet decoder.
 ///
-/// A [`RowFilter`] must be owned by a decoder, so scans split across multiple
-/// decoder runs need a fresh filter for each run that evaluates row predicates.
-/// The first filter is built eagerly during construction so callers can cheaply
-/// query [`has_row_filter`](Self::has_row_filter) before splitting the scan.
+/// A [`RowFilter`] is owned by a decoder. The first filter is built eagerly
+/// during construction so the caller can attach it to the decoder via
+/// [`next_filter`](Self::next_filter) without a redundant build call.
 pub(crate) struct RowFilterGenerator<'a> {
     predicate: Option<&'a Arc<dyn PhysicalExpr>>,
     physical_file_schema: &'a SchemaRef,
@@ -1115,10 +1137,6 @@ impl<'a> RowFilterGenerator<'a> {
         };
         generator.first_row_filter = generator.build();
         generator
-    }
-
-    pub(crate) fn has_row_filter(&self) -> bool {
-        self.first_row_filter.is_some()
     }
 
     pub(crate) fn next_filter(&mut self) -> Option<RowFilter> {

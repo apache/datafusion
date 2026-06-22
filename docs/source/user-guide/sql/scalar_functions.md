@@ -5702,7 +5702,9 @@ union_tag(union_expression)
 - [arrow_try_cast](#arrow_try_cast)
 - [arrow_typeof](#arrow_typeof)
 - [cast_to_type](#cast_to_type)
+- [file_row_index](#file_row_index)
 - [get_field](#get_field)
+- [input_file_name](#input_file_name)
 - [try_cast_to_type](#try_cast_to_type)
 - [version](#version)
 - [with_metadata](#with_metadata)
@@ -5885,6 +5887,27 @@ cast_to_type(expression, reference)
 +-----+
 ```
 
+### `file_row_index`
+
+Returns the zero-based row offset within the source file
+that produced the current row.
+
+The value is scoped to one file, so rows from different files in the same scan
+can have the same row index. This function is intended to be rewritten at
+file-scan time. If the input file is not known (for example, if this function
+is evaluated outside a file scan, or was not pushed down into one), direct
+evaluation returns an error.
+
+```sql
+file_row_index()
+```
+
+#### Example
+
+```sql
+SELECT file_row_index() FROM t;
+```
+
 ### `get_field`
 
 Returns a field within a map or a struct with the given key.
@@ -5935,6 +5958,26 @@ get_field(expression, field_name[, field_name2, ...])
 +--------+
 | 42     |
 +--------+
+```
+
+### `input_file_name`
+
+Returns the path of the input file that produced the current row.
+
+Note: file paths/URIs may be sensitive metadata depending on your environment.
+
+This function is intended to be rewritten at file-scan time (when the file is
+known). If the input file is not known (for example, if this function is
+evaluated outside a file scan, or was not pushed down into one), direct evaluation returns an error.
+
+```sql
+input_file_name()
+```
+
+#### Example
+
+```sql
+SELECT input_file_name() FROM t;
 ```
 
 ### `try_cast_to_type`

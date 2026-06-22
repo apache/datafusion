@@ -92,10 +92,8 @@ impl ListingTableConfigExt for ListingTableConfig {
                 file_extension
             };
 
-        let listing_options = ListingOptions::new(file_format)
-            .with_file_extension(listing_file_extension)
-            .with_target_partitions(state.config().target_partitions())
-            .with_collect_stat(state.config().collect_statistics());
+        let listing_options =
+            ListingOptions::new(file_format).with_file_extension(listing_file_extension);
 
         Ok(self.with_listing_options(listing_options))
     }
@@ -144,6 +142,7 @@ mod tests {
     use datafusion_physical_expr::expressions::binary;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::empty::EmptyExec;
+    use datafusion_physical_plan::statistics::StatisticsArgs;
     use datafusion_physical_plan::{ExecutionPlanProperties, collect};
     use std::collections::HashMap;
     use std::io::Write;
@@ -247,11 +246,12 @@ mod tests {
 
         // test metadata
         assert_eq!(
-            exec.partition_statistics(None)?.num_rows,
+            exec.statistics_with_args(&StatisticsArgs::new())?.num_rows,
             Precision::Exact(8)
         );
         assert_eq!(
-            exec.partition_statistics(None)?.total_byte_size,
+            exec.statistics_with_args(&StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent,
         );
 
@@ -372,7 +372,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_empty_table() -> Result<()> {
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(4),
+        );
         let path = String::from("table/p1=v1/file.json");
         register_test_store(&ctx, &[(&path, 100)]);
 
@@ -381,8 +383,7 @@ mod tests {
 
         let opt = ListingOptions::new(Arc::new(format))
             .with_file_extension(ext)
-            .with_table_partition_cols(vec![(String::from("p1"), DataType::Utf8)])
-            .with_target_partitions(4);
+            .with_table_partition_cols(vec![(String::from("p1"), DataType::Utf8)]);
 
         let table_path = ListingTableUrl::parse("test:///table/")?;
         let file_schema =
@@ -438,12 +439,13 @@ mod tests {
         output_partitioning: usize,
         file_ext: Option<&str>,
     ) -> Result<()> {
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(target_partitions),
+        );
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
         let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
-            .with_file_extension_opt(file_ext)
-            .with_target_partitions(target_partitions);
+            .with_file_extension_opt(file_ext);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
@@ -470,12 +472,13 @@ mod tests {
         output_partitioning: usize,
         file_ext: Option<&str>,
     ) -> Result<()> {
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(target_partitions),
+        );
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
         let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
-            .with_file_extension_opt(file_ext)
-            .with_target_partitions(target_partitions);
+            .with_file_extension_opt(file_ext);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
@@ -505,7 +508,9 @@ mod tests {
         output_partitioning: usize,
         file_ext: Option<&str>,
     ) -> Result<()> {
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(target_partitions),
+        );
         let (store, _) = make_test_store_and_state(
             &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>(),
         );
@@ -523,9 +528,7 @@ mod tests {
 
         let format = JsonFormat::default();
 
-        let opt = ListingOptions::new(Arc::new(format))
-            .with_file_extension_opt(file_ext)
-            .with_target_partitions(target_partitions);
+        let opt = ListingOptions::new(Arc::new(format)).with_file_extension_opt(file_ext);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
@@ -1296,7 +1299,9 @@ mod tests {
             "bucket/test/other/file5",
         ];
 
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(1),
+        );
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
         let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
@@ -1341,10 +1346,12 @@ mod tests {
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
         let table_path = ListingTableUrl::parse(filename)?;
 
-        let ctx = SessionContext::new();
-        let state = ctx.state();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(1),
+        );
+        let mut state = ctx.state();
 
-        // Test 1: Default behavior - stats not collected
+        // Test 1: Default behavior - stats collected
         let opt_default = ListingOptions::new(Arc::new(ParquetFormat::default()));
         let schema_default = opt_default.infer_schema(&state, &table_path).await?;
         let config_default = ListingTableConfig::new(table_path.clone())
@@ -1355,52 +1362,66 @@ mod tests {
 
         let exec_default = table_default.scan(&state, None, &[], None).await?;
         assert_eq!(
-            exec_default.partition_statistics(None)?.num_rows,
-            Precision::Absent
+            exec_default
+                .statistics_with_args(&StatisticsArgs::new())?
+                .num_rows,
+            Precision::Exact(8)
         );
 
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
-            exec_default.partition_statistics(None)?.total_byte_size,
+            exec_default
+                .statistics_with_args(&StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent
         );
 
-        // Test 2: Explicitly disable stats
-        let opt_disabled = ListingOptions::new(Arc::new(ParquetFormat::default()))
-            .with_collect_stat(false);
-        let schema_disabled = opt_disabled.infer_schema(&state, &table_path).await?;
+        // Test 2: Explicitly disable stats via session config
+        let cfg = state.config_mut();
+        cfg.options_mut().execution.collect_statistics = false;
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let schema_disabled = opt.infer_schema(&state, &table_path).await?;
         let config_disabled = ListingTableConfig::new(table_path.clone())
-            .with_listing_options(opt_disabled)
+            .with_listing_options(opt)
             .with_schema(schema_disabled);
         let table_disabled = ListingTable::try_new(config_disabled)?;
 
         let exec_disabled = table_disabled.scan(&state, None, &[], None).await?;
         assert_eq!(
-            exec_disabled.partition_statistics(None)?.num_rows,
+            exec_disabled
+                .statistics_with_args(&StatisticsArgs::new())?
+                .num_rows,
             Precision::Absent
         );
         assert_eq!(
-            exec_disabled.partition_statistics(None)?.total_byte_size,
+            exec_disabled
+                .statistics_with_args(&StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent
         );
 
-        // Test 3: Explicitly enable stats
-        let opt_enabled = ListingOptions::new(Arc::new(ParquetFormat::default()))
-            .with_collect_stat(true);
-        let schema_enabled = opt_enabled.infer_schema(&state, &table_path).await?;
+        // Test 3: Re-enable stats via session config
+        let cfg = state.config_mut();
+        cfg.options_mut().execution.collect_statistics = true;
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let schema_enabled = opt.infer_schema(&state, &table_path).await?;
         let config_enabled = ListingTableConfig::new(table_path)
-            .with_listing_options(opt_enabled)
+            .with_listing_options(opt)
             .with_schema(schema_enabled);
         let table_enabled = ListingTable::try_new(config_enabled)?;
 
         let exec_enabled = table_enabled.scan(&state, None, &[], None).await?;
         assert_eq!(
-            exec_enabled.partition_statistics(None)?.num_rows,
+            exec_enabled
+                .statistics_with_args(&StatisticsArgs::new())?
+                .num_rows,
             Precision::Exact(8)
         );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
-            exec_enabled.partition_statistics(None)?.total_byte_size,
+            exec_enabled
+                .statistics_with_args(&StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent,
         );
 
@@ -1456,14 +1477,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_basic_table_scan() -> Result<()> {
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_collect_statistics(false),
+        );
 
         // Test basic table creation and scanning
         let path = "table/file.json";
         register_test_store(&ctx, &[(path, 10)]);
 
         let format = JsonFormat::default();
-        let opt = ListingOptions::new(Arc::new(format)).with_collect_stat(false);
+        let opt = ListingOptions::new(Arc::new(format));
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
         let table_path = ListingTableUrl::parse("test:///table/")?;
 

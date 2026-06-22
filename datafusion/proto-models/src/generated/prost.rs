@@ -119,10 +119,6 @@ pub struct ListingTableScanNode {
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "7")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
-    #[prost(bool, tag = "8")]
-    pub collect_stat: bool,
-    #[prost(uint32, tag = "9")]
-    pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
     #[prost(
@@ -453,6 +449,9 @@ pub struct DmlNode {
     pub table_name: ::core::option::Option<TableReference>,
     #[prost(message, optional, boxed, tag = "5")]
     pub target: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    /// Populated only when dml_type == MERGE_INTO.
+    #[prost(message, optional, boxed, tag = "6")]
+    pub merge_into: ::core::option::Option<::prost::alloc::boxed::Box<MergeIntoOpNode>>,
 }
 /// Nested message and enum types in `DmlNode`.
 pub mod dml_node {
@@ -476,6 +475,7 @@ pub mod dml_node {
         InsertOverwrite = 4,
         InsertReplace = 5,
         Truncate = 6,
+        MergeInto = 7,
     }
     impl Type {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -491,6 +491,7 @@ pub mod dml_node {
                 Self::InsertOverwrite => "INSERT_OVERWRITE",
                 Self::InsertReplace => "INSERT_REPLACE",
                 Self::Truncate => "TRUNCATE",
+                Self::MergeInto => "MERGE_INTO",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -503,11 +504,117 @@ pub mod dml_node {
                 "INSERT_OVERWRITE" => Some(Self::InsertOverwrite),
                 "INSERT_REPLACE" => Some(Self::InsertReplace),
                 "TRUNCATE" => Some(Self::Truncate),
+                "MERGE_INTO" => Some(Self::MergeInto),
                 _ => None,
             }
         }
     }
 }
+/// Carries the ON condition and WHEN clauses of a MERGE INTO operation.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MergeIntoOpNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub on: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, repeated, tag = "2")]
+    pub clauses: ::prost::alloc::vec::Vec<MergeIntoClauseNode>,
+}
+/// A single WHEN clause within a MERGE INTO statement.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MergeIntoClauseNode {
+    #[prost(enumeration = "merge_into_clause_node::Kind", tag = "1")]
+    pub kind: i32,
+    /// Optional `AND <expr>` predicate. Absent when the clause has no predicate.
+    #[prost(message, optional, tag = "2")]
+    pub predicate: ::core::option::Option<LogicalExprNode>,
+    #[prost(message, optional, tag = "3")]
+    pub action: ::core::option::Option<MergeIntoActionNode>,
+}
+/// Nested message and enum types in `MergeIntoClauseNode`.
+pub mod merge_into_clause_node {
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum Kind {
+        Matched = 0,
+        NotMatched = 1,
+        NotMatchedByTarget = 2,
+        NotMatchedBySource = 3,
+    }
+    impl Kind {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Matched => "MATCHED",
+                Self::NotMatched => "NOT_MATCHED",
+                Self::NotMatchedByTarget => "NOT_MATCHED_BY_TARGET",
+                Self::NotMatchedBySource => "NOT_MATCHED_BY_SOURCE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "MATCHED" => Some(Self::Matched),
+                "NOT_MATCHED" => Some(Self::NotMatched),
+                "NOT_MATCHED_BY_TARGET" => Some(Self::NotMatchedByTarget),
+                "NOT_MATCHED_BY_SOURCE" => Some(Self::NotMatchedBySource),
+                _ => None,
+            }
+        }
+    }
+}
+/// The action for a single WHEN clause.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MergeIntoActionNode {
+    #[prost(oneof = "merge_into_action_node::Action", tags = "1, 2, 3")]
+    pub action: ::core::option::Option<merge_into_action_node::Action>,
+}
+/// Nested message and enum types in `MergeIntoActionNode`.
+pub mod merge_into_action_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Action {
+        #[prost(message, tag = "1")]
+        Update(super::MergeUpdateAction),
+        #[prost(message, tag = "2")]
+        Insert(super::MergeInsertAction),
+        #[prost(message, tag = "3")]
+        Delete(super::MergeDeleteAction),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MergeUpdateAction {
+    #[prost(message, repeated, tag = "1")]
+    pub assignments: ::prost::alloc::vec::Vec<MergeAssignment>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MergeAssignment {
+    #[prost(string, tag = "1")]
+    pub column: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub value: ::core::option::Option<LogicalExprNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MergeInsertAction {
+    /// May be empty (meaning all columns).
+    #[prost(string, repeated, tag = "1")]
+    pub columns: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// One expression per inserted column.
+    #[prost(message, repeated, tag = "2")]
+    pub values: ::prost::alloc::vec::Vec<LogicalExprNode>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MergeDeleteAction {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnnestNode {
     #[prost(message, optional, boxed, tag = "1")]

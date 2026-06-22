@@ -631,7 +631,7 @@ fn array_replace_with_scalar_args(
             let list = list_array.as_list::<i64>();
             general_replace_with_scalar::<i64>(list, &needle, scalar_to, max_replacements)
         }
-        DataType::Null => Ok(new_null_array(list_array.data_type(), 1)),
+        DataType::Null => Ok(new_null_array(list_array.data_type(), list_array.len())),
         array_type => exec_err!("array_replace does not support type '{array_type}'."),
     }
 }
@@ -651,7 +651,7 @@ fn array_replace_internal(
             let list_array = array.as_list::<i64>();
             general_replace::<i64>(list_array, from, to, arr_n)
         }
-        DataType::Null => Ok(new_null_array(array.data_type(), 1)),
+        DataType::Null => Ok(new_null_array(array.data_type(), array.len())),
         array_type => exec_err!("array_replace does not support type '{array_type}'."),
     }
 }

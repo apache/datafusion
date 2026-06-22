@@ -35,7 +35,6 @@ use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use datafusion_physical_plan::expressions::{CaseExpr, DynamicFilterPhysicalExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion_physical_plan::{
@@ -300,50 +299,7 @@ pub fn serialize_physical_expr_with_converter(
         return Ok(node);
     }
 
-    if let Some(expr) = expr.downcast_ref::<CaseExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(
-                protobuf::physical_expr_node::ExprType::Case(
-                    Box::new(
-                        protobuf::PhysicalCaseNode {
-                            expr: expr
-                                .expr()
-                                .map(|exp| {
-                                    proto_converter
-                                        .physical_expr_to_proto(exp, codec)
-                                        .map(Box::new)
-                                })
-                                .transpose()?,
-                            when_then_expr: expr
-                                .when_then_expr()
-                                .iter()
-                                .map(|(when_expr, then_expr)| {
-                                    serialize_when_then_expr(
-                                        when_expr,
-                                        then_expr,
-                                        codec,
-                                        proto_converter,
-                                    )
-                                })
-                                .collect::<Result<
-                                    Vec<protobuf::PhysicalWhenThen>,
-                                    DataFusionError,
-                                >>()?,
-                            else_expr: expr
-                                .else_expr()
-                                .map(|a| {
-                                    proto_converter
-                                        .physical_expr_to_proto(a, codec)
-                                        .map(Box::new)
-                                })
-                                .transpose()?,
-                        },
-                    ),
-                ),
-            ),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
+    if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
         let mut buf = Vec::new();
         codec.try_encode_udf(expr.fun(), &mut buf)?;
         Ok(protobuf::PhysicalExprNode {
@@ -371,39 +327,6 @@ pub fn serialize_physical_expr_with_converter(
                     nullable: expr.nullable(),
                     index: expr.index().as_usize() as u32,
                 },
-            )),
-        })
-    } else if let Some(df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
-        let children = df
-            .original_children()
-            .iter()
-            .map(|child| proto_converter.physical_expr_to_proto(child, codec))
-            .collect::<Result<Vec<_>>>()?;
-
-        let remapped_children = if let Some(remapped) = df.remapped_children() {
-            remapped
-                .iter()
-                .map(|child| proto_converter.physical_expr_to_proto(child, codec))
-                .collect::<Result<Vec<_>>>()?
-        } else {
-            vec![]
-        };
-
-        // Atomic snapshot of inner state.
-        let inner = df.inner();
-        let inner_expr =
-            Box::new(proto_converter.physical_expr_to_proto(&inner.expr, codec)?);
-
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::DynamicFilter(
-                Box::new(protobuf::PhysicalDynamicFilterNode {
-                    children,
-                    remapped_children,
-                    generation: inner.generation,
-                    inner_expr: Some(inner_expr),
-                    is_complete: inner.is_complete,
-                }),
             )),
         })
     } else {
@@ -497,18 +420,6 @@ fn serialize_range_split_point(
                     .map_err(Into::into)
             })
             .collect::<Result<_>>()?,
-    })
-}
-
-fn serialize_when_then_expr(
-    when_expr: &Arc<dyn PhysicalExpr>,
-    then_expr: &Arc<dyn PhysicalExpr>,
-    codec: &dyn PhysicalExtensionCodec,
-    proto_converter: &dyn PhysicalProtoConverterExtension,
-) -> Result<protobuf::PhysicalWhenThen> {
-    Ok(protobuf::PhysicalWhenThen {
-        when_expr: Some(proto_converter.physical_expr_to_proto(when_expr, codec)?),
-        then_expr: Some(proto_converter.physical_expr_to_proto(then_expr, codec)?),
     })
 }
 
