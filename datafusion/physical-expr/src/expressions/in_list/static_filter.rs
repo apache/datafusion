@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, BooleanArray};
+use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::Result;
 
 /// Trait for InList static filters.
@@ -33,17 +33,18 @@ pub(super) trait StaticFilter {
     /// Checks if values in `v` (needle) are contained in this filter's
     /// haystack. `v` may be dictionary-encoded, in which case the
     /// implementation unwraps the dictionary and operates on its values.
-    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray>;
+    fn contains(&self, v: ArrayRef, negated: bool) -> Result<BooleanArray>;
 }
 
 /// Evaluate dictionary-encoded needles by applying a filter to dictionary
 /// values and remapping the result through the keys.
 macro_rules! handle_dictionary {
     ($self:ident, $v:ident, $negated:ident) => {
+        let array = $v.as_ref();
         arrow::array::downcast_dictionary_array! {
-            $v => {
-                let values_contains = $self.contains($v.values().as_ref(), $negated)?;
-                let result = arrow::compute::take(&values_contains, $v.keys(), None)?;
+            array => {
+                let values_contains = $self.contains(std::sync::Arc::clone(array.values()), $negated)?;
+                let result = arrow::compute::take(&values_contains, array.keys(), None)?;
                 return Ok(arrow::array::downcast_array(result.as_ref()))
             }
             _ => {}

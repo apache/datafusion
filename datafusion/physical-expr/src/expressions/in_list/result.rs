@@ -46,7 +46,7 @@ use arrow::buffer::{BooleanBuffer, NullBuffer};
 #[inline]
 pub(crate) fn build_in_list_result<C>(
     len: usize,
-    needle_nulls: Option<&NullBuffer>,
+    needle_nulls: Option<NullBuffer>,
     haystack_has_nulls: bool,
     negated: bool,
     contains: C,
@@ -64,7 +64,7 @@ where
 /// It handles nulls using bitmap operations.
 #[inline]
 pub(crate) fn build_result_from_contains(
-    needle_nulls: Option<&NullBuffer>,
+    needle_nulls: Option<NullBuffer>,
     haystack_has_nulls: bool,
     negated: bool,
     contains_buf: BooleanBuffer,
@@ -73,7 +73,8 @@ pub(crate) fn build_result_from_contains(
         // Haystack has nulls: result is null unless value is found.
         (Some(v), true, false) => {
             // values: valid & contains, nulls: valid & contains
-            let values = v.inner() & &contains_buf;
+            let mut values = contains_buf;
+            values &= v.inner();
             BooleanArray::new(values.clone(), Some(NullBuffer::new(values)))
         }
         (None, true, false) => {
@@ -83,8 +84,10 @@ pub(crate) fn build_result_from_contains(
             // NOT IN with nulls: false if found, null if not found or needle null.
             // values: valid & !contains, nulls: valid & contains
             let valid = v.inner();
-            let values = valid & &(!&contains_buf);
-            let nulls = valid & &contains_buf;
+            let mut values = !&contains_buf;
+            values &= valid;
+            let mut nulls = contains_buf;
+            nulls &= valid;
             BooleanArray::new(values, Some(NullBuffer::new(nulls)))
         }
         (None, true, true) => {
@@ -93,11 +96,15 @@ pub(crate) fn build_result_from_contains(
         // Haystack has no nulls: result validity follows needle validity.
         (Some(v), false, false) => {
             // values: valid & contains, nulls: valid
-            BooleanArray::new(v.inner() & &contains_buf, Some(v.clone()))
+            let mut values = contains_buf;
+            values &= v.inner();
+            BooleanArray::new(values, Some(v))
         }
         (Some(v), false, true) => {
             // values: valid & !contains, nulls: valid
-            BooleanArray::new(v.inner() & &(!&contains_buf), Some(v.clone()))
+            let mut values = !&contains_buf;
+            values &= v.inner();
+            BooleanArray::new(values, Some(v))
         }
         (None, false, false) => BooleanArray::new(contains_buf, None),
         (None, false, true) => BooleanArray::new(!&contains_buf, None),

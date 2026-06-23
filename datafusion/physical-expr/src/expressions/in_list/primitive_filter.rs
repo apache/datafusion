@@ -82,15 +82,19 @@ impl StaticFilter for UInt8BitmapFilter {
         self.null_count
     }
 
-    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+    fn contains(&self, v: ArrayRef, negated: bool) -> Result<BooleanArray> {
         handle_dictionary!(self, v, negated);
-        let v = v.as_primitive_opt::<UInt8Type>().ok_or_else(|| {
-            exec_datafusion_err!("UInt8BitmapFilter: expected UInt8 array")
-        })?;
-        let input_values = v.values();
+        let v = v
+            .as_primitive_opt::<UInt8Type>()
+            .ok_or_else(|| {
+                exec_datafusion_err!("UInt8BitmapFilter: expected UInt8 array")
+            })?
+            .clone();
+        let len = v.len();
+        let (_, input_values, needle_nulls) = v.into_parts();
         Ok(build_in_list_result(
-            v.len(),
-            v.nulls(),
+            len,
+            needle_nulls,
             self.null_count > 0,
             negated,
             #[inline(always)]
@@ -196,20 +200,24 @@ macro_rules! primitive_static_filter {
                 self.null_count
             }
 
-            fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+            fn contains(&self, v: ArrayRef, negated: bool) -> Result<BooleanArray> {
                 handle_dictionary!(self, v, negated);
 
-                let v = v.as_primitive_opt::<$ArrowType>().ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "Failed to downcast an array to a '{}' array",
-                        stringify!($ArrowType)
-                    )
-                })?;
+                let v = v
+                    .as_primitive_opt::<$ArrowType>()
+                    .ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "Failed to downcast an array to a '{}' array",
+                            stringify!($ArrowType)
+                        )
+                    })?
+                    .clone();
 
                 let haystack_has_nulls = self.null_count > 0;
-                let needle_values = v.values();
-                let needle_nulls = v.nulls();
-                let needle_has_nulls = v.null_count() > 0;
+                let (_, needle_values, needle_nulls) = v.into_parts();
+                let needle_has_nulls = needle_nulls
+                    .as_ref()
+                    .is_some_and(|nulls| nulls.null_count() > 0);
 
                 // Truth table for `value [NOT] IN (set)` with SQL three-valued logic:
                 // ("-" means the value doesn't affect the result)
@@ -250,7 +258,7 @@ macro_rules! primitive_static_filter {
                     }
                     (true, false) => {
                         // Only needle has nulls - just use needle's null mask
-                        needle_nulls.cloned()
+                        needle_nulls
                     }
                     (false, true) => {
                         // Only haystack has nulls - result is null when value not in set
@@ -266,9 +274,9 @@ macro_rules! primitive_static_filter {
                     (true, true) => {
                         // Both have nulls - combine needle nulls with haystack-induced nulls
                         let needle_validity =
-                            needle_nulls.map(|n| n.inner().clone()).unwrap_or_else(
-                                || BooleanBuffer::new_set(needle_values.len()),
-                            );
+                            needle_nulls.map(|n| n.into_inner()).unwrap_or_else(|| {
+                                BooleanBuffer::new_set(needle_values.len())
+                            });
 
                         // Valid when original "in set" is true (see above)
                         let haystack_validity = if negated {
@@ -278,7 +286,8 @@ macro_rules! primitive_static_filter {
                         };
 
                         // Combined validity: valid only where both are valid
-                        let combined_validity = &needle_validity & &haystack_validity;
+                        let mut combined_validity = needle_validity;
+                        combined_validity &= &haystack_validity;
                         Some(NullBuffer::new(combined_validity))
                     }
                 };
@@ -319,7 +328,7 @@ mod tests {
 
     fn assert_contains(
         filter: &UInt8BitmapFilter,
-        needles: &dyn Array,
+        needles: ArrayRef,
         expected: Vec<Option<bool>>,
     ) -> Result<()> {
         assert_eq!(
@@ -333,11 +342,16 @@ mod tests {
     fn bitmap_filter_u8_handles_nulls() -> Result<()> {
         let haystack: ArrayRef = Arc::new(UInt8Array::from(vec![Some(1), None, Some(3)]));
         let filter = UInt8BitmapFilter::try_new(&haystack)?;
-        let needles = UInt8Array::from(vec![Some(1), Some(2), None, Some(3)]);
+        let needles: ArrayRef =
+            Arc::new(UInt8Array::from(vec![Some(1), Some(2), None, Some(3)]));
 
-        assert_contains(&filter, &needles, vec![Some(true), None, None, Some(true)])?;
+        assert_contains(
+            &filter,
+            Arc::clone(&needles),
+            vec![Some(true), None, None, Some(true)],
+        )?;
         assert_eq!(
-            filter.contains(&needles, true)?,
+            filter.contains(needles, true)?,
             BooleanArray::from(vec![Some(false), None, None, Some(false)])
         );
 
@@ -351,8 +365,8 @@ mod tests {
 
         let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2)]);
         let values = Arc::new(UInt8Array::from(vec![Some(1), Some(2), Some(3)]));
-        let needles = DictionaryArray::try_new(keys, values)?;
+        let needles: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values)?);
 
-        assert_contains(&filter, &needles, vec![Some(true), None, None, Some(true)])
+        assert_contains(&filter, needles, vec![Some(true), None, None, Some(true)])
     }
 }

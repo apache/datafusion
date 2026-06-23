@@ -16,8 +16,7 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, downcast_array, downcast_dictionary_array,
-    make_comparator,
+    ArrayRef, BooleanArray, downcast_array, downcast_dictionary_array, make_comparator,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{SortOptions, take};
@@ -26,6 +25,7 @@ use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::Result;
 use datafusion_common::hash_utils::{RandomState, with_hashes};
 use hashbrown::HashTable;
+use std::sync::Arc;
 
 use super::result::build_in_list_result;
 use super::static_filter::StaticFilter;
@@ -99,18 +99,18 @@ impl ArrayStaticFilter {
 
     fn find_needles_in_haystack(
         &self,
-        needles: &dyn Array,
+        needles: &ArrayRef,
         negated: bool,
     ) -> Result<BooleanArray> {
         let needle_nulls = needles.logical_nulls();
         let haystack_has_nulls = self.in_array.null_count() != 0;
 
-        with_hashes([needles], &self.state, |needle_hashes| {
-            let cmp = make_comparator(needles, &self.in_array, SortOptions::default())?;
+        with_hashes([needles.as_ref()], &self.state, |needle_hashes| {
+            let cmp = make_comparator(&needles, &self.in_array, SortOptions::default())?;
 
             Ok(build_in_list_result(
                 needles.len(),
-                needle_nulls.as_ref(),
+                needle_nulls,
                 haystack_has_nulls,
                 negated,
                 #[inline(always)]
@@ -129,7 +129,7 @@ impl StaticFilter for ArrayStaticFilter {
     }
 
     /// Checks if values in `v` are contained in the `in_array` using this hash set for lookup.
-    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+    fn contains(&self, v: ArrayRef, negated: bool) -> Result<BooleanArray> {
         // Null type comparisons always return null (SQL three-valued logic)
         if v.data_type() == &DataType::Null
             || self.in_array.data_type() == &DataType::Null
@@ -144,19 +144,20 @@ impl StaticFilter for ArrayStaticFilter {
         // Unwrap dictionary-encoded needles when the value type matches
         // in_array, evaluating against the dictionary values and mapping
         // back via keys.
+        let array = v.as_ref();
         downcast_dictionary_array! {
-            v => {
+            array => {
                 // Only unwrap when the haystack (in_array) type matches
                 // the dictionary value type
-                if v.values().data_type() == self.in_array.data_type() {
-                    let values_contains = self.contains(v.values().as_ref(), negated)?;
-                    let result = take(&values_contains, v.keys(), None)?;
+                if array.values().data_type() == self.in_array.data_type() {
+                    let values_contains = self.contains(Arc::clone(array.values()), negated)?;
+                    let result = take(&values_contains, array.keys(), None)?;
                     return Ok(downcast_array(result.as_ref()));
                 }
             }
             _ => {}
         }
 
-        self.find_needles_in_haystack(v, negated)
+        self.find_needles_in_haystack(&v, negated)
     }
 }

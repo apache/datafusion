@@ -321,7 +321,7 @@ impl PhysicalExpr for InListExpr {
             Some(filter) => {
                 match value {
                     ColumnarValue::Array(array) => {
-                        filter.contains(&array, self.negated)?
+                        filter.contains(array, self.negated)?
                     }
                     ColumnarValue::Scalar(scalar) => {
                         if scalar.is_null() {
@@ -338,8 +338,7 @@ impl PhysicalExpr for InListExpr {
                         // Use a 1 row array to avoid code duplication/branching
                         // Since all we do is compute hash and lookup this should be efficient enough
                         let array = scalar.to_array()?;
-                        let result_array =
-                            filter.contains(array.as_ref(), self.negated)?;
+                        let result_array = filter.contains(array, self.negated)?;
                         // Broadcast the single result to all rows
                         // Must check is_null() to preserve NULL values (SQL three-valued logic)
                         if result_array.is_null(0) {
