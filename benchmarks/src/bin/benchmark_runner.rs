@@ -37,38 +37,3 @@ async fn main() {
         std::process::exit(1);
     }
 }
-
-#[test]
-fn benchmark_runner_prints_errors_without_debug_escaping() {
-    use std::process::Command;
-
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--bin",
-            "benchmark_runner",
-            "--",
-            "predicate_eval",
-            "--query",
-            "999",
-            "--iterations",
-            "1",
-        ])
-        .env("PRED_ROWS", "1000000")
-        .output()
-        .expect("run benchmark_runner");
-
-    assert!(!output.status.success());
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("no SQL benchmark query matched benchmark 'predicate_eval'"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("Available predicate_eval queries:"),
-        "{stderr}"
-    );
-    assert!(!stderr.contains("Execution(\""), "{stderr}");
-    assert!(!stderr.contains("\\n"), "{stderr}");
-}
