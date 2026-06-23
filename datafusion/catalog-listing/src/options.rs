@@ -20,7 +20,7 @@ use datafusion_catalog::Session;
 use datafusion_common::plan_err;
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_format::FileFormat;
-use datafusion_expr::SortExpr;
+use datafusion_expr::{Partitioning, SortExpr};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -53,6 +53,46 @@ pub struct ListingOptions {
     ///       multiple equivalent orderings, the outer `Vec` will have a
     ///       single element.
     pub file_sort_order: Vec<Vec<SortExpr>>,
+    /// Declared output partitioning for scans from this table.
+    ///
+    /// Expressions are logical expressions over the full table schema. When set,
+    /// [`ListingTable`](crate::ListingTable) creates one file group per
+    /// declared output partition. When unset, file grouping uses the scan-time
+    /// [`SessionConfig::target_partitions`](datafusion_execution::config::SessionConfig::target_partitions).
+    ///
+    /// Files are listed in path order, split into whole-file groups across the
+    /// declared partition count, and then padded with trailing empty groups when
+    /// needed. DataFusion does not route files by partition values or validate
+    /// row placement, so callers must ensure file group `i` contains rows for
+    /// partition `i`. Layouts that require explicit file-to-partition assignment
+    /// are not supported.
+    ///
+    /// For example, range partitioning on column `a` with split points
+    /// `[10, 20, 30]` declares four output partitions. With three path-ordered
+    /// files, the trailing partition is preserved as empty:
+    ///
+    /// ```text
+    /// files in path order: f0, f1, f2
+    ///
+    /// file groups:
+    ///   partition 0: [f0]
+    ///   partition 1: [f1]
+    ///   partition 2: [f2]
+    ///   partition 3: []
+    /// ```
+    ///
+    /// With five path-ordered files, a partition can contain multiple files:
+    ///
+    /// ```text
+    /// files in path order: f0, f1, f2, f3, f4
+    ///
+    /// file groups:
+    ///   partition 0: [f0, f1]
+    ///   partition 1: [f2, f3]
+    ///   partition 2: [f4]
+    ///   partition 3: []
+    /// ```
+    pub output_partitioning: Option<Partitioning>,
 }
 
 impl ListingOptions {
@@ -66,6 +106,7 @@ impl ListingOptions {
             format,
             table_partition_cols: vec![],
             file_sort_order: vec![],
+            output_partitioning: None,
         }
     }
 
@@ -110,6 +151,17 @@ impl ListingOptions {
         if let Some(file_extension) = file_extension {
             self.file_extension = file_extension.into();
         }
+        self
+    }
+
+    /// Set declared output partitioning.
+    ///
+    /// See [`Self::output_partitioning`] for the contract.
+    pub fn with_output_partitioning(
+        mut self,
+        output_partitioning: Option<Partitioning>,
+    ) -> Self {
+        self.output_partitioning = output_partitioning;
         self
     }
 
