@@ -46,6 +46,17 @@ pub(in crate::aggregates) struct Final;
 /// While building, it consumes input batches and updates group / accumulator
 /// state. While outputting, it incrementally drains that state into output
 /// batches.
+/// 
+/// # Logical and Physical Model
+///
+/// Logically, this is a hash table that maps { group keys -> accumulator states }
+/// For example, `AVG(v) GROUP BY k` stores one entry per `k`, where each
+/// entry owns the `sum(v)` and `count(v)` state needed to compute the final
+/// average.
+///
+/// Physically, the group keys and accumulators are backed by [`GroupValues`] and
+/// [`GroupsAccumulator`]. Both use columnar storage so aggregation can stay
+/// vectorized.
 ///
 /// # Marker Type
 /// `AggrMode` selects the aggregate semantics.
@@ -113,15 +124,14 @@ pub(super) struct EvaluatedAggregateBatch {
     pub(super) accumulator_args: Vec<EvaluatedHashAggregateAccumulator>,
 }
 
-/// Hash table state while grouped aggregation is consuming input.
+/// Buffer for the aggregate hash table's group keys and accumulator states.
 ///
-/// This owns the coupled state for:
-/// - evaluating group keys,
-/// - interning each distinct group,
-/// - mapping each input row to its group index,
-/// - evaluating aggregate inputs,
-/// - updating per-group accumulator state.
-pub(super) struct BuildingHashTableState {
+/// It accumulates input during aggregation and emits final results during the
+/// outputting stage.
+///
+/// [`GroupValues`] stores the physical group-key layout, while
+/// [`GroupsAccumulator`] stores per-group aggregate state.
+pub(super) struct AggregateHashTableBuffer {
     /// GROUP BY expressions evaluated for each input batch.
     pub(super) group_by: Arc<PhysicalGroupBy>,
 
@@ -142,8 +152,8 @@ pub(super) struct BuildingHashTableState {
 }
 
 pub(super) enum AggregateHashTableState {
-    Building(BuildingHashTableState),
-    Outputting(BuildingHashTableState),
+    Building(AggregateHashTableBuffer),
+    Outputting(AggregateHashTableBuffer),
     Done,
 }
 
@@ -257,14 +267,14 @@ impl HashAggregateAccumulator {
 }
 
 impl AggregateHashTableState {
-    pub(super) fn building(&self) -> &BuildingHashTableState {
+    pub(super) fn building(&self) -> &AggregateHashTableBuffer {
         let Self::Building(state) = self else {
             unreachable!("hash aggregate table is not building")
         };
         state
     }
 
-    pub(super) fn building_mut(&mut self) -> &mut BuildingHashTableState {
+    pub(super) fn building_mut(&mut self) -> &mut AggregateHashTableBuffer {
         let Self::Building(state) = self else {
             unreachable!("hash aggregate table is not building")
         };
@@ -315,7 +325,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             input_schema,
             output_schema,
             batch_size,
-            state: AggregateHashTableState::Building(BuildingHashTableState {
+            state: AggregateHashTableState::Building(AggregateHashTableBuffer {
                 group_by: Arc::clone(&agg.group_by),
                 group_values,
                 batch_group_indices: Default::default(),

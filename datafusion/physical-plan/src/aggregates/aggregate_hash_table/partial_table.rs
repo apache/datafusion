@@ -29,7 +29,7 @@ use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{AggregateExec, group_id_array, max_duplicate_ordinal};
 
 use super::common::{
-    AggregateHashTable, AggregateHashTableState, BuildingHashTableState,
+    AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
     EvaluatedHashAggregateAccumulator, HashAggregateAccumulator, Partial, PartialSkip,
     emit_to_for_batch_size,
 };
@@ -122,7 +122,7 @@ impl AggregateHashTable<Partial> {
             input_schema: Arc::clone(&self.input_schema),
             output_schema: Arc::clone(&self.output_schema),
             batch_size: self.batch_size,
-            state: AggregateHashTableState::Building(BuildingHashTableState {
+            state: AggregateHashTableState::Building(AggregateHashTableBuffer {
                 group_by: Arc::clone(&state.group_by),
                 group_values,
                 batch_group_indices: Default::default(),
