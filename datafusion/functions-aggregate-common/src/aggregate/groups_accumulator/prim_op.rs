@@ -17,7 +17,6 @@
 
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
@@ -25,7 +24,9 @@ use arrow::buffer::NullBuffer;
 use arrow::compute;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
+use datafusion_common::{
+    DataFusionError, Result, internal_datafusion_err, utils::proxy::VecAllocExt,
+};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use crate::aggregate::groups_accumulator::accumulate::{
@@ -158,10 +159,13 @@ where
     }
 
     fn size(&self) -> usize {
-        if self.values.num_blocks() == 0 {
-            return 0;
+        let num_blocks = self.values.num_blocks();
+        if num_blocks == 0 {
+            return self.null_state.size();
         }
-        self.values.num_blocks() * self.values[0].capacity() * size_of::<V>()
+
+        ((num_blocks - 1) * self.values[0].allocated_size())
+            + self.values[num_blocks - 1].allocated_size()
             + self.null_state.size()
     }
 }

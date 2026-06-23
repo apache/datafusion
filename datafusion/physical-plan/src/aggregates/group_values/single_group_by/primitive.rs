@@ -332,18 +332,21 @@ where
     }
 
     fn size(&self) -> usize {
-        (0..self.values.num_blocks())
-            .map(|block_id| {
-                let block = &self.values[block_id];
-                block.len() * block.allocated_size()
-            })
-            .sum::<usize>()
+        let num_blocks = self.values.num_blocks();
+        if num_blocks == 0 {
+            return 0;
+        }
+        (num_blocks - 1) * self.values[0].allocated_size()
+            + self.values[num_blocks - 1].allocated_size()
     }
 
     fn len(&self) -> usize {
-        (0..self.values.num_blocks())
-            .map(|block_id| self.values[block_id].len())
-            .sum::<usize>()
+        let num_blocks = self.values.num_blocks();
+        if num_blocks == 0 {
+            return 0;
+        }
+        (num_blocks - 1) * self.values.block_size().unwrap_or(0)
+            + self.values[num_blocks - 1].len()
     }
 }
 
