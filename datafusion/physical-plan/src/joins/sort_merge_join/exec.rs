@@ -42,6 +42,7 @@ use crate::projection::{
     physical_to_column_exprs, update_join_on,
 };
 use crate::spill::spill_manager::SpillManager;
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -786,29 +787,29 @@ impl ExecutionPlan for SortMergeJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        let (left_stats, right_stats) = match (partition, self.mode) {
+        let (left_stats, right_stats) = match (args.partition(), self.mode) {
             // In CollectLeft mode the left is collected into a single partition and
             // shared across all right partitions, so output partition `i` joins the
             // full left with partition `i` of the right.
-            (Some(partition), PartitionMode::CollectLeft) => (
-                self.left.partition_statistics(None)?,
-                self.right.partition_statistics(Some(partition))?,
+            (Some(_), PartitionMode::CollectLeft) => (
+                args.compute_child_statistics(&self.left, None)?,
+                args.compute_child_statistics(&self.right, args.partition())?,
             ),
             // In Partitioned mode both inputs are hash-partitioned on the join keys,
             // so output partition `i` joins partition `i` of the left with partition
             // `i` of the right.
-            (Some(partition), PartitionMode::Partitioned | PartitionMode::Auto) => (
-                self.left.partition_statistics(Some(partition))?,
-                self.right.partition_statistics(Some(partition))?,
+            (Some(_), PartitionMode::Partitioned | PartitionMode::Auto) => (
+                args.compute_child_statistics(&self.left, args.partition())?,
+                args.compute_child_statistics(&self.right, args.partition())?,
             ),
             // Whole-plan statistics combine both children's full statistics.
             (None, _) => (
-                self.left.partition_statistics(None)?,
-                self.right.partition_statistics(None)?,
+                args.compute_child_statistics(&self.left, None)?,
+                args.compute_child_statistics(&self.right, None)?,
             ),
         };
         Ok(Arc::new(estimate_join_statistics(

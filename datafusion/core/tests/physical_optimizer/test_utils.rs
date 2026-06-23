@@ -68,7 +68,7 @@ use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_window_expr};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
-    PlanProperties, SortOrderPushdownResult, displayable,
+    PlanProperties, SortOrderPushdownResult, StatisticsArgs, displayable,
 };
 
 /// Create a non sorted parquet exec
@@ -967,7 +967,7 @@ impl ExecutionPlan for TestScan {
         internal_err!("TestScan is for testing optimizer only, not for execution")
     }
 
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
+    fn statistics_with_args(&self, _args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         Ok(Arc::new(Statistics::new_unknown(&self.schema)))
     }
 
