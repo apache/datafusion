@@ -268,22 +268,10 @@ fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> 
 /// Creates a schema for a join operation.
 /// The fields from the left side are first.
 ///
-/// The `mark` column of a mark join is non-nullable. Use
-/// [`build_join_schema_with_null_aware`] for null-aware mark joins, whose mark
-/// column can be `NULL` (SQL UNKNOWN).
+/// When `null_aware` is set, the `LeftMark`/`RightMark` `mark` column is made
+/// nullable so it can represent SQL UNKNOWN for null-aware `NOT IN` semantics.
+/// `null_aware` has no effect on non-mark join types.
 pub fn build_join_schema(
-    left: &Schema,
-    right: &Schema,
-    join_type: &JoinType,
-) -> (Schema, Vec<ColumnIndex>) {
-    build_join_schema_with_null_aware(left, right, join_type, false)
-}
-
-/// Like [`build_join_schema`], but makes the `LeftMark`/`RightMark` `mark`
-/// column nullable when `null_aware` is set, so it can represent SQL UNKNOWN
-/// for null-aware `NOT IN` semantics. `null_aware` has no effect on non-mark
-/// join types.
-pub fn build_join_schema_with_null_aware(
     left: &Schema,
     right: &Schema,
     join_type: &JoinType,
@@ -2869,7 +2857,7 @@ mod tests {
         ];
 
         for (left_in, right_in, join_type, left_out, right_out) in cases {
-            let (schema, _) = build_join_schema(left_in, right_in, &join_type);
+            let (schema, _) = build_join_schema(left_in, right_in, &join_type, false);
 
             let expected_fields = left_out
                 .fields()
@@ -4460,13 +4448,13 @@ mod tests {
             .with_metadata(HashMap::from([("key".to_string(), "right".to_string())]));
 
         let (join_schema, _) =
-            build_join_schema(&left_schema, &right_schema, &JoinType::Left);
+            build_join_schema(&left_schema, &right_schema, &JoinType::Left, false);
         assert_eq!(
             join_schema.metadata(),
             &HashMap::from([("key".to_string(), "left".to_string())])
         );
         let (join_schema, _) =
-            build_join_schema(&left_schema, &right_schema, &JoinType::Right);
+            build_join_schema(&left_schema, &right_schema, &JoinType::Right, false);
         assert_eq!(
             join_schema.metadata(),
             &HashMap::from([("key".to_string(), "right".to_string())])

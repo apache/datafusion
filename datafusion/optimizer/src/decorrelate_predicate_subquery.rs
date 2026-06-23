@@ -627,14 +627,6 @@ mod tests {
         ))
     }
 
-    fn nullable_scalar_mark_scan(name: &str) -> Result<LogicalPlan> {
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, true),
-            Field::new("grp", DataType::Int32, true),
-        ]);
-        table_scan(Some(name), &schema, None)?.build()
-    }
-
     fn has_left_mark_join_with_null_aware(
         plan: &LogicalPlan,
         expected_null_aware: bool,
@@ -1287,81 +1279,33 @@ mod tests {
         )
     }
 
-    #[test]
-    fn correlated_not_in_mark_join_is_null_aware_for_hashable_filter() -> Result<()> {
-        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
-        let inner_scan = nullable_scalar_mark_scan("inner_t")?;
-
-        let subquery = Arc::new(
-            LogicalPlanBuilder::from(inner_scan)
-                .filter(
-                    out_ref_col(DataType::Int32, "outer_t.grp").eq(col("inner_t.grp")),
-                )?
-                .project(vec![col("inner_t.id")])?
-                .build()?,
-        );
-
-        let plan = LogicalPlanBuilder::from(outer_scan)
-            .filter(not_in_subquery(col("outer_t.id"), subquery).is_null())?
-            .build()?;
-
-        let optimized = optimize_with_decorrelate(plan)?;
-        assert!(
-            has_left_mark_join_with_null_aware(&optimized, true),
-            "{}",
-            optimized.display_indent_schema()
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn correlated_not_in_mark_join_is_not_null_aware_for_residual_filter() -> Result<()> {
-        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
-        let inner_scan = nullable_scalar_mark_scan("inner_t")?;
-
-        let subquery = Arc::new(
-            LogicalPlanBuilder::from(inner_scan)
-                .filter(
-                    out_ref_col(DataType::Int32, "outer_t.grp").lt(col("inner_t.grp")),
-                )?
-                .project(vec![col("inner_t.id")])?
-                .build()?,
-        );
-
-        let plan = LogicalPlanBuilder::from(outer_scan)
-            .filter(not_in_subquery(col("outer_t.id"), subquery).is_null())?
-            .build()?;
-
-        let optimized = optimize_with_decorrelate(plan)?;
-        assert!(
-            has_left_mark_join_with_null_aware(&optimized, false),
-            "{}",
-            optimized.display_indent_schema()
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn correlated_not_in_mark_join_not_null_aware_for_non_nullable_value_key()
-    -> Result<()> {
-        // The value key `id` is non-nullable on both sides; only the
-        // correlation key `grp` is nullable. A NULL correlation key just makes
-        // the correlated subquery empty, so NOT IN can never be UNKNOWN and
-        // the mark join does not need null-aware semantics.
+    /// Builds `... WHERE (id NOT IN (SELECT id FROM inner WHERE <grp filter>))
+    /// IS NULL` over scans whose value key `id` has the given nullability (the
+    /// correlation key `grp` is always nullable), optimizes it, and asserts the
+    /// resulting `LeftMark` join's `null_aware` flag.
+    fn assert_correlated_not_in_mark_join_null_aware(
+        value_key_nullable: bool,
+        hashable_filter: bool,
+        expected_null_aware: bool,
+    ) -> Result<()> {
         let schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::Int32, value_key_nullable),
             Field::new("grp", DataType::Int32, true),
         ]);
         let outer_scan = table_scan(Some("outer_t"), &schema, None)?.build()?;
         let inner_scan = table_scan(Some("inner_t"), &schema, None)?.build()?;
 
+        let outer_grp = out_ref_col(DataType::Int32, "outer_t.grp");
+        let inner_grp = col("inner_t.grp");
+        let grp_filter = if hashable_filter {
+            outer_grp.eq(inner_grp)
+        } else {
+            outer_grp.lt(inner_grp)
+        };
+
         let subquery = Arc::new(
             LogicalPlanBuilder::from(inner_scan)
-                .filter(
-                    out_ref_col(DataType::Int32, "outer_t.grp").eq(col("inner_t.grp")),
-                )?
+                .filter(grp_filter)?
                 .project(vec![col("inner_t.id")])?
                 .build()?,
         );
@@ -1372,11 +1316,26 @@ mod tests {
 
         let optimized = optimize_with_decorrelate(plan)?;
         assert!(
-            has_left_mark_join_with_null_aware(&optimized, false),
+            has_left_mark_join_with_null_aware(&optimized, expected_null_aware),
             "{}",
             optimized.display_indent_schema()
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn correlated_not_in_mark_join_null_awareness() -> Result<()> {
+        // Hashable (`=`) correlation filter on a nullable value key: NOT IN can
+        // be UNKNOWN, so the mark join is null-aware.
+        assert_correlated_not_in_mark_join_null_aware(true, true, true)?;
+        // Residual (`<`) correlation filter: the equijoin predicate can't be
+        // extracted, so the mark join is not null-aware.
+        assert_correlated_not_in_mark_join_null_aware(true, false, false)?;
+        // Non-nullable value key `id`: a NULL correlation key just makes the
+        // subquery empty, so NOT IN can never be UNKNOWN and the join is not
+        // null-aware.
+        assert_correlated_not_in_mark_join_null_aware(false, true, false)?;
         Ok(())
     }
 
