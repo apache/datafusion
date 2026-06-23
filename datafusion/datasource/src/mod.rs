@@ -69,7 +69,6 @@ use arrow::datatypes::SchemaRef;
 pub use statistics::add_row_stats;
 pub use statistics::compute_all_files_statistics;
 use std::any::Any;
-use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 
