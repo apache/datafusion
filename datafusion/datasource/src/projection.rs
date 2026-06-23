@@ -26,7 +26,7 @@ use datafusion_physical_expr::{
     expressions::{Column, Literal},
     projection::{ProjectionExpr, ProjectionExprs},
 };
-use datafusion_physical_expr_adapter::schema_rewriter::rewrite_input_file_name_in_projection;
+use datafusion_physical_expr_adapter::rewrite::rewrite_input_file_name_in_projection;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 
