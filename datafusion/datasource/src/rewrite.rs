@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Rewrites that lower scan-metadata scalar UDFs into concrete physical
-//! expressions for the specific file being scanned.
+//! Rewrite expressions in preparation for files being scanned, such as scan-metadata scalar UDFs.
 //!
-//! Functions like `file_row_index()` and `input_file_name()` are placeholders
+//! Functions like [`file_row_index`] and [`input_file_name()`] are placeholders
 //! whose value is only known during a file scan. The helpers here replace those
 //! UDFs with ordinary physical expressions bound to the current file: a column
-//! reference into a source-provided row-index column, or a per-file literal.
+//! reference into a source-provided row-index column, or a per-file literal, etc.
 
 use std::sync::Arc;
 
