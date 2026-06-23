@@ -33,10 +33,12 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion},
 };
 use datafusion_expr::ScalarUDFImpl;
+use datafusion_functions::core::input_file_name::InputFileNameFunc;
 use datafusion_functions::core::{
     file_row_index::FileRowIndexFunc, getfield::GetFieldFunc,
 };
 use datafusion_physical_expr::PhysicalExprSimplifier;
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs, Projector};
 use datafusion_physical_expr::{
     ScalarFunctionExpr,
@@ -190,6 +192,34 @@ pub fn rewrite_file_row_index_projection(
     })?;
 
     ProjectionExprs::new(base_exprs).try_merge(&rewritten_projection)
+}
+
+/// Rewrite `input_file_name()` in a pushed projection to a per-file `Utf8`
+/// literal holding `file_name`.
+///
+/// If the projection contains no `input_file_name()` UDF it is returned
+/// unchanged, without allocating the literal or rebuilding the projection tree
+/// (the common case for queries that don't use the function).
+pub fn rewrite_input_file_name_in_projection(
+    projection: ProjectionExprs,
+    file_name: &str,
+) -> Result<ProjectionExprs> {
+    if !projection
+        .iter()
+        .any(|p| expr_references_scalar_udf::<InputFileNameFunc>(&p.expr))
+    {
+        return Ok(projection);
+    }
+
+    let file_name_lit =
+        Arc::new(Literal::new(ScalarValue::Utf8(Some(file_name.to_string()))))
+            as Arc<dyn PhysicalExpr>;
+
+    projection.try_map_exprs(|expr| {
+        rewrite_scalar_udf::<InputFileNameFunc, _>(expr, |_| {
+            Ok(Arc::clone(&file_name_lit))
+        })
+    })
 }
 
 /// Trait for adapting [`PhysicalExpr`] expressions to match a target schema.
@@ -422,7 +452,7 @@ impl DefaultPhysicalExprAdapterRewriter {
             None => return Ok(None),
         };
 
-        let lit = match field_name_expr.downcast_ref::<expressions::Literal>() {
+        let lit = match field_name_expr.downcast_ref::<Literal>() {
             Some(lit) => lit,
             None => return Ok(None),
         };
@@ -475,7 +505,7 @@ impl DefaultPhysicalExprAdapterRewriter {
         };
 
         let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
-        Ok(Some(Arc::new(expressions::Literal::new_with_metadata(
+        Ok(Some(Arc::new(Literal::new_with_metadata(
             null_value,
             Some(FieldMetadata::from(logical_struct_field.as_ref())),
         ))))
@@ -522,12 +552,10 @@ impl DefaultPhysicalExprAdapterRewriter {
             // If the column is missing from the physical schema fill it in with nulls.
             // For a different behavior, provide a custom `PhysicalExprAdapter` implementation.
             let null_value = ScalarValue::Null.cast_to(logical_field.data_type())?;
-            return Ok(Transformed::yes(Arc::new(
-                expressions::Literal::new_with_metadata(
-                    null_value,
-                    Some(FieldMetadata::from(logical_field)),
-                ),
-            )));
+            return Ok(Transformed::yes(Arc::new(Literal::new_with_metadata(
+                null_value,
+                Some(FieldMetadata::from(logical_field)),
+            ))));
         };
 
         let fields_match = logical_field == physical_field.as_ref();
@@ -769,6 +797,16 @@ mod tests {
         ))
     }
 
+    fn input_file_name_expr() -> Arc<dyn PhysicalExpr> {
+        Arc::new(ScalarFunctionExpr::new(
+            "input_file_name",
+            Arc::new(ScalarUDF::from(InputFileNameFunc::new())),
+            vec![],
+            Arc::new(Field::new("input_file_name", DataType::Utf8, true)),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
     #[test]
     fn test_rewrite_scalar_udf_replaces_nested_typed_udf() -> Result<()> {
         let expr = Arc::new(expressions::BinaryExpr::new(
@@ -797,6 +835,61 @@ mod tests {
             .downcast_ref::<Literal>()
             .expect("right side should remain the original literal");
         assert_eq!(right.value(), &ScalarValue::Int64(Some(1)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_rewrite_input_file_name_in_projection() -> Result<()> {
+        let file_name = "part=west/data.parquet";
+        let projection = ProjectionExprs::new([
+            ProjectionExpr::new(input_file_name_expr(), "file_name"),
+            ProjectionExpr::new(
+                Arc::new(expressions::BinaryExpr::new(
+                    input_file_name_expr(),
+                    Operator::Eq,
+                    expressions::lit(ScalarValue::Utf8(Some(file_name.to_string()))),
+                )),
+                "matches_file",
+            ),
+        ]);
+
+        let rewritten = rewrite_input_file_name_in_projection(projection, file_name)?;
+        let rewritten = rewritten.as_ref();
+        assert_eq!(rewritten[0].alias, "file_name");
+        assert_eq!(rewritten[1].alias, "matches_file");
+
+        let file_name_lit = rewritten[0]
+            .expr
+            .downcast_ref::<Literal>()
+            .expect("input_file_name should rewrite to a literal");
+        assert_eq!(
+            file_name_lit.value(),
+            &ScalarValue::Utf8(Some(file_name.to_string()))
+        );
+
+        let binary = rewritten[1]
+            .expr
+            .downcast_ref::<expressions::BinaryExpr>()
+            .expect("nested expression should remain binary");
+        assert_eq!(binary.op(), &Operator::Eq);
+
+        let left = binary
+            .left()
+            .downcast_ref::<Literal>()
+            .expect("nested input_file_name should rewrite to a literal");
+        assert_eq!(
+            left.value(),
+            &ScalarValue::Utf8(Some(file_name.to_string()))
+        );
+
+        let right = binary
+            .right()
+            .downcast_ref::<Literal>()
+            .expect("comparison literal should remain unchanged");
+        assert_eq!(
+            right.value(),
+            &ScalarValue::Utf8(Some(file_name.to_string()))
+        );
         Ok(())
     }
 

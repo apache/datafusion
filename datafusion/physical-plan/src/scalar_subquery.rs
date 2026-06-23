@@ -33,6 +33,7 @@ use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
 
 use crate::execution_plan::{CardinalityEffect, ExecutionPlan, PlanProperties};
 use crate::joins::utils::{OnceAsync, OnceFut};
+use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
 
@@ -235,8 +236,8 @@ impl ExecutionPlan for ScalarSubqueryExec {
         vec![false; self.subqueries.len() + 1]
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(partition)
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        args.compute_child_statistics(&self.input, args.partition())
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {

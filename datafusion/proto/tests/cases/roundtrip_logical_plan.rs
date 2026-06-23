@@ -45,6 +45,7 @@ use std::vec;
 
 use datafusion::catalog::{TableProvider, TableProviderFactory};
 use datafusion::datasource::DefaultTableSource;
+use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
@@ -73,8 +74,8 @@ use datafusion_common::format::{
 };
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
-    internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, SplitPoint,
+    TableReference, internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::CopyTo;
@@ -91,9 +92,9 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::{
     Accumulator, AggregateUDF, ColumnarValue, DmlStatement, ExprFunctionExt,
     ExprSchemable, LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder, Operator,
-    PartitionEvaluator, ScalarUDF, Signature, TryCast, Volatility, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
-    WindowUDFImpl, WriteOp,
+    PartitionEvaluator, RangePartitioning, Repartition, ScalarUDF, Signature, TryCast,
+    Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition, WindowUDF, WindowUDFImpl, WriteOp,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
@@ -3379,9 +3380,7 @@ async fn roundtrip_empty_table_scan() -> Result<()> {
         Field::new("id", DataType::Int32, false),
         Field::new("name", DataType::Utf8, true),
     ]));
-    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
-        &schema,
-    )));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
     let ctx = SessionContext::new();
     ctx.register_table("empty", table)?;
@@ -3403,9 +3402,7 @@ async fn roundtrip_empty_table_scan_with_projection() -> Result<()> {
         Field::new("id", DataType::Int32, false),
         Field::new("name", DataType::Utf8, true),
     ]));
-    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
-        &schema,
-    )));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
     let ctx = SessionContext::new();
     ctx.register_table("empty", table)?;
@@ -3481,14 +3478,8 @@ async fn roundtrip_join_null_equality() -> Result<()> {
     let left_schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
     let right_schema =
         Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
-    ctx.register_table(
-        "t1",
-        Arc::new(datafusion::datasource::empty::EmptyTable::new(left_schema)),
-    )?;
-    ctx.register_table(
-        "t2",
-        Arc::new(datafusion::datasource::empty::EmptyTable::new(right_schema)),
-    )?;
+    ctx.register_table("t1", Arc::new(EmptyTable::new(left_schema)))?;
+    ctx.register_table("t2", Arc::new(EmptyTable::new(right_schema)))?;
     let left = ctx.table("t1").await?.into_optimized_plan()?;
     let right = ctx.table("t2").await?.into_optimized_plan()?;
 
@@ -3507,5 +3498,93 @@ async fn roundtrip_join_null_equality() -> Result<()> {
     let rt = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{join:?}"), format!("{rt:?}"));
 
+    Ok(())
+}
+
+// Single column, single split point range partitioning
+#[tokio::test]
+async fn roundtrip_range_partitioning_single_col() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let scan_plan = ctx.table("empty").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::Range(RangePartitioning::try_new(
+            vec![col("id").sort(true, true)],
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+        )?),
+    });
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+// Multi-column compound key with multiple split points for range partitioning
+#[tokio::test]
+async fn roundtrip_range_partitioning_multi_col() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("ts", DataType::Int64, false),
+        Field::new("region", DataType::Utf8, false),
+    ]));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let scan_plan = ctx.table("empty").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::Range(RangePartitioning::try_new(
+            vec![col("ts").sort(true, true), col("region").sort(true, true)],
+            vec![
+                SplitPoint::new(vec![
+                    ScalarValue::Int64(Some(1000)),
+                    ScalarValue::Utf8(Some("east".to_string())),
+                ]),
+                SplitPoint::new(vec![
+                    ScalarValue::Int64(Some(2000)),
+                    ScalarValue::Utf8(Some("west".to_string())),
+                ]),
+            ],
+        )?),
+    });
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+// Non-default sort options: descending with nulls last for range partitioning
+#[tokio::test]
+async fn roundtrip_range_partitioning_desc_nulls_last() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "score",
+        DataType::Float64,
+        true,
+    )]));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let scan_plan = ctx.table("empty").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::Range(RangePartitioning::try_new(
+            vec![col("score").sort(false, false)],
+            vec![SplitPoint::new(vec![ScalarValue::Float64(Some(50.0))])],
+        )?),
+    });
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     Ok(())
 }

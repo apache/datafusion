@@ -29,6 +29,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    #[expect(deprecated)]
     fn test_ffi_execution_plan_partition_statistics_cross_library()
     -> Result<(), DataFusionError> {
         let module = get_module()?;

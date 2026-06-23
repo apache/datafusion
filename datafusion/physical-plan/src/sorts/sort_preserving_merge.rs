@@ -24,6 +24,7 @@ use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
@@ -380,8 +381,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(None)
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        args.compute_child_statistics(&self.input, None)
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -467,7 +468,8 @@ mod tests {
             .with_memory_limit(20_000_000, 1.0)
             .build_arc()?;
         let mut config = SessionConfig::new();
-        config.options_mut().execution.batch_size = target_batch_size;
+        config.options_mut().execution.batch_size =
+            datafusion_common::config::ConfigNonZeroUsize::try_new(target_batch_size)?;
         let task_ctx = TaskContext::default()
             .with_runtime(runtime)
             .with_session_config(config);

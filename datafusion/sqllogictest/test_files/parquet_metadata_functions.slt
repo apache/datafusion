@@ -1,0 +1,84 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Test for Parquet scans with metadata function
+
+statement ok
+COPY  (VALUES (10), (20), (30))
+TO 'test_files/scratch/parquet_metadata_functions/first.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY  (VALUES (40), (50), (60))
+TO 'test_files/scratch/parquet_metadata_functions/second.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE test_table(column1 int)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_metadata_functions/';
+
+query TII rowsort
+SELECT input_file_name(), file_row_index(), column1
+FROM test_table
+----
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/first.parquet 0 10
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/first.parquet 1 20
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/first.parquet 2 30
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/second.parquet 0 40
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/second.parquet 1 50
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/second.parquet 2 60
+
+query TT
+EXPLAIN SELECT input_file_name(), file_row_index(), column1
+FROM test_table
+----
+logical_plan
+01)Projection: input_file_name(), file_row_index(), test_table.column1
+02)--TableScan: test_table projection=[column1]
+physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/first.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/second.parquet]]}, projection=[input_file_name() as input_file_name(), CAST(__datafusion_file_row_index@1 AS Int64) as file_row_index(), column1], file_type=parquet
+
+# input_file_name() in a WHERE predicate: only rows from the matching file are returned
+query I
+SELECT column1 FROM test_table
+WHERE input_file_name() LIKE '%first.parquet'
+ORDER BY column1
+----
+10
+20
+30
+
+# input_file_name() as a GROUP BY key: per-file aggregation
+query TII
+SELECT input_file_name(), count(*), sum(column1)
+FROM test_table
+GROUP BY input_file_name()
+ORDER BY input_file_name()
+----
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/first.parquet 3 60
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/second.parquet 3 150
+
+# input_file_name() inside a projection expression
+query B rowsort
+SELECT DISTINCT input_file_name() LIKE '%second.parquet'
+FROM test_table
+----
+false
+true
+
+statement ok
+DROP TABLE test_table;
