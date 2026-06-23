@@ -599,29 +599,7 @@ impl DFSchema {
             .all(|(dffield, arrowfield)| dffield.name() == arrowfield.name())
     }
 
-    /// Check to see if fields in 2 Arrow schemas are compatible
-    #[deprecated(since = "47.0.0", note = "This method is no longer used")]
-    pub fn check_arrow_schema_type_compatible(
-        &self,
-        arrow_schema: &Schema,
-    ) -> Result<()> {
-        let self_arrow_schema = self.as_arrow();
-        self_arrow_schema
-            .fields()
-            .iter()
-            .zip(arrow_schema.fields().iter())
-            .try_for_each(|(l_field, r_field)| {
-                if !can_cast_types(r_field.data_type(), l_field.data_type()) {
-                    _plan_err!("Column {} (type: {}) is not compatible with column {} (type: {})",
-                                r_field.name(),
-                                r_field.data_type(),
-                                l_field.name(),
-                                l_field.data_type())
-                } else {
-                    Ok(())
-                }
-            })
-    }
+
 
     /// Returns true if the two schemas have the same qualified named
     /// fields with logically equivalent data types. Returns false otherwise.
