@@ -37,6 +37,7 @@ use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
 use crate::hash_join_buffering::HashJoinBuffering;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
+use crate::parallel_sort_merge::ParallelSortMerge;
 use crate::pushdown_sort::PushdownSort;
 use crate::window_topn::WindowTopN;
 use datafusion_common::Result;
@@ -233,6 +234,11 @@ impl PhysicalOptimizer {
             Arc::new(ProjectionPushdown::new()),
             // PushdownSort: Detect sorts that can be pushed down to data sources.
             Arc::new(PushdownSort::new()),
+            // ParallelSortMerge: optionally replace single-threaded
+            // `SortPreservingMergeExec` with a parallel merge. Gated by
+            // `datafusion.optimizer.enable_parallel_sort_merge`. Runs after sort
+            // placement is finalized so the merges it targets already exist.
+            Arc::new(ParallelSortMerge::new()),
             Arc::new(EnsureCooperative::new()),
             // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
             // Therefore, it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.

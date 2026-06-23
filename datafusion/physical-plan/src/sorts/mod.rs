@@ -21,6 +21,7 @@ mod builder;
 mod cursor;
 mod merge;
 mod multi_level_merge;
+pub mod parallel_merge;
 pub mod partial_sort;
 pub mod partitioned_topk;
 pub mod sort;
