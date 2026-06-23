@@ -102,7 +102,7 @@ impl AggregateHashTable<PartialMarker> {
             .all(|acc| acc.supports_convert_to_state())
     }
 
-    /// In skip-partial-aggregation optimization, when a decision has made to skip
+    /// In skip-partial-aggregation optimization, when a decision has been made to skip
     /// partial stage, build a typed hash table only for aggregation state conversion
     /// row-by-row.
     pub(in crate::aggregates) fn partial_skip_table(
