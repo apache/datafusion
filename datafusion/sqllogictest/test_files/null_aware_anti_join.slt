@@ -451,3 +451,68 @@ DROP TABLE customers_test;
 
 statement ok
 DROP TABLE all_null_banned;
+
+#############
+## Test: dynamic filter pushdown must not drop the inner NULL.
+## With join dynamic filter pushdown on, the build-side filter pushed to the probe scan would drop
+## the inner NULL, but NOT IN three-valued logic needs it to collapse the result to zero rows. The
+## in-memory VALUES scans above never apply the pushed filter, so this case needs a parquet scan.
+#############
+
+statement ok
+set datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
+
+# Row-level parquet filtering, so the pushed filter actually drops matching rows instead of only
+# pruning row groups. Without this the single row group is read whole and the NULL never gets dropped.
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+CREATE TABLE asa_outer(id INT) AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE asa_inner(eid INT) AS VALUES (2), (NULL);
+
+query I
+COPY asa_outer TO 'test_files/scratch/null_aware_anti_join/asa_outer.parquet' STORED AS PARQUET;
+----
+3
+
+query I
+COPY asa_inner TO 'test_files/scratch/null_aware_anti_join/asa_inner.parquet' STORED AS PARQUET;
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE asa_outer_parquet(id INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/null_aware_anti_join/asa_outer.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE asa_inner_parquet(eid INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/null_aware_anti_join/asa_inner.parquet';
+
+# Expected: zero rows. Before the fix the pushed dynamic filter dropped the inner NULL, so the join
+# wrongly returned id = 1 and id = 3.
+query I
+SELECT id FROM asa_outer_parquet WHERE id NOT IN (SELECT eid FROM asa_inner_parquet) ORDER BY id;
+----
+
+statement ok
+DROP TABLE asa_outer;
+
+statement ok
+DROP TABLE asa_inner;
+
+statement ok
+DROP TABLE asa_outer_parquet;
+
+statement ok
+DROP TABLE asa_inner_parquet;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+set datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
