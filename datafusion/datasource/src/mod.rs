@@ -55,6 +55,7 @@ pub mod write;
 pub use self::file::as_file_source;
 pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
+use arrow::datatypes::SchemaRef;
 use chrono::TimeZone;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, TableReference};
@@ -62,15 +63,11 @@ use datafusion_common::{ScalarValue, Statistics};
 use datafusion_physical_expr::LexOrdering;
 use futures::Stream;
 use object_store::{ObjectMeta, path::Path};
-pub use table_schema::{TableSchema, TableSchemaBuilder};
-// Remove when add_row_stats is remove
-use arrow::datatypes::SchemaRef;
-#[expect(deprecated)]
-pub use statistics::add_row_stats;
 pub use statistics::compute_all_files_statistics;
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
+pub use table_schema::{TableSchema, TableSchemaBuilder};
 
 /// User-defined per-file extension data, keyed by concrete Rust type.
 ///
