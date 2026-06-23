@@ -22,6 +22,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
@@ -41,7 +42,9 @@ use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::utils::JoinFilter;
-use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
+use datafusion_physical_plan::joins::{
+    HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -1592,4 +1595,109 @@ async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         );
     };
     Ok(())
+}
+
+/// Build a `SortMergeJoinExec` in the default (`Partitioned`) mode.
+fn sort_merge_join(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
+    join_type: JoinType,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_options = vec![SortOptions::default(); on.len()];
+    Arc::new(
+        SortMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            join_type,
+            sort_options,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    )
+}
+
+/// Run `JoinSelection` over a `SortMergeJoinExec` with the given inputs/join
+/// type and assert the resulting partition mode.
+fn check_sort_merge_join_mode(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    left_key: &str,
+    right_key: &str,
+    join_type: JoinType,
+    expected_mode: PartitionMode,
+) {
+    let on: Vec<(PhysicalExprRef, PhysicalExprRef)> = vec![(
+        Arc::new(Column::new_with_schema(left_key, &left.schema()).unwrap()) as _,
+        Arc::new(Column::new_with_schema(right_key, &right.schema()).unwrap()) as _,
+    )];
+    let join = sort_merge_join(left, right, on, join_type);
+    let optimized = JoinSelection::new()
+        .optimize(join, &ConfigOptions::new())
+        .unwrap();
+    let smj = optimized
+        .downcast_ref::<SortMergeJoinExec>()
+        .expect("plan should remain a SortMergeJoinExec");
+    assert_eq!(smj.mode, expected_mode, "join_type={join_type:?}");
+}
+
+#[tokio::test]
+async fn test_sort_merge_join_collect_left_small_left() {
+    // A small left side is collectible, so supported join types switch to
+    // CollectLeft (collect the left, do not repartition the big right).
+    for join_type in [
+        JoinType::Inner,
+        JoinType::Right,
+        JoinType::RightSemi,
+        JoinType::RightAnti,
+        JoinType::RightMark,
+    ] {
+        let (big, small) = create_big_and_small();
+        check_sort_merge_join_mode(
+            small,
+            big,
+            "small_col",
+            "big_col",
+            join_type,
+            PartitionMode::CollectLeft,
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_sort_merge_join_collect_left_skipped_for_big_left() {
+    // The left side is too big to collect: stay Partitioned.
+    let (big, small) = create_big_and_small();
+    check_sort_merge_join_mode(
+        big,
+        small,
+        "big_col",
+        "small_col",
+        JoinType::Inner,
+        PartitionMode::Partitioned,
+    );
+}
+
+#[tokio::test]
+async fn test_sort_merge_join_collect_left_skipped_for_unsupported_join() {
+    // Left-side join types cannot use CollectLeft even with a small left side.
+    for join_type in [
+        JoinType::Left,
+        JoinType::LeftSemi,
+        JoinType::LeftAnti,
+        JoinType::LeftMark,
+        JoinType::Full,
+    ] {
+        let (big, small) = create_big_and_small();
+        check_sort_merge_join_mode(
+            small,
+            big,
+            "small_col",
+            "big_col",
+            join_type,
+            PartitionMode::Partitioned,
+        );
+    }
 }

@@ -4965,3 +4965,142 @@ async fn spill_read_back_single_source() -> Result<()> {
 
     Ok(())
 }
+
+// ==================== CollectLeft partition mode ====================
+
+/// Left side for the CollectLeft tests: a single sorted partition. The key
+/// `b1` has a duplicate (4) so equal-key cartesian products are exercised, and
+/// a key (8) with no match on the right.
+fn collect_left_test_left() -> Arc<dyn ExecutionPlan> {
+    build_table(
+        ("a1", &vec![1, 2, 3, 5]),
+        ("b1", &vec![2, 4, 4, 8]),
+        ("c1", &vec![70, 80, 90, 100]),
+    )
+}
+
+/// Right side as two independently-sorted partitions (overlapping key ranges).
+fn collect_left_test_right_two_partitions() -> Arc<dyn ExecutionPlan> {
+    let p0 = build_table_i32(
+        ("a2", &vec![10, 30]),
+        ("b1", &vec![2, 6]),
+        ("c2", &vec![21, 61]),
+    );
+    let p1 = build_table_i32(
+        ("a2", &vec![20, 99]),
+        ("b1", &vec![4, 10]),
+        ("c2", &vec![41, 9]),
+    );
+    let schema = p0.schema();
+    TestMemoryExec::try_new_exec(&[vec![p0], vec![p1]], schema, None).unwrap()
+}
+
+/// The same right rows as [`collect_left_test_right_two_partitions`] merged into
+/// one sorted partition, used as the reference (Partitioned-mode) input.
+fn collect_left_test_right_single_partition() -> Arc<dyn ExecutionPlan> {
+    let batch = build_table_i32(
+        ("a2", &vec![10, 20, 30, 99]),
+        ("b1", &vec![2, 4, 6, 10]),
+        ("c2", &vec![21, 41, 61, 9]),
+    );
+    let schema = batch.schema();
+    TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
+}
+
+/// Execute every output partition of a `CollectLeft` sort-merge join and gather
+/// all output batches.
+async fn collect_left_join_collect(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    on: JoinOn,
+    join_type: JoinType,
+) -> Result<Vec<RecordBatch>> {
+    let task_ctx = Arc::new(TaskContext::default());
+    let join = join(left, right, on, join_type)?.with_mode(PartitionMode::CollectLeft)?;
+    let n = join.properties().output_partitioning().partition_count();
+    let mut batches = Vec::new();
+    for partition in 0..n {
+        let stream = join.execute(partition, Arc::clone(&task_ctx))?;
+        batches.extend(common::collect(stream).await?);
+    }
+    Ok(batches)
+}
+
+/// For every supported join type, a `CollectLeft` join over a multi-partition
+/// right must produce the same multiset of rows as the default Partitioned join
+/// over the equivalent single-partition right.
+#[tokio::test]
+async fn collect_left_matches_partitioned() -> Result<()> {
+    for join_type in [Inner, Right, RightSemi, RightAnti, RightMark] {
+        let left = collect_left_test_left();
+        let right_multi = collect_left_test_right_two_partitions();
+        let on: JoinOn = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right_multi.schema())?) as _,
+        )];
+
+        let collect_left = collect_left_join_collect(
+            Arc::clone(&left),
+            right_multi,
+            on.clone(),
+            join_type,
+        )
+        .await?;
+
+        let (_, reference) = join_collect(
+            left,
+            collect_left_test_right_single_partition(),
+            on,
+            join_type,
+        )
+        .await?;
+
+        assert_eq!(
+            batches_to_sort_string(&collect_left),
+            batches_to_sort_string(&reference),
+            "CollectLeft output differs from Partitioned output for {join_type:?}"
+        );
+    }
+    Ok(())
+}
+
+/// CollectLeft is only valid for join types whose output is determined per
+/// right partition; left-side join types must be rejected.
+#[tokio::test]
+async fn collect_left_rejects_left_side_joins() {
+    for join_type in [Left, LeftSemi, LeftAnti, LeftMark, Full] {
+        let left = collect_left_test_left();
+        let right = collect_left_test_right_single_partition();
+        let on: JoinOn = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
+        )];
+        let err = join(left, right, on, join_type)
+            .unwrap()
+            .with_mode(PartitionMode::CollectLeft)
+            .unwrap_err();
+        assert_contains!(err.to_string(), "CollectLeft mode does not support");
+    }
+}
+
+/// In CollectLeft mode the output has one partition per right partition while
+/// the left has a single partition; `partition_statistics(Some(i))` must use the
+/// full (collected) left rather than asking the single-partition left for
+/// partition `i` (which would error for `i >= 1`).
+#[tokio::test]
+async fn collect_left_partition_statistics() -> Result<()> {
+    let left = collect_left_test_left();
+    let right = collect_left_test_right_two_partitions();
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+    let join = join(left, right, on, Inner)?.with_mode(PartitionMode::CollectLeft)?;
+    let n = join.properties().output_partitioning().partition_count();
+    assert!(n >= 2, "expected one output partition per right partition");
+    for partition in 0..n {
+        join.partition_statistics(Some(partition))?;
+    }
+    join.partition_statistics(None)?;
+    Ok(())
+}

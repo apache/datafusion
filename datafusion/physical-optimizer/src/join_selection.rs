@@ -36,7 +36,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
@@ -300,6 +300,64 @@ pub(crate) fn partitioned_hash_join(
     }
 }
 
+/// Join types for which [`SortMergeJoinExec`] supports
+/// [`PartitionMode::CollectLeft`]: those whose output is fully determined per
+/// right partition, so each right partition can be joined against the collected
+/// left independently (no cross-partition tracking of left-side matches).
+fn sort_merge_supports_collect_left(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
+        JoinType::Inner
+            | JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark
+    )
+}
+
+/// Tries to switch a [`SortMergeJoinExec`] to [`PartitionMode::CollectLeft`].
+///
+/// In `CollectLeft` mode the left side is collected into a single sorted run
+/// shared across all right partitions and the right side is left
+/// un-repartitioned (one output partition per right partition). This avoids
+/// hash-repartitioning the right side and is beneficial when the left side is
+/// small and the right side is large.
+///
+/// Returns `Some(plan)` only when it is both safe and beneficial: the join type
+/// is supported, the join is currently in [`PartitionMode::Partitioned`], and
+/// the left side is estimated to be small enough to collect.
+///
+/// Used configurations inside arg `config`
+/// - `config.optimizer.hash_join_single_partition_threshold`: byte threshold for collecting the left
+/// - `config.optimizer.hash_join_single_partition_threshold_rows`: row threshold for collecting the left
+fn try_collect_left_sort_merge_join(
+    smj: &SortMergeJoinExec,
+    config: &ConfigOptions,
+    registry: Option<&StatisticsRegistry>,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    let optimizer_config = &config.optimizer;
+    if smj.mode != PartitionMode::Partitioned
+        || !sort_merge_supports_collect_left(smj.join_type())
+    {
+        return Ok(None);
+    }
+
+    let left_can_collect = supports_collect_by_thresholds(
+        smj.left().as_ref(),
+        optimizer_config.hash_join_single_partition_threshold,
+        optimizer_config.hash_join_single_partition_threshold_rows,
+        registry,
+    );
+
+    if left_can_collect {
+        Ok(Some(Arc::new(
+            smj.clone().with_mode(PartitionMode::CollectLeft)?,
+        )))
+    } else {
+        Ok(None)
+    }
+}
+
 /// This subrule tries to modify a given plan so that it can
 /// optimize hash and cross joins in the plan according to available statistical
 /// information.
@@ -360,6 +418,8 @@ fn statistical_join_selection_subrule(
         } else {
             None
         }
+    } else if let Some(smj) = plan.downcast_ref::<SortMergeJoinExec>() {
+        try_collect_left_sort_merge_join(smj, config, registry)?
     } else {
         None
     };
