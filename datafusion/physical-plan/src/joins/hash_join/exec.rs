@@ -59,7 +59,7 @@ use crate::{
     common::can_project,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
-        build_join_schema_with_null_aware, check_join_is_valid, estimate_join_statistics,
+        build_join_schema, check_join_is_valid, estimate_join_statistics,
         need_produce_result_in_final, symmetric_join_output_partitioning,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
@@ -523,12 +523,8 @@ impl HashJoinExecBuilder {
         }
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
-        let (join_schema, column_indices) = build_join_schema_with_null_aware(
-            &left_schema,
-            &right_schema,
-            &join_type,
-            null_aware,
-        );
+        let (join_schema, column_indices) =
+            build_join_schema(&left_schema, &right_schema, &join_type, null_aware);
 
         let join_schema = Arc::new(join_schema);
 
@@ -1442,6 +1438,11 @@ impl ExecutionPlan for HashJoinExec {
             .flatten()
             .flatten();
 
+        // The extra scope maps + null bitmap are only built for correlated
+        // null-aware LeftMark joins (`on[1..]` are correlation scope keys).
+        let with_null_aware_mark_state =
+            self.null_aware && self.join_type == JoinType::LeftMark && on_left.len() > 1;
+
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.try_once(|| {
                 let left_stream = self.left.execute(0, Arc::clone(&context))?;
@@ -1461,12 +1462,7 @@ impl ExecutionPlan for HashJoinExec {
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
                     array_map_created_count,
-                    // with_null_aware_mark_state: the extra scope maps + null
-                    // bitmap are only built for correlated null-aware LeftMark
-                    // (`on[1..]` are correlation scope keys).
-                    self.null_aware
-                        && self.join_type == JoinType::LeftMark
-                        && on_left.len() > 1,
+                    with_null_aware_mark_state,
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -1487,12 +1483,9 @@ impl ExecutionPlan for HashJoinExec {
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
                     array_map_created_count,
-                    // with_null_aware_mark_state: the extra scope maps + null
-                    // bitmap are only built for correlated null-aware LeftMark
-                    // (`on[1..]` are correlation scope keys).
-                    self.null_aware
-                        && self.join_type == JoinType::LeftMark
-                        && on_left.len() > 1,
+                    // Partitioned mode is rejected for null-aware joins (see
+                    // `try_new`), so the extra null-aware state is never built.
+                    false,
                 ))
             }
             PartitionMode::Auto => {
@@ -2208,11 +2201,8 @@ async fn collect_left_input(
             "null-aware LeftMark needs on_left[0]=value, on_left[1..]=scope, got {} key(s)",
             on_left.len()
         );
-        // This secondary map is keyed only by correlation scope keys. The
-        // primary join map may still use ArrayMap for full-key TRUE matches,
-        // but scope-only NULL marking uses a HashMap for arbitrary key shapes.
-        // It is probed only with the NULL-valued probe rows, so the lookup work
-        // is proportional to the probe-side NULLs.
+        // Scope-only NULL marking uses a HashMap (the primary join map may use
+        // ArrayMap for full-key matches, but scope keys have arbitrary shape).
         let mut scope_map = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
 
         let mut hashes_buffer = vec![0; batch.num_rows()];
@@ -2228,10 +2218,8 @@ async fn collect_left_input(
             NullEquality::NullEqualsNothing,
         )?;
 
-        // Build rows whose value key is NULL get a dedicated scope map: any
-        // probe row sharing their scope makes their mark UNKNOWN, so they are
-        // probed with *every* probe row. Restricting the map to the NULL-valued
-        // rows keeps that lookup proportional to the build-side NULLs.
+        // Build the dedicated scope map over the NULL-valued build rows (see
+        // `NullValueScopeMap`).
         let value_key = &left_values[0];
         let null_value_scope_map = if value_key.null_count() > 0 {
             let null_mask = arrow::compute::is_null(value_key.as_ref())?;

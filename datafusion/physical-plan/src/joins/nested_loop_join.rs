@@ -284,7 +284,7 @@ impl NestedLoopJoinExecBuilder {
         let right_schema = right.schema();
         check_join_is_valid(&left_schema, &right_schema, &[])?;
         let (join_schema, column_indices) =
-            build_join_schema(&left_schema, &right_schema, &join_type);
+            build_join_schema(&left_schema, &right_schema, &join_type, false);
         let join_schema = Arc::new(join_schema);
         let cache = NestedLoopJoinExec::compute_properties(
             &left,

@@ -3460,24 +3460,8 @@ mod tests {
         ctx.sql(query).await?.create_physical_plan().await
     }
 
-    async fn plan_sql_with_config(
-        query: &str,
-        config: SessionConfig,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let ctx = SessionContext::new_with_config(config);
-        ctx.sql(query).await?.create_physical_plan().await
-    }
-
     async fn collect_sql(query: &str) -> Result<Vec<RecordBatch>> {
         let ctx = SessionContext::new();
-        ctx.sql(query).await?.collect().await
-    }
-
-    async fn collect_sql_with_config(
-        query: &str,
-        config: SessionConfig,
-    ) -> Result<Vec<RecordBatch>> {
-        let ctx = SessionContext::new_with_config(config);
         ctx.sql(query).await?.collect().await
     }
 
@@ -3644,8 +3628,9 @@ mod tests {
         let config = SessionConfig::new()
             .with_target_partitions(4)
             .set_bool("datafusion.optimizer.prefer_hash_join", false);
+        let ctx = SessionContext::new_with_config(config);
 
-        let plan = plan_sql_with_config(query, config.clone()).await?;
+        let plan = ctx.sql(query).await?.create_physical_plan().await?;
         let formatted = displayable(plan.as_ref()).indent(true).to_string();
         assert_contains!(
             &formatted,
@@ -3653,7 +3638,7 @@ mod tests {
         );
         assert!(!formatted.contains("SortMergeJoinExec"), "{formatted}");
 
-        let batches = collect_sql_with_config(query, config).await?;
+        let batches = ctx.sql(query).await?.collect().await?;
         assert_batches_eq!(
             &[
                 "+-------+",
