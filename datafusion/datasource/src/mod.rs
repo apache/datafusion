@@ -41,6 +41,7 @@ pub mod file_stream;
 pub mod memory;
 pub mod morsel;
 pub mod projection;
+pub mod rewrite;
 pub mod schema_adapter;
 pub mod sink;
 pub mod source;
