@@ -32,10 +32,10 @@ use datafusion_common::{
     DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
     plan_datafusion_err,
 };
+use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 pub use datafusion_expr::planner::ContextProvider;
 use datafusion_expr::utils::find_column_exprs;
-use datafusion_expr::{Expr, col};
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
@@ -591,10 +591,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 idents.len()
             )
         } else {
-            let fields = plan.schema().fields().clone();
+            let columns = plan.schema().columns().clone();
             LogicalPlanBuilder::from(plan)
-                .project(fields.iter().zip(idents).map(|(field, ident)| {
-                    col(field.name()).alias(self.ident_normalizer.normalize(ident))
+                .project(columns.into_iter().zip(idents).map(|(col, ident)| {
+                    Expr::Column(col).alias(self.ident_normalizer.normalize(ident))
                 }))?
                 .build()
         }

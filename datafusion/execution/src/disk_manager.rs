@@ -516,18 +516,14 @@ impl std::io::Write for FileSpillWriter {
                 .used_disk_space
                 .fetch_sub(len, Ordering::Relaxed);
 
-            return Err(std::io::Error::other(
-                format!(
-                    "The used disk space during the spilling process has exceeded the allowable limit of {}. \
+            return Err(std::io::Error::other(format!(
+                "The used disk space during the spilling process has exceeded the allowable limit of {}. \
                         Please try increasing the config: `datafusion.runtime.max_temp_directory_size`.",
-                    human_readable_size(limit as usize)
-                ),
-            ));
+                human_readable_size(limit as usize)
+            )));
         }
 
-        self.file
-            .write_all(buf)
-            .map_err(DataFusionError::IoError)?;
+        self.file.write_all(buf).map_err(DataFusionError::IoError)?;
 
         self.current_file_disk_usage
             .fetch_add(len, Ordering::Relaxed);

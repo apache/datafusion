@@ -325,7 +325,7 @@ pub fn evaluate_partition_prefix<'a>(
     }
 }
 
-fn filter_partitions(
+pub fn filter_partitioned_file(
     pf: PartitionedFile,
     filters: &[Expr],
     df_schema: &DFSchema,
@@ -447,7 +447,7 @@ pub async fn pruned_partition_list<'a>(
                 ))
             })
             .try_filter_map(move |pf| {
-                futures::future::ready(filter_partitions(pf, filters, &df_schema))
+                futures::future::ready(filter_partitioned_file(pf, filters, &df_schema))
             })
             .boxed())
     }

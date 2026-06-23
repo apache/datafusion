@@ -115,7 +115,7 @@ async fn test_multiple_configs() {
     assert!(result.is_ok(), "Should not fail due to memory limit");
 
     let state = ctx.state();
-    let batch_size = state.config().options().execution.batch_size;
+    let batch_size = state.config().options().execution.batch_size.get();
     assert_eq!(batch_size, 2048);
 }
 
