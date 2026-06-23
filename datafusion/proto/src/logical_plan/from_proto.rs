@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    NullEquality, RecursionUnnestOption, Result, ScalarValue, TableReference,
+    NullEquality, RecursionUnnestOption, Result, ScalarValue, SplitPoint, TableReference,
     UnnestOptions, exec_datafusion_err, internal_err, plan_datafusion_err,
 };
 use datafusion_execution::TaskContext;
@@ -898,4 +898,15 @@ fn parse_required_expr(
 
 fn proto_error<S: Into<String>>(message: S) -> Error {
     Error::General(message.into())
+}
+
+pub(super) fn parse_protobuf_range_split_point(
+    split_point: &protobuf::RangeSplitPoint,
+) -> Result<SplitPoint, Error> {
+    let values = split_point
+        .value
+        .iter()
+        .map(ScalarValue::try_from)
+        .collect::<Result<_, Error>>()?;
+    Ok(SplitPoint::new(values))
 }

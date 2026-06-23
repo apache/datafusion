@@ -905,19 +905,51 @@ impl SortExec {
         self.preserve_partitioning = preserve_partitioning;
         Arc::make_mut(&mut self.cache).partitioning =
             Self::output_partitioning_helper(&self.input, self.preserve_partitioning);
+        if self.fetch.is_some() {
+            self.rebuild_filter_for_current_partitioning();
+        }
         self
     }
 
-    /// Add or reset `self.filter` to a new `TopKDynamicFilters`.
+    fn topk_emitter_count(&self) -> usize {
+        self.cache.output_partitioning().partition_count()
+    }
+
+    /// Build a new shared TopK dynamic filter wrapper for this `SortExec`.
     fn create_filter(&self) -> Arc<RwLock<TopKDynamicFilters>> {
         let children = self
             .expr
             .iter()
             .map(|sort_expr| Arc::clone(&sort_expr.expr))
             .collect::<Vec<_>>();
-        Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
-            DynamicFilterPhysicalExpr::new(children, lit(true)),
-        ))))
+        self.create_filter_with_expr(Arc::new(DynamicFilterPhysicalExpr::new(
+            children,
+            lit(true),
+        )))
+    }
+
+    fn create_filter_with_expr(
+        &self,
+        expr: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Arc<RwLock<TopKDynamicFilters>> {
+        Arc::new(RwLock::new(
+            TopKDynamicFilters::new_with_topk_emitter_count(
+                expr,
+                self.topk_emitter_count(),
+            ),
+        ))
+    }
+
+    /// Rebuild the shared TopK filter wrapper for the current output partitioning.
+    ///
+    /// The dynamic filter expression is preserved, but wrapper state such as the
+    /// shared threshold and remaining emitter count is reset for the new
+    /// partitioning.
+    fn rebuild_filter_for_current_partitioning(&mut self) {
+        let filter_expr = self.filter.as_ref().map(|filter| filter.read().expr());
+        if let Some(filter_expr) = filter_expr {
+            self.filter = Some(self.create_filter_with_expr(filter_expr));
+        }
     }
 
     fn cloned(&self) -> Self {
@@ -952,14 +984,20 @@ impl SortExec {
         if fetch.is_some() && is_pipeline_friendly {
             cache = cache.with_boundedness(Boundedness::Bounded);
         }
-        let filter = fetch.is_some().then(|| {
-            // If we already have a filter, keep it. Otherwise, create a new one.
-            self.filter.clone().unwrap_or_else(|| self.create_filter())
-        });
         let mut new_sort = self.cloned();
         new_sort.fetch = fetch;
         new_sort.cache = cache.into();
-        new_sort.filter = filter;
+        if fetch.is_some() {
+            if new_sort.filter.is_some() {
+                // Keep the dynamic filter expression, but reset wrapper state
+                // such as the shared threshold and expected emitter count.
+                new_sort.rebuild_filter_for_current_partitioning();
+            } else {
+                new_sort.filter = Some(new_sort.create_filter());
+            }
+        } else {
+            new_sort.filter = None;
+        }
         new_sort
     }
 
@@ -998,7 +1036,7 @@ impl SortExec {
         for child in filter.children() {
             child.data_type(&input_schema)?;
         }
-        self.filter = Some(Arc::new(RwLock::new(TopKDynamicFilters::new(filter))));
+        self.filter = Some(self.create_filter_with_expr(filter));
         Ok(self)
     }
 
@@ -1173,6 +1211,9 @@ impl ExecutionPlan for SortExec {
             )?;
             new_sort.cache = Arc::new(cache);
             new_sort.common_sort_prefix = sort_prefix;
+            if new_sort.fetch.is_some() {
+                new_sort.rebuild_filter_for_current_partitioning();
+            }
         }
 
         Ok(Arc::new(new_sort))
@@ -1459,8 +1500,8 @@ mod tests {
         GreedyMemoryPool, MemoryConsumer, MemoryPool,
     };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_expr::expressions::{Column, Literal};
+    use datafusion_physical_expr::{DynamicFilterTracking, EquivalenceProperties};
 
     use futures::{FutureExt, Stream, TryStreamExt};
     use insta::assert_snapshot;
@@ -2770,6 +2811,127 @@ mod tests {
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
         assert_eq!(restored_id, new_id);
         assert_ne!(restored_id, original_id);
+        Ok(())
+    }
+
+    async fn emit_sort_partition(
+        sort: &Arc<SortExec>,
+        partition: usize,
+        task_ctx: Arc<TaskContext>,
+    ) -> Result<()> {
+        let _batches: Vec<RecordBatch> =
+            sort.execute(partition, task_ctx)?.try_collect().await?;
+        Ok(())
+    }
+
+    fn assert_filter_still_waiting(filter: &Arc<DynamicFilterPhysicalExpr>) {
+        let dynamic_filter_expr: Arc<dyn PhysicalExpr> =
+            Arc::<DynamicFilterPhysicalExpr>::clone(filter);
+        assert!(
+            matches!(
+                DynamicFilterTracking::classify(&dynamic_filter_expr),
+                DynamicFilterTracking::Watching(_)
+            ),
+            "the shared filter should remain watchable until every partition emits"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preserved_topk_filter_waits_for_all_sort_partitions() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let partitions = vec![
+            vec![RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(vec![3, 1, 2]))],
+            )?],
+            vec![RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(vec![6, 4, 5]))],
+            )?],
+        ];
+        let input = TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+        let sort = SortExec::new(
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into(),
+            input,
+        )
+        // `with_fetch` creates the TopK filter; preserving partitioning after
+        // that must rebuild it with one emitter per output partition.
+        .with_fetch(Some(2))
+        .with_preserve_partitioning(true);
+
+        let dynamic_filter = sort
+            .dynamic_filter_expr()
+            .expect("fetch sort should create a dynamic filter");
+        let sort = Arc::new(sort);
+        let task_ctx = Arc::new(TaskContext::default());
+
+        emit_sort_partition(&sort, 0, Arc::clone(&task_ctx)).await?;
+        assert_filter_still_waiting(&dynamic_filter);
+
+        emit_sort_partition(&sort, 1, task_ctx).await?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            dynamic_filter.wait_complete(),
+        )
+        .await
+        .expect("the final preserved SortExec partition should complete the filter");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_with_fetch_rebuilds_existing_topk_filter() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let partitions = vec![
+            vec![RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(vec![3, 1, 2]))],
+            )?],
+            vec![RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(vec![6, 4, 5]))],
+            )?],
+        ];
+        let input = TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("a", 0))],
+            lit(true),
+        ));
+        let dynamic_filter_id = dynamic_filter
+            .expression_id()
+            .expect("DynamicFilterPhysicalExpr always has an expression_id");
+        let sort = SortExec::new(
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into(),
+            input,
+        )
+        .with_dynamic_filter_expr(dynamic_filter)?
+        .with_preserve_partitioning(true)
+        .with_fetch(Some(2));
+
+        let dynamic_filter = sort
+            .dynamic_filter_expr()
+            .expect("fetch sort should keep the dynamic filter");
+        assert_eq!(
+            dynamic_filter
+                .expression_id()
+                .expect("DynamicFilterPhysicalExpr always has an expression_id"),
+            dynamic_filter_id
+        );
+
+        let sort = Arc::new(sort);
+        let task_ctx = Arc::new(TaskContext::default());
+
+        emit_sort_partition(&sort, 0, Arc::clone(&task_ctx)).await?;
+        assert_filter_still_waiting(&dynamic_filter);
+
+        emit_sort_partition(&sort, 1, task_ctx).await?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            dynamic_filter.wait_complete(),
+        )
+        .await
+        .expect("the final preserved SortExec partition should complete the filter");
+
         Ok(())
     }
 
