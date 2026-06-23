@@ -2007,7 +2007,7 @@ DROP TABLE approx_distinct_typed_test;
 
 
 
-## This test exectes the APPROX_PERCENTILE_CONT aggregation against the test
+## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
 ## data, asserting the estimated quantiles are ±5% their actual values.
 ##
 ## Actual quantiles calculated with:
