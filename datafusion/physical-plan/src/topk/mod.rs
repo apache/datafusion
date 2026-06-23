@@ -196,17 +196,13 @@ impl TopKThreshold {
 }
 
 #[derive(Clone, Copy)]
-struct TopKHeapBoundary<'a> {
+struct TopKHeapBoundaryRow<'a> {
     row: &'a TopKRow,
 }
 
-impl<'a> TopKHeapBoundary<'a> {
+impl<'a> TopKHeapBoundaryRow<'a> {
     fn new(row: &'a TopKRow) -> Self {
         Self { row }
-    }
-
-    fn row(&self) -> &'a TopKRow {
-        self.row
     }
 
     fn full_sort_key_row(&self) -> &[u8] {
@@ -218,21 +214,27 @@ impl<'a> TopKHeapBoundary<'a> {
             .map(|current| self.full_sort_key_row() < current.full_sort_key_row())
             .unwrap_or(true)
     }
+}
+
+#[derive(Clone, Copy)]
+struct TopKHeapBoundary<'a> {
+    row: &'a TopKRow,
+    batch: &'a RecordBatch,
+}
+
+impl<'a> TopKHeapBoundary<'a> {
+    fn new(row: &'a TopKRow, batch: &'a RecordBatch) -> Self {
+        Self { row, batch }
+    }
 
     fn threshold_values(
         &self,
-        heap: &TopKHeap,
         sort_exprs: &[PhysicalSortExpr],
     ) -> Result<Vec<ScalarValue>> {
-        let batch_entry = heap
-            .store
-            .get(self.row.batch_id)
-            .ok_or(internal_datafusion_err!("Invalid batch ID in TopKRow"))?;
-
         let mut scalar_values = Vec::with_capacity(sort_exprs.len());
         for sort_expr in sort_exprs {
             let expr = Arc::clone(&sort_expr.expr);
-            let value = expr.evaluate(&batch_entry.batch.slice(self.row.index, 1))?;
+            let value = expr.evaluate(&self.batch.slice(self.row.index, 1))?;
 
             let scalar = match value {
                 ColumnarValue::Scalar(scalar) => scalar,
@@ -250,7 +252,7 @@ impl<'a> TopKHeapBoundary<'a> {
     }
 
     fn threshold(&self, common_prefix_row: Option<Vec<u8>>) -> TopKThreshold {
-        TopKThreshold::new(self.full_sort_key_row().to_vec(), common_prefix_row)
+        TopKThreshold::new(self.row.row().to_vec(), common_prefix_row)
     }
 }
 
@@ -483,8 +485,26 @@ impl TopK {
         replacements
     }
 
-    fn current_heap_boundary(&self) -> Option<TopKHeapBoundary<'_>> {
-        self.heap.max().map(TopKHeapBoundary::new)
+    fn current_heap_boundary_row(&self) -> Option<TopKHeapBoundaryRow<'_>> {
+        self.heap.max().map(TopKHeapBoundaryRow::new)
+    }
+
+    fn current_heap_boundary(&self) -> Result<Option<TopKHeapBoundary<'_>>> {
+        let Some(row) = self.heap.max() else {
+            return Ok(None);
+        };
+
+        self.heap_boundary(row).map(Some)
+    }
+
+    fn heap_boundary<'a>(&'a self, row: &'a TopKRow) -> Result<TopKHeapBoundary<'a>> {
+        let batch_entry = self
+            .heap
+            .store
+            .get(row.batch_id)
+            .ok_or_else(|| internal_datafusion_err!("Invalid batch ID in TopKRow"))?;
+
+        Ok(TopKHeapBoundary::new(row, &batch_entry.batch))
     }
 
     /// Update the filter representation of our TopK heap.
@@ -499,7 +519,7 @@ impl TopK {
     /// ```
     fn update_filter(&mut self) -> Result<()> {
         // If the heap doesn't have k elements yet, we can't create thresholds
-        let Some(boundary) = self.current_heap_boundary() else {
+        let Some(boundary_row) = self.current_heap_boundary_row() else {
             return Ok(());
         };
 
@@ -507,7 +527,7 @@ impl TopK {
         // currently set in the filter with a read only lock
         let needs_update = {
             let filter = self.filter.read();
-            boundary.is_more_selective_than(filter.shared_threshold.as_ref())
+            boundary_row.is_more_selective_than(filter.shared_threshold.as_ref())
         };
 
         // exit early if the current values are better
@@ -515,13 +535,15 @@ impl TopK {
             return Ok(());
         }
 
+        let boundary = self.heap_boundary(boundary_row.row)?;
+
         // Extract scalar values BEFORE acquiring lock to reduce critical section
-        let thresholds = boundary.threshold_values(&self.heap, &self.expr)?;
+        let thresholds = boundary.threshold_values(&self.expr)?;
 
         // Build the filter expression OUTSIDE any synchronization
         let predicate = Self::build_filter_expression(&self.expr, &thresholds)?;
         let new_threshold =
-            boundary.threshold(self.encode_topk_common_prefix_row(boundary.row())?);
+            boundary.threshold(self.encode_topk_common_prefix_row(boundary)?);
 
         // update the threshold. Since there was a lock gap, we must check if it is still the best
         // may have changed while we were building the expression without the lock
@@ -680,7 +702,7 @@ impl TopK {
         }
 
         // Early exit only from the local heap once it has a full boundary row.
-        let Some(boundary) = self.current_heap_boundary() else {
+        let Some(boundary) = self.current_heap_boundary()? else {
             return Ok(());
         };
 
@@ -697,7 +719,7 @@ impl TopK {
         boundary: TopKHeapBoundary<'_>,
     ) -> Result<bool> {
         let Some(heap_common_prefix_row) =
-            self.encode_topk_common_prefix_row(boundary.row())?
+            self.encode_topk_common_prefix_row(boundary)?
         else {
             return Ok(false);
         };
@@ -707,22 +729,17 @@ impl TopK {
 
     fn encode_topk_common_prefix_row(
         &self,
-        topk_row: &TopKRow,
+        boundary: TopKHeapBoundary<'_>,
     ) -> Result<Option<Vec<u8>>> {
         let Some(prefix_converter) = &self.common_sort_prefix_converter else {
             return Ok(None);
         };
 
-        let store_entry = self
-            .heap
-            .store
-            .get(topk_row.batch_id)
-            .ok_or(internal_datafusion_err!("Invalid batch id in topK heap"))?;
         let mut scratch = prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW);
         self.append_common_prefix_row(
             prefix_converter,
-            &store_entry.batch,
-            topk_row.index,
+            boundary.batch,
+            boundary.row.index,
             &mut scratch,
         )?;
         Ok(Some(scratch.row(0).as_ref().to_vec()))
