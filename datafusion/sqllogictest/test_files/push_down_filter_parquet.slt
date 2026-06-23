@@ -1024,10 +1024,10 @@ drop table int_probe;
 
 
 ########
-# Dynamic filters must not be created for null-equal joins (IS NOT DISTINCT
-# FROM, INTERSECT): min/max bounds and membership filters derived from the
-# build side evaluate to NULL for probe-side NULL keys and would prune rows
-# that can null-match a build-side NULL.
+# Null-equal joins (IS NOT DISTINCT FROM, INTERSECT) keep dynamic filter pushdown.
+# Min/max bounds and membership filters derived from the build side evaluate to NULL
+# for a probe-side NULL key, so the pushed predicate carries an `IS NULL` disjunct that
+# lets the probe NULL reach the join and null-match a build-side NULL.
 ########
 
 statement ok
@@ -1049,20 +1049,47 @@ SELECT nej_build.id, nej_probe.id FROM nej_build JOIN nej_probe ON nej_build.id 
 11 11
 NULL NULL
 
-# No DynamicFilter predicate may appear on the probe side of a null-equal join
+# The probe side now carries a DynamicFilter for a null-equal join (widened with IS NULL at runtime)
 query TT
 EXPLAIN SELECT nej_build.id, nej_probe.id FROM nej_build JOIN nej_probe ON nej_build.id IS NOT DISTINCT FROM nej_probe.id
 ----
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], NullsEqual: true
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nej_build.parquet]]}, projection=[id], file_type=parquet
-03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nej_probe.parquet]]}, projection=[id], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nej_probe.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
 statement ok
 drop table nej_build;
 
 statement ok
 drop table nej_probe;
+
+
+# Multi-key null-equal join: the IS NULL disjunct covers every nullable key, so a probe row with a
+# NULL in either key still reaches the join and null-matches the build side.
+statement ok
+COPY (SELECT * FROM (VALUES (1, 10), (2, NULL), (NULL, 30)) v(a, b)) TO 'test_files/scratch/push_down_filter_parquet/mnej_probe.parquet' STORED AS PARQUET;
+
+statement ok
+COPY (SELECT * FROM (VALUES (1, 10), (2, NULL)) v(a, b)) TO 'test_files/scratch/push_down_filter_parquet/mnej_build.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE mnej_probe STORED AS PARQUET LOCATION 'test_files/scratch/push_down_filter_parquet/mnej_probe.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE mnej_build STORED AS PARQUET LOCATION 'test_files/scratch/push_down_filter_parquet/mnej_build.parquet';
+
+query IIII rowsort
+SELECT mnej_build.a, mnej_build.b, mnej_probe.a, mnej_probe.b FROM mnej_build JOIN mnej_probe ON (mnej_build.a IS NOT DISTINCT FROM mnej_probe.a) AND (mnej_build.b IS NOT DISTINCT FROM mnej_probe.b)
+----
+1 10 1 10
+2 NULL 2 NULL
+
+statement ok
+drop table mnej_build;
+
+statement ok
+drop table mnej_probe;
 
 
 # Config reset
