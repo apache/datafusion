@@ -22,8 +22,8 @@
 //! UDFs with ordinary physical expressions bound to the current file: a column
 //! reference into a source-provided row-index column, or a per-file literal, etc.
 //!
-//! [`file_row_index()`]: datafusion_functions::core::file_row_index::FileRowIndexFunc;
-//! [`input_file_name()`]: datafusion_functions::core::input_file_name::InputFileNameFunc;
+//! [`file_row_index()`]: datafusion_functions::core::file_row_index::FileRowIndexFunc
+//! [`input_file_name()`]: datafusion_functions::core::input_file_name::InputFileNameFunc
 
 use std::sync::Arc;
 
@@ -40,7 +40,7 @@ use datafusion_physical_expr::expressions::{CastExpr, Column, Literal};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-/// Return true if `expr` references scalar UDF `T`.
+/// Return true if a [`PhysicalExpr`] references scalar UDF `T`.
 ///
 /// This matches the concrete [`ScalarUDFImpl`] type rather than the function
 /// name, so unrelated UDFs with the same name are not treated as matches.
@@ -61,7 +61,8 @@ pub fn expr_references_scalar_udf<T: ScalarUDFImpl>(
     found
 }
 
-/// Rewrite occurrences of scalar UDF `T` in `expr` using `replacement`.
+/// Rewrite occurrences of scalar UDF `T` in a [`PhysicalExpr`] using
+/// `replacement`.
 ///
 /// The rewrite matches the concrete [`ScalarUDFImpl`] type rather than the
 /// function name. `replacement` is called with each matching
@@ -85,8 +86,8 @@ where
     .map(|transformed| transformed.data)
 }
 
-/// Rewrite `file_row_index()` in `expr` to read from a source-provided
-/// row-index column.
+/// Rewrite [`file_row_index()`][FileRowIndexFunc] in a [`PhysicalExpr`] to
+/// read from a source-provided row-index column.
 ///
 /// `row_index_idx` is the index of `row_index_name` in the schema that the
 /// rewritten expression will be evaluated against. The rewrite uses ordinary
@@ -109,12 +110,13 @@ pub fn rewrite_file_row_index_expr(
     })
 }
 
-/// Rewrite `file_row_index()` in a pushed projection to read from a
-/// source-provided row-index column.
+/// Rewrite [`file_row_index()`][FileRowIndexFunc] in pushed [`ProjectionExprs`]
+/// to read from a source-provided row-index column.
 ///
 ///
 /// For example if `row_index_column` is `__datafusion_row_idx` this function rewrites all
-/// instances of `file_row_index()` to `__datafusion_row_index` column references.
+/// instances of [`file_row_index()`][FileRowIndexFunc] to
+/// `__datafusion_row_index` [`Column`] references.
 ///
 /// `base_projection` is the current projection already pushed into a source.
 /// The row-index source column is appended to that base projection if it is not
@@ -148,12 +150,12 @@ pub fn rewrite_file_row_index_projection(
     ProjectionExprs::new(base_exprs).try_merge(&rewritten_projection)
 }
 
-/// Rewrite `input_file_name()` in a pushed projection to a per-file `Utf8`
-/// literal holding `file_name`.
+/// Rewrite [`input_file_name()`][InputFileNameFunc] in pushed
+/// [`ProjectionExprs`] to a per-file [`Literal`] holding `file_name`.
 ///
-/// If the projection contains no `input_file_name()` UDF it is returned
-/// unchanged, without allocating the literal or rebuilding the projection tree
-/// (the common case for queries that don't use the function).
+/// If the projection contains no [`input_file_name()`][InputFileNameFunc] UDF it
+/// is returned unchanged, without allocating the literal or rebuilding the
+/// projection tree (the common case for queries that don't use the function).
 pub fn rewrite_input_file_name_in_projection(
     projection: ProjectionExprs,
     file_name: &str,
