@@ -2225,6 +2225,7 @@ async fn collect_left_input(
             &mut hashes_buffer,
             0,
             true,
+            NullEquality::NullEqualsNothing,
         )?;
 
         // Build rows whose value key is NULL get a dedicated scope map: any
