@@ -22,8 +22,10 @@ use tokio::sync::watch;
 
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
+#[cfg(feature = "proto")]
+use datafusion_common::internal_datafusion_err;
 use datafusion_common::{
-    Result, internal_datafusion_err,
+    Result,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::ColumnarValue;
