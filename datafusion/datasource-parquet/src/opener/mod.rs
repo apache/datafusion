@@ -40,7 +40,7 @@ use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
-use datafusion_physical_expr_adapter::schema_rewriter::rewrite_input_file_name_in_projection;
+use datafusion_physical_expr_adapter::rewrite::rewrite_input_file_name_in_projection;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;

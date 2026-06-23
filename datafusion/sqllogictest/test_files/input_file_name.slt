@@ -79,3 +79,50 @@ SELECT input_file_name() FROM (VALUES (1)) v(x);
 
 statement ok
 DROP TABLE csv_table;
+
+# Parquet tests as it has its own implementation
+
+statement ok
+COPY  (VALUES (10), (20), (30))
+TO 'test_files/scratch/input_file_name/parquet/first.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY  (VALUES (40), (50), (60))
+TO 'test_files/scratch/input_file_name/parquet/second.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE pq_table(column1 int)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/input_file_name/parquet/';
+
+query I
+SELECT column1 FROM pq_table
+WHERE input_file_name() LIKE '%first.parquet'
+ORDER BY column1
+----
+10
+20
+30
+
+query TT
+EXPLAIN SELECT column1 FROM pq_table
+WHERE input_file_name() LIKE '%first.parquet'
+ORDER BY column1
+----
+logical_plan
+01)Sort: pq_table.column1 ASC NULLS LAST
+02)--Projection: pq_table.column1
+03)----Filter: __datafusion_extracted_1 LIKE Utf8("%first.parquet")
+04)------Projection: input_file_name() AS __datafusion_extracted_1, pq_table.column1
+05)--------TableScan: pq_table projection=[column1]
+physical_plan
+01)SortPreservingMergeExec: [column1@0 ASC NULLS LAST]
+02)--SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----FilterExec: __datafusion_extracted_1@0 LIKE %first.parquet, projection=[column1@1]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+05)--------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/parquet/first.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/parquet/second.parquet]]}, projection=[input_file_name() as __datafusion_extracted_1, column1], file_type=parquet, predicate=input_file_name() LIKE %first.parquet
+
+statement ok
+DROP TABLE pq_table;
