@@ -47,9 +47,9 @@ use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
-use datafusion_physical_expr_adapter::expr_references_scalar_udf;
-use datafusion_physical_expr_adapter::{
-    DefaultPhysicalExprAdapterFactory, rewrite_file_row_index_projection,
+use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
+use datafusion_physical_expr_adapter::rewrite::{
+    expr_references_scalar_udf, rewrite_file_row_index_projection,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -1829,7 +1829,7 @@ mod tests {
         use datafusion_expr::{col, lit as logical_lit};
         use datafusion_functions::core::expr_fn::file_row_index;
         use datafusion_physical_expr::planner::logical2physical;
-        use datafusion_physical_expr_adapter::rewrite_file_row_index_expr;
+        use datafusion_physical_expr_adapter::rewrite::rewrite_file_row_index_expr;
         use datafusion_physical_plan::filter_pushdown::PushedDown;
         use parquet::arrow::RowNumber;
 
