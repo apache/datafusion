@@ -35,11 +35,11 @@ use crate::aggregates::{
 };
 
 /// Marker for raw rows -> partial state aggregation.
-pub(in crate::aggregates) struct Partial;
+pub(in crate::aggregates) struct PartialMarker;
 /// Marker for raw rows -> partial state conversion without aggregation.
-pub(in crate::aggregates) struct PartialSkip;
+pub(in crate::aggregates) struct PartialSkipMarker;
 /// Marker for partial state -> final value aggregation.
-pub(in crate::aggregates) struct Final;
+pub(in crate::aggregates) struct FinalMarker;
 
 /// Grouped hash table shared by the partial and final paths.
 ///
@@ -61,7 +61,7 @@ pub(in crate::aggregates) struct Final;
 /// # Marker Type
 /// `AggrMode` selects the aggregate semantics.
 ///
-/// e.g. `AggregateHashTable::<Partial>::new(...)` creates an aggregate hash table
+/// e.g. `AggregateHashTable::<PartialMarker>::new(...)` creates an aggregate hash table
 /// for the partial hash aggregate stage, the input schema is raw rows and output
 /// schema is intermediate states.
 ///
@@ -85,6 +85,139 @@ pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
     pub(super) state: AggregateHashTableState,
 
     pub(super) _mode: PhantomData<AggrMode>,
+}
+
+/// Methods shared by all aggregate hash table modes.
+impl<AggrMode> AggregateHashTable<AggrMode> {
+    pub(super) fn new_with_filters(
+        agg: &AggregateExec,
+        partition: usize,
+        output_schema: SchemaRef,
+        batch_size: usize,
+        filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    ) -> Result<Self> {
+        if batch_size == 0 {
+            return internal_err!("AggregateHashTable requires config batch_size >= 1");
+        }
+
+        let input_schema = agg.input().schema();
+        let aggregate_arguments = aggregate_expressions(
+            &agg.aggr_expr,
+            &agg.mode,
+            agg.group_by.num_group_exprs(),
+        )?;
+        let accumulators: Vec<_> = agg
+            .aggr_expr
+            .iter()
+            .zip(aggregate_arguments)
+            .zip(filters)
+            .map(|((agg_expr, arguments), filter)| {
+                let accumulator = create_group_accumulator(agg_expr)?;
+                Ok(HashAggregateAccumulator::new(
+                    Arc::clone(agg_expr),
+                    arguments,
+                    filter,
+                    accumulator,
+                ))
+            })
+            .collect::<Result<_>>()?;
+
+        let group_schema = agg.group_by.group_schema(&input_schema)?;
+        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+
+        Ok(Self {
+            group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
+            input_schema,
+            output_schema,
+            batch_size,
+            state: AggregateHashTableState::Building(AggregateHashTableBuffer {
+                group_by: Arc::clone(&agg.group_by),
+                group_values,
+                batch_group_indices: Default::default(),
+                accumulators,
+            }),
+            _mode: PhantomData,
+        })
+    }
+
+    /// See comments in [`EvaluatedAggregateBatch`]
+    pub(super) fn evaluate_batch(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<EvaluatedAggregateBatch> {
+        let state = self.state.building();
+        let timer = self.group_by_metrics.time_calculating_group_ids.timer();
+        // outer vec: one per each grouping set
+        // inner vec: all group by exprs for the current grouping set
+        let grouping_set_args = evaluate_group_by(&state.group_by, batch)?;
+        drop(timer);
+
+        let timer = self.group_by_metrics.aggregate_arguments_time.timer();
+        // The evaluated args for each accumulator
+        let accumulator_args = self
+            .state
+            .building()
+            .accumulators
+            .iter()
+            .map(|acc| acc.evaluate_acc_args(batch))
+            .collect::<Result<Vec<_>>>()?;
+        drop(timer);
+
+        Ok(EvaluatedAggregateBatch {
+            grouping_set_args,
+            accumulator_args,
+        })
+    }
+
+    pub(in crate::aggregates) fn memory_size(&self) -> usize {
+        match &self.state {
+            AggregateHashTableState::Building(state)
+            | AggregateHashTableState::Outputting(state) => {
+                let acc = state
+                    .accumulators
+                    .iter()
+                    .map(|acc| acc.accumulator.size())
+                    .sum::<usize>();
+
+                acc + state.group_values.size()
+                    + state.batch_group_indices.allocated_size()
+            }
+            AggregateHashTableState::Done => 0,
+        }
+    }
+
+    /// Returns the number of distinct groups accumulated so far.
+    pub(in crate::aggregates) fn building_group_count(&self) -> usize {
+        self.state.building().group_values.len()
+    }
+
+    pub(in crate::aggregates) fn is_building(&self) -> bool {
+        matches!(self.state, AggregateHashTableState::Building(_))
+    }
+
+    pub(in crate::aggregates) fn is_done(&self) -> bool {
+        matches!(self.state, AggregateHashTableState::Done)
+    }
+
+    pub(super) fn start_outputting(&mut self) {
+        let AggregateHashTableState::Building(mut state) =
+            std::mem::replace(&mut self.state, AggregateHashTableState::Done)
+        else {
+            unreachable!("hash aggregate table is not building")
+        };
+
+        state.batch_group_indices = Vec::new();
+        self.state = AggregateHashTableState::Outputting(state);
+    }
+}
+
+pub(super) fn emit_to_for_batch_size(batch_size: usize, group_count: usize) -> EmitTo {
+    debug_assert!(batch_size > 0);
+    if group_count <= batch_size {
+        EmitTo::All
+    } else {
+        EmitTo::First(batch_size)
+    }
 }
 
 /// State and argument information for a single Aggregate
@@ -196,7 +329,13 @@ impl HashAggregateAccumulator {
         ))
     }
 
-    fn evaluate(&self, batch: &RecordBatch) -> Result<EvaluatedAccumulatorArgs> {
+    /// Evaluate aggregate arguments and filter for one input batch.
+    ///
+    /// For example, `AVG(x + 1) FILTER (WHERE x > 0)` evaluates both `x + 1`
+    /// and `x > 0`.
+    ///
+    /// These arrays can be passed directly to [`GroupsAccumulator`] next.
+    fn evaluate_acc_args(&self, batch: &RecordBatch) -> Result<EvaluatedAccumulatorArgs> {
         let arguments = self
             .arguments
             .iter()
@@ -245,10 +384,16 @@ impl HashAggregateAccumulator {
             .merge_batch(&values.arguments, group_indices, total_num_groups)
     }
 
-    pub(super) fn evaluate_final(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+    /// Evaluating final aggregate results according to `EmitTo`, and reset inner
+    /// states. (e.g. after `evaluate(EmitTo::All)`, it returns all accumulated groups
+    /// , and clear the inner buffers)
+    pub(super) fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         self.accumulator.evaluate(emit_to)
     }
 
+    /// Evaluating partial aggregate results according to `EmitTo`, and reset inner
+    /// states. (e.g. after `state(EmitTo::All)`, it returns all accumulated groups
+    /// , and clear the inner buffers)
     pub(super) fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         self.accumulator.state(emit_to)
     }
@@ -293,138 +438,5 @@ impl AggregateHashTableState {
             unreachable!("hash aggregate table is not building")
         };
         state
-    }
-}
-
-/// Methods shared by all aggregate hash table modes.
-impl<AggrMode> AggregateHashTable<AggrMode> {
-    pub(super) fn new_with_filters(
-        agg: &AggregateExec,
-        partition: usize,
-        output_schema: SchemaRef,
-        batch_size: usize,
-        filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
-    ) -> Result<Self> {
-        if batch_size == 0 {
-            return internal_err!("AggregateHashTable requires config batch_size >= 1");
-        }
-
-        let input_schema = agg.input().schema();
-        let aggregate_arguments = aggregate_expressions(
-            &agg.aggr_expr,
-            &agg.mode,
-            agg.group_by.num_group_exprs(),
-        )?;
-        let accumulators: Vec<_> = agg
-            .aggr_expr
-            .iter()
-            .zip(aggregate_arguments)
-            .zip(filters)
-            .map(|((agg_expr, arguments), filter)| {
-                let accumulator = create_group_accumulator(agg_expr)?;
-                Ok(HashAggregateAccumulator::new(
-                    Arc::clone(agg_expr),
-                    arguments,
-                    filter,
-                    accumulator,
-                ))
-            })
-            .collect::<Result<_>>()?;
-
-        let group_schema = agg.group_by.group_schema(&input_schema)?;
-        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
-
-        Ok(Self {
-            group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
-            input_schema,
-            output_schema,
-            batch_size,
-            state: AggregateHashTableState::Building(AggregateHashTableBuffer {
-                group_by: Arc::clone(&agg.group_by),
-                group_values,
-                batch_group_indices: Default::default(),
-                accumulators,
-            }),
-            _mode: PhantomData,
-        })
-    }
-
-    /// See comments in [`EvaluatedAggregateBatch`]
-    pub(super) fn evaluate_batch(
-        &self,
-        batch: &RecordBatch,
-    ) -> Result<EvaluatedAggregateBatch> {
-        let state = self.state.building();
-        let timer = self.group_by_metrics.time_calculating_group_ids.timer();
-        // outer vec: one per each grouping set
-        // inner vec: all group by exprs for the current grouping set
-        let grouping_set_args = evaluate_group_by(&state.group_by, batch)?;
-        drop(timer);
-
-        let timer = self.group_by_metrics.aggregate_arguments_time.timer();
-        // The evaluated args for each accumulator
-        let accumulator_args = self
-            .state
-            .building()
-            .accumulators
-            .iter()
-            .map(|acc| acc.evaluate(batch))
-            .collect::<Result<Vec<_>>>()?;
-        drop(timer);
-
-        Ok(EvaluatedAggregateBatch {
-            grouping_set_args,
-            accumulator_args,
-        })
-    }
-
-    pub(in crate::aggregates) fn memory_size(&self) -> usize {
-        match &self.state {
-            AggregateHashTableState::Building(state)
-            | AggregateHashTableState::Outputting(state) => {
-                let acc = state
-                    .accumulators
-                    .iter()
-                    .map(|acc| acc.accumulator.size())
-                    .sum::<usize>();
-
-                acc + state.group_values.size()
-                    + state.batch_group_indices.allocated_size()
-            }
-            AggregateHashTableState::Done => 0,
-        }
-    }
-
-    /// Returns the number of distinct groups accumulated so far.
-    pub(in crate::aggregates) fn building_group_count(&self) -> usize {
-        self.state.building().group_values.len()
-    }
-
-    pub(in crate::aggregates) fn is_building(&self) -> bool {
-        matches!(self.state, AggregateHashTableState::Building(_))
-    }
-
-    pub(in crate::aggregates) fn is_done(&self) -> bool {
-        matches!(self.state, AggregateHashTableState::Done)
-    }
-
-    pub(super) fn start_outputting(&mut self) {
-        let AggregateHashTableState::Building(mut state) =
-            std::mem::replace(&mut self.state, AggregateHashTableState::Done)
-        else {
-            unreachable!("hash aggregate table is not building")
-        };
-
-        state.batch_group_indices = Vec::new();
-        self.state = AggregateHashTableState::Outputting(state);
-    }
-}
-
-pub(super) fn emit_to_for_batch_size(batch_size: usize, group_count: usize) -> EmitTo {
-    debug_assert!(batch_size > 0);
-    if group_count <= batch_size {
-        EmitTo::All
-    } else {
-        EmitTo::First(batch_size)
     }
 }

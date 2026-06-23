@@ -30,12 +30,12 @@ use crate::aggregates::{AggregateExec, group_id_array, max_duplicate_ordinal};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
-    EvaluatedAccumulatorArgs, HashAggregateAccumulator, Partial, PartialSkip,
+    EvaluatedAccumulatorArgs, HashAggregateAccumulator, PartialMarker, PartialSkipMarker,
     emit_to_for_batch_size,
 };
 
 /// Methods specific to the aggregate hash table used in the partial aggregation stage.
-impl AggregateHashTable<Partial> {
+impl AggregateHashTable<PartialMarker> {
     pub(in crate::aggregates) fn new(
         agg: &AggregateExec,
         partition: usize,
@@ -107,7 +107,7 @@ impl AggregateHashTable<Partial> {
     /// row-by-row.
     pub(in crate::aggregates) fn partial_skip_table(
         &self,
-    ) -> Result<AggregateHashTable<PartialSkip>> {
+    ) -> Result<AggregateHashTable<PartialSkipMarker>> {
         let state = self.state.building();
         let group_schema = state.group_by.group_schema(&self.input_schema)?;
         let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
@@ -235,7 +235,7 @@ impl AggregateHashTable<Partial> {
     }
 }
 
-impl AggregateHashTable<PartialSkip> {
+impl AggregateHashTable<PartialSkipMarker> {
     pub(in crate::aggregates) fn convert_batch_to_state(
         &mut self,
         batch: &RecordBatch,

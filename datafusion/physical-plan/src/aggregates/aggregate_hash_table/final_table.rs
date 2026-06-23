@@ -24,11 +24,11 @@ use datafusion_common::{Result, internal_err};
 use crate::aggregates::AggregateExec;
 
 use super::common::{
-    AggregateHashTable, AggregateHashTableState, Final, emit_to_for_batch_size,
+    AggregateHashTable, AggregateHashTableState, FinalMarker, emit_to_for_batch_size,
 };
 
 /// Methods specific to the aggregate hash table used in the final aggregation stage.
-impl AggregateHashTable<Final> {
+impl AggregateHashTable<FinalMarker> {
     pub(in crate::aggregates) fn new(
         agg: &AggregateExec,
         partition: usize,
@@ -68,7 +68,7 @@ impl AggregateHashTable<Final> {
                 let mut output = state.group_values.emit(emit_to)?;
 
                 for acc in state.accumulators.iter_mut() {
-                    output.push(acc.evaluate_final(emit_to)?);
+                    output.push(acc.evaluate(emit_to)?);
                 }
                 let done = state.group_values.is_empty();
                 drop(timer);
