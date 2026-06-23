@@ -1126,12 +1126,8 @@ impl HashJoinStream {
 /// 1. its value key is NULL and any probe row shares its correlation scope, or
 /// 2. some probe row in its correlation scope has a NULL value key.
 ///
-/// Each case only does work proportional to the rows that actually involve a
-/// NULL value key: case 1 probes the build-side NULL-value scope map (which
-/// contains only NULL-valued build rows) with all probe rows, and case 2
-/// probes the full scope map with only the NULL-valued probe rows. Enumerating
-/// every scope match of every probe row instead would degrade to
-/// O(build * probe) for low-cardinality correlation keys.
+/// Case 1 probes the build-side NULL-value scope map with all probe rows;
+/// case 2 probes the full scope map with only the NULL-valued probe rows.
 fn mark_null_candidates_for_probe_batch(
     build_side: &BuildSideReadyState,
     state: &ProcessProbeBatchState,
@@ -1145,19 +1141,12 @@ fn mark_null_candidates_for_probe_batch(
         return Ok(());
     };
 
-    debug_assert!(
-        build_side.left_data.values().len() > 1,
-        "build keys must be [value, scope..]"
-    );
-    debug_assert!(
-        state.values.len() > 1,
-        "probe keys must be [value, scope..]"
-    );
     debug_assert_eq!(
         build_side.left_data.values().len(),
         state.values.len(),
         "build/probe key counts must match"
     );
+    debug_assert!(state.values.len() > 1, "keys must be [value, scope..]");
 
     let probe_value_key = &state.values[0];
     let build_scope_values = &build_side.left_data.values()[1..];
