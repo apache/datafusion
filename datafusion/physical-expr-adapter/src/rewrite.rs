@@ -21,7 +21,7 @@
 //! whose value is only known during a file scan. The helpers here replace those
 //! UDFs with ordinary physical expressions bound to the current file: a column
 //! reference into a source-provided row-index column, or a per-file literal, etc.
-//! 
+//!
 //! [`file_row_index()`]: datafusion_functions::core::file_row_index::FileRowIndexFunc;
 //! [`input_file_name()`]: datafusion_functions::core::input_file_name::InputFileNameFunc;
 
