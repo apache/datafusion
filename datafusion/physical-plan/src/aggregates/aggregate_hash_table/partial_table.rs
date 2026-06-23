@@ -139,7 +139,7 @@ impl AggregateHashTable<PartialMarker> {
         let evaluated_batch = self.evaluate_batch(batch)?;
         let state = self.state.building_mut();
 
-        let timer = self.group_by_metrics.aggregation_time.timer();
+        let _timer = self.group_by_metrics.aggregation_time.timer();
         for group_values in &evaluated_batch.grouping_set_args {
             state
                 .group_values
@@ -155,7 +155,6 @@ impl AggregateHashTable<PartialMarker> {
                 acc.update_batch(values, group_indices, total_num_groups)?;
             }
         }
-        drop(timer);
 
         Ok(())
     }
