@@ -21,7 +21,6 @@ pub(crate) mod in_progress_spill_file;
 pub(crate) mod replayable_spill_input;
 pub(crate) mod spill_manager;
 pub mod spill_pool;
-use bytes::BytesMut;
 use datafusion_execution::spill_file::SpillWriter;
 // Moved for refactor, re-export to keep the public API stable
 pub use datafusion_common::utils::memory::get_record_batch_memory_size;
@@ -29,8 +28,6 @@ pub use datafusion_common::utils::memory::get_record_batch_memory_size;
 #[doc(hidden)]
 pub use spill_manager::SpillManager;
 
-use std::fs::File;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -51,8 +48,8 @@ use arrow::record_batch::RecordBatch;
 use arrow_data::ArrayDataBuilder;
 use arrow_ipc::CompressionType;
 
+use datafusion_common::Result;
 use datafusion_common::config::SpillCompression;
-use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
 use datafusion_execution::RecordBatchStream;
 use datafusion_execution::spill_file::SpillFile;
 use futures::Stream;
@@ -200,117 +197,41 @@ impl RecordBatchStream for SpillReaderStream {
     }
 }
 
-/// A simple, unmonitored file writer to support the deprecated `spill_record_batch_by_size` API.
-struct DeprecatedFileSpillWriter(File);
-
-impl SpillWriter for DeprecatedFileSpillWriter {
-    fn write(&mut self, data: bytes::Bytes) -> Result<()> {
-        use std::io::Write;
-        self.0.write_all(&data).map_err(DataFusionError::IoError)?;
-        Ok(())
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        use std::io::Write;
-        self.0.flush().map_err(DataFusionError::IoError)
-    }
-
-    fn finish(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-/// Spill the `RecordBatch` to disk as smaller batches
-/// split by `batch_size_rows`
-#[deprecated(
-    since = "46.0.0",
-    note = "This method is deprecated. Use `SpillManager::spill_record_batch_by_size` instead."
-)]
-#[expect(clippy::needless_pass_by_value)]
-pub fn spill_record_batch_by_size(
-    batch: &RecordBatch,
-    path: PathBuf,
-    schema: SchemaRef,
-    batch_size_rows: usize,
-) -> Result<()> {
-    let file = File::create(&path).map_err(|e| {
-        exec_datafusion_err!("(Hint: you may increase the file descriptor limit with shell command 'ulimit -n 4096') Failed to create partition file at {path:?}: {e:?}")
-    })?;
-
-    let spill_writer = Box::new(DeprecatedFileSpillWriter(file));
-
-    let mut offset = 0;
-    let total_rows = batch.num_rows();
-    let mut writer = IPCStreamWriter::new(
-        spill_writer,
-        schema.as_ref(),
-        SpillCompression::Uncompressed,
-    )?;
-
-    while offset < total_rows {
-        let length = std::cmp::min(total_rows - offset, batch_size_rows);
-        let batch = batch.slice(offset, length);
-        offset += batch.num_rows();
-        writer.write(&batch)?;
-    }
-    writer.finish()?;
-
-    Ok(())
-}
-
-/// An adapter that implements `std::io::Write` to bridge Arrow's synchronous
-/// IPC writer with our chunk-based `SpillWriter` backend trait.
-pub(crate) struct SpillWriteAdapter {
+/// A  wrapper that counts the exact compressed IPC bytes written by Arrow.
+///
+/// Arrow's `StreamWriter` does not return the number of bytes written during its
+/// `write()` calls. To accurately track the `spilled_bytes` metrics (especially
+/// when LZ4/ZSTD compression is applied), we must intercept the `std::io::Write`
+/// trait boundary to count the final serialized payload size.
+pub(crate) struct TrackingSpillWriter {
     inner: Box<dyn SpillWriter>,
-    buffer: BytesMut,
     pub(crate) total_bytes_written: usize,
 }
 
-impl SpillWriteAdapter {
+impl TrackingSpillWriter {
     pub fn new(inner: Box<dyn SpillWriter>) -> Self {
         Self {
             inner,
-            buffer: BytesMut::new(),
             total_bytes_written: 0,
         }
     }
-    /// Drains the internal buffer to the backend without forcing an I/O flush.
-    /// This prevents memory leaks while preserving optimal batching performance.
-    pub fn drain(&mut self) -> Result<()> {
-        if !self.buffer.is_empty() {
-            let chunk = self.buffer.split().freeze();
-            self.inner.write(chunk)?;
-        }
-        Ok(())
-    }
+
     pub fn finish(mut self) -> Result<()> {
-        if !self.buffer.is_empty() {
-            let chunk = self.buffer.split().freeze();
-            self.inner.write(chunk)?;
-        }
-        // Arrow already flushed during writer.finish().
-        // Just signal completion to the backend.
         self.inner.finish()
     }
 }
 
-impl std::io::Write for SpillWriteAdapter {
+impl std::io::Write for TrackingSpillWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.buffer.extend_from_slice(buf);
-        self.total_bytes_written += buf.len();
-        Ok(buf.len())
+        let n = self.inner.write(buf)?;
+
+        self.total_bytes_written += n;
+
+        Ok(n)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        if !self.buffer.is_empty() {
-            let chunk = self.buffer.split().freeze();
-            self.inner
-                .write(chunk)
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-        }
-        self.inner
-            .flush()
-            .map_err(|e| std::io::Error::other(e.to_string()))
+        self.inner.flush()
     }
 }
 
@@ -318,7 +239,7 @@ impl std::io::Write for SpillWriteAdapter {
 /// Stream format also supports dictionary replacement.
 struct IPCStreamWriter {
     /// Inner writer
-    writer: Option<StreamWriter<SpillWriteAdapter>>,
+    writer: Option<StreamWriter<TrackingSpillWriter>>,
     /// Batches written
     num_batches: usize,
     /// Rows written
@@ -358,7 +279,7 @@ impl IPCStreamWriter {
         let compression_type = Option::<CompressionType>::from(spill_compression);
         write_options = write_options.try_with_compression(compression_type)?;
 
-        let adapter = SpillWriteAdapter::new(spill_writer);
+        let adapter = TrackingSpillWriter::new(spill_writer);
         let writer = StreamWriter::try_new_with_options(adapter, schema, write_options)?;
 
         Ok(Self {
@@ -377,7 +298,6 @@ impl IPCStreamWriter {
 
         let bytes_before = writer.get_ref().total_bytes_written;
         writer.write(batch)?;
-        writer.get_mut().drain()?;
         let bytes_after = writer.get_ref().total_bytes_written;
         self.num_batches += 1;
         let delta_num_rows = batch.num_rows();

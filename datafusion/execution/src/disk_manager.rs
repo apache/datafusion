@@ -20,9 +20,7 @@
 use crate::spill_file::{SpillFile, SpillWriter, TempFileFactory};
 use bytes::Bytes;
 use datafusion_common::human_readable_size;
-use datafusion_common::{
-    DataFusionError, Result, config_err, resources_datafusion_err, resources_err,
-};
+use datafusion_common::{DataFusionError, Result, config_err, resources_datafusion_err};
 #[cfg(not(target_arch = "wasm32"))]
 use futures::StreamExt;
 use log::debug;
@@ -498,13 +496,11 @@ pub struct FileSpillWriter {
     current_file_disk_usage: Arc<AtomicU64>,
 }
 
-impl SpillWriter for FileSpillWriter {
-    fn write(&mut self, data: Bytes) -> Result<()> {
-        use std::io::Write;
-
-        let len = data.len() as u64;
+impl std::io::Write for FileSpillWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let len = buf.len() as u64;
         if len == 0 {
-            return Ok(());
+            return Ok(0);
         }
 
         let new_global = self
@@ -520,30 +516,33 @@ impl SpillWriter for FileSpillWriter {
                 .used_disk_space
                 .fetch_sub(len, Ordering::Relaxed);
 
-            return resources_err!(
-                "The used disk space during the spilling process has exceeded the allowable limit of {}. \
-                Please try increasing the config: `datafusion.runtime.max_temp_directory_size`.",
-                human_readable_size(limit as usize)
-            );
+            return Err(std::io::Error::other(
+                format!(
+                    "The used disk space during the spilling process has exceeded the allowable limit of {}. \
+                        Please try increasing the config: `datafusion.runtime.max_temp_directory_size`.",
+                    human_readable_size(limit as usize)
+                ),
+            ));
         }
 
         self.file
-            .write_all(&data)
+            .write_all(buf)
             .map_err(DataFusionError::IoError)?;
 
         self.current_file_disk_usage
             .fetch_add(len, Ordering::Relaxed);
 
-        Ok(())
+        Ok(buf.len())
     }
 
-    fn flush(&mut self) -> Result<()> {
-        use std::io::Write;
-        self.file.flush().map_err(DataFusionError::IoError)
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
     }
+}
 
+impl SpillWriter for FileSpillWriter {
     fn finish(&mut self) -> Result<()> {
-        // flush() already called by SpillWriteAdapter before finish()
+        // flush() is handled by Arrow, nothing left to do here
         Ok(())
     }
 }
@@ -764,7 +763,7 @@ mod tests {
         assert_eq!(temp_file.size().unwrap(), 0);
 
         // Write some data to the file
-        writer.write(Bytes::from_static(b"hello world"))?;
+        writer.write_all(b"hello world")?;
 
         // Disk usage should now reflect the written data
         let expected_usage = temp_file.size().unwrap();
@@ -772,7 +771,7 @@ mod tests {
         assert_eq!(dm.used_disk_space(), expected_usage);
 
         // Write more data
-        writer.write(Bytes::from_static(b"more_data"))?;
+        writer.write_all(b"more_data")?;
 
         // Disk usage should increase
         let new_usage = temp_file.size().unwrap();
@@ -795,7 +794,7 @@ mod tests {
 
         // Write some data
         let mut writer = temp_file.open_writer()?;
-        writer.write(Bytes::from_static(b"test data"))?;
+        writer.write_all(b"test data")?;
 
         let usage_after_write = temp_file.size().unwrap();
         assert!(usage_after_write > 0);
@@ -813,7 +812,7 @@ mod tests {
 
         // Write more data through one clone
         let mut clone_writer = clone1.open_writer()?;
-        clone_writer.write(Bytes::from_static(b" more data"))?;
+        clone_writer.write_all(b" more data")?;
 
         let new_usage = clone1.size().unwrap();
         assert!(new_usage > usage_after_write);
@@ -857,7 +856,7 @@ mod tests {
         let mut writer = temp_file.open_writer()?;
 
         // Write data
-        writer.write(Bytes::from_static(b"test"))?;
+        writer.write_all(b"test")?;
 
         let usage = temp_file.size().unwrap();
         assert_eq!(dm.used_disk_space(), usage);
@@ -902,13 +901,13 @@ mod tests {
         let mut writer2 = file2.open_writer()?;
 
         // Write to first file
-        writer1.write(Bytes::from_static(b"file1"))?;
+        writer1.write_all(b"file1")?;
         let usage1 = file1.size().unwrap();
 
         assert_eq!(dm.used_disk_space(), usage1);
 
         // Write to second file
-        writer2.write(Bytes::from_static(b"file2 data"))?;
+        writer2.write_all(b"file2 data")?;
         let usage2 = file2.size().unwrap();
 
         // Global usage should be sum of both files
@@ -1133,7 +1132,7 @@ mod tests {
         // Create a temp file and write some data
         {
             let data = vec![0u8; 1024]; // 1KB
-            writer.write(Bytes::from(data))?;
+            writer.write_all(&data)?;
         }
 
         let usage_after_first_write = dm.used_disk_space();
@@ -1142,7 +1141,7 @@ mod tests {
         // Write more data to grow the file
         {
             let data = vec![0u8; 4 * 1024]; // 4KB more
-            writer.write(Bytes::from(data))?;
+            writer.write_all(&data)?;
         }
 
         let usage_after_second_write = dm.used_disk_space();
@@ -1156,7 +1155,7 @@ mod tests {
             let data = vec![0u8; 2 * 1024]; // 2KB more
 
             // This write should FAIL (exceeds new 1-byte limit)
-            let result = writer.write(Bytes::from(data));
+            let result = writer.write_all(&data);
 
             assert!(result.is_err());
             assert!(

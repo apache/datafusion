@@ -41,13 +41,7 @@ pub trait SpillFile: Send + Sync {
 }
 
 /// Writer for spill file backends.
-/// Receives zero-copy `Bytes` payloads from the IPCStreamWriter adapter.
-pub trait SpillWriter: Send {
-    fn write(&mut self, data: Bytes) -> Result<()>;
-    fn flush(&mut self) -> Result<()>;
-    /// Finalizes the write after all data has been flushed.
-    ///
-    /// Implementations must not call `flush` internally.
+pub trait SpillWriter: std::io::Write + Send {
     /// Intended for close/sync/commit operations.    
     fn finish(&mut self) -> Result<()>;
 }
