@@ -30,7 +30,7 @@ use crate::aggregates::{AggregateExec, group_id_array, max_duplicate_ordinal};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
-    EvaluatedHashAggregateAccumulator, HashAggregateAccumulator, Partial, PartialSkip,
+    EvaluatedAccumulatorArgs, HashAggregateAccumulator, Partial, PartialSkip,
     emit_to_for_batch_size,
 };
 
@@ -223,7 +223,7 @@ impl AggregateHashTable<Partial> {
             let false_filter = BooleanArray::from(vec![false]);
             for acc in state.accumulators.iter_mut() {
                 let null_args = acc.null_arguments(&self.input_schema)?;
-                let values = EvaluatedHashAggregateAccumulator {
+                let values = EvaluatedAccumulatorArgs {
                     arguments: null_args,
                     filter: Some(Arc::new(false_filter.clone())),
                 };

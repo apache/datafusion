@@ -46,7 +46,7 @@ pub(in crate::aggregates) struct Final;
 /// While building, it consumes input batches and updates group / accumulator
 /// state. While outputting, it incrementally drains that state into output
 /// batches.
-/// 
+///
 /// # Logical and Physical Model
 ///
 /// Logically, this is a hash table that maps { group keys -> accumulator states }
@@ -87,6 +87,10 @@ pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
     pub(super) _mode: PhantomData<AggrMode>,
 }
 
+/// State and argument information for a single Aggregate
+///
+/// For example, for `SELECT COUNT(x), SUM(y WHERE z > 10) ...`  there would be two
+/// `HashAggregateAccumulator`, one each for `COUNT(x)` and `SUM(y WHERE z > 10)`
 pub(super) struct HashAggregateAccumulator {
     /// Aggregate expression used to create a fresh accumulator for related
     /// hash tables, such as the partial-skip table.
@@ -106,8 +110,16 @@ pub(super) struct HashAggregateAccumulator {
     accumulator: Box<dyn GroupsAccumulator>,
 }
 
-pub(super) struct EvaluatedHashAggregateAccumulator {
+/// Evaluated aggregate arguments and filter for one input batch.
+///
+/// For example, `AVG(x + 1) FILTER (WHERE x > 0)` evaluates both `x + 1`
+/// and `x > 0`.
+///
+/// These arrays can be passed directly to [`GroupsAccumulator`].
+pub(super) struct EvaluatedAccumulatorArgs {
+    /// Evaluated argument arrays. Some aggregate functions take multiple arguments.
     pub(super) arguments: Vec<ArrayRef>,
+    /// Evaluated filter array, `Some` if the aggregate has a `FILTER` expression.
     pub(super) filter: Option<ArrayRef>,
 }
 
@@ -121,7 +133,7 @@ pub(super) struct EvaluatedAggregateBatch {
     pub(super) grouping_set_args: Vec<Vec<ArrayRef>>,
 
     /// Evaluated arguments and filters, one entry per aggregate expression.
-    pub(super) accumulator_args: Vec<EvaluatedHashAggregateAccumulator>,
+    pub(super) accumulator_args: Vec<EvaluatedAccumulatorArgs>,
 }
 
 /// Buffer for the aggregate hash table's group keys and accumulator states.
@@ -172,6 +184,8 @@ impl HashAggregateAccumulator {
         }
     }
 
+    /// Construct a new accumulator with the same definition, but with empty internal
+    /// state buffers (empty [`GroupsAccumulator`]).
     pub(super) fn empty_like(&self) -> Result<Self> {
         let accumulator = create_group_accumulator(&self.aggregate_expr)?;
         Ok(Self::new(
@@ -182,7 +196,7 @@ impl HashAggregateAccumulator {
         ))
     }
 
-    fn evaluate(&self, batch: &RecordBatch) -> Result<EvaluatedHashAggregateAccumulator> {
+    fn evaluate(&self, batch: &RecordBatch) -> Result<EvaluatedAccumulatorArgs> {
         let arguments = self
             .arguments
             .iter()
@@ -202,12 +216,12 @@ impl HashAggregateAccumulator {
             })
             .transpose()?;
 
-        Ok(EvaluatedHashAggregateAccumulator { arguments, filter })
+        Ok(EvaluatedAccumulatorArgs { arguments, filter })
     }
 
     pub(super) fn update_batch(
         &mut self,
-        values: &EvaluatedHashAggregateAccumulator,
+        values: &EvaluatedAccumulatorArgs,
         group_indices: &[usize],
         total_num_groups: usize,
     ) -> Result<()> {
@@ -222,7 +236,7 @@ impl HashAggregateAccumulator {
 
     pub(super) fn merge_batch(
         &mut self,
-        values: &EvaluatedHashAggregateAccumulator,
+        values: &EvaluatedAccumulatorArgs,
         group_indices: &[usize],
         total_num_groups: usize,
     ) -> Result<()> {
@@ -245,7 +259,7 @@ impl HashAggregateAccumulator {
 
     pub(super) fn convert_to_state(
         &mut self,
-        values: &EvaluatedHashAggregateAccumulator,
+        values: &EvaluatedAccumulatorArgs,
     ) -> Result<Vec<ArrayRef>> {
         let opt_filter = values.filter.as_ref().map(|filter| filter.as_boolean());
         self.accumulator
