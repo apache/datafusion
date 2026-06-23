@@ -233,8 +233,9 @@ impl<'a> TopKHeapBoundary<'a> {
     ) -> Result<Vec<ScalarValue>> {
         let mut scalar_values = Vec::with_capacity(sort_exprs.len());
         for sort_expr in sort_exprs {
-            let expr = Arc::clone(&sort_expr.expr);
-            let value = expr.evaluate(&self.batch.slice(self.row.index, 1))?;
+            let value = sort_expr
+                .expr
+                .evaluate(&self.batch.slice(self.row.index, 1))?;
 
             let scalar = match value {
                 ColumnarValue::Scalar(scalar) => scalar,
