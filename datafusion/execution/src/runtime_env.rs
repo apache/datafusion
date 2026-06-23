@@ -371,14 +371,6 @@ impl RuntimeEnvBuilder {
         }
     }
 
-    #[expect(deprecated)]
-    #[deprecated(since = "48.0.0", note = "Use with_disk_manager_builder instead")]
-    /// Customize disk manager
-    pub fn with_disk_manager(mut self, disk_manager: DiskManagerConfig) -> Self {
-        self.disk_manager = disk_manager;
-        self
-    }
-
     /// Customize the disk manager builder
     pub fn with_disk_manager_builder(mut self, disk_manager: DiskManagerBuilder) -> Self {
         self.disk_manager_builder = Some(disk_manager);
