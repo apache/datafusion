@@ -31,18 +31,9 @@ use crate::aggregate::groups_accumulator::block_store::{Block, BlockStore};
 /// (simply you can think a [`Block`] as a `Vec`). And `Blocks` is the structure
 /// to represent such multiple [`Block`]s.
 ///
-/// The lifecycle is split into two phases, encoded in the type system via
-/// [`EmitContext`]:
-/// - **Accumulation** (`emit_ctx` is `None`): blocks are appended via
-///   [`BlockStore::resize`], [`BlockStore::reserve_blocks`], or [`Self::push_block`].
-/// - **Emission** (`emit_ctx` is `Some`): the first call to [`Self::pop_block`]
-///   moves all accumulated blocks into the [`EmitContext`]; subsequent calls
-///   drain from there one-by-one. [`BlockStore::clear`] resets the state back
-///   to accumulation.
-///
-/// When blocks are popped via [`Self::pop_block`], the block is swapped
-/// out in O(1) using `mem::take` and the cursor advances, avoiding the
-/// O(n) shift cost of `Vec::remove(0)`.
+/// Blocks are popped in FIFO order by keeping a cursor into `inner`. Popping a
+/// block swaps it out in O(1) using `mem::take` and advances the cursor,
+/// avoiding the O(n) shift cost of `Vec::remove(0)`.
 ///
 /// More details about `blocked approach` can see in: [`GroupsAccumulator::supports_blocked_groups`].
 ///
@@ -51,69 +42,40 @@ use crate::aggregate::groups_accumulator::block_store::{Block, BlockStore};
 #[derive(Debug)]
 pub struct BlockedBlockStore<B: Block> {
     inner: Vec<B>,
+    /// Index of the next active block.
+    cursor: usize,
     block_size: usize,
-    /// `None` during accumulation; `Some` once emission has begun.
-    emit_ctx: Option<PopContext<B>>,
-}
-
-/// Emission state for [`BlockedBlockStore`].
-///
-/// Created lazily when [`BlockedBlockStore::pop_block`] is first called. The
-/// store's accumulation `inner` is moved here in one shot, after which blocks
-/// are drained by advancing `pop_cursor` (using `mem::take` for O(1) removal).
-#[derive(Debug)]
-struct PopContext<B: Block> {
-    /// Index of the next block to pop.
-    pop_cursor: usize,
-    /// Blocks moved out of the store at the start of emission.
-    inner: Vec<B>,
 }
 
 impl<B: Block> BlockedBlockStore<B> {
+    /// Create a new blocked store with the given fixed block size.
     pub fn new(block_size: usize) -> Self {
         Self {
             inner: Vec::new(),
-            emit_ctx: None,
+            cursor: 0,
             block_size,
-        }
-    }
-
-    fn reset_exhausted_emit_context(&mut self) {
-        if self
-            .emit_ctx
-            .as_ref()
-            .is_some_and(|ctx| ctx.pop_cursor >= ctx.inner.len())
-        {
-            self.emit_ctx = None;
         }
     }
 }
 
 impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
     fn push_block(&mut self, block: B) {
-        self.reset_exhausted_emit_context();
         self.inner.push(block);
     }
 
     fn pop_block(&mut self) -> Option<B> {
-        let ctx = self.emit_ctx.get_or_insert_with(|| PopContext {
-            pop_cursor: 0,
-            inner: mem::take(&mut self.inner),
-        });
-
-        if ctx.pop_cursor >= ctx.inner.len() {
+        if self.cursor >= self.inner.len() {
             return None;
         }
 
-        let block = mem::take(&mut ctx.inner[ctx.pop_cursor]);
-        ctx.pop_cursor += 1;
+        let block = mem::take(&mut self.inner[self.cursor]);
+        self.cursor += 1;
         Some(block)
     }
 
     fn reserve_blocks(&mut self) {
-        self.reset_exhausted_emit_context();
         let block_size = self.block_size;
-        if self.inner.is_empty()
+        if self.num_blocks() == 0
             || self
                 .inner
                 .last()
@@ -124,13 +86,12 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
     }
 
     fn resize(&mut self, total_num_groups: usize, default_value: B::T) {
-        self.reset_exhausted_emit_context();
         let block_size = self.block_size;
-        let n = self.inner.len();
-        let current_len = if n == 0 {
+        let num_blocks = self.num_blocks();
+        let current_len = if num_blocks == 0 {
             0
         } else {
-            (n - 1) * block_size + self.inner.last().unwrap().len()
+            (num_blocks - 1) * block_size + self.inner.last().unwrap().len()
         };
 
         if current_len >= total_num_groups {
@@ -139,17 +100,16 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
 
         let mut to_fill = total_num_groups - current_len;
 
-        // Fill remaining capacity in the last block
-        if let Some(last) = self.inner.last_mut() {
-            let available = block_size - last.len();
-            let fill = to_fill.min(available);
-            if fill > 0 {
-                last.fill_default_value(fill, default_value.clone());
-                to_fill -= fill;
+        if num_blocks > 0 {
+            let last_block = self.inner.last_mut().unwrap();
+            let available = block_size - last_block.len();
+            let fill_len = to_fill.min(available);
+            if fill_len > 0 {
+                last_block.fill_default_value(fill_len, default_value.clone());
+                to_fill -= fill_len;
             }
         }
 
-        // Add full blocks
         while to_fill >= block_size {
             let mut block = B::new(block_size);
             block.fill_default_value(block_size, default_value.clone());
@@ -157,7 +117,6 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
             to_fill -= block_size;
         }
 
-        // Add final partial block if needed
         if to_fill > 0 {
             let mut block = B::new(block_size);
             block.fill_default_value(to_fill, default_value.clone());
@@ -166,10 +125,8 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
     }
 
     fn num_blocks(&self) -> usize {
-        match &self.emit_ctx {
-            None => self.inner.len(),
-            Some(ctx) => ctx.inner.len() - ctx.pop_cursor,
-        }
+        debug_assert!(self.cursor <= self.inner.len());
+        self.inner.len() - self.cursor
     }
 
     fn block_size(&self) -> Option<usize> {
@@ -178,7 +135,7 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
 
     fn clear(&mut self) {
         self.inner.clear();
-        self.emit_ctx = None;
+        self.cursor = 0;
     }
 }
 
@@ -187,14 +144,14 @@ impl<B: Block> Index<usize> for BlockedBlockStore<B> {
 
     #[inline]
     fn index(&self, index: usize) -> &Self::Output {
-        unsafe { self.inner.get_unchecked(index) }
+        unsafe { self.inner.get_unchecked(self.cursor + index) }
     }
 }
 
 impl<B: Block> IndexMut<usize> for BlockedBlockStore<B> {
     #[inline]
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        unsafe { self.inner.get_unchecked_mut(index) }
+        unsafe { self.inner.get_unchecked_mut(self.cursor + index) }
     }
 }
 
@@ -251,35 +208,31 @@ mod tests {
         assert!(blocks.pop_block().is_none());
     }
 
-    // Covers the lazy emission context created by the first pop.
-    // Example: after popping [1, 2], a newly pushed [4, 5] is not emitted before existing [3].
+    // Covers push_block appending behind the current cursor.
+    // Example: after popping [1, 2], a newly pushed [4, 5] is emitted after existing [3].
     #[test]
-    fn test_pop_block_uses_lazy_emit_context_once() {
+    fn test_push_block_appends_after_unpopped_blocks() {
         let mut blocks = TestBlocks::new(2);
         blocks.push_block(vec![1, 2]);
         blocks.push_block(vec![3]);
 
         assert_eq!(blocks.pop_block(), Some(vec![1, 2]));
 
-        // `pop_block` drains from the emission context created by the first
-        // pop, rather than from the accumulation vector. A block pushed after
-        // emission starts is not part of that emission context.
         blocks.push_block(vec![4, 5]);
-        assert_eq!(blocks.num_blocks(), 1);
+        assert_eq!(blocks.num_blocks(), 2);
         assert_eq!(blocks.pop_block(), Some(vec![3]));
+        assert_eq!(blocks.pop_block(), Some(vec![4, 5]));
         assert_eq!(blocks.pop_block(), None);
 
-        // `clear` leaves emission mode and returns the store to accumulation.
-        blocks.clear();
         blocks.push_block(vec![6]);
         assert_eq!(blocks.num_blocks(), 1);
         assert_eq!(blocks.pop_block(), Some(vec![6]));
     }
 
-    // Covers appending a fresh block after the current emission context is exhausted.
-    // Example: after [1] is emitted, pushing [2] starts the next emission context.
+    // Covers appending a fresh block after all existing blocks have been popped.
+    // Example: after [1] is emitted, pushing [2] makes [2] the only active block.
     #[test]
-    fn test_push_block_resets_exhausted_emit_context() {
+    fn test_push_block_appends_after_exhausted_prefix() {
         let mut blocks = TestBlocks::new(2);
         blocks.push_block(vec![1]);
 
@@ -288,7 +241,26 @@ mod tests {
 
         blocks.push_block(vec![2]);
         assert_eq!(blocks.num_blocks(), 1);
+        assert_eq!(blocks[0], vec![2]);
         assert_eq!(blocks.pop_block(), Some(vec![2]));
+        assert_eq!(blocks.pop_block(), None);
+    }
+
+    // ---- index ----
+
+    // Covers index and index_mut addressing active blocks after the pop cursor moves.
+    // Example: after popping [1], store[0] addresses [2, 3] and can mutate it.
+    #[test]
+    fn test_index_accesses_active_blocks_after_pop_cursor_moves() {
+        let mut blocks = TestBlocks::new(2);
+        blocks.push_block(vec![1]);
+        blocks.push_block(vec![2, 3]);
+
+        assert_eq!(blocks.pop_block(), Some(vec![1]));
+        assert_eq!(blocks[0], vec![2, 3]);
+
+        blocks[0][0] = 4;
+        assert_eq!(blocks.pop_block(), Some(vec![4, 3]));
         assert_eq!(blocks.pop_block(), None);
     }
 
@@ -312,6 +284,22 @@ mod tests {
         assert_eq!(BlockStore::num_blocks(&store), 2);
         assert_eq!(store[1].capacity(), 2);
         assert!(store[1].is_empty());
+    }
+
+    // Covers reserve_blocks appending after all previous blocks have been popped.
+    // Example: after popping [1, 2], reserve_blocks creates a new active empty block.
+    #[test]
+    fn test_reserve_blocks_appends_after_pop_cursor_is_exhausted() {
+        let mut store = BlockedBlockStore::<Vec<u32>>::new(2);
+        store.push_block(vec![1, 2]);
+
+        assert_eq!(store.pop_block(), Some(vec![1, 2]));
+        assert_eq!(store.num_blocks(), 0);
+
+        store.reserve_blocks();
+        assert_eq!(store.num_blocks(), 1);
+        assert_eq!(store[0].capacity(), 2);
+        assert!(store[0].is_empty());
     }
 
     // ---- resize ----
@@ -391,6 +379,25 @@ mod tests {
         assert_block(&store[2], &[5, 5]);
     }
 
+    // Covers resize growing only the active suffix after the pop cursor moves.
+    // Example: after popping [1, 2], resizing active [3] to 4 groups yields [3, 9], [9, 9].
+    #[test]
+    fn test_resize_grows_active_blocks_after_pop_cursor_moves() {
+        let mut store = BlockedBlockStore::<Vec<u32>>::new(2);
+        store.push_block(vec![1, 2]);
+        store.push_block(vec![3]);
+
+        assert_eq!(store.pop_block(), Some(vec![1, 2]));
+        store.resize(4, 9);
+
+        assert_eq!(store.num_blocks(), 2);
+        assert_block(&store[0], &[3, 9]);
+        assert_block(&store[1], &[9, 9]);
+        assert_eq!(store.pop_block(), Some(vec![3, 9]));
+        assert_eq!(store.pop_block(), Some(vec![9, 9]));
+        assert_eq!(store.pop_block(), None);
+    }
+
     // Covers resize reusing an empty block created by reserve_blocks.
     // Example: reserve_blocks with block_size = 4, resize to 3 fills the existing block with [11, 11, 11].
     #[test]
@@ -410,10 +417,10 @@ mod tests {
 
     // ---- clear ----
 
-    // Covers clear resetting both accumulation state and any in-progress emission context.
+    // Covers clear resetting both accumulated blocks and the pop cursor.
     // Example: after popping the first of three blocks, clear allows a fresh resize to [9].
     #[test]
-    fn test_clear_discards_remaining_emit_context() {
+    fn test_clear_resets_pop_cursor() {
         let mut store = BlockedBlockStore::<Vec<u32>>::new(2);
         store.resize(5, 1);
         assert_eq!(store.pop_block(), Some(vec![1, 1]));
