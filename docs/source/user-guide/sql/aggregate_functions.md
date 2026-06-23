@@ -350,7 +350,7 @@ last_value(expression [ORDER BY expression])
 
 ### `map_agg`
 
-Aggregate key-value pairs from two columns into a single map per group. Pairs with a NULL key are skipped; NULL values are retained. On a duplicate key the first value wins; use ORDER BY to make which value wins deterministic.
+Aggregate key-value pairs from two columns into a single map per group. Pairs with a NULL key are skipped; NULL values are retained. For duplicate keys, the first value in aggregate order wins; use ORDER BY to make that order deterministic.
 
 ```sql
 map_agg(key, value [ORDER BY expression])
