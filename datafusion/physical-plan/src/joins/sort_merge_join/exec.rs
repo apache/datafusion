@@ -38,7 +38,7 @@ use crate::projection::{
     physical_to_column_exprs, update_join_on,
 };
 use crate::spill::spill_manager::SpillManager;
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, SendableRecordBatchStream, Statistics, check_if_same_properties,
@@ -562,6 +562,10 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition), ChildStats::At(partition)]
     }
 
     fn statistics_from_inputs(

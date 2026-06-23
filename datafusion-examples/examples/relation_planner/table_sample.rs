@@ -108,7 +108,8 @@ use datafusion::{
     },
     physical_expr::EquivalenceProperties,
     physical_plan::{
-        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
+        ChildStats, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+        StatisticsArgs,
         metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput},
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
@@ -720,6 +721,10 @@ impl ExecutionPlan for SampleExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
     }
 
     fn statistics_from_inputs(

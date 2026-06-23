@@ -24,7 +24,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation,
 };
 use crate::projection::ProjectionExec;
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SortOrderPushdownResult,
@@ -236,6 +236,10 @@ impl ExecutionPlan for BufferExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
     }
 
     fn statistics_from_inputs(

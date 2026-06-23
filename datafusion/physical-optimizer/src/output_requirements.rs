@@ -39,8 +39,8 @@ use datafusion_physical_plan::projection::{
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    SendableRecordBatchStream, StatisticsArgs,
+    ChildStats, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
+    PlanProperties, SendableRecordBatchStream, StatisticsArgs,
 };
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
@@ -240,6 +240,10 @@ impl ExecutionPlan for OutputRequirementExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unreachable!();
+    }
+
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
     }
 
     fn statistics_from_inputs(

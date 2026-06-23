@@ -84,7 +84,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation,
 };
 use crate::projection::ProjectionExec;
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, SortOrderPushdownResult, check_if_same_properties,
@@ -297,6 +297,10 @@ impl ExecutionPlan for CooperativeExec {
     ) -> Result<SendableRecordBatchStream> {
         let child_stream = self.input.execute(partition, task_ctx)?;
         Ok(make_cooperative(child_stream))
+    }
+
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
     }
 
     fn statistics_from_inputs(

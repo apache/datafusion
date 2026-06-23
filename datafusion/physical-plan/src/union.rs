@@ -676,6 +676,10 @@ impl ExecutionPlan for InterleaveExec {
         Some(self.metrics.clone_inner())
     }
 
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition); self.inputs.len()]
+    }
+
     fn statistics_from_inputs(
         &self,
         input_stats: &[Arc<Statistics>],

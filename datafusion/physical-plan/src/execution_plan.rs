@@ -538,20 +538,23 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         self.partition_statistics(args.partition())
     }
 
-    /// Returns the partition index to request from each child when computing
-    /// statistics for this node at `partition`.
+    /// Returns, per child, which statistics the [`StatisticsContext`] should resolve
+    /// before calling [`Self::statistics_from_inputs`].
     ///
-    /// The returned `Vec` has one entry per child (in the same order as
-    /// [`Self::children`]). [`ChildStats::At`] with `None` requests the child's
-    /// overall (all-partitions) statistics, and [`ChildStats::Skip`] omits a child
-    /// whose statistics this node does not need.
+    /// One entry per child (same order as [`Self::children`]): [`ChildStats::At`]
+    /// requests the child's statistics at a partition (`None` = overall);
+    /// [`ChildStats::Skip`] omits a child whose statistics this node does not need
+    /// (a `Statistics::new_unknown` placeholder fills its `input_stats` slot).
     ///
-    /// The default requests the same `partition` from every child.
-    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
-        self.children()
-            .iter()
-            .map(|_| ChildStats::At(partition))
-            .collect()
+    /// The default skips every child, so a node that derives nothing from its
+    /// children (for example one that only overrides the deprecated
+    /// [`Self::partition_statistics`]) triggers no child traversal. A node that reads
+    /// `input_stats` in [`Self::statistics_from_inputs`] must override this to declare
+    /// the children it uses.
+    ///
+    /// [`StatisticsContext`]: crate::statistics::StatisticsContext
+    fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
+        self.children().iter().map(|_| ChildStats::Skip).collect()
     }
 
     /// Returns `true` if a limit can be safely pushed down through this

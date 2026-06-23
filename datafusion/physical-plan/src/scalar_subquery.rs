@@ -33,7 +33,7 @@ use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
 
 use crate::execution_plan::{CardinalityEffect, ExecutionPlan, PlanProperties};
 use crate::joins::utils::{OnceAsync, OnceFut};
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
 
@@ -234,6 +234,13 @@ impl ExecutionPlan for ScalarSubqueryExec {
         // ScalarSubqueryExec is a pass-through coordinator: it does not
         // benefit from repartitioning any child directly below it.
         vec![false; self.subqueries.len() + 1]
+    }
+
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        // Only `self.input` (child 0) is used; the subqueries are skipped.
+        let mut requests = vec![ChildStats::Skip; 1 + self.subqueries.len()];
+        requests[0] = ChildStats::At(partition);
+        requests
     }
 
     fn statistics_from_inputs(
