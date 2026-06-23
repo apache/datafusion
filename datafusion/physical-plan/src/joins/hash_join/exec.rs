@@ -1075,6 +1075,12 @@ impl HashJoinExec {
         &self,
         partition_mode: PartitionMode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_or_internal_err!(
+            self.dynamic_filter.is_none(),
+            "Cannot swap HashJoinExec inputs after dynamic filters have been constructed. \
+             Optimizer rules that reorder join inputs must run before optimizer rules `FilterPushdown::new_post_optimization()`"
+        );
+
         let left = self.left();
         let right = self.right();
         let new_join = self
@@ -1095,7 +1101,6 @@ impl HashJoinExec {
                 self.join_type(),
             ))
             .with_partition_mode(partition_mode)
-            .with_dynamic_filter(None)
             .build()?;
         // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
         if matches!(
@@ -6612,7 +6617,7 @@ mod tests {
     }
 
     #[test]
-    fn test_swap_inputs_clears_dynamic_filter() -> Result<()> {
+    fn test_swap_inputs_rejects_dynamic_filter() -> Result<()> {
         let left = build_table(
             ("l_key", &vec![1]),
             ("l_payload", &vec![10]),
@@ -6642,29 +6647,11 @@ mod tests {
         )?
         .with_dynamic_filter_expr(dynamic_filter)?;
 
-        let original_dynamic_filter = join
-            .dynamic_filter_expr()
-            .expect("join should start with a dynamic filter");
-        let original_expression_id = original_dynamic_filter
-            .expression_id()
-            .expect("DynamicFilterPhysicalExpr always has an expression_id");
-
-        let swapped = join.swap_inputs(PartitionMode::CollectLeft)?;
-        let swapped_join = swapped
-            .downcast_ref::<HashJoinExec>()
-            .expect("swapped join should be a HashJoinExec");
-
-        // HashJoinExecBuilder preserves dynamic_filter by default. swap_inputs
-        // must explicitly clear it, otherwise this would still be
-        // `Some(original_expression_id)` after the probe side has changed.
-        assert_ne!(
-            swapped_join.dynamic_filter_expr().map(|df| {
-                df.expression_id()
-                    .expect("DynamicFilterPhysicalExpr always has an expression_id")
-            }),
-            Some(original_expression_id)
+        let err = join.swap_inputs(PartitionMode::CollectLeft).unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Cannot swap HashJoinExec inputs after dynamic filters have been constructed"
         );
-        assert!(swapped_join.dynamic_filter_expr().is_none());
         Ok(())
     }
 
