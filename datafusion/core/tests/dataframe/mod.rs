@@ -91,7 +91,9 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::empty::EmptyExec;
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
+use datafusion_physical_plan::{
+    ExecutionPlan, ExecutionPlanProperties, collect, displayable,
+};
 
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::options::JsonReadOptions;
@@ -7066,19 +7068,42 @@ async fn test_grouping_with_alias() -> Result<()> {
 
 #[tokio::test]
 async fn test_unresolved_lambda_variable() -> Result<()> {
-    table_with_mixed_lists().await?.with_column(
-        "c",
-        array_transform(
-            make_array(vec![col("list")]),
-            lambda(
-                ["x"],
-                array_filter(
-                    lambda_var("x"),
-                    lambda(["y"], lambda_var("y").gt_eq(lit(1))),
+    let plan = table_with_mixed_lists()
+        .await?
+        .with_column(
+            "c",
+            array_transform(
+                make_array(vec![col("list")]),
+                lambda(
+                    ["x"],
+                    array_filter(
+                        lambda_var("x"),
+                        lambda(["y"], lambda_var("y").gt_eq(lit(2))),
+                    ),
                 ),
             ),
-        ),
-    )?;
+        )?
+        .select_columns(&["list", "c"])?
+        .into_unoptimized_plan()
+        .resolve_lambda_variables()?
+        .data;
+
+    let session = SessionContext::new();
+    let exec = session.state().create_physical_plan(&plan).await?;
+    let context = session.task_ctx();
+    let results = collect(exec, context).await?;
+
+    let expected = [
+        "+-----------+----------+",
+        "| list      | c        |",
+        "+-----------+----------+",
+        "| [1, 2, 3] | [[2, 3]] |",
+        "|           | []       |",
+        "| []        | [[]]     |",
+        "|           | []       |",
+        "+-----------+----------+",
+    ];
+    assert_batches_eq!(expected, &results);
 
     Ok(())
 }
