@@ -88,14 +88,14 @@ WHERE (id NOT IN (SELECT id FROM inner_table_with_null)) IS NULL;
 logical_plan
 01)Projection: outer_table.id, outer_table.value
 02)--Filter: NOT __correlated_sq_1.mark IS NULL
-03)----LeftMark Join: outer_table.id = __correlated_sq_1.id
+03)----LeftMark Join: outer_table.id = __correlated_sq_1.id null_aware
 04)------TableScan: outer_table projection=[id, value]
 05)------SubqueryAlias: __correlated_sq_1
 06)--------TableScan: inner_table_with_null projection=[id]
 physical_plan
 01)FilterExec: NOT mark@2 IS NULL, projection=[id@0, value@1]
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)]
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -118,14 +118,14 @@ logical_plan
 01)Projection: outer_table.value
 02)--Filter: NOT __correlated_sq_1.mark IS NULL
 03)----Projection: outer_table.value, __correlated_sq_1.mark
-04)------LeftMark Join: outer_table.id = __correlated_sq_1.id
+04)------LeftMark Join: outer_table.id = __correlated_sq_1.id null_aware
 05)--------TableScan: outer_table projection=[id, value]
 06)--------SubqueryAlias: __correlated_sq_1
 07)----------TableScan: inner_table_no_null projection=[id]
 physical_plan
 01)FilterExec: NOT mark@1 IS NULL, projection=[value@0]
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], projection=[value@1, mark@2]
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], projection=[value@1, mark@2], null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -413,14 +413,14 @@ logical_plan
 01)Projection: outer_table.value
 02)--Filter: __correlated_sq_1.mark IS NULL
 03)----Projection: outer_table.value, __correlated_sq_1.mark
-04)------LeftMark Join: outer_table.id = __correlated_sq_1.id
+04)------LeftMark Join: outer_table.id = __correlated_sq_1.id null_aware
 05)--------TableScan: outer_table projection=[id, value]
 06)--------SubqueryAlias: __correlated_sq_1
 07)----------TableScan: inner_table_with_null projection=[id]
 physical_plan
 01)FilterExec: mark@1 IS NULL, projection=[value@0]
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], projection=[value@1, mark@2]
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], projection=[value@1, mark@2], null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -473,14 +473,14 @@ WHERE (id NOT IN (SELECT id FROM inner_table_with_null)) IS NULL;
 logical_plan
 01)Projection: outer_table.id, outer_table.value
 02)--Filter: NOT __correlated_sq_1.mark IS NULL
-03)----LeftMark Join: outer_table.id = __correlated_sq_1.id
+03)----LeftMark Join: outer_table.id = __correlated_sq_1.id null_aware
 04)------TableScan: outer_table projection=[id, value]
 05)------SubqueryAlias: __correlated_sq_1
 06)--------TableScan: inner_table_with_null projection=[id]
 physical_plan
 01)FilterExec: NOT mark@2 IS NULL, projection=[id@0, value@1]
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)]
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -493,14 +493,14 @@ logical_plan
 01)Projection: outer_table.value
 02)--Filter: NOT __correlated_sq_1.mark IS NULL
 03)----Projection: outer_table.value, __correlated_sq_1.mark
-04)------LeftMark Join: outer_table.id = __correlated_sq_1.id
+04)------LeftMark Join: outer_table.id = __correlated_sq_1.id null_aware
 05)--------TableScan: outer_table projection=[id, value]
 06)--------SubqueryAlias: __correlated_sq_1
 07)----------TableScan: inner_table_with_null projection=[id]
 physical_plan
 01)FilterExec: NOT mark@1 IS NULL, projection=[value@0]
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], projection=[value@1, mark@2]
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], projection=[value@1, mark@2], null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
