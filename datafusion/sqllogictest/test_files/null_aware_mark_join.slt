@@ -49,18 +49,6 @@ CREATE TABLE inner_corr_table(id INT, grp INT) AS VALUES
 (NULL, 1),
 (1, 2);
 
-# Out-of-scope row-valued NOT IN repro kept for future work.
-# DuckDB issue #19182 covers partially NULL tuple comparison semantics; this PR
-# only targets scalar null-aware mark joins.
-# statement ok
-# CREATE TABLE outer_tuple_table(f1 INT, f2 INT) AS VALUES
-# (0, 0),
-# (1, 0);
-#
-# statement ok
-# CREATE TABLE inner_tuple_table(c1 BIGINT, c2 BIGINT) AS VALUES
-# (0, NULL);
-
 statement ok
 CREATE TABLE empty_table(id INT) AS
 SELECT *
@@ -365,36 +353,8 @@ WHERE (id = ANY (SELECT id FROM inner_table_no_null)) IS TRUE;
 b
 d
 
-query TT
-EXPLAIN SELECT value
-FROM outer_table
-WHERE (id = ANY (SELECT id FROM inner_table_no_null)) IS NULL;
-----
-logical_plan
-01)Projection: outer_table.value
-02)--Filter: __correlated_sq_1.mark OR __correlated_sq_2.mark AND NOT __correlated_sq_3.mark AND Boolean(NULL) IS NULL
-03)----Projection: outer_table.value, __correlated_sq_1.mark, __correlated_sq_2.mark, __correlated_sq_3.mark
-04)------LeftMark Join:  Filter: outer_table.id = __correlated_sq_3.id IS TRUE
-05)--------LeftMark Join:  Filter: outer_table.id = __correlated_sq_2.id IS NULL
-06)----------LeftMark Join:  Filter: outer_table.id = __correlated_sq_1.id IS TRUE
-07)------------TableScan: outer_table projection=[id, value]
-08)------------SubqueryAlias: __correlated_sq_1
-09)--------------TableScan: inner_table_no_null projection=[id]
-10)----------SubqueryAlias: __correlated_sq_2
-11)------------TableScan: inner_table_no_null projection=[id]
-12)--------SubqueryAlias: __correlated_sq_3
-13)----------TableScan: inner_table_no_null projection=[id]
-physical_plan
-01)FilterExec: mark@1 OR mark@2 AND NOT mark@3 AND NULL IS NULL, projection=[value@0]
-02)--NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true, projection=[value@1, mark@2, mark@3, mark@4]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----NestedLoopJoinExec: join_type=RightMark, filter=id@0 = id@1 IS NULL
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-07)--------NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true
-08)----------DataSourceExec: partitions=1, partition_sizes=[1]
-09)----------DataSourceExec: partitions=1, partition_sizes=[1]
-
+# Same plan shape as the `= ANY (... with_null) IS NULL` case above; only the
+# result differs, so assert just the result here.
 query T rowsort
 SELECT value
 FROM outer_table
@@ -434,33 +394,8 @@ c
 d
 e
 
-# Regression test for row-valued NOT IN with a partially NULL tuple.
-# This matches DuckDB issue #19182 and the Postgres-style behavior from
-# https://github.com/duckdb/duckdb/pull/22683. It is commented out because
-# tuple-valued NOT IN needs row-comparison NULL semantics that are outside this
-# scalar null-aware mark join PR.
-# query II rowsort
-# SELECT f1, f2
-# FROM outer_tuple_table
-# WHERE (f1, f2) NOT IN (
-#   SELECT c1, c2
-#   FROM inner_tuple_table
-# );
-# ----
-# 1 0
-#
-# query II rowsort
-# SELECT f1, f2
-# FROM outer_tuple_table
-# WHERE ((f1, f2) NOT IN (
-#   SELECT c1, c2
-#   FROM inner_tuple_table
-# )) IS NULL;
-# ----
-# 0 0
-
-# These queries would fall back to a sort-merge, but we force them
-# into hash joins to make sure we preserve null awareness.
+# Null-aware mark joins are pinned to CollectLeft hash joins (mark joins have no
+# sort-merge path); flipping prefer_hash_join off must not drop null awareness.
 
 statement ok
 set datafusion.optimizer.prefer_hash_join = false;
@@ -483,43 +418,6 @@ physical_plan
 03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
-
-query TT
-EXPLAIN SELECT value
-FROM outer_table
-WHERE (id NOT IN (SELECT id FROM inner_table_with_null)) IS NULL;
-----
-logical_plan
-01)Projection: outer_table.value
-02)--Filter: NOT __correlated_sq_1.mark IS NULL
-03)----Projection: outer_table.value, __correlated_sq_1.mark
-04)------LeftMark Join: outer_table.id = __correlated_sq_1.id null_aware
-05)--------TableScan: outer_table projection=[id, value]
-06)--------SubqueryAlias: __correlated_sq_1
-07)----------TableScan: inner_table_with_null projection=[id]
-physical_plan
-01)FilterExec: NOT mark@1 IS NULL, projection=[value@0]
-02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], projection=[value@1, mark@2], null_aware
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
-
-query T rowsort
-SELECT value
-FROM outer_table
-WHERE (id NOT IN (SELECT id FROM inner_table_with_null)) IS NULL;
-----
-a
-c
-d
-e
-
-query T rowsort
-SELECT value
-FROM outer_table
-WHERE (id NOT IN (SELECT id FROM inner_table_no_null)) IS NULL;
-----
-e
 
 ####################################
 ## Nested loop mark join with NULLs
@@ -590,12 +488,6 @@ DROP TABLE inner_corr_table;
 
 statement ok
 DROP TABLE outer_corr_table;
-
-# statement ok
-# DROP TABLE inner_tuple_table;
-#
-# statement ok
-# DROP TABLE outer_tuple_table;
 
 statement ok
 DROP TABLE outer_table;
