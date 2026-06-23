@@ -1247,6 +1247,7 @@ fn scan_scope_matches_into_bitmap(
             probe_scope_values,
             NullEquality::NullEqualsNothing,
             hashes_buffer,
+            None,
             batch_size,
             offset,
             probe_indices_buffer,
