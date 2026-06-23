@@ -5000,6 +5000,34 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn projection_with_wildcard_expr_before_pk_preserves_pk() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        let input = LogicalPlanBuilder::scan("employee_csv", source, None)?.build()?;
+        #[expect(deprecated)]
+        let projection = Projection::try_new(
+            vec![
+                Expr::Wildcard {
+                    qualifier: None,
+                    options: Box::new(crate::expr::WildcardOptions::default()),
+                },
+                col("employee_csv.id"),
+            ],
+            Arc::new(input),
+        )?;
+
+        let deps = projection.schema.functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![1]);
+
+        Ok(())
+    }
+
     fn i32_split_point(value: i32) -> SplitPoint {
         SplitPoint::new(vec![ScalarValue::Int32(Some(value))])
     }
