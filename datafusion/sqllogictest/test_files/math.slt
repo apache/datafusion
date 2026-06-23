@@ -686,6 +686,38 @@ select gcd(-9223372036854775808, 0);
 query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(0, \-9223372036854775808\)
 select gcd(0, -9223372036854775808);
 
+# gcd decimal
+query RT
+select gcd(2::decimal(38, 0), 3::decimal(38, 0)), arrow_typeof(gcd(2::decimal(38, 0), 3::decimal(38, 0)));
+----
+1 Decimal128(38, 0)
+
+query RT
+select gcd(0::decimal(38, 0), 3::decimal(38, 0)), arrow_typeof(gcd(0::decimal(38, 0), 3::decimal(38, 0)));
+----
+3 Decimal128(38, 0)
+
+query RT
+select gcd(2, 3::decimal(38, 0)), arrow_typeof(gcd(2, 3::decimal(38, 0)));
+----
+1 Decimal128(38, 0)
+
+query RR
+select gcd(-15::decimal(38, 0), -3::decimal(38, 0)), gcd(-15::decimal(38, 0), 3::decimal(38, 0));
+----
+3 3
+
+# non-whole number case
+query RT
+select gcd(15.3::decimal(38, 1), 2.9::decimal(38, 1)), arrow_typeof(gcd(15.3::decimal(38, 1), 2.9::decimal(38, 1)));
+----
+0.1 Decimal128(38, 1)
+
+# both decimal arguments are coerced to widest - decimal(38, 5), return type is that as well
+query RT
+select gcd(15::decimal(30, 2), 3::decimal(38, 5)), arrow_typeof(gcd(15::decimal(30, 2), 3::decimal(38, 5)));
+----
+3 Decimal128(38, 5)
 
 ## lcm
 
@@ -727,6 +759,28 @@ select lcm(1, -9223372036854775808);
 query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(2, 9223372036854775803\)
 select lcm(2, 9223372036854775803);
 
+# lcm decimal
+query R
+select lcm(2::decimal(38, 0), 3::decimal(38, 0));
+----
+6
+
+query RT
+select lcm(0::decimal(38, 0), 3::decimal(38, 0)), arrow_typeof(lcm(0::decimal(38, 0), 3::decimal(38, 0)));
+----
+0 Decimal128(38, 0)
+
+query RT
+select lcm(2, 3::decimal(38, 0)), arrow_typeof(lcm(2, 3::decimal(38, 0)));
+----
+6 Decimal128(38, 0)
+
+# both decimal arguments are coerced to widest - decimal(38, 5), return type is that as well
+query RT
+select lcm(2::decimal(30, 2), 3::decimal(38, 5)), arrow_typeof(lcm(2::decimal(30, 2), 3::decimal(38, 5)));
+----
+6 Decimal128(38, 5)
+
 
 ## pow/power
 
@@ -742,11 +796,29 @@ SELECT pow(-2, -0.5)
 ----
 NaN
 
-# pow() with zero base and negative exponent (returns Infinity)
-query R
+# pow() with zero base and negative exponent (PostgreSQL: domain error)
+query error DataFusion error: Arrow error: Compute error: zero raised to a negative power is undefined
 SELECT pow(0, -0.5)
-----
-Infinity
+
+# power(0::float8, negative::float8) - issue #22272
+query error DataFusion error: Arrow error: Compute error: zero raised to a negative power is undefined
+SELECT power(0.0::float8, -1.0::float8)
+
+# zero base, negative exponent: exact Decimal+Int64 path (pow_decimal_int → pow_decimal_float)
+query error DataFusion error: Arrow error: Compute error: zero raised to a negative power is undefined
+SELECT pow(0::decimal(38, 0), -2::bigint)
+
+# bigint operands (typically coerced to float); still must reject 0^(negative)
+query error DataFusion error: Arrow error: Compute error: zero raised to a negative power is undefined
+SELECT pow(0::bigint, -2::bigint)
+
+# decimal base + float scalar exponent (compute_pow_f64_result / pow_decimal_float fallback)
+query error DataFusion error: Arrow error: Compute error: zero raised to a negative power is undefined
+SELECT pow(0.0::decimal(10,2), -1.0)
+
+# decimal base + array exponent (pow_decimal_with_float_fallback)
+query error DataFusion error: Arrow error: Compute error: zero raised to a negative power is undefined
+SELECT power(base, exp) FROM (VALUES (0.0::decimal(10,2), -1.0::float8)) AS t(base, exp)
 
 # pow() with integer base of 1 and negative exponent
 query R
@@ -800,6 +872,8 @@ from values
 81
 NULL
 
+# There is no variant of `power` that accepts (Decimal, Decimal); type coercion
+# casts both arguments to `Float64`, so the result is `Float64`.
 query RT rowsort
 select
   power(base::decimal(38, 0), exponent::decimal(38, 0)),
@@ -812,19 +886,23 @@ from values
   (2, 3),
   (3, 4) as t(base, exponent);
 ----
-0 Decimal128(38, 0)
-1 Decimal128(38, 0)
-4 Decimal128(38, 0)
-625 Decimal128(38, 0)
-8 Decimal128(38, 0)
-81 Decimal128(38, 0)
+0 Float64
+1 Float64
+4 Float64
+625 Float64
+8 Float64
+81 Float64
 
 query RT
 select
   pow(2.5::decimal(2, 1), 4::bigint),
   arrow_typeof(pow(2.5::decimal(2, 1), 4::bigint));
 ----
-39 Decimal128(2, 1)
+39.0625 Float64
+
+# factorial negative (PostgreSQL-compatible domain error)
+query error DataFusion error: Execution error: factorial of a negative number is undefined
+select factorial(-1);
 
 # factorial overflow
 query error DataFusion error: Execution error: Overflow happened on FACTORIAL\(350943270\)
@@ -875,6 +953,28 @@ SELECT lcm(6, column1) FROM (VALUES (4), (9), (0));
 18
 0
 
+query I
+SELECT lcm(column1, column2) FROM (VALUES (0, 5), (3, 5), (25, 5), (-16, 5));
+----
+0
+15
+25
+80
+
+query R
+SELECT lcm(6, arrow_cast(column1, 'Decimal128(38,0)')) FROM (VALUES (4), (9), (0));
+----
+12
+18
+0
+
+query R
+SELECT lcm(arrow_cast(column1, 'Decimal128(38,0)'), arrow_cast(column2, 'Decimal128(38,0)')) FROM (VALUES (6, 4), (6, 9), (6, 0));
+----
+12
+18
+0
+
 # lcm array and scalar with nulls in the array
 query I
 SELECT lcm(column1, 5) FROM (VALUES (0), (NULL), (25));
@@ -917,6 +1017,29 @@ SELECT gcd(15, column1) FROM (VALUES (10), (25), (0));
 5
 5
 15
+
+query I
+SELECT gcd(column1, column2) FROM (VALUES (8, 12), (18, 12), (0, 12), (-36, 12));
+----
+4
+6
+12
+12
+
+query R
+SELECT gcd(15, arrow_cast(column1, 'Decimal128(38,0)')) FROM (VALUES (10), (25), (0));
+----
+5
+5
+15
+
+query R
+SELECT gcd(arrow_cast(column1, 'Decimal128(38,0)'), arrow_cast(column2, 'Decimal128(38,0)')) FROM (VALUES (15, 10), (15, 25), (15, 0));
+----
+5
+5
+15
+
 
 # gcd array and scalar with nulls in the array
 query I

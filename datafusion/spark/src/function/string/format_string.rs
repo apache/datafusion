@@ -592,15 +592,15 @@ impl TryFrom<char> for TimeFormat {
 impl ConversionType {
     pub fn validate(&self, arg_type: &DataType) -> Result<()> {
         match self {
-            ConversionType::BooleanLower | ConversionType::BooleanUpper => {
-                if *arg_type != DataType::Boolean {
-                    return exec_err!(
-                        "Invalid argument type for boolean conversion: {:?}",
-                        arg_type
-                    );
-                }
+            ConversionType::BooleanLower | ConversionType::BooleanUpper
+                if *arg_type != DataType::Boolean =>
+            {
+                return exec_err!(
+                    "Invalid argument type for boolean conversion: {:?}",
+                    arg_type
+                );
             }
-            ConversionType::CharLower | ConversionType::CharUpper => {
+            ConversionType::CharLower | ConversionType::CharUpper
                 if !matches!(
                     arg_type,
                     DataType::Int8
@@ -611,23 +611,23 @@ impl ConversionType {
                         | DataType::UInt32
                         | DataType::Int64
                         | DataType::UInt64
-                ) {
-                    return exec_err!(
-                        "Invalid argument type for char conversion: {:?}",
-                        arg_type
-                    );
-                }
+                ) =>
+            {
+                return exec_err!(
+                    "Invalid argument type for char conversion: {:?}",
+                    arg_type
+                );
             }
             ConversionType::DecInt
             | ConversionType::OctInt
             | ConversionType::HexIntLower
-            | ConversionType::HexIntUpper => {
-                if !arg_type.is_integer() {
-                    return exec_err!(
-                        "Invalid argument type for integer conversion: {:?}",
-                        arg_type
-                    );
-                }
+            | ConversionType::HexIntUpper
+                if !arg_type.is_integer() =>
+            {
+                return exec_err!(
+                    "Invalid argument type for integer conversion: {:?}",
+                    arg_type
+                );
             }
             ConversionType::SciFloatLower
             | ConversionType::SciFloatUpper
@@ -635,21 +635,21 @@ impl ConversionType {
             | ConversionType::CompactFloatLower
             | ConversionType::CompactFloatUpper
             | ConversionType::HexFloatLower
-            | ConversionType::HexFloatUpper => {
-                if !arg_type.is_numeric() {
-                    return exec_err!(
-                        "Invalid argument type for float conversion: {:?}",
-                        arg_type
-                    );
-                }
+            | ConversionType::HexFloatUpper
+                if !arg_type.is_numeric() =>
+            {
+                return exec_err!(
+                    "Invalid argument type for float conversion: {:?}",
+                    arg_type
+                );
             }
-            ConversionType::TimeLower(_) | ConversionType::TimeUpper(_) => {
-                if !arg_type.is_temporal() {
-                    return exec_err!(
-                        "Invalid argument type for time conversion: {:?}",
-                        arg_type
-                    );
-                }
+            ConversionType::TimeLower(_) | ConversionType::TimeUpper(_)
+                if !arg_type.is_temporal() =>
+            {
+                return exec_err!(
+                    "Invalid argument type for time conversion: {:?}",
+                    arg_type
+                );
             }
             _ => {}
         }
@@ -861,7 +861,138 @@ fn take_numeric_param(s: &str, zero: bool) -> (NumericParam, &str) {
     }
 }
 
+/// Convert a `u32` to a [`char`] for the `%c` conversion. Returns an error if
+/// the value is not a valid Unicode scalar value (i.e. is in the surrogate
+/// range `0xD800..=0xDFFF` or above `0x10FFFF`).
+fn codepoint_to_char(value: u32) -> Result<char> {
+    char::from_u32(value).ok_or_else(|| {
+        exec_datafusion_err!("invalid Unicode scalar value for %c: {value:#x}")
+    })
+}
+
+/// Convert a signed integer to a [`char`] for the `%c` conversion. Returns an
+/// error if the value is negative or is not a valid Unicode scalar value (i.e.
+/// is in the surrogate range `0xD800..=0xDFFF` or above `0x10FFFF`).
+fn signed_to_char(value: i64) -> Result<char> {
+    let codepoint = u32::try_from(value).map_err(|_| {
+        exec_datafusion_err!("invalid Unicode scalar value for %c: {value}")
+    })?;
+    codepoint_to_char(codepoint)
+}
+
+/// Convert an unsigned integer to a [`char`] for the `%c` conversion. Returns
+/// an error if the value does not fit in a `u32` or is not a valid Unicode
+/// scalar value (i.e. is in the surrogate range `0xD800..=0xDFFF` or above
+/// `0x10FFFF`).
+fn unsigned_to_char(value: u64) -> Result<char> {
+    let codepoint = u32::try_from(value).map_err(|_| {
+        exec_datafusion_err!("invalid Unicode scalar value for %c: {value:#x}")
+    })?;
+    codepoint_to_char(codepoint)
+}
+
+/// Formatting operations that differ between signed and unsigned integer
+/// primitives. Signed values format as decimal for `%d` / `%s` / `%c`, but use
+/// their original bit width for `%x` / `%o` via `unsigned_bits`.
+trait IntegerFormatValue {
+    fn unsigned_bits(self) -> u64;
+
+    fn to_char(self) -> Result<char>;
+
+    fn format_decimal(
+        self,
+        spec: &ConversionSpecifier,
+        writer: &mut String,
+    ) -> Result<()>;
+
+    fn decimal_string(self) -> String;
+}
+
+macro_rules! signed_integer_value {
+    ($source:ty, $unsigned:ty) => {
+        impl IntegerFormatValue for $source {
+            fn unsigned_bits(self) -> u64 {
+                (self as $unsigned) as u64
+            }
+
+            fn to_char(self) -> Result<char> {
+                signed_to_char(self as i64)
+            }
+
+            fn format_decimal(
+                self,
+                spec: &ConversionSpecifier,
+                writer: &mut String,
+            ) -> Result<()> {
+                spec.format_signed(writer, self as i64)
+            }
+
+            fn decimal_string(self) -> String {
+                self.to_string()
+            }
+        }
+    };
+}
+
+signed_integer_value!(i8, u8);
+signed_integer_value!(i16, u16);
+signed_integer_value!(i32, u32);
+signed_integer_value!(i64, u64);
+
+macro_rules! unsigned_integer_value {
+    ($source:ty) => {
+        impl IntegerFormatValue for $source {
+            fn unsigned_bits(self) -> u64 {
+                self as u64
+            }
+
+            fn to_char(self) -> Result<char> {
+                unsigned_to_char(self as u64)
+            }
+
+            fn format_decimal(
+                self,
+                spec: &ConversionSpecifier,
+                writer: &mut String,
+            ) -> Result<()> {
+                spec.format_unsigned(writer, self as u64)
+            }
+
+            fn decimal_string(self) -> String {
+                self.to_string()
+            }
+        }
+    };
+}
+
+unsigned_integer_value!(u8);
+unsigned_integer_value!(u16);
+unsigned_integer_value!(u32);
+unsigned_integer_value!(u64);
+
 impl ConversionSpecifier {
+    /// Validates that the grouping separator flag is not used with scientific
+    /// notation conversions, matching Java/Spark behavior which throws
+    /// `FormatFlagsConversionMismatchException` for `%,e` / `%,E`.
+    fn validate_grouping_separator(&self) -> Result<()> {
+        if self.grouping_separator
+            && matches!(
+                self.conversion_type,
+                ConversionType::SciFloatLower | ConversionType::SciFloatUpper
+            )
+        {
+            return exec_err!(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion '{}'",
+                if self.conversion_type == ConversionType::SciFloatUpper {
+                    'E'
+                } else {
+                    'e'
+                }
+            );
+        }
+        Ok(())
+    }
+
     pub fn format(&self, string: &mut String, value: &ScalarValue) -> Result<()> {
         match value {
             ScalarValue::Boolean(value) => match self.conversion_type {
@@ -871,204 +1002,14 @@ impl ConversionSpecifier {
 
                 _ => self.format_boolean(string, value),
             },
-            ScalarValue::Int8(value) => match (self.conversion_type, value) {
-                (ConversionType::DecInt, Some(value)) => {
-                    self.format_signed(string, *value as i64)
-                }
-                (
-                    ConversionType::HexIntLower
-                    | ConversionType::HexIntUpper
-                    | ConversionType::OctInt,
-                    Some(value),
-                ) => self.format_unsigned(string, (*value as u8) as u64),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, *value as u8 as char)
-                }
-                (
-                    ConversionType::StringLower | ConversionType::StringUpper,
-                    Some(value),
-                ) => self.format_string(string, &value.to_string()),
-                (t, None) if t.supports_integer() => self.format_string(string, "null"),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for Int8",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::Int16(value) => match (self.conversion_type, value) {
-                (ConversionType::DecInt, Some(value)) => {
-                    self.format_signed(string, *value as i64)
-                }
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(
-                        string,
-                        char::from_u32((*value as u16) as u32).unwrap(),
-                    )
-                }
-                (
-                    ConversionType::HexIntLower
-                    | ConversionType::HexIntUpper
-                    | ConversionType::OctInt,
-                    Some(value),
-                ) => self.format_unsigned(string, (*value as u16) as u64),
-                (
-                    ConversionType::StringLower | ConversionType::StringUpper,
-                    Some(value),
-                ) => self.format_string(string, &value.to_string()),
-                (t, None) if t.supports_integer() => self.format_string(string, "null"),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for Int16",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::Int32(value) => match (self.conversion_type, value) {
-                (ConversionType::DecInt, Some(value)) => {
-                    self.format_signed(string, *value as i64)
-                }
-                (
-                    ConversionType::HexIntLower
-                    | ConversionType::HexIntUpper
-                    | ConversionType::OctInt,
-                    Some(value),
-                ) => self.format_unsigned(string, (*value as u32) as u64),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, char::from_u32(*value as u32).unwrap())
-                }
-                (
-                    ConversionType::StringLower | ConversionType::StringUpper,
-                    Some(value),
-                ) => self.format_string(string, &value.to_string()),
-                (t, None) if t.supports_integer() => self.format_string(string, "null"),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for Int32",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::Int64(value) => match (self.conversion_type, value) {
-                (ConversionType::DecInt, Some(value)) => {
-                    self.format_signed(string, *value)
-                }
-                (
-                    ConversionType::HexIntLower
-                    | ConversionType::HexIntUpper
-                    | ConversionType::OctInt,
-                    Some(value),
-                ) => self.format_unsigned(string, *value as u64),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(
-                        string,
-                        char::from_u32((*value as u64) as u32).unwrap(),
-                    )
-                }
-                (
-                    ConversionType::StringLower | ConversionType::StringUpper,
-                    Some(value),
-                ) => self.format_string(string, &value.to_string()),
-                (t, None) if t.supports_integer() => self.format_string(string, "null"),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for Int64",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::UInt8(value) => match (self.conversion_type, value) {
-                (
-                    ConversionType::DecInt
-                    | ConversionType::HexIntLower
-                    | ConversionType::HexIntUpper
-                    | ConversionType::OctInt,
-                    Some(value),
-                ) => self.format_unsigned(string, *value as u64),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, *value as char)
-                }
-                (
-                    ConversionType::StringLower | ConversionType::StringUpper,
-                    Some(value),
-                ) => self.format_string(string, &value.to_string()),
-                (t, None) if t.supports_integer() => self.format_string(string, "null"),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for UInt8",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::UInt16(value) => match (self.conversion_type, value) {
-                (
-                    ConversionType::DecInt
-                    | ConversionType::HexIntLower
-                    | ConversionType::HexIntUpper
-                    | ConversionType::OctInt,
-                    Some(value),
-                ) => self.format_unsigned(string, *value as u64),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, char::from_u32(*value as u32).unwrap())
-                }
-                (
-                    ConversionType::StringLower | ConversionType::StringUpper,
-                    Some(value),
-                ) => self.format_string(string, &value.to_string()),
-                (t, None) if t.supports_integer() => self.format_string(string, "null"),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for UInt16",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::UInt32(value) => match (self.conversion_type, value) {
-                (
-                    ConversionType::DecInt
-                    | ConversionType::HexIntLower
-                    | ConversionType::HexIntUpper
-                    | ConversionType::OctInt,
-                    Some(value),
-                ) => self.format_unsigned(string, *value as u64),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, char::from_u32(*value).unwrap())
-                }
-                (
-                    ConversionType::StringLower | ConversionType::StringUpper,
-                    Some(value),
-                ) => self.format_string(string, &value.to_string()),
-                (t, None) if t.supports_integer() => self.format_string(string, "null"),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for UInt32",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::UInt64(value) => match (self.conversion_type, value) {
-                (
-                    ConversionType::DecInt
-                    | ConversionType::HexIntLower
-                    | ConversionType::HexIntUpper
-                    | ConversionType::OctInt,
-                    Some(value),
-                ) => self.format_unsigned(string, *value),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, char::from_u32(*value as u32).unwrap())
-                }
-                (
-                    ConversionType::StringLower | ConversionType::StringUpper,
-                    Some(value),
-                ) => self.format_string(string, &value.to_string()),
-                (t, None) if t.supports_integer() => self.format_string(string, "null"),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for UInt64",
-                        self.conversion_type
-                    )
-                }
-            },
+            ScalarValue::Int8(value) => self.format_integer(string, value, "Int8"),
+            ScalarValue::Int16(value) => self.format_integer(string, value, "Int16"),
+            ScalarValue::Int32(value) => self.format_integer(string, value, "Int32"),
+            ScalarValue::Int64(value) => self.format_integer(string, value, "Int64"),
+            ScalarValue::UInt8(value) => self.format_integer(string, value, "UInt8"),
+            ScalarValue::UInt16(value) => self.format_integer(string, value, "UInt16"),
+            ScalarValue::UInt32(value) => self.format_integer(string, value, "UInt32"),
+            ScalarValue::UInt64(value) => self.format_integer(string, value, "UInt64"),
             ScalarValue::Float16(value) => match (self.conversion_type, value) {
                 (
                     ConversionType::DecFloatLower
@@ -1430,6 +1371,48 @@ impl ConversionSpecifier {
         }
     }
 
+    fn format_integer<T>(
+        &self,
+        writer: &mut String,
+        value: &Option<T>,
+        type_name: &str,
+    ) -> Result<()>
+    where
+        T: Copy + IntegerFormatValue,
+    {
+        let Some(value) = *value else {
+            return if self.conversion_type.supports_integer() {
+                self.format_string(writer, "null")
+            } else {
+                self.invalid_integer_conversion(type_name)
+            };
+        };
+
+        match self.conversion_type {
+            ConversionType::DecInt => value.format_decimal(self, writer),
+            ConversionType::HexIntLower
+            | ConversionType::HexIntUpper
+            | ConversionType::OctInt => {
+                self.format_unsigned(writer, value.unsigned_bits())
+            }
+            ConversionType::CharLower | ConversionType::CharUpper => {
+                self.format_char(writer, value.to_char()?)
+            }
+            ConversionType::StringLower | ConversionType::StringUpper => {
+                self.format_string(writer, &value.decimal_string())
+            }
+            _ => self.invalid_integer_conversion(type_name),
+        }
+    }
+
+    fn invalid_integer_conversion<T>(&self, type_name: &str) -> Result<T> {
+        exec_err!(
+            "Invalid conversion type: {:?} for {}",
+            self.conversion_type,
+            type_name
+        )
+    }
+
     fn format_hex_float(&self, writer: &mut String, value: f64) -> Result<()> {
         // Handle special cases first
         let (sign, raw_exponent, mantissa) = value.to_parts();
@@ -1690,6 +1673,8 @@ impl ConversionSpecifier {
     }
 
     fn format_float(&self, writer: &mut String, value: f64) -> Result<()> {
+        self.validate_grouping_separator()?;
+
         let mut prefix = String::new();
         let mut suffix = String::new();
         let mut number = String::new();
@@ -1769,6 +1754,9 @@ impl ConversionSpecifier {
                 number = format!("{abs:.prec$}", prec = precision as usize);
                 if strip_trailing_0s {
                     number = trim_trailing_0s(&number).to_owned();
+                }
+                if self.grouping_separator {
+                    number = insert_thousands_separator(&number);
                 }
             }
             if self.alt_form && !number.contains('.') {
@@ -1882,20 +1870,11 @@ impl ConversionSpecifier {
         match self.conversion_type {
             ConversionType::DecInt => {
                 let num_str = format!("{value}");
-                if self.grouping_separator {
-                    // Add thousands separators
-                    let mut result = String::new();
-                    let chars: Vec<char> = num_str.chars().collect();
-                    for (i, c) in chars.iter().enumerate() {
-                        if i > 0 && (chars.len() - i).is_multiple_of(3) {
-                            result.push(',');
-                        }
-                        result.push(*c);
-                    }
-                    s = result;
+                s = if self.grouping_separator {
+                    insert_thousands_separator(&num_str)
                 } else {
-                    s = num_str;
-                }
+                    num_str
+                };
             }
             ConversionType::HexIntLower => {
                 alt_prefix = "0x";
@@ -2000,6 +1979,8 @@ impl ConversionSpecifier {
     }
 
     fn format_decimal(&self, writer: &mut String, value: &str, scale: i64) -> Result<()> {
+        self.validate_grouping_separator()?;
+
         let mut prefix = String::new();
         let upper = self.conversion_type.is_upper();
 
@@ -2010,6 +1991,10 @@ impl ConversionSpecifier {
         let decimal = BigDecimal::from_bigint(decimal, scale);
 
         // Handle sign
+        // TODO: `negative_in_parentheses` (the `(` flag) is not implemented here.
+        // Java/Spark wrap negative values in parentheses when this flag is set
+        // (e.g. `%(,.2f` with -1234.5 → "(1,234.50)"), but this path always
+        // uses a minus sign. See `format_float` for the correct implementation.
         let is_negative = decimal.sign() == Sign::Minus;
         let abs_decimal = decimal.abs();
 
@@ -2033,7 +2018,15 @@ impl ConversionSpecifier {
         let number = match self.conversion_type {
             ConversionType::DecFloatLower => {
                 // Format as fixed-point decimal
-                self.format_decimal_fixed(&abs_decimal, precision, strip_trailing_0s)?
+                let mut n = self.format_decimal_fixed(
+                    &abs_decimal,
+                    precision,
+                    strip_trailing_0s,
+                )?;
+                if self.grouping_separator {
+                    n = insert_thousands_separator(&n);
+                }
+                n
             }
             ConversionType::SciFloatLower => self.format_decimal_scientific(
                 &abs_decimal,
@@ -2062,11 +2055,15 @@ impl ConversionSpecifier {
                         strip_trailing_0s,
                     )?
                 } else {
-                    self.format_decimal_fixed(
+                    let mut n = self.format_decimal_fixed(
                         &abs_decimal,
                         precision - 1 - log10_val.floor() as i32,
                         strip_trailing_0s,
-                    )?
+                    )?;
+                    if self.grouping_separator {
+                        n = insert_thousands_separator(&n);
+                    }
+                    n
                 }
             }
             _ => {
@@ -2332,6 +2329,24 @@ impl FloatBits for f64 {
     }
 }
 
+/// Inserts thousands separators (`,`) into the integer part of a numeric string.
+/// For example, `"1234567.89"` becomes `"1,234,567.89"`.
+fn insert_thousands_separator(number: &str) -> String {
+    let (int_part, frac_part) = match number.find('.') {
+        Some(pos) => (&number[..pos], &number[pos..]),
+        None => (number, ""),
+    };
+    let mut result = String::with_capacity(number.len() + number.len() / 3);
+    for (i, c) in int_part.char_indices() {
+        if i > 0 && (int_part.len() - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.push_str(frac_part);
+    result
+}
+
 fn trim_trailing_0s(number: &str) -> &str {
     if number.contains('.') {
         for (i, c) in number.chars().rev().enumerate() {
@@ -2355,6 +2370,8 @@ fn trim_trailing_0s_hex(number: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::function::utils::test::test_scalar_function;
+    use arrow::array::StringArray;
     use arrow::datatypes::DataType::Utf8;
 
     #[test]
@@ -2383,6 +2400,517 @@ mod tests {
             "format_string(fmt, ...) should NOT be nullable when fmt is NOT nullable"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_format_char_invalid_codepoint_errors() {
+        use arrow::datatypes::Field;
+        use datafusion_common::config::ConfigOptions;
+
+        let func = FormatStringFunc::new();
+        // Spark/Java reject any negative integer or any value outside
+        // `0..=0x10FFFF` (and the surrogate range) regardless of integer
+        // width, so all of these inputs must surface a SQL error rather than
+        // panicking or silently reinterpreting the bits as unsigned.
+        let cases: Vec<(&str, ScalarValue)> = vec![
+            ("Int8(-1)", ScalarValue::Int8(Some(-1))),
+            ("Int16(-1)", ScalarValue::Int16(Some(-1))),
+            ("Int16(-10000)", ScalarValue::Int16(Some(-10000))),
+            ("Int32(-1)", ScalarValue::Int32(Some(-1))),
+            ("Int32(0x110000)", ScalarValue::Int32(Some(0x110000))),
+            ("Int64(0x1FFFFFFFF)", ScalarValue::Int64(Some(0x1FFFFFFFF))),
+            ("Int64(-1)", ScalarValue::Int64(Some(-1))),
+            ("UInt16(0xD800)", ScalarValue::UInt16(Some(0xD800))),
+            ("UInt32(0x110000)", ScalarValue::UInt32(Some(0x110000))),
+            (
+                "UInt64(0x1_0000_0000)",
+                ScalarValue::UInt64(Some(0x1_0000_0000)),
+            ),
+        ];
+
+        for (label, value) in cases {
+            let fmt = ColumnarValue::Scalar(ScalarValue::Utf8(Some("[%c]".to_string())));
+            let arg_data_type = value.data_type();
+            let arg = ColumnarValue::Scalar(value);
+            let arg_fields = vec![
+                Arc::new(Field::new("fmt", Utf8, false)),
+                Arc::new(Field::new("v", arg_data_type, false)),
+            ];
+            let res = func.invoke_with_args(ScalarFunctionArgs {
+                args: vec![fmt, arg],
+                number_rows: 1,
+                arg_fields,
+                return_field: Arc::new(Field::new("o", Utf8, false)),
+                config_options: Arc::new(ConfigOptions::default()),
+            });
+            assert!(
+                res.is_err(),
+                "format_string('[%c]', {label}) should error, got Ok"
+            );
+            let err = res.unwrap_err().to_string();
+            assert!(
+                err.contains("invalid Unicode scalar value for %c"),
+                "unexpected error for {label}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_format_char_valid_codepoint_succeeds() {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("[%c]".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(0x1F680))),
+            ],
+            Ok(Some("[\u{1F680}]")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("[%c]".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::UInt32(Some(0x10FFFF))),
+            ],
+            Ok(Some("[\u{10FFFF}]")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("[%c]".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Int16(Some(65))),
+            ],
+            Ok(Some("[A]")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // Int8 / UInt8 can never produce an invalid codepoint for non-negative
+        // values, but they must still flow through the validating helper.
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("[%c]".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Int8(Some(97))),
+            ],
+            Ok(Some("[a]")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("[%c]".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::UInt8(Some(255))),
+            ],
+            Ok(Some("[\u{00FF}]")),
+            &str,
+            Utf8,
+            StringArray
+        );
+    }
+
+    #[test]
+    fn test_integer_formatting_across_widths() -> Result<()> {
+        let cases = [
+            (
+                ScalarValue::Int8(Some(-1)),
+                "%d|%x|%o|%s",
+                4,
+                "-1|ff|377|-1",
+            ),
+            (
+                ScalarValue::Int16(Some(-1)),
+                "%d|%x|%o|%s",
+                4,
+                "-1|ffff|177777|-1",
+            ),
+            (
+                ScalarValue::Int32(Some(-1)),
+                "%d|%x|%o|%s",
+                4,
+                "-1|ffffffff|37777777777|-1",
+            ),
+            (
+                ScalarValue::Int64(Some(-1)),
+                "%d|%x|%o|%s",
+                4,
+                "-1|ffffffffffffffff|1777777777777777777777|-1",
+            ),
+            (
+                ScalarValue::UInt8(Some(255)),
+                "%d|%x|%o|%s|%c",
+                5,
+                "255|ff|377|255|ÿ",
+            ),
+            (
+                ScalarValue::UInt16(Some(65535)),
+                "%d|%x|%o|%s",
+                4,
+                "65535|ffff|177777|65535",
+            ),
+            (
+                ScalarValue::UInt32(Some(u32::MAX)),
+                "%d|%x|%o|%s",
+                4,
+                "4294967295|ffffffff|37777777777|4294967295",
+            ),
+            (
+                ScalarValue::UInt64(Some(u64::MAX)),
+                "%d|%x|%o|%s",
+                4,
+                "18446744073709551615|ffffffffffffffff|1777777777777777777777|18446744073709551615",
+            ),
+            (
+                ScalarValue::Int32(None),
+                "%d|%x|%o|%s|%c",
+                5,
+                "null|null|null|null|null",
+            ),
+        ];
+
+        for (value, fmt, arg_count, expected) in cases {
+            let data_types = vec![value.data_type(); arg_count];
+            let formatter = Formatter::parse(fmt, &data_types)?;
+            let args = vec![value; arg_count];
+            assert_eq!(formatter.format(&args)?, expected, "{fmt}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_thousands_separator() {
+        assert_eq!(insert_thousands_separator("1234567.89"), "1,234,567.89");
+        assert_eq!(insert_thousands_separator("123.45"), "123.45");
+        assert_eq!(insert_thousands_separator("1234"), "1,234");
+        assert_eq!(insert_thousands_separator("12"), "12");
+        assert_eq!(insert_thousands_separator("0.5"), "0.5");
+        assert_eq!(
+            insert_thousands_separator("1234567890.1234"),
+            "1,234,567,890.1234"
+        );
+        assert_eq!(insert_thousands_separator("1000"), "1,000");
+        assert_eq!(insert_thousands_separator("100"), "100");
+    }
+
+    #[test]
+    fn test_grouping_separator_float() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("1,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_decimal() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Ok(Some("1,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_scientific_float() -> Result<()> {
+        // %,e — Java/Spark reject grouping separator with scientific notation
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,e".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Err(DataFusionError::Execution(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion 'e'".to_string(),
+            )),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,E — uppercase scientific also rejected
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,E".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Err(DataFusionError::Execution(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion 'E'".to_string(),
+            )),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,.0e — precision 0 scientific with grouping also rejected
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.0e".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Err(DataFusionError::Execution(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion 'e'".to_string(),
+            )),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_compact_float() -> Result<()> {
+        // %,g with large number — triggers scientific, no commas
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,g".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("1.23457e+06")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,g with small number — triggers fixed-point, commas in integer part
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,g".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(12345.6))),
+            ],
+            Ok(Some("12,345.6")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,.0g — precision 0 compact with grouping (large number, scientific)
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.0g".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("1e+06")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,G — uppercase compact
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,G".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("1.23457E+06")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_scientific_decimal() -> Result<()> {
+        // %,e on decimal — Java/Spark reject grouping separator with scientific notation
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,e".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Err(DataFusionError::Execution(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion 'e'".to_string(),
+            )),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,.0e on decimal — also rejected
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.0e".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Err(DataFusionError::Execution(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion 'e'".to_string(),
+            )),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_compact_decimal() -> Result<()> {
+        // %,g on decimal — large number triggers scientific, no commas
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,g".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Ok(Some("1.23457e+06")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,g on decimal — small number triggers fixed-point, commas expected
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,g".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(1234560), 10, 2)),
+            ],
+            Ok(Some("12,345.6")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,.0g on decimal — precision 0 compact with grouping (scientific)
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.0g".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Ok(Some("1e+06")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_width_sign_float() -> Result<()> {
+        // %0,15.2f — zero-pad + grouping + width
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%0,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("0001,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %+,15.2f — force-sign + grouping + width (space-padded)
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%+,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("  +1,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %-,15.2f — left-adjust + grouping + width
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%-,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("1,234,567.89   ")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_width_sign_decimal() -> Result<()> {
+        // %0,15.2f — zero-pad + grouping + width on decimal
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%0,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Ok(Some("0001,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %+,15.2f — force-sign + grouping + width on decimal
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%+,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Ok(Some("  +1,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_parentheses_float() -> Result<()> {
+        // %(,15.2f with negative — parentheses + grouping + width
+        // Java: String.format("%(,15.2f", -1234.5) → "     (1,234.50)"
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(-1234.5))),
+            ],
+            Ok(Some("     (1,234.50)")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_parentheses_decimal() -> Result<()> {
+        // %(,15.2f on negative decimal — format_decimal ignores negative_in_parentheses,
+        // always uses '-'. Check TODO in fn format_decimal
+        // Java: String.format("%(,15.2f", -1234.5) → "     (1,234.50)"
+        // Ours: "      -1,234.50" (minus sign, no parens)
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(-123450), 10, 2)),
+            ],
+            Ok(Some("      -1,234.50")),
+            &str,
+            Utf8,
+            StringArray
+        );
         Ok(())
     }
 }

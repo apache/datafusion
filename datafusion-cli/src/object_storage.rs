@@ -16,6 +16,9 @@
 // under the License.
 
 pub mod instrumented;
+pub(crate) mod stdin;
+
+pub use stdin::{StdinCarriesCommands, is_stdin_location};
 
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
@@ -564,6 +567,9 @@ pub(crate) async fn get_object_store(
                 .with_url(url.origin().ascii_serialization())
                 .build()?,
         ),
+        _ if scheme == stdin::StdinUtils::SCHEME => {
+            stdin::StdinUtils::get_or_create(state, url).await?
+        }
         _ => {
             // For other types, try to get from `object_store_registry`:
             state

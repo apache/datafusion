@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::scalar_subquery::ScalarSubqueryExpr;
@@ -30,8 +29,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
 use datafusion_common::{
-    DFSchema, Result, ScalarValue, ToDFSchema, exec_err, internal_datafusion_err,
-    not_impl_err, plan_datafusion_err, plan_err,
+    DFSchema, Result, ScalarValue, TableReference, ToDFSchema, exec_err,
+    internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
@@ -452,6 +451,18 @@ pub fn create_physical_expr(
                 );
             }
 
+            let lambda_qualifier = 1 + input_dfschema
+                .iter()
+                .filter_map(|(qualifier, _field)| {
+                    qualifier.and_then(|tbl| {
+                        tbl.table().strip_prefix("lambda_")?.parse::<usize>().ok()
+                    })
+                })
+                .max()
+                .unwrap_or_default();
+
+            let qualifier = TableReference::bare(format!("lambda_{lambda_qualifier}"));
+
             let physical_args = args
                 .iter()
                 .map(|arg| match arg {
@@ -465,15 +476,26 @@ pub fn create_physical_expr(
                             })?
                             .into_iter()
                             .zip(&lambda.params)
-                            .map(|(field, name)| field.renamed(name.as_str()))
+                            .map(|(field, name)| {
+                                (Some(qualifier.clone()), field.renamed(name.as_str()))
+                            });
+
+                        let new_fields = input_dfschema
+                            .iter()
+                            .map(|(tbl, field)| (tbl.cloned(), Arc::clone(field)))
+                            .chain(lambda_parameters)
                             .collect();
 
-                        let lambda_schema = DFSchema::from_unqualified_fields(
-                            lambda_parameters,
-                            HashMap::new(),
+                        let lambda_schema = DFSchema::new_with_metadata(
+                            new_fields,
+                            input_dfschema.metadata().clone(),
                         )?;
 
-                        create_physical_expr(arg, &lambda_schema, execution_props)
+                        let execution_props = execution_props
+                            .clone()
+                            .with_qualified_lambda_variables(&qualifier, &lambda.params);
+
+                        create_physical_expr(arg, &lambda_schema, &execution_props)
                     }
                     _ => create_physical_expr(arg, input_dfschema, execution_props),
                 })
@@ -491,17 +513,10 @@ pub fn create_physical_expr(
                 config_options,
             )?))
         }
-        Expr::Lambda(Lambda { params, body }) => {
-            // tracked at https://github.com/apache/datafusion/issues/21172
-            if body.any_column_refs() {
-                return plan_err!("lambda doesn't support column capture");
-            }
-
-            expressions::lambda(
-                params,
-                create_physical_expr(body, input_dfschema, execution_props)?,
-            )
-        }
+        Expr::Lambda(Lambda { params, body }) => expressions::lambda(
+            params,
+            create_physical_expr(body, input_dfschema, execution_props)?,
+        ),
         Expr::LambdaVariable(LambdaVariable {
             name,
             field,
@@ -511,7 +526,21 @@ pub fn create_physical_expr(
                 plan_datafusion_err!("unresolved LambdaVariable {name}")
             })?;
 
-            let index = input_dfschema.inner().index_of(name)?;
+            let qualifier = execution_props
+                .lambda_variable_qualifier
+                .get(name)
+                .ok_or_else(|| {
+                    plan_datafusion_err!("qualifier for lambda variable {name} not found")
+                })?;
+
+            let index = input_dfschema
+                .index_of_column_by_name(Some(qualifier), name)
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "lambda variable {qualifier}.{name} not found in planning schema"
+                    )
+                })?;
+
             let schema_field = input_dfschema.field(index);
 
             // LambdaVariable.field will be made optional as in Expr::Placeholder

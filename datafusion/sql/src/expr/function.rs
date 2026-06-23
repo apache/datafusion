@@ -370,7 +370,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         if let Some(fm) = self.context_provider.get_higher_order_meta(&name) {
             // plan non-lambda arguments first so we can get theirs datatype and call
-            // HigherOrderUDF::lambda_parameters to then plan the lambda arguments with
+            // HigherOrderUDFImpl::lambda_parameters to then plan the lambda arguments with
             // resolved lambda variables
             enum ExprOrLambda {
                 Expr(Expr),
@@ -927,10 +927,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             );
         }
 
+        if lambda.params.iter().any(|p| p.data_type.is_some()) {
+            return not_impl_err!(
+                "Lambda parameters with explicit data types are not supported"
+            );
+        }
         let params = lambda
             .params
             .iter()
-            .map(|p| crate::utils::normalize_ident(p.clone()))
+            .map(|p| crate::utils::normalize_ident(p.name.clone()))
             .collect();
 
         let lambda_parameters = std::iter::zip(lambda_params, &params)
@@ -1181,19 +1186,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 /// After normalization with [normalize_ident], check whether all params are unique
 ///
 /// [normalize_ident]: crate::utils::normalize_ident
-fn all_unique(params: &[sqlparser::ast::Ident]) -> bool {
+fn all_unique(params: &[sqlparser::ast::LambdaFunctionParameter]) -> bool {
     match params.len() {
         0 | 1 => true,
         2 => {
-            crate::utils::normalize_ident(params[0].clone())
-                != crate::utils::normalize_ident(params[1].clone())
+            crate::utils::normalize_ident(params[0].name.clone())
+                != crate::utils::normalize_ident(params[1].name.clone())
         }
         _ => {
             let mut set = HashSet::with_capacity(params.len());
 
             params
                 .iter()
-                .map(|p| crate::utils::normalize_ident(p.clone()))
+                .map(|p| crate::utils::normalize_ident(p.name.clone()))
                 .all(|p| set.insert(p))
         }
     }

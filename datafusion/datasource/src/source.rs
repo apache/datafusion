@@ -40,12 +40,12 @@ use itertools::Itertools;
 use crate::file::FileSource;
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::SortOrderPushdownResult;
+use datafusion_physical_plan::StatisticsArgs;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
@@ -225,22 +225,6 @@ pub trait DataSource: Any + Send + Sync + Debug {
         None
     }
 
-    /// Apply a closure to each expression used by this data source.
-    ///
-    /// This includes filter predicates (which may contain dynamic filters) and any
-    /// other expressions used during data scanning.
-    ///
-    /// Implementations must override this method. If the data source has no expressions,
-    /// return `Ok(TreeNodeRecursion::Continue)` immediately.
-    ///
-    /// See [`ExecutionPlan::apply_expressions`] for more details and implementation examples.
-    ///
-    /// [`ExecutionPlan::apply_expressions`]: datafusion_physical_plan::ExecutionPlan::apply_expressions
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion>;
-
     /// Injects arbitrary run-time state into this DataSource, returning a new instance
     /// that incorporates that state *if* it is relevant to the concrete DataSource implementation.
     ///
@@ -368,14 +352,6 @@ impl ExecutionPlan for DataSourceExec {
         Vec::new()
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Delegate to the underlying data source
-        self.data_source.apply_expressions(f)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
@@ -451,8 +427,8 @@ impl ExecutionPlan for DataSourceExec {
         Some(metrics)
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.data_source.partition_statistics(partition)
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        self.data_source.partition_statistics(args.partition())
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

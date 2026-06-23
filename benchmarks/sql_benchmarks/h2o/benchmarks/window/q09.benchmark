@@ -1,0 +1,26 @@
+subgroup window
+
+name Q09
+group h2o
+
+echo Loading ${H2O_BENCH_SIZE:-small} window ${H2O_FILE_TYPE:-csv} h2o data
+
+load sql_benchmarks/h2o/init/load_window_${H2O_BENCH_SIZE:-small}_${H2O_FILE_TYPE:-csv}.sql
+
+assert I
+SELECT COUNT(*) > 0 FROM x
+----
+true
+
+run
+-- First PARTITION BY ROWS BETWEEN
+SELECT
+    id1,
+    id2,
+    id3,
+    v2,
+    first_value(v2) OVER (PARTITION BY id2 ORDER BY id3 ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING) AS my_lag_by_id2,
+    first_value(v2) OVER (PARTITION BY id2 ORDER BY id3 ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING) AS my_lead_by_id2
+FROM x;
+
+result sql_benchmarks/h2o/results/window/${H2O_BENCH_SIZE:-small}/q09.csv

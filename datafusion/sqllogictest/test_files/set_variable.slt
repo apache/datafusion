@@ -104,12 +104,12 @@ statement ok
 set datafusion.catalog.information_schema = true
 
 statement ok
-SET datafusion.execution.batch_size to 0
+SET datafusion.execution.batch_size to 310104
 
 query TT
 SHOW datafusion.execution.batch_size
 ----
-datafusion.execution.batch_size 0
+datafusion.execution.batch_size 310104
 
 statement ok
 SET datafusion.execution.batch_size to '1'
@@ -342,14 +342,20 @@ SET datafusion.runtime.memory_limit = '1K'
 
 # This query should fail with low memory
 statement error Not enough memory to continue external sort
-EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
+EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1 DESC
 
 statement ok
 RESET datafusion.runtime.memory_limit
 
 # This query should succeed after resetting memory limit
 statement ok
-EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
+EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1 DESC
+
+statement ok
+SET datafusion.runtime.file_statistics_cache_limit = '1K'
+
+statement ok
+RESET datafusion.runtime.file_statistics_cache_limit
 
 statement ok
 SET datafusion.runtime.list_files_cache_limit = '1K'
@@ -376,7 +382,7 @@ statement error DataFusion error: Invalid or Unsupported Configuration: Config v
 RESET datafusion.execution.batches_size
 
 # reset invalid variable - extra suffix on valid field
-statement error DataFusion error: Invalid or Unsupported Configuration: Config field is a scalar usize and does not have nested field "bar"
+statement error DataFusion error: Invalid or Unsupported Configuration: Config field batch_size is a scalar ConfigNonZeroUsize and does not have nested field "bar"
 RESET datafusion.execution.batch_size.bar
 
 #############################################
@@ -605,6 +611,18 @@ SHOW datafusion.runtime.max_temp_directory_size
 ----
 datafusion.runtime.max_temp_directory_size 10G
 
+# Test SET and SHOW runtime.file_statistics_cache_limit
+statement ok
+SET datafusion.runtime.file_statistics_cache_limit = '42M'
+
+query TT
+SHOW datafusion.runtime.file_statistics_cache_limit
+----
+datafusion.runtime.file_statistics_cache_limit 42M
+
+statement ok
+RESET datafusion.runtime.file_statistics_cache_limit
+
 # Test SET and SHOW runtime.metadata_cache_limit
 statement ok
 SET datafusion.runtime.metadata_cache_limit = '200M'
@@ -632,6 +650,15 @@ SHOW datafusion.runtime.list_files_cache_ttl
 ----
 datafusion.runtime.list_files_cache_ttl 1m30s
 
+# Test SET and SHOW for limit 0
+statement ok
+SET datafusion.runtime.list_files_cache_limit = '0'
+
+query TT
+SHOW datafusion.runtime.list_files_cache_limit
+----
+datafusion.runtime.list_files_cache_limit 0
+
 # Note: runtime.temp_directory shows the actual temp directory path with a unique suffix,
 # so we cannot test the exact value. We verify it exists in information_schema instead.
 
@@ -639,6 +666,7 @@ datafusion.runtime.list_files_cache_ttl 1m30s
 query T
 SELECT name FROM information_schema.df_settings WHERE name LIKE 'datafusion.runtime.%' ORDER BY name
 ----
+datafusion.runtime.file_statistics_cache_limit
 datafusion.runtime.list_files_cache_limit
 datafusion.runtime.list_files_cache_ttl
 datafusion.runtime.max_temp_directory_size
@@ -678,6 +706,10 @@ SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551555s'
 
 statement error DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins \* 60 \+ secs' when setting 'datafusion\.runtime\.list_files_cache_ttl'
 SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551556s'
+
+# Set invalid value and ensures error
+statement error DataFusion error: Invalid or Unsupported Configuration: value must be greater than 0
+SET datafusion.execution.batch_size = 0
 
 # Config reset
 statement ok

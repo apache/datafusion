@@ -15,39 +15,66 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`EliminateOuterJoin`] converts `LEFT/RIGHT/FULL` joins to `INNER` joins
+//! [`EliminateOuterJoin`] rewrites outer joins to simpler join types when
+//! filters make the outer rows unnecessary (e.g. `LEFT`/`RIGHT` to `INNER`,
+//! and `FULL` to `LEFT`/`RIGHT`/`INNER`).
+use crate::push_down_filter::replace_cols_by_name;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DFSchema, Result};
-use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan};
+use datafusion_common::{Column, DFSchema, Result, qualified_name};
+use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, Projection};
 use datafusion_expr::{Expr, Filter, Operator};
 
 use crate::optimizer::ApplyOrder;
 use datafusion_common::tree_node::Transformed;
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, Like, TryCast};
+use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Attempt to simplify outer joins when filters make their null-padded
+/// rows impossible to observe.
 ///
-/// Attempt to replace outer joins with inner joins.
+/// Outer joins are generally more expensive than inner joins and can block
+/// predicate pushdown and other optimizations. When a filter above an outer
+/// join removes every row the join would add for unmatched input rows, the
+/// join can be changed to a cheaper join type.
 ///
-/// Outer joins are typically more expensive to compute at runtime
-/// than inner joins and prevent various forms of predicate pushdown
-/// and other optimizations, so removing them if possible is beneficial.
+/// For example:
 ///
-/// Inner joins filter out rows that do match. Outer joins pass rows
-/// that do not match padded with nulls. If there is a filter in the
-/// query that would filter any such null rows after the join the rows
-/// introduced by the outer join are filtered.
+/// ```sql
+/// SELECT ...
+/// FROM a LEFT JOIN b ON ...
+/// WHERE b.xx = 100
+/// ```
 ///
-/// For example, in the `select ... from a left join b on ... where b.xx = 100;`
+/// For unmatched rows from `a`, the LEFT JOIN would produce a row with
+/// `b.xx` set to NULL. The predicate `b.xx = 100` does not pass for those
+/// rows, so the query does not need the LEFT JOIN's null-padded output and
+/// the join can be rewritten as an inner join.
 ///
-/// For rows when `b.xx` is null (as it would be after an outer join),
-/// the `b.xx = 100` predicate filters them out and there is no
-/// need to produce null rows for output.
+/// The same reasoning can also simplify FULL joins to LEFT, RIGHT, or INNER
+/// joins when filters remove the rows padded on one or both sides.
 ///
-/// Generally, an outer join can be rewritten to inner join if the
-/// filters from the WHERE clause return false while any inputs are
-/// null and columns of those quals are come from nullable side of
-/// outer join.
+/// This rule looks for a filter above an outer join:
+///
+/// ```text
+/// Filter(predicate)
+///   Join(LEFT/RIGHT/FULL)
+/// ```
+///
+/// It also handles plan shapes where projection pruning has inserted one or
+/// more Projection nodes between the filter and join:
+///
+/// ```text
+/// Filter(predicate over projection output)
+///   Projection(...)
+///     ...
+///       Join(LEFT/RIGHT/FULL)
+/// ```
+///
+/// In the projection case, the rule rewrites a copy of the predicate through
+/// each Projection so it can analyze the predicate against the Join inputs.
+/// The original filter predicate and Projection nodes are preserved when the
+/// plan is rebuilt.
 #[derive(Default, Debug)]
 pub struct EliminateOuterJoin;
 
@@ -77,60 +104,127 @@ impl OptimizerRule for EliminateOuterJoin {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Filter(mut filter) => match Arc::unwrap_or_clone(filter.input) {
+        let LogicalPlan::Filter(filter) = plan else {
+            return Ok(Transformed::no(plan));
+        };
+
+        // Descend through one or more Projection nodes until we find a Join.
+        // For each Projection we encounter, rewrite a working copy of the
+        // predicate by replacing references to projection output columns with
+        // the expressions that define them. Keep the filter's original
+        // predicate intact for eventual use in the rebuilt plan; the rewritten
+        // predicate is used only for the null-rejection analysis.
+        let mut rewritten_predicate = filter.predicate.clone();
+        let mut projections: Vec<Projection> = Vec::new();
+        let mut cur = Arc::clone(&filter.input);
+
+        let new_join = loop {
+            match cur.as_ref() {
+                LogicalPlan::Projection(p) => {
+                    rewritten_predicate =
+                        inline_through_projection(rewritten_predicate, p)?;
+                    let next = Arc::clone(&p.input);
+                    projections.push(p.clone());
+                    cur = next;
+                }
                 LogicalPlan::Join(join) => {
-                    let mut non_nullable_cols: Vec<Column> = vec![];
-
-                    extract_non_nullable_columns(
-                        &filter.predicate,
-                        &mut non_nullable_cols,
-                        join.left.schema(),
-                        join.right.schema(),
-                        true,
-                    );
-
-                    let new_join_type = if join.join_type.is_outer() {
-                        let mut left_non_nullable = false;
-                        let mut right_non_nullable = false;
-                        for col in non_nullable_cols.iter() {
-                            if join.left.schema().has_column(col) {
-                                left_non_nullable = true;
-                            }
-                            if join.right.schema().has_column(col) {
-                                right_non_nullable = true;
-                            }
-                        }
-                        eliminate_outer(
-                            join.join_type,
-                            left_non_nullable,
-                            right_non_nullable,
-                        )
-                    } else {
-                        join.join_type
+                    let Some(new_join) = try_simplify_join(join, &rewritten_predicate)
+                    else {
+                        return Ok(Transformed::no(LogicalPlan::Filter(filter)));
                     };
+                    break new_join;
+                }
+                _ => {
+                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                }
+            }
+        };
 
-                    let new_join = Arc::new(LogicalPlan::Join(Join {
-                        left: join.left,
-                        right: join.right,
-                        join_type: new_join_type,
-                        join_constraint: join.join_constraint,
-                        on: join.on.clone(),
-                        filter: join.filter.clone(),
-                        schema: Arc::clone(&join.schema),
-                        null_equality: join.null_equality,
-                        null_aware: join.null_aware,
-                    }));
-                    Filter::try_new(filter.predicate, new_join)
-                        .map(|f| Transformed::yes(LogicalPlan::Filter(f)))
-                }
-                filter_input => {
-                    filter.input = Arc::new(filter_input);
-                    Ok(Transformed::no(LogicalPlan::Filter(filter)))
-                }
-            },
-            _ => Ok(Transformed::no(plan)),
-        }
+        let rebuilt_inner = rewrap_projections(new_join, projections);
+        Filter::try_new(filter.predicate, Arc::new(rebuilt_inner))
+            .map(|f| Transformed::yes(LogicalPlan::Filter(f)))
+    }
+}
+
+/// Attempt to simplify an outer join by analyzing `predicate` for
+/// null-rejection.  If the predicate filters out rows padded with NULLs on one
+/// or both sides, return a copy of `join` rewritten to an equivalent join type
+/// that omits those rows in the first place; otherwise return `None`.
+fn try_simplify_join(join: &Join, predicate: &Expr) -> Option<LogicalPlan> {
+    if !join.join_type.is_outer() {
+        return None;
+    }
+
+    let null_rejecting_sides = extract_null_rejecting_sides(
+        predicate,
+        join.left.schema(),
+        join.right.schema(),
+        true,
+    );
+
+    let new_join_type = eliminate_outer(
+        join.join_type,
+        null_rejecting_sides.left,
+        null_rejecting_sides.right,
+    );
+    if new_join_type == join.join_type {
+        return None;
+    }
+
+    Some(LogicalPlan::Join(Join {
+        left: Arc::clone(&join.left),
+        right: Arc::clone(&join.right),
+        join_type: new_join_type,
+        join_constraint: join.join_constraint,
+        on: join.on.clone(),
+        filter: join.filter.clone(),
+        schema: Arc::clone(&join.schema),
+        null_equality: join.null_equality,
+        null_aware: join.null_aware,
+    }))
+}
+
+/// Substitute the projection's output column references in `predicate` with
+/// the projection's defining expressions (stripped of any `Alias` wrapper).
+/// The result expresses `predicate` over the projection's *input* schema.
+///
+/// Unlike `PushDownFilter`, this rule does not change expression evaluation
+/// behavior (in fact, the rewritten expressions are only used for analysis
+/// purposes). Therefore, function volatility and `MoveTowardsLeafNodes`
+/// placement can be ignored here.
+fn inline_through_projection(predicate: Expr, p: &Projection) -> Result<Expr> {
+    let mut map: HashMap<String, Expr> = HashMap::new();
+    for ((qualifier, field), expr) in p.schema.iter().zip(p.expr.iter()) {
+        map.insert(
+            qualified_name(qualifier, field.name()),
+            unalias(expr).clone(),
+        );
+    }
+    replace_cols_by_name(predicate, &map)
+}
+
+/// Re-attach a stack of projections above `new_inner`, restoring the original
+/// plan shape with the new (possibly retyped) join at the bottom. Projection
+/// schemas are reused as-is; only nullability of columns sourced from the
+/// formerly-outer side may have changed, and the existing rule already takes
+/// this looser-schema approach at the join itself.
+fn rewrap_projections(
+    new_inner: LogicalPlan,
+    projections: Vec<Projection>,
+) -> LogicalPlan {
+    let mut current = new_inner;
+    for mut p in projections.into_iter().rev() {
+        p.input = Arc::new(current);
+        current = LogicalPlan::Projection(p);
+    }
+    current
+}
+
+fn unalias(expr: &Expr) -> &Expr {
+    if let Expr::Alias(a) = expr {
+        unalias(&a.expr)
+    } else {
+        expr
     }
 }
 
@@ -139,214 +233,149 @@ pub fn eliminate_outer(
     left_non_nullable: bool,
     right_non_nullable: bool,
 ) -> JoinType {
-    let mut new_join_type = join_type;
-    match join_type {
-        JoinType::Left => {
-            if right_non_nullable {
-                new_join_type = JoinType::Inner;
-            }
-        }
-        JoinType::Right => {
-            if left_non_nullable {
-                new_join_type = JoinType::Inner;
-            }
-        }
-        JoinType::Full => {
-            if left_non_nullable && right_non_nullable {
-                new_join_type = JoinType::Inner;
-            } else if left_non_nullable {
-                new_join_type = JoinType::Left;
-            } else if right_non_nullable {
-                new_join_type = JoinType::Right;
-            }
-        }
-        _ => {}
+    match (join_type, left_non_nullable, right_non_nullable) {
+        (JoinType::Left, _, true) => JoinType::Inner,
+        (JoinType::Right, true, _) => JoinType::Inner,
+        (JoinType::Full, true, true) => JoinType::Inner,
+        (JoinType::Full, true, false) => JoinType::Left,
+        (JoinType::Full, false, true) => JoinType::Right,
+        _ => join_type,
     }
-    new_join_type
 }
 
-/// Recursively traverses expr, if expr returns false when
-/// any inputs are null, treats columns of both sides as non_nullable columns.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+struct NullRejectingSides {
+    left: bool,
+    right: bool,
+}
+
+impl NullRejectingSides {
+    /// The join side(s) a column belongs to.
+    ///
+    /// A bare column reference is null-rejecting on its own side: if the column
+    /// is NULL, every null-propagating operator above it yields NULL and the row
+    /// is filtered.
+    fn for_column(col: &Column, left_schema: &DFSchema, right_schema: &DFSchema) -> Self {
+        Self {
+            left: left_schema.has_column(col),
+            right: right_schema.has_column(col),
+        }
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            left: self.left || other.left,
+            right: self.right || other.right,
+        }
+    }
+
+    fn intersection(self, other: Self) -> Self {
+        Self {
+            left: self.left && other.left,
+            right: self.right && other.right,
+        }
+    }
+}
+
+/// Compute which join sides are null-rejected by `expr` in a WHERE clause.
+/// For each marked side, rows padded with NULLs on that side are guaranteed to
+/// evaluate to NULL or false and be filtered out.
 ///
-/// For and/or expr, extracts from all sub exprs and merges the columns.
-/// For or expr, if one of sub exprs returns true, discards all columns from or expr.
-/// For IS NOT NULL/NOT expr, always returns false for NULL input.
-///     extracts columns from these exprs.
-/// For all other exprs, fall through
-fn extract_non_nullable_columns(
+/// `left_schema` and `right_schema` map column references to join sides.
+/// `top_level` is true only while walking the root WHERE context; nested
+/// contexts are more conservative because their boolean result may be combined
+/// by an enclosing expression.
+fn extract_null_rejecting_sides(
     expr: &Expr,
-    non_nullable_cols: &mut Vec<Column>,
     left_schema: &Arc<DFSchema>,
     right_schema: &Arc<DFSchema>,
     top_level: bool,
-) {
+) -> NullRejectingSides {
     match expr {
         Expr::Column(col) => {
-            non_nullable_cols.push(col.clone());
+            NullRejectingSides::for_column(col, left_schema, right_schema)
         }
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
-            // If one of the inputs are null for these operators, the results should be false.
-            Operator::Eq
-            | Operator::NotEq
-            | Operator::Lt
-            | Operator::LtEq
-            | Operator::Gt
-            | Operator::GtEq => {
-                extract_non_nullable_columns(
-                    left,
-                    non_nullable_cols,
-                    left_schema,
-                    right_schema,
-                    false,
-                );
-                extract_non_nullable_columns(
-                    right,
-                    non_nullable_cols,
-                    left_schema,
-                    right_schema,
-                    false,
-                )
-            }
             Operator::And | Operator::Or => {
-                // treat And as Or if does not from top level, such as
-                // not (c1 < 10 and c2 > 100)
-                if top_level && *op == Operator::And {
-                    extract_non_nullable_columns(
-                        left,
-                        non_nullable_cols,
-                        left_schema,
-                        right_schema,
-                        top_level,
-                    );
-                    extract_non_nullable_columns(
-                        right,
-                        non_nullable_cols,
-                        left_schema,
-                        right_schema,
-                        top_level,
-                    );
-                    return;
-                }
-
-                let mut left_non_nullable_cols: Vec<Column> = vec![];
-                let mut right_non_nullable_cols: Vec<Column> = vec![];
-
-                extract_non_nullable_columns(
+                let left_sides = extract_null_rejecting_sides(
                     left,
-                    &mut left_non_nullable_cols,
                     left_schema,
                     right_schema,
                     top_level,
                 );
-                extract_non_nullable_columns(
+                let right_sides = extract_null_rejecting_sides(
                     right,
-                    &mut right_non_nullable_cols,
                     left_schema,
                     right_schema,
                     top_level,
                 );
 
-                // for query: select *** from a left join b where b.c1 ... or b.c2 ...
-                // this can be eliminated to inner join.
-                // for query: select *** from a left join b where a.c1 ... or b.c2 ...
-                // this can not be eliminated.
-                // If columns of relation exist in both sub exprs, any columns of this relation
-                // can be added to non nullable columns.
-                if !left_non_nullable_cols.is_empty()
-                    && !right_non_nullable_cols.is_empty()
-                {
-                    for left_col in &left_non_nullable_cols {
-                        for right_col in &right_non_nullable_cols {
-                            if (left_schema.has_column(left_col)
-                                && left_schema.has_column(right_col))
-                                || (right_schema.has_column(left_col)
-                                    && right_schema.has_column(right_col))
-                            {
-                                non_nullable_cols.push(left_col.clone());
-                                break;
-                            }
-                        }
-                    }
+                // Top-level AND: each conjunct is an independent WHERE filter,
+                // so side evidence from either branch is sufficient.
+                // Nested AND is handled like OR because the enclosing context
+                // may still let a NULL-padded row pass.
+                if top_level && *op == Operator::And {
+                    left_sides.union(right_sides)
+                } else {
+                    // OR (and nested AND): a NULL-padded row is rejected only
+                    // if both branches reject NULLs for the same side.
+                    left_sides.intersection(right_sides)
                 }
             }
-            _ => {}
-        },
-        Expr::Not(arg) => extract_non_nullable_columns(
-            arg,
-            non_nullable_cols,
-            left_schema,
-            right_schema,
-            false,
-        ),
-        Expr::IsNotNull(arg) => {
-            if !top_level {
-                return;
+            // Other NULL-on-NULL operators preserve null rejection from either
+            // operand.
+            op if op.returns_null_on_null() => {
+                let left_sides =
+                    extract_null_rejecting_sides(left, left_schema, right_schema, false);
+                let right_sides =
+                    extract_null_rejecting_sides(right, left_schema, right_schema, false);
+                left_sides.union(right_sides)
             }
-            extract_non_nullable_columns(
-                arg,
-                non_nullable_cols,
-                left_schema,
-                right_schema,
-                false,
-            )
+            // Other operators, notably IS [ NOT ] DISTINCT FROM, are not
+            // NULL-propagating and provide no side-level rejection evidence.
+            _ => NullRejectingSides::default(),
+        },
+        Expr::Not(arg) | Expr::Negative(arg) => {
+            extract_null_rejecting_sides(arg, left_schema, right_schema, false)
+        }
+        // These wrappers return FALSE on NULL input, so they reject NULLs only
+        // when they are themselves in the root WHERE context. Under another
+        // expression, that FALSE can be transformed into a NULL-accepting result
+        // (for example by NOT), so recurse only at the top level.
+        Expr::IsNotNull(arg)
+        | Expr::IsTrue(arg)
+        | Expr::IsFalse(arg)
+        | Expr::IsNotUnknown(arg) => {
+            if top_level {
+                extract_null_rejecting_sides(arg, left_schema, right_schema, false)
+            } else {
+                NullRejectingSides::default()
+            }
         }
         Expr::Cast(Cast { expr, field: _ })
-        | Expr::TryCast(TryCast { expr, field: _ }) => extract_non_nullable_columns(
-            expr,
-            non_nullable_cols,
-            left_schema,
-            right_schema,
-            false,
-        ),
-        // IN list and BETWEEN are null-rejecting on the input expression:
-        // if the input column is NULL, the result is NULL (filtered out),
-        // regardless of whether the list/range contains NULLs.
-        Expr::InList(InList { expr, .. }) => extract_non_nullable_columns(
-            expr,
-            non_nullable_cols,
-            left_schema,
-            right_schema,
-            false,
-        ),
-        Expr::Between(between) => extract_non_nullable_columns(
-            &between.expr,
-            non_nullable_cols,
-            left_schema,
-            right_schema,
-            false,
-        ),
-        // LIKE is null-rejecting: if either the input column or the pattern
-        // is NULL, the result is NULL (filtered out by WHERE).
+        | Expr::TryCast(TryCast { expr, field: _ }) => {
+            extract_null_rejecting_sides(expr, left_schema, right_schema, false)
+        }
+        // IN list and BETWEEN reject NULLs from their input expression; list
+        // values and range bounds do not affect which join side is padded.
+        Expr::InList(InList { expr, .. }) => {
+            extract_null_rejecting_sides(expr, left_schema, right_schema, false)
+        }
+        Expr::Between(between) => {
+            extract_null_rejecting_sides(&between.expr, left_schema, right_schema, false)
+        }
         Expr::Like(Like { expr, pattern, .. }) => {
-            extract_non_nullable_columns(
-                expr,
-                non_nullable_cols,
-                left_schema,
-                right_schema,
-                false,
-            );
-            extract_non_nullable_columns(
-                pattern,
-                non_nullable_cols,
-                left_schema,
-                right_schema,
-                false,
-            );
+            let expr_sides =
+                extract_null_rejecting_sides(expr, left_schema, right_schema, false);
+            let pattern_sides =
+                extract_null_rejecting_sides(pattern, left_schema, right_schema, false);
+            expr_sides.union(pattern_sides)
         }
-        // IS TRUE, IS FALSE, and IS NOT UNKNOWN are null-rejecting:
-        // if the input is NULL, they return false (filtered out by WHERE).
-        // Note: IS NOT TRUE, IS NOT FALSE, and IS UNKNOWN are NOT null-rejecting
-        // because they return true for NULL input.
-        Expr::IsTrue(arg) | Expr::IsFalse(arg) | Expr::IsNotUnknown(arg) => {
-            extract_non_nullable_columns(
-                arg,
-                non_nullable_cols,
-                left_schema,
-                right_schema,
-                false,
-            )
-        }
-        _ => {}
+        // Everything else is conservative: NULL-accepting predicates such as
+        // IS NULL / IS NOT TRUE / IS NOT FALSE / IS UNKNOWN must not eliminate
+        // an outer join, and functions/subqueries/accessors/literals have no
+        // uniform NULL-propagation contract here.
+        _ => NullRejectingSides::default(),
     }
 }
 
@@ -362,8 +391,48 @@ mod tests {
         Operator::{And, Or},
         binary_expr, cast, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
-        try_cast,
+        not, try_cast,
     };
+
+    #[test]
+    fn null_rejecting_sides_union() {
+        let left_side = NullRejectingSides {
+            left: true,
+            right: false,
+        };
+        let right_side = NullRejectingSides {
+            left: false,
+            right: true,
+        };
+
+        assert_eq!(
+            left_side.union(right_side),
+            NullRejectingSides {
+                left: true,
+                right: true,
+            }
+        );
+    }
+
+    #[test]
+    fn null_rejecting_sides_intersection() {
+        let both_sides = NullRejectingSides {
+            left: true,
+            right: true,
+        };
+        let right_side = NullRejectingSides {
+            left: false,
+            right: true,
+        };
+
+        assert_eq!(
+            both_sides.intersection(right_side),
+            NullRejectingSides {
+                left: false,
+                right: true,
+            }
+        );
+    }
 
     macro_rules! assert_optimized_plan_equal {
         (
@@ -899,6 +968,83 @@ mod tests {
     }
 
     #[test]
+    fn no_eliminate_left_with_not_is_true() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // NOT(<x> IS TRUE) is equivalent to (<x> IS NOT TRUE): TRUE when
+        // <x> is FALSE OR NULL. So `WHERE NOT((t2.b > 5) IS TRUE)` accepts
+        // rows where t2.b is NULL (because t2.b > 5 is NULL → IS TRUE is
+        // FALSE → NOT FALSE = TRUE). The LEFT JOIN must NOT be converted.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(not(col("t2.b").gt(lit(5u32)).is_true()))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: NOT t2.b > UInt32(5) IS TRUE
+          Left Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn no_eliminate_left_with_not_is_false() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // Same shape, IS FALSE: NOT(<x> IS FALSE) accepts NULL on the
+        // inner column.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(not(col("t2.b").gt(lit(5u32)).is_false()))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: NOT t2.b > UInt32(5) IS FALSE
+          Left Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn no_eliminate_left_with_not_is_not_unknown() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // Same shape, IS NOT UNKNOWN: NOT(<x> IS NOT UNKNOWN) is
+        // equivalent to (<x> IS UNKNOWN), which is TRUE when <x> is NULL.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(not(col("t2.b").gt(lit(5u32)).is_not_unknown()))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: NOT t2.b > UInt32(5) IS NOT UNKNOWN
+          Left Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
     fn eliminate_full_with_type_cast() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
@@ -1171,6 +1317,243 @@ mod tests {
           Inner Join: t1.a = t2.a
             TableScan: t1
             TableScan: t2
+        ")
+    }
+
+    // ----- Filter pierces a Projection to reach the Join -----
+
+    #[test]
+    fn eliminate_left_through_projection() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // Filter → Projection → LeftJoin is the shape produced by projection
+        // pruning in queries such as TPC-DS q49, where the post-join
+        // Projection sits between the filter and the join.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .project(vec![col("t1.a"), col("t2.b").alias("bb")])?
+            .filter(col("bb").gt(lit(10u32)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: bb > UInt32(10)
+          Projection: t1.a, t2.b AS bb
+            Inner Join: t1.a = t2.a
+              TableScan: t1
+              TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn no_eliminate_left_through_projection_with_or_cross_side() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // After inlining the filter is still t1.b > 10 OR t2.b < 20, which
+        // is null-tolerant when t2 is NULL (the t1.b clause can still hold).
+        // The LEFT JOIN must be preserved.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .project(vec![col("t1.b").alias("x"), col("t2.b").alias("y")])?
+            .filter(binary_expr(
+                col("x").gt(lit(10u32)),
+                Or,
+                col("y").lt(lit(20u32)),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: x > UInt32(10) OR y < UInt32(20)
+          Projection: t1.b AS x, t2.b AS y
+            Left Join: t1.a = t2.a
+              TableScan: t1
+              TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn no_eliminate_left_through_projection_with_only_left_filter() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // A filter that constrains only the preserved (left) side of a
+        // LEFT JOIN does not justify converting it to INNER — the LEFT
+        // would still pass nullable right-side rows that the filter
+        // accepts.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .project(vec![col("t1.b").alias("x"), col("t2.b")])?
+            .filter(col("x").gt(lit(10u32)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: x > UInt32(10)
+          Projection: t1.b AS x, t2.b
+            Left Join: t1.a = t2.a
+              TableScan: t1
+              TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_left_with_arithmetic_predicate() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // t2.b * 2 + 1 > 10 is null-rejecting on t2.b: arithmetic
+        // operators propagate NULL, so the whole expression is NULL when
+        // t2.b is NULL, and NULL > 10 is filtered out by WHERE.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(
+                binary_expr(
+                    binary_expr(col("t2.b"), Operator::Multiply, lit(2u32)),
+                    Operator::Plus,
+                    lit(1u32),
+                )
+                .gt(lit(10u32)),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b * UInt32(2) + UInt32(1) > UInt32(10)
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+    #[test]
+    fn eliminate_left_with_negative_predicate() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // Unary minus propagates NULL: -NULL is NULL, so `WHERE -t2.b > 0`
+        // is null-rejecting on t2.b.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(Expr::Negative(Box::new(col("t2.b"))).gt(lit(0u32)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: (- t2.b) > UInt32(0)
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn no_eliminate_left_with_is_distinct_from() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // IS DISTINCT FROM is NOT null-rejecting: t2.b IS DISTINCT FROM 5 is
+        // true when t2.b is NULL (NULL is distinct from 5). Padding rows from
+        // a LEFT JOIN would survive the filter, so the LEFT JOIN must stay.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(binary_expr(
+                col("t2.b"),
+                Operator::IsDistinctFrom,
+                lit(5u32),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b IS DISTINCT FROM UInt32(5)
+          Left Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn no_eliminate_left_with_is_not_distinct_from() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // IS NOT DISTINCT FROM is also not null-rejecting: t2.b IS NOT
+        // DISTINCT FROM NULL is true when t2.b is NULL. The LEFT JOIN must
+        // stay.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(binary_expr(
+                col("t2.b"),
+                Operator::IsNotDistinctFrom,
+                lit(ScalarValue::UInt32(None)),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b IS NOT DISTINCT FROM UInt32(NULL)
+          Left Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn no_eliminate_through_non_transparent() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // Limit is intentionally not treated as transparent: a Limit below
+        // the Filter changes which rows survive, so swapping LEFT→INNER
+        // beneath it could yield a different surviving-row set even when
+        // the filter is null-rejecting on the right side.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .limit(0, Some(5))?
+            .filter(col("t2.b").gt(lit(10u32)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b > UInt32(10)
+          Limit: skip=0, fetch=5
+            Left Join: t1.a = t2.a
+              TableScan: t1
+              TableScan: t2
         ")
     }
 }

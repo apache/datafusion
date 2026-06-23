@@ -209,17 +209,15 @@ async fn ddl_can_not_be_planned_by_session_state() {
 }
 
 #[tokio::test]
-async fn invalid_wrapped_negation_fails_during_optimization() {
+async fn invalid_wrapped_negation_fails_during_planning() {
     let ctx = SessionContext::new();
     let err = ctx
         .sql("SELECT * FROM (SELECT 1) WHERE ((-'a') IS NULL)")
         .await
-        .unwrap()
-        .into_optimized_plan()
         .unwrap_err();
 
     assert_contains!(
         err.strip_backtrace(),
-        "Negation only supports numeric, interval and timestamp types"
+        "Unary operator '-' only supports signed numeric, interval and timestamp types"
     );
 }

@@ -993,7 +993,7 @@ fn bench_fixed_size_binary_inner(
         .collect();
 
     let refs: Vec<&[u8]> = values.iter().map(|v| v.as_slice()).collect();
-    let array = FixedSizeBinaryArray::from(refs);
+    let array = FixedSizeBinaryArray::try_from_iter(refs.into_iter()).unwrap();
 
     let schema = Schema::new(vec![Field::new("a", array.data_type().clone(), true)]);
     let exprs: Vec<_> = haystack

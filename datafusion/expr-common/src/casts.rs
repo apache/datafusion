@@ -31,7 +31,31 @@ use arrow::datatypes::{
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::ScalarValue;
 
-/// Convert a literal value from one data type to another
+/// Convert a literal [`ScalarValue`] to `target_type`, preserving the exact value.
+///
+/// Returns `None` if the value cannot be represented in `target_type`
+/// *exactly*.
+///
+/// This is a restricted, value-preserving cast used to rewrite comparison
+/// predicates of the form `CAST(col AS target_type) <op> literal` into
+/// `col <op> try_cast_literal_to_type(literal, col_type)`. That rewrite is
+/// only valid when the cast cannot change the comparison result.
+///
+/// # Supported Casts
+/// * numeric → numeric, including integers, decimals, `Date32`/`Date64` and
+///   `Timestamp`s, rejecting values outside the target's range or that would
+///   lose decimal digits
+/// * string → string between `Utf8`, `LargeUtf8` and `Utf8View`
+/// * wrapping a value into, or unwrapping it out of, a `Dictionary` whose value
+///   type matches the literal's type
+/// * `Binary` → `FixedSizeBinary` of the matching length
+/// * `Timestamp` → `Timestamp` cast between different time units is allowed even
+///   though it can truncate (for example nanoseconds → seconds), and a unit
+///   conversion that overflows yields a `NULL` literal rather than `None`.
+///
+/// # See Also
+/// - [`ScalarValue::cast_to`]: a general-purpose cast that can lose information
+///   or change a value's meaning.
 pub fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,
@@ -77,6 +101,35 @@ fn is_date_type(data_type: &DataType) -> bool {
 fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
     (is_date_type(from_type) && to_type.is_temporal())
         || (is_date_type(to_type) && from_type.is_temporal())
+}
+
+/// Returns true when casting a timestamp from `from_type` to `to_type` loses
+/// timestamp precision.
+///
+/// This is used by comparison cast unwrapping to avoid rewrites such as
+/// `CAST(ts_ns AS timestamp(ms)) = lit_ms` -> `ts_ns = lit_ns`. The original
+/// predicate can match any nanosecond value in the same millisecond, while the
+/// rewritten predicate only matches the exact millisecond boundary.
+pub fn is_timestamp_precision_narrowing_cast(
+    from_type: &DataType,
+    to_type: &DataType,
+) -> bool {
+    let (DataType::Timestamp(from_unit, _), DataType::Timestamp(to_unit, _)) =
+        (from_type, to_type)
+    else {
+        return false;
+    };
+
+    timestamp_unit_scale(from_unit) > timestamp_unit_scale(to_unit)
+}
+
+fn timestamp_unit_scale(unit: &TimeUnit) -> i128 {
+    match unit {
+        TimeUnit::Second => 1,
+        TimeUnit::Millisecond => MILLISECONDS as i128,
+        TimeUnit::Microsecond => MICROSECONDS as i128,
+        TimeUnit::Nanosecond => NANOSECONDS as i128,
+    }
 }
 
 /// Returns true if unwrap_cast_in_comparison supports this numeric type
@@ -758,6 +811,23 @@ mod tests {
             DataType::Date64,
             ExpectedCast::NoValue,
         );
+    }
+
+    #[test]
+    fn test_timestamp_precision_narrowing_cast() {
+        let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let ts_us = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
+        let ts_s = DataType::Timestamp(TimeUnit::Second, None);
+
+        assert!(is_timestamp_precision_narrowing_cast(&ts_ns, &ts_ms));
+        assert!(is_timestamp_precision_narrowing_cast(&ts_us, &ts_s));
+        assert!(!is_timestamp_precision_narrowing_cast(&ts_ms, &ts_ns));
+        assert!(!is_timestamp_precision_narrowing_cast(&ts_ms, &ts_ms));
+        assert!(!is_timestamp_precision_narrowing_cast(
+            &DataType::Int64,
+            &ts_ms
+        ));
     }
 
     #[test]

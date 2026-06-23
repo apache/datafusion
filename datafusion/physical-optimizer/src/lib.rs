@@ -27,9 +27,12 @@
 
 pub mod aggregate_statistics;
 pub mod combine_partial_final_agg;
-pub mod enforce_distribution;
-pub mod enforce_sorting;
 pub mod ensure_coop;
+pub mod ensure_requirements;
+// `enforce_distribution` and `enforce_sorting` are now internal implementation
+// details of `ensure_requirements`. Re-export at the crate root so external test
+// modules keep their public paths.
+pub use ensure_requirements::{enforce_distribution, enforce_sorting};
 pub mod filter_pushdown;
 pub mod join_selection;
 pub mod limit_pushdown;

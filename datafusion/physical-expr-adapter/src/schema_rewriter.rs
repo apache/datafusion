@@ -34,6 +34,7 @@ use datafusion_common::{
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
 use datafusion_physical_expr::PhysicalExprSimplifier;
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::{
     ScalarFunctionExpr,
@@ -311,7 +312,7 @@ impl DefaultPhysicalExprAdapterRewriter {
             None => return Ok(None),
         };
 
-        let lit = match field_name_expr.downcast_ref::<expressions::Literal>() {
+        let lit = match field_name_expr.downcast_ref::<Literal>() {
             Some(lit) => lit,
             None => return Ok(None),
         };
@@ -364,7 +365,7 @@ impl DefaultPhysicalExprAdapterRewriter {
         };
 
         let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
-        Ok(Some(Arc::new(expressions::Literal::new_with_metadata(
+        Ok(Some(Arc::new(Literal::new_with_metadata(
             null_value,
             Some(FieldMetadata::from(logical_struct_field.as_ref())),
         ))))
@@ -411,12 +412,10 @@ impl DefaultPhysicalExprAdapterRewriter {
             // If the column is missing from the physical schema fill it in with nulls.
             // For a different behavior, provide a custom `PhysicalExprAdapter` implementation.
             let null_value = ScalarValue::Null.cast_to(logical_field.data_type())?;
-            return Ok(Transformed::yes(Arc::new(
-                expressions::Literal::new_with_metadata(
-                    null_value,
-                    Some(FieldMetadata::from(logical_field)),
-                ),
-            )));
+            return Ok(Transformed::yes(Arc::new(Literal::new_with_metadata(
+                null_value,
+                Some(FieldMetadata::from(logical_field)),
+            ))));
         };
 
         let fields_match = logical_field == physical_field.as_ref();
@@ -432,7 +431,7 @@ impl DefaultPhysicalExprAdapterRewriter {
         // We need a cast expression whenever the logical and physical fields differ,
         // whether that difference is only metadata/nullability or also data type.
         // TODO: add optimization to move the cast from the column to literal expressions in the case of `col = 123`
-        // since that's much cheaper to evalaute.
+        // since that's much cheaper to evaluate.
         // See https://github.com/apache/datafusion/issues/15780#issuecomment-2824716928
         validate_data_type_compatibility(
             resolved_column.name(),

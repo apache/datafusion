@@ -32,6 +32,11 @@ pub fn from_repartition(
     let partition_count = match repartition.partitioning_scheme {
         Partitioning::RoundRobinBatch(num) => num,
         Partitioning::Hash(_, num) => num,
+        Partitioning::Range(_) => {
+            // TODO: Support range repartitioning in Substrait exchange output.
+            // Tracked by https://github.com/apache/datafusion/issues/22788
+            return not_impl_err!("Substrait does not support Range repartitioning");
+        }
         Partitioning::DistributeBy(_) => {
             return not_impl_err!(
                 "Physical plan does not support DistributeBy partitioning"
@@ -49,6 +54,11 @@ pub fn from_repartition(
                 .map(|e| try_to_substrait_field_reference(e, repartition.input.schema()))
                 .collect::<datafusion::common::Result<Vec<_>>>()?;
             ExchangeKind::ScatterByFields(ScatterFields { fields })
+        }
+        Partitioning::Range(_) => {
+            // TODO: Support range repartitioning in Substrait exchange output.
+            // Tracked by https://github.com/apache/datafusion/issues/22788
+            return not_impl_err!("Substrait does not support Range repartitioning");
         }
         Partitioning::DistributeBy(_) => {
             return not_impl_err!(

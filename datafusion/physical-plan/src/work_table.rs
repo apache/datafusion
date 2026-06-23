@@ -29,13 +29,13 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
+use crate::statistics::StatisticsArgs;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_datafusion_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryReservation;
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 /// A vector of record batches with a memory reservation.
 #[derive(Debug)]
@@ -186,13 +186,6 @@ impl ExecutionPlan for WorkTableExec {
         vec![]
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
@@ -235,7 +228,7 @@ impl ExecutionPlan for WorkTableExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
+    fn statistics_with_args(&self, _args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         Ok(Arc::new(Statistics::new_unknown(&self.schema())))
     }
 

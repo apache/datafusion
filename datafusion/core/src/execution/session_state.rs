@@ -30,7 +30,9 @@ use crate::datasource::provider_as_source;
 use crate::execution::SessionStateDefaults;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-use arrow_schema::{DataType, FieldRef};
+#[cfg(feature = "sql")]
+use arrow_schema::DataType;
+use arrow_schema::FieldRef;
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::information_schema::{
     INFORMATION_SCHEMA, InformationSchemaProvider,
@@ -162,7 +164,7 @@ pub struct SessionState {
     /// Scalar functions that are registered with the context
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Higher order functions that are registered with the context
-    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
+    higher_order_functions: HashMap<String, Arc<HigherOrderUDF>>,
     /// Aggregate functions registered in the context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions registered in the context
@@ -286,7 +288,7 @@ impl Session for SessionState {
         &self.scalar_functions
     }
 
-    fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
+    fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
         &self.higher_order_functions
     }
 
@@ -437,9 +439,8 @@ impl SessionState {
     ) -> datafusion_common::Result<Statement> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
-                "Unsupported SQL dialect: {dialect}. Available dialects: \
-                     Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                     MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
+                "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
+                Dialect::available()
             )
         })?;
 
@@ -486,9 +487,8 @@ impl SessionState {
     ) -> datafusion_common::Result<SQLExprWithAlias> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
-                "Unsupported SQL dialect: {dialect}. Available dialects: \
-                         Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
+                "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
+                Dialect::available()
             )
         })?;
 
@@ -691,6 +691,7 @@ impl SessionState {
                         stringified_plans,
                         schema: Arc::clone(&e.schema),
                         logical_optimization_succeeded: false,
+                        show_statistics: e.show_statistics,
                     }));
                 }
                 Err(e) => return Err(e),
@@ -728,6 +729,7 @@ impl SessionState {
                 stringified_plans,
                 schema: Arc::clone(&e.schema),
                 logical_optimization_succeeded,
+                show_statistics: e.show_statistics,
             }))
         } else {
             let analyzed_plan = self.analyzer.execute_and_check(
@@ -934,7 +936,7 @@ impl SessionState {
     }
 
     /// Return reference to higher_order_functions
-    pub fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
+    pub fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
         &self.higher_order_functions
     }
 
@@ -1034,7 +1036,7 @@ pub struct SessionStateBuilder {
     catalog_list: Option<Arc<dyn CatalogProviderList>>,
     table_functions: Option<HashMap<String, Arc<TableFunction>>>,
     scalar_functions: Option<Vec<Arc<ScalarUDF>>>,
-    higher_order_functions: Option<Vec<Arc<dyn HigherOrderUDF>>>,
+    higher_order_functions: Option<Vec<Arc<HigherOrderUDF>>>,
     aggregate_functions: Option<Vec<Arc<AggregateUDF>>>,
     window_functions: Option<Vec<Arc<WindowUDF>>>,
     extension_types: Option<ExtensionTypeRegistryRef>,
@@ -1371,7 +1373,7 @@ impl SessionStateBuilder {
     /// Set the map of [`HigherOrderUDF`]s
     pub fn with_higher_order_functions(
         mut self,
-        higher_order_functions: Vec<Arc<dyn HigherOrderUDF>>,
+        higher_order_functions: Vec<Arc<HigherOrderUDF>>,
     ) -> Self {
         self.higher_order_functions = Some(higher_order_functions);
         self
@@ -1791,9 +1793,7 @@ impl SessionStateBuilder {
     }
 
     /// Returns the current scalar_functions value
-    pub fn higher_order_functions(
-        &mut self,
-    ) -> &mut Option<Vec<Arc<dyn HigherOrderUDF>>> {
+    pub fn higher_order_functions(&mut self) -> &mut Option<Vec<Arc<HigherOrderUDF>>> {
         &mut self.higher_order_functions
     }
 
@@ -2016,7 +2016,7 @@ impl ContextProvider for SessionContextProvider<'_> {
         self.state.scalar_functions().get(name).cloned()
     }
 
-    fn get_higher_order_meta(&self, name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+    fn get_higher_order_meta(&self, name: &str) -> Option<Arc<HigherOrderUDF>> {
         self.state.higher_order_functions().get(name).cloned()
     }
 
@@ -2106,7 +2106,7 @@ impl FunctionRegistry for SessionState {
     fn higher_order_function(
         &self,
         name: &str,
-    ) -> datafusion_common::Result<Arc<dyn HigherOrderUDF>> {
+    ) -> datafusion_common::Result<Arc<HigherOrderUDF>> {
         self.higher_order_functions
             .get(name)
             .cloned()
@@ -2142,8 +2142,8 @@ impl FunctionRegistry for SessionState {
 
     fn register_higher_order_function(
         &mut self,
-        function: Arc<dyn HigherOrderUDF>,
-    ) -> datafusion_common::Result<Option<Arc<dyn HigherOrderUDF>>> {
+        function: Arc<HigherOrderUDF>,
+    ) -> datafusion_common::Result<Option<Arc<HigherOrderUDF>>> {
         function.aliases().iter().for_each(|alias| {
             self.higher_order_functions
                 .insert(alias.clone(), Arc::clone(&function));
@@ -2191,7 +2191,7 @@ impl FunctionRegistry for SessionState {
     fn deregister_higher_order_function(
         &mut self,
         name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn HigherOrderUDF>>> {
+    ) -> datafusion_common::Result<Option<Arc<HigherOrderUDF>>> {
         let function = self.higher_order_functions.remove(name);
         if let Some(function) = &function {
             for alias in function.aliases() {
@@ -2354,13 +2354,11 @@ mod tests {
     use crate::logical_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
     use crate::physical_plan::ExecutionPlan;
     use crate::sql::planner::ContextProvider;
-    use crate::sql::{ResolvedTableReference, TableReference};
     use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_catalog::MemoryCatalogProviderList;
-    use datafusion_common::DFSchema;
-    use datafusion_common::Result;
     use datafusion_common::config::Dialect;
+    use datafusion_common::{DFSchema, ResolvedTableReference, Result, TableReference};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
     use datafusion_expr::HigherOrderUDF;
@@ -2370,6 +2368,18 @@ mod tests {
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    #[test]
+    #[cfg(feature = "sql")]
+    fn test_configured_dialect_names_are_accepted_by_sqlparser() {
+        for info in Dialect::metadata() {
+            assert!(
+                sqlparser::dialect::dialect_from_str(info.canonical_name).is_some(),
+                "sqlparser should accept configured dialect {}",
+                info.canonical_name
+            );
+        }
+    }
 
     #[test]
     #[cfg(feature = "sql")]
@@ -2681,7 +2691,7 @@ mod tests {
             self.state.scalar_functions().get(name).cloned()
         }
 
-        fn get_higher_order_meta(&self, name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+        fn get_higher_order_meta(&self, name: &str) -> Option<Arc<HigherOrderUDF>> {
             self.state.higher_order_functions().get(name).cloned()
         }
 

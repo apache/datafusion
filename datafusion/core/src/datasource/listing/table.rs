@@ -92,10 +92,8 @@ impl ListingTableConfigExt for ListingTableConfig {
                 file_extension
             };
 
-        let listing_options = ListingOptions::new(file_format)
-            .with_file_extension(listing_file_extension)
-            .with_target_partitions(state.config().target_partitions())
-            .with_collect_stat(state.config().collect_statistics());
+        let listing_options =
+            ListingOptions::new(file_format).with_file_extension(listing_file_extension);
 
         Ok(self.with_listing_options(listing_options))
     }
@@ -125,7 +123,7 @@ mod tests {
         },
     };
     use arrow::{compute::SortOptions, record_batch::RecordBatch};
-    use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use datafusion_catalog::TableProvider;
     use datafusion_catalog_listing::{
         ListingOptions, ListingTable, ListingTableConfig, SchemaSource,
@@ -139,12 +137,18 @@ mod tests {
     use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_expr::dml::InsertOp;
-    use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
+    use datafusion_expr::{
+        BinaryExpr, LogicalPlanBuilder, Operator, Partitioning as LogicalPartitioning,
+        RangePartitioning as LogicalRangePartitioning,
+    };
     use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_expr::expressions::binary;
+    use datafusion_physical_expr::expressions::{Column, binary};
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::empty::EmptyExec;
-    use datafusion_physical_plan::{ExecutionPlanProperties, collect};
+    use datafusion_physical_plan::statistics::StatisticsArgs;
+    use datafusion_physical_plan::{
+        ExecutionPlanProperties, Partitioning, RangePartitioning, SplitPoint, collect,
+    };
     use std::collections::HashMap;
     use std::io::Write;
     use std::sync::Arc;
@@ -175,6 +179,21 @@ mod tests {
         (start_index..start_index + count)
             .map(|i| format!("{prefix}/file{i}"))
             .collect()
+    }
+
+    fn listing_table_with_files(
+        ctx: &SessionContext,
+        files: &[&str],
+        table_path: &str,
+        options: ListingOptions,
+        schema: Schema,
+    ) -> Result<ListingTable> {
+        register_test_store(ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
+
+        let config = ListingTableConfig::new(ListingTableUrl::parse(table_path)?)
+            .with_listing_options(options)
+            .with_schema(Arc::new(schema));
+        ListingTable::try_new(config)
     }
 
     #[tokio::test]
@@ -247,11 +266,12 @@ mod tests {
 
         // test metadata
         assert_eq!(
-            exec.partition_statistics(None)?.num_rows,
+            exec.statistics_with_args(&StatisticsArgs::new())?.num_rows,
             Precision::Exact(8)
         );
         assert_eq!(
-            exec.partition_statistics(None)?.total_byte_size,
+            exec.statistics_with_args(&StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent,
         );
 
@@ -372,7 +392,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_empty_table() -> Result<()> {
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(4),
+        );
         let path = String::from("table/p1=v1/file.json");
         register_test_store(&ctx, &[(&path, 100)]);
 
@@ -381,8 +403,7 @@ mod tests {
 
         let opt = ListingOptions::new(Arc::new(format))
             .with_file_extension(ext)
-            .with_table_partition_cols(vec![(String::from("p1"), DataType::Utf8)])
-            .with_target_partitions(4);
+            .with_table_partition_cols(vec![(String::from("p1"), DataType::Utf8)]);
 
         let table_path = ListingTableUrl::parse("test:///table/")?;
         let file_schema =
@@ -438,12 +459,13 @@ mod tests {
         output_partitioning: usize,
         file_ext: Option<&str>,
     ) -> Result<()> {
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(target_partitions),
+        );
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
         let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
-            .with_file_extension_opt(file_ext)
-            .with_target_partitions(target_partitions);
+            .with_file_extension_opt(file_ext);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
@@ -470,12 +492,13 @@ mod tests {
         output_partitioning: usize,
         file_ext: Option<&str>,
     ) -> Result<()> {
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(target_partitions),
+        );
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
         let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
-            .with_file_extension_opt(file_ext)
-            .with_target_partitions(target_partitions);
+            .with_file_extension_opt(file_ext);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
@@ -505,7 +528,9 @@ mod tests {
         output_partitioning: usize,
         file_ext: Option<&str>,
     ) -> Result<()> {
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(target_partitions),
+        );
         let (store, _) = make_test_store_and_state(
             &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>(),
         );
@@ -523,9 +548,7 @@ mod tests {
 
         let format = JsonFormat::default();
 
-        let opt = ListingOptions::new(Arc::new(format))
-            .with_file_extension_opt(file_ext)
-            .with_target_partitions(target_partitions);
+        let opt = ListingOptions::new(Arc::new(format)).with_file_extension_opt(file_ext);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
@@ -1287,6 +1310,236 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_files_uses_declared_output_partitioning_count() -> Result<()> {
+        let files = ["bucket/key-prefix/file0", "bucket/key-prefix/file1"];
+
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(1),
+        );
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_output_partitioning(Some(LogicalPartitioning::Range(
+                LogicalRangePartitioning::try_new(
+                    vec![col("a").sort(true, true)],
+                    vec![
+                        SplitPoint::new(vec![ScalarValue::from(10i32)]),
+                        SplitPoint::new(vec![ScalarValue::from(20i32)]),
+                        SplitPoint::new(vec![ScalarValue::from(30i32)]),
+                    ],
+                )?,
+            )));
+        let table = listing_table_with_files(
+            &ctx,
+            &files,
+            "test:///bucket/key-prefix/",
+            opt,
+            Schema::new(vec![Field::new("a", DataType::Int32, false)]),
+        )?;
+
+        let result = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        let group_sizes = result
+            .file_groups
+            .iter()
+            .map(|group| group.len())
+            .collect::<Vec<_>>();
+
+        assert_eq!(group_sizes, vec![1, 1, 0, 0]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_range_output_partitioning_normalizes_split_point_types() -> Result<()> {
+        let files = ["bucket/key-prefix/file0"];
+
+        let ctx = SessionContext::new();
+        let output_partitioning =
+            LogicalPartitioning::Range(LogicalRangePartitioning::try_new(
+                vec![col("a").sort(true, true)],
+                vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+                    Some(123_000_000_000),
+                    None,
+                )])],
+            )?);
+        let expected_output_partitioning =
+            Partitioning::Range(RangePartitioning::try_new(
+                LexOrdering::new(vec![PhysicalSortExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    SortOptions::default(),
+                )])
+                .unwrap(),
+                vec![SplitPoint::new(vec![ScalarValue::TimestampSecond(
+                    Some(123),
+                    None,
+                )])],
+            )?);
+
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_output_partitioning(Some(output_partitioning));
+        let table = listing_table_with_files(
+            &ctx,
+            &files,
+            "test:///bucket/key-prefix/",
+            opt,
+            Schema::new(vec![Field::new(
+                "a",
+                DataType::Timestamp(TimeUnit::Second, None),
+                false,
+            )]),
+        )?;
+
+        let scan = table.scan(&ctx.state(), None, &[], None).await?;
+        assert_eq!(scan.output_partitioning(), &expected_output_partitioning);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_range_output_partitioning_rejects_invalid_split_point_type()
+    -> Result<()> {
+        let files = ["bucket/key-prefix/file0"];
+
+        let ctx = SessionContext::new();
+        let output_partitioning =
+            LogicalPartitioning::Range(LogicalRangePartitioning::try_new(
+                vec![col("a").sort(true, true)],
+                vec![SplitPoint::new(vec![ScalarValue::Utf8(Some(
+                    "not-an-int".to_string(),
+                ))])],
+            )?);
+
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_output_partitioning(Some(output_partitioning));
+        let table = listing_table_with_files(
+            &ctx,
+            &files,
+            "test:///bucket/key-prefix/",
+            opt,
+            Schema::new(vec![Field::new("a", DataType::Int32, false)]),
+        )?;
+
+        let err = table.scan(&ctx.state(), None, &[], None).await.unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Range output partitioning split point 0 value 0 with type Utf8 cannot be represented exactly as ordering expression type Int32"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_range_output_partitioning_rejects_lossy_timestamp_split_point()
+    -> Result<()> {
+        let files = ["bucket/key-prefix/file0"];
+
+        let ctx = SessionContext::new();
+        let output_partitioning =
+            LogicalPartitioning::Range(LogicalRangePartitioning::try_new(
+                vec![col("a").sort(true, true)],
+                vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+                    Some(123_456),
+                    None,
+                )])],
+            )?);
+
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_output_partitioning(Some(output_partitioning));
+        let table = listing_table_with_files(
+            &ctx,
+            &files,
+            "test:///bucket/key-prefix/",
+            opt,
+            Schema::new(vec![Field::new(
+                "a",
+                DataType::Timestamp(TimeUnit::Second, None),
+                false,
+            )]),
+        )?;
+
+        let err = table.scan(&ctx.state(), None, &[], None).await.unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Range output partitioning split point 0 value 0 with type Timestamp(ns) cannot be represented exactly as ordering expression type Timestamp(s)"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partition_filter_preserves_declared_output_partitioning() -> Result<()>
+    {
+        let files = ["bucket/test/pid=1/file1", "bucket/test/pid=2/file2"];
+
+        let ctx = SessionContext::new();
+        let output_partitioning =
+            LogicalPartitioning::Range(LogicalRangePartitioning::try_new(
+                vec![col("pid").sort(true, true)],
+                vec![SplitPoint::new(vec![ScalarValue::from(2i32)])],
+            )?);
+        let expected_output_partitioning =
+            Partitioning::Range(RangePartitioning::try_new(
+                LexOrdering::new(vec![PhysicalSortExpr::new(
+                    Arc::new(Column::new("pid", 1)),
+                    SortOptions::default(),
+                )])
+                .unwrap(),
+                vec![SplitPoint::new(vec![ScalarValue::from(2i32)])],
+            )?);
+
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_table_partition_cols(vec![("pid".to_string(), DataType::Int32)])
+            .with_output_partitioning(Some(output_partitioning.clone()));
+
+        let table = listing_table_with_files(
+            &ctx,
+            &files,
+            "test:///bucket/test/",
+            opt,
+            Schema::new(vec![Field::new("a", DataType::Boolean, false)]),
+        )?;
+
+        let unfiltered = table.scan(&ctx.state(), None, &[], None).await?;
+        assert_eq!(
+            unfiltered.output_partitioning(),
+            &expected_output_partitioning
+        );
+
+        let filter = Expr::eq(col("pid"), lit(2_i32));
+        let file_groups = table
+            .list_files_for_scan(&ctx.state(), std::slice::from_ref(&filter), None)
+            .await?
+            .file_groups
+            .into_iter()
+            .map(|group| {
+                group
+                    .into_inner()
+                    .into_iter()
+                    .map(|file| file.path().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            file_groups,
+            vec![
+                Vec::<String>::new(),
+                vec!["bucket/test/pid=2/file2".to_string()]
+            ]
+        );
+
+        let filtered = table.scan(&ctx.state(), None, &[filter], None).await?;
+        assert_eq!(
+            filtered.output_partitioning(),
+            &expected_output_partitioning
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_listing_table_prunes_extra_files_in_hive() -> Result<()> {
         let files = [
             "bucket/test/pid=1/file1",
@@ -1296,7 +1549,9 @@ mod tests {
             "bucket/test/other/file5",
         ];
 
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(1),
+        );
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
         let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
@@ -1341,10 +1596,12 @@ mod tests {
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
         let table_path = ListingTableUrl::parse(filename)?;
 
-        let ctx = SessionContext::new();
-        let state = ctx.state();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(1),
+        );
+        let mut state = ctx.state();
 
-        // Test 1: Default behavior - stats not collected
+        // Test 1: Default behavior - stats collected
         let opt_default = ListingOptions::new(Arc::new(ParquetFormat::default()));
         let schema_default = opt_default.infer_schema(&state, &table_path).await?;
         let config_default = ListingTableConfig::new(table_path.clone())
@@ -1355,52 +1612,66 @@ mod tests {
 
         let exec_default = table_default.scan(&state, None, &[], None).await?;
         assert_eq!(
-            exec_default.partition_statistics(None)?.num_rows,
-            Precision::Absent
+            exec_default
+                .statistics_with_args(&StatisticsArgs::new())?
+                .num_rows,
+            Precision::Exact(8)
         );
 
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
-            exec_default.partition_statistics(None)?.total_byte_size,
+            exec_default
+                .statistics_with_args(&StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent
         );
 
-        // Test 2: Explicitly disable stats
-        let opt_disabled = ListingOptions::new(Arc::new(ParquetFormat::default()))
-            .with_collect_stat(false);
-        let schema_disabled = opt_disabled.infer_schema(&state, &table_path).await?;
+        // Test 2: Explicitly disable stats via session config
+        let cfg = state.config_mut();
+        cfg.options_mut().execution.collect_statistics = false;
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let schema_disabled = opt.infer_schema(&state, &table_path).await?;
         let config_disabled = ListingTableConfig::new(table_path.clone())
-            .with_listing_options(opt_disabled)
+            .with_listing_options(opt)
             .with_schema(schema_disabled);
         let table_disabled = ListingTable::try_new(config_disabled)?;
 
         let exec_disabled = table_disabled.scan(&state, None, &[], None).await?;
         assert_eq!(
-            exec_disabled.partition_statistics(None)?.num_rows,
+            exec_disabled
+                .statistics_with_args(&StatisticsArgs::new())?
+                .num_rows,
             Precision::Absent
         );
         assert_eq!(
-            exec_disabled.partition_statistics(None)?.total_byte_size,
+            exec_disabled
+                .statistics_with_args(&StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent
         );
 
-        // Test 3: Explicitly enable stats
-        let opt_enabled = ListingOptions::new(Arc::new(ParquetFormat::default()))
-            .with_collect_stat(true);
-        let schema_enabled = opt_enabled.infer_schema(&state, &table_path).await?;
+        // Test 3: Re-enable stats via session config
+        let cfg = state.config_mut();
+        cfg.options_mut().execution.collect_statistics = true;
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let schema_enabled = opt.infer_schema(&state, &table_path).await?;
         let config_enabled = ListingTableConfig::new(table_path)
-            .with_listing_options(opt_enabled)
+            .with_listing_options(opt)
             .with_schema(schema_enabled);
         let table_enabled = ListingTable::try_new(config_enabled)?;
 
         let exec_enabled = table_enabled.scan(&state, None, &[], None).await?;
         assert_eq!(
-            exec_enabled.partition_statistics(None)?.num_rows,
+            exec_enabled
+                .statistics_with_args(&StatisticsArgs::new())?
+                .num_rows,
             Precision::Exact(8)
         );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
-            exec_enabled.partition_statistics(None)?.total_byte_size,
+            exec_enabled
+                .statistics_with_args(&StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent,
         );
 
@@ -1456,14 +1727,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_basic_table_scan() -> Result<()> {
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_collect_statistics(false),
+        );
 
         // Test basic table creation and scanning
         let path = "table/file.json";
         register_test_store(&ctx, &[(path, 10)]);
 
         let format = JsonFormat::default();
-        let opt = ListingOptions::new(Arc::new(format)).with_collect_stat(false);
+        let opt = ListingOptions::new(Arc::new(format));
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
         let table_path = ListingTableUrl::parse("test:///table/")?;
 

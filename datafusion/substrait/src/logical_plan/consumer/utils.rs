@@ -18,12 +18,11 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UnionFields};
 use datafusion::common::{
-    DFSchema, DFSchemaRef, exec_err, not_impl_err, substrait_datafusion_err,
-    substrait_err,
+    DFSchema, DFSchemaRef, TableReference, exec_err, not_impl_err,
+    substrait_datafusion_err, substrait_err,
 };
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Cast, Expr, ExprSchemable};
-use datafusion::sql::TableReference;
 use std::collections::HashSet;
 use std::sync::Arc;
 use substrait::proto::SortField;
@@ -316,6 +315,10 @@ pub(super) fn ensure_schema_compatibility(
 /// 1. They have logically equivalent types.
 /// 2. They have the same nullability OR the Substrait field is nullable and the DataFusion fields
 ///    is not nullable.
+/// 3. For Struct fields, every child field's nullability is compatible by the same rule
+///    (recursively).
+///
+/// TODO: Check nullability for List and Map fields.
 ///
 /// If a Substrait field is not nullable, the Substrait plan may be built around assuming it is not
 /// nullable. As such if DataFusion has that field as nullable the plan should be rejected.
@@ -339,13 +342,54 @@ fn ensure_field_compatibility(
         datafusion_field.is_nullable(),
         substrait_field.is_nullable(),
     ) {
-        // TODO: from_substrait_struct_type needs to be updated to set the nullability correctly. It defaults to true for now.
         return substrait_err!(
             "Field '{}' is nullable in the DataFusion schema but not nullable in the Substrait schema.",
             substrait_field.name()
         );
     }
+
+    ensure_nested_nullability_compatibility(
+        datafusion_field.data_type(),
+        substrait_field.data_type(),
+        substrait_field.name(),
+    )
+}
+
+/// Recurses through nested Struct DataTypes, applying
+/// [`compatible_nullabilities`] to each child field.
+///
+/// TODO: Add support for List/LargeList/FixedSizeList and Map fields.
+fn ensure_nested_nullability_compatibility(
+    datafusion_type: &DataType,
+    substrait_type: &DataType,
+    field_path: &str,
+) -> datafusion::common::Result<()> {
+    if let (DataType::Struct(df_fields), DataType::Struct(sub_fields)) =
+        (datafusion_type, substrait_type)
+    {
+        for (df_f, sub_f) in df_fields.iter().zip(sub_fields.iter()) {
+            check_nested_field(df_f, sub_f, field_path)?;
+        }
+    }
     Ok(())
+}
+
+fn check_nested_field(
+    df_field: &Field,
+    sub_field: &Field,
+    parent_path: &str,
+) -> datafusion::common::Result<()> {
+    let path = format!("{parent_path}.{}", sub_field.name());
+    if !compatible_nullabilities(df_field.is_nullable(), sub_field.is_nullable()) {
+        return substrait_err!(
+            "Field '{path}' is nullable in the DataFusion schema but not nullable in the Substrait schema."
+        );
+    }
+    ensure_nested_nullability_compatibility(
+        df_field.data_type(),
+        sub_field.data_type(),
+        &path,
+    )
 }
 
 /// Returns true if the DataFusion and Substrait nullabilities are compatible, false otherwise
@@ -521,16 +565,15 @@ pub(crate) fn from_substrait_precision(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{NameTracker, make_renamed_schema};
+    use super::{NameTracker, ensure_schema_compatibility, make_renamed_schema};
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::DefaultSubstraitConsumer;
-    use datafusion::arrow::datatypes::{DataType, Field};
-    use datafusion::common::DFSchema;
+    use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
+    use datafusion::common::{DFSchema, TableReference};
     use datafusion::error::Result;
     use datafusion::execution::SessionState;
     use datafusion::logical_expr::{Expr, col};
     use datafusion::prelude::SessionContext;
-    use datafusion::sql::TableReference;
     use std::collections::HashMap;
     use std::sync::{Arc, LazyLock};
 
@@ -812,5 +855,56 @@ pub(crate) mod tests {
         assert_eq!(result2, col("y").alias("result").alias("result__temp__0"));
 
         Ok(())
+    }
+
+    fn schema_with_struct_inner(inner_nullable: bool) -> DFSchema {
+        let inner = Field::new("inner", DataType::Int32, inner_nullable);
+        let outer = Field::new("s", DataType::Struct(Fields::from(vec![inner])), false);
+        DFSchema::try_from(Schema::new(vec![outer])).unwrap()
+    }
+
+    #[test]
+    fn nested_compatibility_accepts_required_df_field() -> Result<()> {
+        // DF makes a stronger guarantee (required) than Substrait expects
+        // (nullable). The stronger guarantee is compatible with the weaker
+        // expectation, so this is accepted.
+        let df = schema_with_struct_inner(false);
+        let sub = schema_with_struct_inner(true);
+        ensure_schema_compatibility(&df, sub)
+    }
+
+    #[test]
+    fn nested_compatibility_rejects_nullable_df_field() {
+        // Substrait says inner is required; DF says inner is nullable. The
+        // Substrait plan may rely on inner being non-null, so reject.
+        let df = schema_with_struct_inner(true);
+        let sub = schema_with_struct_inner(false);
+        let err = ensure_schema_compatibility(&df, sub).unwrap_err();
+        assert!(
+            err.to_string().contains("'s.inner'"),
+            "expected error to identify the nested field path 's.inner', got: {err}"
+        );
+    }
+
+    #[test]
+    fn nested_compatibility_recurses_into_nested_struct() {
+        // Two levels of nesting: outer struct with required field that is
+        // itself a struct, whose `inner` field is required in Substrait but
+        // nullable in DF.
+        fn schema(inner_nullable: bool) -> DFSchema {
+            let inner = Field::new("inner", DataType::Int32, inner_nullable);
+            let middle =
+                Field::new("m", DataType::Struct(Fields::from(vec![inner])), false);
+            let outer =
+                Field::new("s", DataType::Struct(Fields::from(vec![middle])), false);
+            DFSchema::try_from(Schema::new(vec![outer])).unwrap()
+        }
+        let df = schema(true);
+        let sub = schema(false);
+        let err = ensure_schema_compatibility(&df, sub).unwrap_err();
+        assert!(
+            err.to_string().contains("'s.m.inner'"),
+            "expected error to identify the deeply nested field path 's.m.inner', got: {err}"
+        );
     }
 }

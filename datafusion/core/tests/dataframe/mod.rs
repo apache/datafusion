@@ -75,10 +75,11 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, NullTreatment, Sort, WindowFunction};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
-    Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
-    ScalarFunctionImplementation, SortExpr, TableType, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunctionDefinition, cast, col, create_udf, exists,
-    in_subquery, lit, out_ref_col, placeholder, scalar_subquery, when, wildcard,
+    CreateMemoryTable, CreateView, DdlStatement, Expr, ExprFunctionExt, ExprSchemable,
+    LogicalPlan, LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, TableType,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, cast, col,
+    create_udf, exists, in_subquery, lit, out_ref_col, placeholder, scalar_subquery,
+    when, wildcard,
 };
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -839,7 +840,7 @@ async fn test_aggregate_with_pk() -> Result<()> {
     let aggr_expr = vec![];
     let df = df.aggregate(group_expr, aggr_expr)?;
 
-    // Since id and name are functionally dependant, we can use name among
+    // Since id and name are functionally dependent, we can use name among
     // expression even if it is not part of the group by expression and can
     // select "name" column even though it wasn't explicitly grouped
     let df = df.select(vec![col("id"), col("name")])?;
@@ -894,7 +895,7 @@ async fn test_aggregate_with_pk2() -> Result<()> {
     "
     );
 
-    // Since id and name are functionally dependant, we can use name among expression
+    // Since id and name are functionally dependent, we can use name among expression
     // even if it is not part of the group by expression.
     let df_results = df.collect().await?;
 
@@ -942,7 +943,7 @@ async fn test_aggregate_with_pk3() -> Result<()> {
     "
     );
 
-    // Since id and name are functionally dependant, we can use name among expression
+    // Since id and name are functionally dependent, we can use name among expression
     // even if it is not part of the group by expression.
     let df_results = df.collect().await?;
 
@@ -1140,7 +1141,13 @@ async fn test_aggregate_name_collision() -> Result<()> {
         // The select expr has the same display_name as the group_expr,
         // but since they are different expressions, it should fail.
         .expect_err("Expected error");
-    assert_snapshot!(df.strip_backtrace(), @r#"Schema error: No field named aggregate_test_100.c2. Valid fields are "aggregate_test_100.c2 + aggregate_test_100.c3"."#);
+    assert_snapshot!(
+        df.strip_backtrace(),
+        @r#"
+Schema error: No field named aggregate_test_100.c2.
+Valid fields are "aggregate_test_100.c2 + aggregate_test_100.c3".
+"#
+    );
 
     Ok(())
 }
@@ -1203,27 +1210,27 @@ async fn window_using_aggregates() -> Result<()> {
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
     | first_value | last_val | approx_distinct | approx_median | median | max | min  | c2 | c3   |
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
-    |             |          |                 |               |        |     |      | 1  | -85  |
-    | -85         | -101     | 14              | -12.0         | -12    | 83  | -101 | 4  | -54  |
-    | -85         | -101     | 17              | -25.0         | -25    | 83  | -101 | 5  | -31  |
-    | -85         | -12      | 10              | -32.75        | -34    | 83  | -85  | 3  | 13   |
-    | -85         | -25      | 3               | -56.0         | -56    | -25 | -85  | 1  | -5   |
-    | -85         | -31      | 18              | -29.75        | -28    | 83  | -101 | 5  | 36   |
-    | -85         | -38      | 16              | -25.0         | -25    | 83  | -101 | 4  | 65   |
-    | -85         | -43      | 7               | -43.0         | -43    | 83  | -85  | 2  | 45   |
-    | -85         | -48      | 6               | -35.75        | -36    | 83  | -85  | 2  | -43  |
-    | -85         | -5       | 4               | -37.75        | -40    | -5  | -85  | 1  | 83   |
-    | -85         | -54      | 15              | -17.0         | -18    | 83  | -101 | 4  | -38  |
-    | -85         | -56      | 2               | -70.5         | -70    | -56 | -85  | 1  | -25  |
-    | -85         | -72      | 9               | -43.0         | -43    | 83  | -85  | 3  | -12  |
-    | -85         | -85      | 1               | -85.0         | -85    | -85 | -85  | 1  | -56  |
-    | -85         | 13       | 11              | -17.0         | -18    | 83  | -85  | 3  | 14   |
-    | -85         | 13       | 11              | -25.0         | -25    | 83  | -85  | 3  | 13   |
-    | -85         | 14       | 12              | -12.0         | -12    | 83  | -85  | 3  | 17   |
-    | -85         | 17       | 13              | -11.25        | -8     | 83  | -85  | 4  | -101 |
-    | -85         | 45       | 8               | -34.5         | -34    | 83  | -85  | 3  | -72  |
-    | -85         | 65       | 17              | -17.0         | -18    | 83  | -101 | 5  | -101 |
-    | -85         | 83       | 5               | -25.0         | -25    | 83  | -85  | 2  | -48  |
+    |             |          | 0               |               |        |     |      | 1  | -85  |
+    | -85         | -101     | 14              | -12.0         | -12.0  | 83  | -101 | 4  | -54  |
+    | -85         | -101     | 17              | -25.0         | -25.0  | 83  | -101 | 5  | -31  |
+    | -85         | -12      | 10              | -32.75        | -34.0  | 83  | -85  | 3  | 13   |
+    | -85         | -25      | 3               | -56.0         | -56.0  | -25 | -85  | 1  | -5   |
+    | -85         | -31      | 18              | -29.75        | -28.0  | 83  | -101 | 5  | 36   |
+    | -85         | -38      | 16              | -25.0         | -25.0  | 83  | -101 | 4  | 65   |
+    | -85         | -43      | 7               | -43.0         | -43.0  | 83  | -85  | 2  | 45   |
+    | -85         | -48      | 6               | -35.75        | -36.5  | 83  | -85  | 2  | -43  |
+    | -85         | -5       | 4               | -37.75        | -40.5  | -5  | -85  | 1  | 83   |
+    | -85         | -54      | 15              | -17.0         | -18.5  | 83  | -101 | 4  | -38  |
+    | -85         | -56      | 2               | -70.5         | -70.5  | -56 | -85  | 1  | -25  |
+    | -85         | -72      | 9               | -43.0         | -43.0  | 83  | -85  | 3  | -12  |
+    | -85         | -85      | 1               | -85.0         | -85.0  | -85 | -85  | 1  | -56  |
+    | -85         | 13       | 11              | -17.0         | -18.5  | 83  | -85  | 3  | 14   |
+    | -85         | 13       | 11              | -25.0         | -25.0  | 83  | -85  | 3  | 13   |
+    | -85         | 14       | 12              | -12.0         | -12.0  | 83  | -85  | 3  | 17   |
+    | -85         | 17       | 13              | -11.25        | -8.5   | 83  | -85  | 4  | -101 |
+    | -85         | 45       | 8               | -34.5         | -34.0  | 83  | -85  | 3  | -72  |
+    | -85         | 65       | 17              | -17.0         | -18.5  | 83  | -101 | 5  | -101 |
+    | -85         | 83       | 5               | -25.0         | -25.0  | 83  | -85  | 2  | -48  |
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
     "
     );
@@ -3022,20 +3029,20 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
         @r"
-    +---------------+----------------------------------------------------------------------------+
-    | plan_type     | plan                                                                       |
-    +---------------+----------------------------------------------------------------------------+
-    | logical_plan  | Sort: count(*) AS count(*) ASC NULLS LAST                                  |
-    |               |   Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1)) AS count(*)]]        |
-    |               |     TableScan: t1 projection=[b]                                           |
-    | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                       |
-    |               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true] |
-    |               |     AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(*)]  |
-    |               |       RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1     |
-    |               |         AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(*)]       |
-    |               |           DataSourceExec: partitions=1, partition_sizes=[1]                |
-    |               |                                                                            |
-    +---------------+----------------------------------------------------------------------------+
+    +---------------+---------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                  |
+    +---------------+---------------------------------------------------------------------------------------+
+    | logical_plan  | Sort: count(*) AS count(*) ASC NULLS LAST                                             |
+    |               |   Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1)) AS count(*)]]                   |
+    |               |     TableScan: t1 projection=[b]                                                      |
+    | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                                  |
+    |               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true]            |
+    |               |     AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(1) as count(*)] |
+    |               |       RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1                |
+    |               |         AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(1) as count(*)]      |
+    |               |           DataSourceExec: partitions=1, partition_sizes=[1]                           |
+    |               |                                                                                       |
+    +---------------+---------------------------------------------------------------------------------------+
     "
     );
     Ok(())
@@ -3268,7 +3275,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
+              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet, sort_order_for_reorder=[id@0 ASC NULLS LAST]
     ");
     Ok(())
 }
@@ -3286,7 +3293,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
+              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet, sort_order_for_reorder=[id@0 ASC NULLS LAST]
     ");
 
     Ok(())
@@ -3344,7 +3351,11 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
 
     // To be able to remove user specific paths from the plan, for stable assertions
     let testdata_clean = Path::new(&testdata).canonicalize()?.display().to_string();
-    let testdata_clean = testdata_clean.strip_prefix("/").unwrap_or(&testdata_clean);
+    let testdata_clean = testdata_clean.replace("\\", "/");
+    let testdata_clean = testdata_clean
+        .strip_prefix("//?/")
+        .or_else(|| testdata_clean.strip_prefix("/"))
+        .unwrap_or(&testdata_clean);
 
     // Use displayable() rather than explain().collect() to avoid table formatting issues. We need
     // to replace machine-specific paths with variable lengths, which breaks table alignment and
@@ -3500,9 +3511,9 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |     HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@1, a@0)], projection=[a@3, b@4, count(*)@0, __always_true@2] |
     |               |       CoalescePartitionsExec                                                                                             |
     |               |         ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                   |
-    |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(*)]                                          |
+    |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(1) as count(*)]                              |
     |               |             RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                             |
-    |               |               AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                               |
+    |               |               AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(1) as count(*)]                                   |
     |               |                 DataSourceExec: partitions=1, partition_sizes=[1]                                                        |
     |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
     |               |                                                                                                                          |
@@ -6304,7 +6315,10 @@ async fn test_alias_nested() -> Result<()> {
     let select2 = df.select(vec![col("alias1.a")]);
     assert_snapshot!(
         select2.unwrap_err().strip_backtrace(),
-        @"Schema error: No field named alias1.a. Valid fields are alias2.a, alias2.b, alias2.one."
+        @r#"
+Schema error: No field named alias1.a. Did you mean 'alias2.a'?
+Valid fields are alias2.a, alias2.b, alias2.one.
+"#
     );
     Ok(())
 }
@@ -6522,6 +6536,173 @@ async fn test_fill_null_all_columns() -> Result<()> {
     +---+---------+
     "
     );
+    Ok(())
+}
+
+async fn create_nan_table() -> Result<DataFrame> {
+    // create a DataFrame with a NaN value in a float column "a" and a
+    // non-float column "b" that must stay untouched by fill_nan.
+    //    "+-----+---+",
+    //    "| a   | b |",
+    //    "+-----+---+",
+    //    "| 1.0 | 1 |",
+    //    "| NaN | 2 |",
+    //    "| 3.0 | 3 |",
+    //    "+-----+---+",
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Float64, true),
+        Field::new("b", DataType::Int32, true),
+    ]));
+    let a_values = Float64Array::from(vec![Some(1.0), Some(f64::NAN), Some(3.0)]);
+    let b_values = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(a_values), Arc::new(b_values)],
+    )?;
+
+    let ctx = SessionContext::new();
+    let table = MemTable::try_new(schema.clone(), vec![vec![batch]])?;
+    ctx.register_table("t_nan", Arc::new(table))?;
+    let df = ctx.table("t_nan").await?;
+    Ok(df)
+}
+
+#[tokio::test]
+async fn test_fill_nan() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // Fill NaNs in the float column "a" with 0.0.
+    let df_filled = df.fill_nan(&ScalarValue::Float64(Some(0.0)), &["a"])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 0.0 | 2 |
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    +-----+---+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_nan_all_columns() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // Fill NaNs across all columns. Only the float column "a" is affected;
+    // the non-float column "b" is left unchanged since NaN only exists for
+    // floating-point types.
+    let df_filled = df.fill_nan(&ScalarValue::Float64(Some(0.0)), &[])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 0.0 | 2 |
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    +-----+---+
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_nan_non_float_column() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // Explicitly naming a non-float column is a no-op, not an error: NaN does
+    // not exist for Int32, so column "b" (and the un-targeted "a") are unchanged.
+    let df_filled = df.fill_nan(&ScalarValue::Float64(Some(0.0)), &["b"])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    | NaN | 2 |
+    +-----+---+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_nan_unknown_column() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // A column name that is not in the schema is propagated as an error.
+    let err = df
+        .fill_nan(&ScalarValue::Float64(Some(0.0)), &["does_not_exist"])
+        .unwrap_err();
+
+    assert_snapshot!(err.strip_backtrace(), @"Error during planning: Column 'does_not_exist' not found");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_nan_casts_fill_value() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // Int32(0) is not the column's type (Float64) but can be cast to it, so the
+    // NaN is replaced with 0.0. Exercises the cross-type cast path — the other
+    // positive tests pass a Float64 value, which skips the actual cast.
+    let df_filled = df.fill_nan(&ScalarValue::Int32(Some(0)), &["a"])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 0.0 | 2 |
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    +-----+---+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_nan_uncastable_value() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // The float column "a" is targeted, but "abc" cannot be cast to Float64, so
+    // the fill is skipped and column "a" keeps its original NaN value.
+    let df_filled = df.fill_nan(&ScalarValue::Utf8(Some("abc".to_string())), &["a"])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    | NaN | 2 |
+    +-----+---+
+    "
+    );
+
     Ok(())
 }
 
@@ -6747,6 +6928,169 @@ async fn test_copy_to_preserves_order() -> Result<()> {
       DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
+    Ok(())
+}
+
+fn duplicate_unqualified_name_batch() -> Result<RecordBatch> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(vec![
+                "abcDEF",
+                "abc123",
+                "CBAdef",
+                "123AbcDef",
+            ])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+        ],
+    )
+    .map_err(Into::into)
+}
+
+async fn duplicate_unqualified_name_input(
+    ctx: &SessionContext,
+    name: &str,
+) -> Result<LogicalPlan> {
+    ctx.register_batch(name, duplicate_unqualified_name_batch()?)?;
+
+    let left = ctx.table(name).await?;
+    let right = left.clone().alias("t2")?;
+    Ok(left
+        .join(right, JoinType::Inner, &["b"], &["b"], None)?
+        .into_unoptimized_plan())
+}
+
+#[tokio::test]
+async fn execute_logical_plan_rejects_duplicate_unqualified_names_in_create_memory_table()
+-> Result<()> {
+    let ctx = SessionContext::new();
+    let input = duplicate_unqualified_name_input(&ctx, "t1").await?;
+
+    let plan = LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
+        name: TableReference::bare("dup_out"),
+        constraints: Constraints::default(),
+        input: Arc::new(input),
+        if_not_exists: false,
+        or_replace: false,
+        temporary: false,
+        column_defaults: vec![],
+    }));
+
+    let err = ctx.execute_logical_plan(plan).await.unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Schema contains duplicate unqualified field name a"
+    );
+    assert!(ctx.table("dup_out").await.is_err());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_logical_plan_rejects_duplicate_unqualified_names_in_replace_table()
+-> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE dup_out AS VALUES ('seed', 0)")
+        .await?
+        .collect()
+        .await?;
+
+    let input = duplicate_unqualified_name_input(&ctx, "t1").await?;
+    let plan = LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
+        name: TableReference::bare("dup_out"),
+        constraints: Constraints::default(),
+        input: Arc::new(input),
+        if_not_exists: false,
+        or_replace: true,
+        temporary: false,
+        column_defaults: vec![],
+    }));
+
+    let err = ctx.execute_logical_plan(plan).await.unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Schema contains duplicate unqualified field name a"
+    );
+
+    let rows = ctx.sql("SELECT * FROM dup_out").await?.collect().await?;
+    assert_batches_eq!(
+        [
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "| seed    | 0       |",
+            "+---------+---------+",
+        ],
+        &rows
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_logical_plan_rejects_duplicate_unqualified_names_in_create_view()
+-> Result<()> {
+    let ctx = SessionContext::new();
+    let input = duplicate_unqualified_name_input(&ctx, "t1").await?;
+    let plan = LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
+        name: TableReference::bare("dup_view"),
+        input: Arc::new(input),
+        or_replace: false,
+        definition: None,
+        temporary: false,
+    }));
+
+    let err = ctx.execute_logical_plan(plan).await.unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Schema contains duplicate unqualified field name a"
+    );
+    assert!(ctx.table("dup_view").await.is_err());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_logical_plan_rejects_duplicate_unqualified_names_in_replace_view()
+-> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE VIEW dup_view AS SELECT 'seed' AS column1, 0 AS column2")
+        .await?
+        .collect()
+        .await?;
+
+    let input = duplicate_unqualified_name_input(&ctx, "t1").await?;
+    let plan = LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
+        name: TableReference::bare("dup_view"),
+        input: Arc::new(input),
+        or_replace: true,
+        definition: None,
+        temporary: false,
+    }));
+
+    let err = ctx.execute_logical_plan(plan).await.unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Schema contains duplicate unqualified field name a"
+    );
+
+    let rows = ctx.sql("SELECT * FROM dup_view").await?.collect().await?;
+    assert_batches_eq!(
+        [
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "| seed    | 0       |",
+            "+---------+---------+",
+        ],
+        &rows
+    );
+
     Ok(())
 }
 

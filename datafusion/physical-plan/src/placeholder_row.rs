@@ -29,12 +29,11 @@ use crate::{
 
 use arrow::array::{ArrayRef, NullArray, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_expr::PhysicalExpr;
 
+use crate::statistics::StatisticsArgs;
 use log::trace;
 
 /// Execution plan for empty relation with produce_one_row=true
@@ -137,13 +136,6 @@ impl ExecutionPlan for PlaceholderRowExec {
         vec![]
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
@@ -173,12 +165,12 @@ impl ExecutionPlan for PlaceholderRowExec {
         Ok(Box::pin(cooperative(ms)))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         let batches = self
             .data()
             .expect("Create single row placeholder RecordBatch should not fail");
 
-        let batches = match partition {
+        let batches = match args.partition() {
             Some(_) => vec![batches],
             // entire plan
             None => vec![batches; self.partitions],

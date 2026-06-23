@@ -23,8 +23,11 @@ use std::time::Duration;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::context::TaskContext;
 use datafusion::prelude::SessionConfig;
-use datafusion_execution::cache::DefaultListFilesCache;
-use datafusion_execution::cache::cache_manager::CacheManagerConfig;
+use datafusion_execution::cache::cache_manager::{
+    CacheManagerConfig, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
+    DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
+};
+use datafusion_execution::cache::default_cache::DefaultCache;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_plan::common::collect;
 
@@ -46,7 +49,7 @@ async fn test_memory_limit_with_spill() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     let plan = df.create_physical_plan().await.unwrap();
@@ -76,7 +79,7 @@ async fn test_no_spill_with_adequate_memory() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     let plan = df.create_physical_plan().await.unwrap();
@@ -112,7 +115,7 @@ async fn test_multiple_configs() {
     assert!(result.is_ok(), "Should not fail due to memory limit");
 
     let state = ctx.state();
-    let batch_size = state.config().options().execution.batch_size;
+    let batch_size = state.config().options().execution.batch_size.get();
     assert_eq!(batch_size, 2048);
 }
 
@@ -127,7 +130,7 @@ async fn test_memory_limit_enforcement() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1 desc;";
     let result = ctx.sql(query).await.unwrap().collect().await;
 
     assert!(result.is_err(), "Should fail due to memory limit");
@@ -201,7 +204,7 @@ async fn test_max_temp_directory_size_enforcement() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1 desc;";
     let result = ctx.sql(query).await.unwrap().collect().await;
 
     assert!(
@@ -259,7 +262,8 @@ async fn test_test_metadata_cache_limit() {
 
 #[tokio::test]
 async fn test_list_files_cache_limit() {
-    let list_files_cache = Arc::new(DefaultListFilesCache::default());
+    let list_files_cache =
+        Arc::new(DefaultCache::new(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT));
 
     let rt = RuntimeEnvBuilder::new()
         .with_cache_manager(
@@ -302,7 +306,8 @@ async fn test_list_files_cache_limit() {
 
 #[tokio::test]
 async fn test_list_files_cache_ttl() {
-    let list_files_cache = Arc::new(DefaultListFilesCache::default());
+    let list_files_cache =
+        Arc::new(DefaultCache::new(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT));
 
     let rt = RuntimeEnvBuilder::new()
         .with_cache_manager(
@@ -342,6 +347,52 @@ async fn test_list_files_cache_ttl() {
 
     update_limit(&ctx, "1m30s").await;
     assert_eq!(get_limit(&ctx), Duration::from_secs(90));
+}
+
+#[tokio::test]
+async fn test_file_statistics_cache_limit() {
+    let file_statistics_cache =
+        Arc::new(DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT));
+
+    let rt = RuntimeEnvBuilder::new()
+        .with_cache_manager(
+            CacheManagerConfig::default()
+                .with_file_statistics_cache(Some(file_statistics_cache)),
+        )
+        .build_arc()
+        .unwrap();
+
+    let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), rt);
+
+    let update_limit = async |ctx: &SessionContext, limit: &str| {
+        ctx.sql(
+            format!("SET datafusion.runtime.file_statistics_cache_limit = '{limit}'")
+                .as_str(),
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    };
+
+    let get_limit = |ctx: &SessionContext| -> usize {
+        ctx.task_ctx()
+            .runtime_env()
+            .cache_manager
+            .get_file_statistic_cache()
+            .unwrap()
+            .cache_limit()
+    };
+
+    update_limit(&ctx, "1M").await;
+    assert_eq!(get_limit(&ctx), 1024 * 1024);
+
+    update_limit(&ctx, "42G").await;
+    assert_eq!(get_limit(&ctx), 42 * 1024 * 1024 * 1024);
+
+    update_limit(&ctx, "23K").await;
+    assert_eq!(get_limit(&ctx), 23 * 1024);
 }
 
 #[tokio::test]

@@ -39,19 +39,20 @@ use arrow::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, Decimal32Type, Decimal64Type, FieldRef,
 };
 
+use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
+    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err, exec_datafusion_err,
     internal_datafusion_err,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
-    function::AccumulatorArgs, utils::format_state_name,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, Signature, TypeSignature,
+    TypeSignatureClass, Volatility, function::AccumulatorArgs, utils::format_state_name,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
+use datafusion_functions_aggregate_common::utils::{GenericDistinctBuffer, Hashable};
 use datafusion_macros::user_doc;
 use std::collections::HashMap;
 
@@ -99,7 +100,25 @@ impl Default for Median {
 impl Median {
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
+            // Integer inputs are coerced to Float64 so the average of the two
+            // middle values is not truncated. This matches DuckDB / PostgreSQL / Spark.
+            // Float and Decimal inputs preserve their type.
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Decimal,
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Float,
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_float64()),
+                        vec![TypeSignatureClass::Integer],
+                        NativeType::Float64,
+                    )]),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -263,7 +282,12 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
-        self.all_values.reserve(values.len() - values.null_count());
+        let additional = values.len() - values.null_count();
+        self.all_values.try_reserve(additional).map_err(|e| {
+            exec_datafusion_err!(
+                "failed to reserve {additional} values for median accumulator: {e}"
+            )
+        })?;
         self.all_values.extend(values.iter().flatten());
         Ok(())
     }
@@ -285,24 +309,17 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
         size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
     }
 
-    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let mut to_remove: HashMap<ScalarValue, usize> = HashMap::new();
+        let mut to_remove: HashMap<Hashable<T::Native>, usize> = HashMap::new();
 
-        let arr = &values[0];
-        for i in 0..arr.len() {
-            let v = ScalarValue::try_from_array(arr, i)?;
-            if !v.is_null() {
-                *to_remove.entry(v).or_default() += 1;
-            }
+        let arr = values[0].as_primitive::<T>();
+        for value in arr.iter().flatten() {
+            *to_remove.entry(Hashable(value)).or_default() += 1;
         }
 
         let mut i = 0;
         while i < self.all_values.len() {
-            let k = ScalarValue::new_primitive::<T>(
-                Some(self.all_values[i]),
-                &self.data_type,
-            )?;
+            let k = Hashable(self.all_values[i]);
             if let Some(count) = to_remove.get_mut(&k)
                 && *count > 0
             {
@@ -376,8 +393,6 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        // Since aggregate filter should be applied in partial stage, in final stage there should be no filter
-        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");

@@ -81,9 +81,8 @@ impl TableProviderFactory for ListingTableFactory {
             true => "",
             false => &get_extension(cmd.location.as_str()),
         };
-        let mut options = ListingOptions::new(file_format)
-            .with_session_config_options(session_state.config())
-            .with_file_extension(file_extension);
+        let mut options =
+            ListingOptions::new(file_format).with_file_extension(file_extension);
 
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
             let infer_parts = session_state
@@ -229,18 +228,21 @@ mod tests {
         datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
         test_util::parquet_test_data,
     };
-    use datafusion_execution::cache::CacheAccessor;
-    use datafusion_execution::cache::cache_manager::CacheManagerConfig;
-    use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
+    use datafusion_execution::cache::cache_manager::{
+        CacheManagerConfig, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
+    };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use glob::Pattern;
     use std::collections::HashMap;
     use std::fs;
+    use std::fs::File;
     use std::path::PathBuf;
 
     use datafusion_common::parsers::CompressionTypeVariant;
     use datafusion_common::{DFSchema, TableReference};
+    use datafusion_execution::cache::Cache;
+    use datafusion_execution::cache::default_cache::DefaultCache;
     use datafusion_expr::registry::ExtensionTypeRegistryRef;
 
     #[tokio::test]
@@ -309,6 +311,10 @@ mod tests {
     #[tokio::test]
     async fn test_create_using_folder_with_compression() {
         let dir = tempfile::tempdir().unwrap();
+        // Schema inference now requires at least one file at the location.
+        // The file itself can be 0-byte — it will be filtered out before the
+        // format-specific inference runs, leaving an empty inferred schema.
+        File::create_new(dir.path().join("placeholder.csv.gz")).unwrap();
 
         let factory = ListingTableFactory::new();
         let context = SessionContext::new();
@@ -351,6 +357,9 @@ mod tests {
     #[tokio::test]
     async fn test_create_using_folder_without_compression() {
         let dir = tempfile::tempdir().unwrap();
+        // See `test_create_using_folder_with_compression` — a placeholder file
+        // is required so schema inference does not error on an empty location.
+        File::create_new(dir.path().join("placeholder.csv")).unwrap();
 
         let factory = ListingTableFactory::new();
         let context = SessionContext::new();
@@ -387,6 +396,8 @@ mod tests {
         let mut path = PathBuf::from(dir.path());
         path.extend(["odd.v1", "odd.v2"]);
         fs::create_dir_all(&path).unwrap();
+        // Placeholder so schema inference does not error on an empty location.
+        File::create_new(path.join("placeholder.parquet")).unwrap();
 
         let factory = ListingTableFactory::new();
         let context = SessionContext::new();
@@ -414,7 +425,7 @@ mod tests {
         path.extend(["key1=value1", "key2=value2"]);
         fs::create_dir_all(&path).unwrap();
         path.push("data.parquet");
-        fs::File::create_new(&path).unwrap();
+        File::create_new(&path).unwrap();
 
         let factory = ListingTableFactory::new();
         let context = SessionContext::new();
@@ -474,9 +485,10 @@ mod tests {
             .to_string();
 
         // Test with collect_statistics enabled
-        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+        let file_statistics_cache =
+            Arc::new(DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT));
         let cache_config = CacheManagerConfig::default()
-            .with_files_statistics_cache(Some(file_statistics_cache.clone()));
+            .with_file_statistics_cache(Some(file_statistics_cache.clone()));
         let runtime = RuntimeEnvBuilder::new()
             .with_cache_manager(cache_config)
             .build_arc()
@@ -504,9 +516,10 @@ mod tests {
         );
 
         // Test with collect_statistics disabled
-        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+        let file_statistics_cache =
+            Arc::new(DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT));
         let cache_config = CacheManagerConfig::default()
-            .with_files_statistics_cache(Some(file_statistics_cache.clone()));
+            .with_file_statistics_cache(Some(file_statistics_cache.clone()));
         let runtime = RuntimeEnvBuilder::new()
             .with_cache_manager(cache_config)
             .build_arc()
@@ -577,7 +590,7 @@ mod tests {
             }
             fn higher_order_functions(
                 &self,
-            ) -> &HashMap<String, Arc<dyn datafusion_expr::HigherOrderUDF>> {
+            ) -> &HashMap<String, Arc<datafusion_expr::HigherOrderUDF>> {
                 unimplemented!()
             }
             fn aggregate_functions(
