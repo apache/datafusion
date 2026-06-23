@@ -43,14 +43,14 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::rewrite::{
-    expr_references_scalar_udf, rewrite_file_row_index_projection,
-};
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
+use datafusion_physical_expr_adapter::rewrite::{
+    expr_references_scalar_udf, rewrite_file_row_index_projection,
+};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_plan::DisplayFormatType;
@@ -1826,10 +1826,10 @@ mod tests {
         use arrow::datatypes::{DataType, Field, FieldRef, Schema};
         use datafusion_common::config::ConfigOptions;
         use datafusion_datasource::TableSchema;
-        use datafusion_datasource::rewrite::rewrite_file_row_index_expr;
         use datafusion_expr::{col, lit as logical_lit};
         use datafusion_functions::core::expr_fn::file_row_index;
         use datafusion_physical_expr::planner::logical2physical;
+        use datafusion_physical_expr_adapter::rewrite::rewrite_file_row_index_expr;
         use datafusion_physical_plan::filter_pushdown::PushedDown;
         use parquet::arrow::RowNumber;
 

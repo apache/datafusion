@@ -52,7 +52,6 @@ datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-functions = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
@@ -75,6 +74,7 @@ zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+datafusion-functions = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
 
