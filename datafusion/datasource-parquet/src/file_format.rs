@@ -23,10 +23,8 @@ use std::ops::Range;
 use std::sync::Arc;
 
 // Re-export so the historical `file_format::*` paths still resolve.
-#[expect(deprecated)]
 pub use crate::schema_coercion::{
-    Int96Coercer, apply_file_schema_type_coercions, coerce_file_schema_to_string_type,
-    coerce_file_schema_to_view_type, coerce_int96_to_resolution,
+    Int96Coercer, apply_file_schema_type_coercions, coerce_int96_to_resolution,
     transform_binary_to_string, transform_schema_to_view,
 };
 pub use crate::sink::ParquetSink;
