@@ -32,6 +32,7 @@ pub mod file_row_index;
 pub mod getfield;
 pub mod greatest;
 mod greatest_least_utils;
+pub mod input_file_name;
 pub mod least;
 pub mod named_struct;
 pub mod nullif;
@@ -69,6 +70,7 @@ make_udf_function!(arrow_metadata::ArrowMetadataFunc, arrow_metadata);
 make_udf_function!(with_metadata::WithMetadataFunc, with_metadata);
 make_udf_function!(arrow_field::ArrowFieldFunc, arrow_field);
 make_udf_function!(file_row_index::FileRowIndexFunc, file_row_index);
+make_udf_function!(input_file_name::InputFileNameFunc, input_file_name);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
@@ -117,7 +119,12 @@ pub mod expr_fn {
         arrow_metadata,
         "Returns the metadata of the input expression",
         args,
-    ),(
+    ),
+    (
+        input_file_name,
+        "Returns the path of the input file that produced the current row",
+    ),
+    (
         with_metadata,
         "Attaches Arrow field metadata (key/value pairs) to the input expression",
         args,
@@ -200,6 +207,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         union_extract(),
         union_tag(),
         version(),
+        input_file_name(),
         r#struct(),
         file_row_index(),
     ]

@@ -103,6 +103,35 @@ fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
         || (is_date_type(to_type) && from_type.is_temporal())
 }
 
+/// Returns true when casting a timestamp from `from_type` to `to_type` loses
+/// timestamp precision.
+///
+/// This is used by comparison cast unwrapping to avoid rewrites such as
+/// `CAST(ts_ns AS timestamp(ms)) = lit_ms` -> `ts_ns = lit_ns`. The original
+/// predicate can match any nanosecond value in the same millisecond, while the
+/// rewritten predicate only matches the exact millisecond boundary.
+pub fn is_timestamp_precision_narrowing_cast(
+    from_type: &DataType,
+    to_type: &DataType,
+) -> bool {
+    let (DataType::Timestamp(from_unit, _), DataType::Timestamp(to_unit, _)) =
+        (from_type, to_type)
+    else {
+        return false;
+    };
+
+    timestamp_unit_scale(from_unit) > timestamp_unit_scale(to_unit)
+}
+
+fn timestamp_unit_scale(unit: &TimeUnit) -> i128 {
+    match unit {
+        TimeUnit::Second => 1,
+        TimeUnit::Millisecond => MILLISECONDS as i128,
+        TimeUnit::Microsecond => MICROSECONDS as i128,
+        TimeUnit::Nanosecond => NANOSECONDS as i128,
+    }
+}
+
 /// Returns true if unwrap_cast_in_comparison supports this numeric type
 fn is_supported_numeric_type(data_type: &DataType) -> bool {
     matches!(
@@ -782,6 +811,23 @@ mod tests {
             DataType::Date64,
             ExpectedCast::NoValue,
         );
+    }
+
+    #[test]
+    fn test_timestamp_precision_narrowing_cast() {
+        let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let ts_us = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
+        let ts_s = DataType::Timestamp(TimeUnit::Second, None);
+
+        assert!(is_timestamp_precision_narrowing_cast(&ts_ns, &ts_ms));
+        assert!(is_timestamp_precision_narrowing_cast(&ts_us, &ts_s));
+        assert!(!is_timestamp_precision_narrowing_cast(&ts_ms, &ts_ns));
+        assert!(!is_timestamp_precision_narrowing_cast(&ts_ms, &ts_ms));
+        assert!(!is_timestamp_precision_narrowing_cast(
+            &DataType::Int64,
+            &ts_ms
+        ));
     }
 
     #[test]
