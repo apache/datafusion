@@ -1,0 +1,67 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+statement ok
+CREATE TABLE otel_spans (id INT, attrs_json TEXT) AS VALUES
+  (1, '{"http.response.status_code": 200, "http.method": "GET"}'),
+  (2, '{"http.response.status_code": 404, "http.method": "POST"}'),
+  (3, '{"service.name": "my-service", "deployment.environment": "prod"}');
+
+# variant_get_field treats the path as a single key (no dot-splitting)
+query T
+select variant_to_json(variant_get_field(json_to_variant(attrs_json), 'http.response.status_code')) from otel_spans;
+----
+200
+404
+NULL
+
+query T
+select variant_to_json(variant_get_field(json_to_variant(attrs_json), 'http.method')) from otel_spans;
+----
+"GET"
+"POST"
+NULL
+
+# With type hint
+query I
+select variant_get_field(json_to_variant(attrs_json), 'http.response.status_code', 'Int64') from otel_spans;
+----
+200
+404
+NULL
+
+query T
+select variant_get_field(json_to_variant(attrs_json), 'service.name', 'Utf8') from otel_spans;
+----
+NULL
+NULL
+my-service
+
+# variant_get with dot-notation splits the key — should return NULL for dotted keys
+query T
+select variant_to_json(variant_get(json_to_variant(attrs_json), 'http.response.status_code')) from otel_spans;
+----
+NULL
+NULL
+NULL
+
+# Missing field returns NULL
+query T
+select variant_to_json(variant_get_field(json_to_variant(attrs_json), 'nonexistent')) from otel_spans;
+----
+NULL
+NULL
+NULL

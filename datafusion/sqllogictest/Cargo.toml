@@ -48,6 +48,7 @@ chrono = { workspace = true, optional = true }
 clap = { version = "4.5.60", features = ["derive", "env"] }
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
 datafusion-datasource = { workspace = true }
+datafusion-functions-variant = { workspace = true, features = ["core"] }
 datafusion-spark = { workspace = true, features = ["core"] }
 datafusion-substrait = { workspace = true, default-features = true, optional = true }
 futures = { workspace = true }

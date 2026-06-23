@@ -159,7 +159,7 @@ impl SessionStateDefaults {
         file_formats
     }
 
-    /// registers all builtin functions - scalar, array and aggregate
+    /// registers all builtin functions - scalar, array, and aggregate
     pub fn register_builtin_functions(state: &mut SessionState) {
         Self::register_scalar_functions(state);
         Self::register_array_functions(state);

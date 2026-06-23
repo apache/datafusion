@@ -1,0 +1,204 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+# tests the variant_list_insert udf
+# this function takes a variant list and a variant value, and inserts the value into the list
+
+# Create test data
+statement ok
+CREATE TABLE test_data (id INT, name TEXT, age INT, active BOOL) AS VALUES
+  (1, 'Norm', 50, true),
+  (2, 'Marie', 22, false),
+  (3, 'Joe', 31, true);
+
+# Test 1: Insert a string into a simple list
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    variant_list_construct(json_to_variant('"Alice"')),
+    json_to_variant('"Bob"')
+  )
+);
+----
+[ShortString(ShortString("Alice")), ShortString(ShortString("Bob"))]
+
+# Test 2: Insert a number into a list with multiple elements
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    variant_list_construct(
+      json_to_variant('"Alice"'),
+      json_to_variant('30'),
+      json_to_variant('true')
+    ),
+    json_to_variant('42')
+  )
+);
+----
+[ShortString(ShortString("Alice")), Int8(30), BooleanTrue, Int8(42)]
+
+# Test 3: Insert an object into a list
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    variant_list_construct(
+      json_to_variant('"admin"')
+    ),
+    json_to_variant('{"name": "Bob", "age": 25}')
+  )
+);
+----
+[ShortString(ShortString("admin")), {"age": Int8(25), "name": ShortString(ShortString("Bob"))}]
+
+# Test 4: Insert an array into a list
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    variant_list_construct(
+      json_to_variant('1'),
+      json_to_variant('2')
+    ),
+    json_to_variant('[3, 4, 5]')
+  )
+);
+----
+[Int8(1), Int8(2), [Int8(3), Int8(4), Int8(5)]]
+
+# Test 5: Insert null into a list
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    variant_list_construct(
+      json_to_variant('"Charlie"'),
+      json_to_variant('42')
+    ),
+    json_to_variant('null')
+  )
+);
+----
+[ShortString(ShortString("Charlie")), Int8(42), Null]
+
+# Test 6: Insert a value into a list with nulls
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    variant_list_construct(
+      json_to_variant('null'),
+      json_to_variant('null')
+    ),
+    json_to_variant('"test"')
+  )
+);
+----
+[Null, Null, ShortString(ShortString("test"))]
+
+# Test 7: Insert boolean into a list with booleans
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    variant_list_construct(
+      json_to_variant('true'),
+      json_to_variant('false')
+    ),
+    json_to_variant('true')
+  )
+);
+----
+[BooleanTrue, BooleanFalse, BooleanTrue]
+
+# Test 8: Insert a number into a numeric list
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    variant_list_construct(
+      json_to_variant('1'),
+      json_to_variant('2.5'),
+      json_to_variant('3')
+    ),
+    json_to_variant('-10')
+  )
+);
+----
+[Int8(1), Double(2.5), Int8(3), Int8(-10)]
+
+# Test 9: Insert into a list with complex types
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    variant_list_construct(
+      json_to_variant('{"key": "value"}'),
+      json_to_variant('[1, 2]')
+    ),
+    json_to_variant('"new_item"')
+  )
+);
+----
+[{"key": ShortString(ShortString("value"))}, [Int8(1), Int8(2)], ShortString(ShortString("new_item"))]
+
+# Test 10: Insert a string with special characters
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    variant_list_construct(
+      json_to_variant('"hello world"')
+    ),
+    json_to_variant('"foo\nbar"')
+  )
+);
+----
+[ShortString(ShortString("hello world")), ShortString(ShortString("foo\nbar"))]
+
+# Test 11: Insert into an empty list (single element list that we add to)
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    json_to_variant('[]'),
+    json_to_variant('"first"')
+  )
+);
+----
+[ShortString(ShortString("first"))]
+
+# Test 12: Chain multiple inserts
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    variant_list_insert(
+      variant_list_construct(json_to_variant('"a"')),
+      json_to_variant('"b"')
+    ),
+    json_to_variant('"c"')
+  )
+);
+----
+[ShortString(ShortString("a")), ShortString(ShortString("b")), ShortString(ShortString("c"))]
+
+# Test 13: Insert nested objects
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    variant_list_construct(
+      json_to_variant('{"outer": {"inner": 1}}')
+    ),
+    json_to_variant('{"data": [1, 2, 3]}')
+  )
+);
+----
+[{"outer": {"inner": Int8(1)}}, {"data": [Int8(1), Int8(2), Int8(3)]}]
+
+# Cleanup
+statement ok
+DROP TABLE test_data;

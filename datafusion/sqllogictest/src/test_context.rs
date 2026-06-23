@@ -51,6 +51,7 @@ use datafusion::{
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
+use datafusion_functions_variant::SessionStateBuilderVariant;
 use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
@@ -113,7 +114,8 @@ impl TestContext {
         let mut state_builder = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
-            .with_default_features();
+            .with_default_features()
+            .with_variant_features();
 
         if is_spark_path(relative_path) {
             state_builder = state_builder.with_spark_features();

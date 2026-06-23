@@ -1,0 +1,102 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+statement ok
+CREATE TABLE json_data (id INT, json_str TEXT) AS VALUES
+  (1, '{"name": "Alice", "age": 30}'),
+  (2, '{"name": "Bob", "age": 25}'),
+  (3, '{"items": [1, 2, 3], "count": 3}'),
+  (4, 'null'),
+  (5, '"simple string"'),
+  (6, '123'),
+  (7, 'true'),
+  (8, '{"pi": 3.14}');
+
+# Numeric values are returned as Float64
+query R
+select variant_get_float(json_to_variant(json_str), 'age') from json_data;
+----
+30
+25
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+# Missing paths return NULL
+query R
+select variant_get_float(json_to_variant(json_str), 'nonexistent') from json_data;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+# Non-numeric values return NULL
+query R
+select variant_get_float(json_to_variant(json_str), 'name') from json_data;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+# Float values are returned as Float64
+query R
+select variant_get_float(json_to_variant(json_str), 'pi') from json_data;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+3.14
+
+# Scalar variant with integer value
+query R
+select variant_get_float(json_to_variant('{"count": 42}'), 'count');
+----
+42
+
+# Scalar variant with string value returns NULL
+query R
+select variant_get_float(json_to_variant('{"greeting": "hello world"}'), 'greeting');
+----
+NULL
+
+# Nested numeric path
+query R
+select variant_get_float(json_to_variant('{"obj": {"a": 1}}'), 'obj.a');
+----
+1
+
+# Large integers are coerced to Float64 (with potential precision loss)
+query R
+select variant_get_float(json_to_variant('{"n": 9007199254740993}'), 'n');
+----
+9007199254740992
