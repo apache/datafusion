@@ -4144,10 +4144,12 @@ fn calc_func_dependencies_for_project(
     exprs: &[Expr],
     input: &LogicalPlan,
 ) -> Result<FunctionalDependencies> {
+    // Sentinel for projection outputs that do not map back to any input field.
     const COMPUTED_EXPR_INDEX: usize = usize::MAX;
 
     let input_fields = input.schema().field_names();
-    // Calculate expression indices (if present) in the input schema.
+    // Map each projection output position to its input column index.
+    // A projection expression can produce multiple output columns, such as `*`.
     let proj_indices = exprs
         .iter()
         .map(|expr| match expr {
