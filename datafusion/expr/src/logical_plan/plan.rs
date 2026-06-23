@@ -48,8 +48,7 @@ use crate::utils::{
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
     LogicalPlanBuilder, Operator, Prepare, TableProviderFilterPushDown, TableSource,
-    WindowFunctionDefinition, build_join_schema_with_null_aware, expr_vec_fmt,
-    requalify_sides_if_needed,
+    WindowFunctionDefinition, build_join_schema, expr_vec_fmt, requalify_sides_if_needed,
 };
 
 use crate::statistics::StatisticsRequest;
@@ -669,7 +668,7 @@ impl LogicalPlan {
                 null_equality,
                 null_aware,
             }) => {
-                let schema = build_join_schema_with_null_aware(
+                let schema = build_join_schema(
                     left.schema(),
                     right.schema(),
                     &join_type,
@@ -958,7 +957,7 @@ impl LogicalPlan {
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
-                let schema = build_join_schema_with_null_aware(
+                let schema = build_join_schema(
                     left.schema(),
                     right.schema(),
                     join_type,
@@ -4374,12 +4373,8 @@ impl Join {
         null_equality: NullEquality,
         null_aware: bool,
     ) -> Result<Self> {
-        let join_schema = build_join_schema_with_null_aware(
-            left.schema(),
-            right.schema(),
-            &join_type,
-            null_aware,
-        )?;
+        let join_schema =
+            build_join_schema(left.schema(), right.schema(), &join_type, null_aware)?;
 
         Ok(Join {
             left,
@@ -4429,7 +4424,7 @@ impl Join {
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
 
-        let join_schema = build_join_schema_with_null_aware(
+        let join_schema = build_join_schema(
             left_sch.schema(),
             right_sch.schema(),
             &original_join.join_type,

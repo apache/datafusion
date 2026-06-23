@@ -194,7 +194,7 @@ impl SortMergeJoinExec {
         };
 
         let schema =
-            Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
+            Arc::new(build_join_schema(&left_schema, &right_schema, &join_type, false).0);
         let cache =
             Self::compute_properties(&left, &right, &schema, join_type, &on, None)?;
         Ok(Self {
