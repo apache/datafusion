@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use datafusion_common::{NullEquality, TableReference, UnnestOptions};
+use datafusion_common::{NullEquality, SplitPoint, TableReference, UnnestOptions};
 use datafusion_expr::dml::{
     MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
 };
@@ -685,6 +685,18 @@ where
             })
         })
         .collect::<Result<Vec<_>, Error>>()
+}
+
+pub(super) fn serialize_range_split_point(
+    split_point: &SplitPoint,
+) -> Result<protobuf::RangeSplitPoint, Error> {
+    Ok(protobuf::RangeSplitPoint {
+        value: split_point
+            .values()
+            .iter()
+            .map(TryInto::<datafusion_proto_common::ScalarValue>::try_into)
+            .collect::<Result<_, Error>>()?,
+    })
 }
 
 impl FromProto<TableReference> for protobuf::TableReference {
