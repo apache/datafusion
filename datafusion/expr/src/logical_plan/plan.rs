@@ -4976,6 +4976,30 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn projection_with_leading_computed_column_and_wildcard_preserves_pk() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .project(vec![
+                SelectExpr::Expression(lit(1i32).alias("__common_expr_1")),
+                SelectExpr::Wildcard(Default::default()),
+            ])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(plan.schema().fields().len(), 6);
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![1]);
+        assert_eq!(deps[0].target_indices, vec![0, 1, 2, 3, 4, 5]);
+
+        Ok(())
+    }
+
     fn i32_split_point(value: i32) -> SplitPoint {
         SplitPoint::new(vec![ScalarValue::Int32(Some(value))])
     }
