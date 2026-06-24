@@ -70,6 +70,8 @@ pub(crate) enum ExecutionState {
     /// When producing output, the remaining rows to output are stored
     /// here and are sliced off as needed in batch_size chunks
     ProducingOutput(RecordBatch),
+    /// Produces output for partitioned aggregation.
+    ProducingPartitionedOutput(RecordBatch),
     /// Produce intermediate aggregate state for each input row without
     /// aggregation.
     ///
@@ -738,8 +740,7 @@ impl Stream for GroupedHashAggregateStream {
                             {
                                 timer.done();
                                 if let Some(batch) = self.emit(to_emit, false)? {
-                                    self.exec_state =
-                                        ExecutionState::ProducingOutput(batch);
+                                    self.exec_state = self.producing_output_state(batch);
                                 };
                                 // make sure the exec_state just set is not overwritten below
                                 break 'reading_input;
@@ -825,7 +826,8 @@ impl Stream for GroupedHashAggregateStream {
                     }
                 }
 
-                ExecutionState::ProducingOutput(batch) => {
+                ExecutionState::ProducingOutput(batch)
+                | ExecutionState::ProducingPartitionedOutput(batch) => {
                     // slice off a part of the batch, if needed
                     let output_batch;
                     let size = self.batch_size;
@@ -851,7 +853,7 @@ impl Stream for GroupedHashAggregateStream {
                         let num_remaining = batch.num_rows() - size;
                         let remaining = batch.slice(size, num_remaining);
                         let output = batch.slice(0, size);
-                        (ExecutionState::ProducingOutput(remaining), output)
+                        (self.producing_output_state(remaining), output)
                     };
 
                     if let Some(reduction_factor) = self.reduction_factor.as_ref() {
@@ -1133,6 +1135,14 @@ impl GroupedHashAggregateStream {
         }
     }
 
+    fn producing_output_state(&self, batch: RecordBatch) -> ExecutionState {
+        if self.group_values.len() > 1 {
+            ExecutionState::ProducingPartitionedOutput(batch)
+        } else {
+            ExecutionState::ProducingOutput(batch)
+        }
+    }
+
     /// Attempts to update the memory reservation. If that fails due to a
     /// [DataFusionError::ResourcesExhausted] error, an attempt will be made to resolve
     /// the out-of-memory condition based on the [out-of-memory handling mode](OutOfMemoryMode).
@@ -1166,7 +1176,7 @@ impl GroupedHashAggregateStream {
                 if let Some(emit_to) = self.group_ordering.oom_emit_to(n)
                     && let Some(batch) = self.emit(emit_to, false)?
                 {
-                    return Ok(Some(ExecutionState::ProducingOutput(batch)));
+                    return Ok(Some(self.producing_output_state(batch)));
                 }
                 Err(oom)
             }
@@ -1477,7 +1487,9 @@ impl GroupedHashAggregateStream {
             let batch = self.emit(EmitTo::All, false)?;
 
             // If there are none, we're done; otherwise switch to emitting them
-            batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
+            batch.map_or(ExecutionState::Done, |batch| {
+                self.producing_output_state(batch)
+            })
         } else {
             // Spill any remaining data to disk. There is some performance overhead in
             // writing out this last chunk of data and reading it back. The benefit of
@@ -1557,7 +1569,7 @@ impl GroupedHashAggregateStream {
             && probe.should_skip()
             && let Some(batch) = self.emit(EmitTo::All, false)?
         {
-            return Ok(Some(ExecutionState::ProducingOutput(batch)));
+            return Ok(Some(self.producing_output_state(batch)));
         };
 
         Ok(None)
