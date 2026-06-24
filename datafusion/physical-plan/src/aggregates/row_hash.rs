@@ -95,33 +95,25 @@ impl PartitionedOutputState {
         }
     }
 
-    fn is_empty(&self) -> bool {
-        self.batches.iter().all(|batch| batch.num_rows() == 0)
-    }
-
-    fn next_batch(&mut self, batch_size: usize) -> RecordBatch {
+    fn next_batch(&mut self, batch_size: usize) -> Option<RecordBatch> {
         let num_partitions = self.batches.len();
-        for offset in 0..num_partitions {
-            let partition = (self.next_partition + offset) % num_partitions;
-            if self.batches[partition].num_rows() == 0 {
+        for _ in 0..num_partitions {
+            let partition = self.next_partition;
+            self.next_partition = (self.next_partition + 1) % num_partitions;
+
+            let batch = &self.batches[partition];
+            if batch.num_rows() == 0 {
                 continue;
             }
 
-            self.next_partition = (partition + 1) % num_partitions;
-            let batch = &self.batches[partition];
-            if batch.num_rows() <= batch_size {
-                let output = batch.clone();
-                self.batches[partition] = batch.slice(batch.num_rows(), 0);
-                return output;
-            }
-
-            let output = batch.slice(0, batch_size);
+            let output_len = batch.num_rows().min(batch_size);
+            let output = batch.slice(0, output_len);
             self.batches[partition] =
-                batch.slice(batch_size, batch.num_rows() - batch_size);
-            return output;
+                batch.slice(output_len, batch.num_rows() - output_len);
+            return Some(output);
         }
 
-        unreachable!("partitioned output must contain a non-empty batch")
+        None
     }
 }
 
@@ -915,7 +907,7 @@ impl Stream for GroupedHashAggregateStream {
                 }
 
                 ExecutionState::ProducingPartitionedOutput(state) => {
-                    if state.is_empty() {
+                    let Some(output_batch) = state.next_batch(batch_size) else {
                         if input_done {
                             self.exec_state = ExecutionState::Done;
                         } else if self.should_skip_aggregation() {
@@ -924,9 +916,8 @@ impl Stream for GroupedHashAggregateStream {
                             self.exec_state = ExecutionState::ReadingInput;
                         }
                         continue;
-                    }
+                    };
 
-                    let output_batch = state.next_batch(batch_size);
                     if let Some(reduction_factor) = self.reduction_factor.as_ref() {
                         reduction_factor.add_part(output_batch.num_rows());
                     }
