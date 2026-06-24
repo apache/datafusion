@@ -47,6 +47,7 @@ impl GroupValues for GroupValuesBytesView {
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
+        _hashes_buffer: &[u64],
     ) -> datafusion_common::Result<()> {
         assert_eq!(cols.len(), 1);
 
@@ -110,7 +111,7 @@ impl GroupValues for GroupValuesBytesView {
 
                 self.num_groups = 0;
                 let mut group_indexes = vec![];
-                self.intern(&[remaining_group_values], &mut group_indexes)?;
+                self.intern(&[remaining_group_values], &mut group_indexes, &[])?;
 
                 // Verify that the group indexes were assigned in the correct order
                 assert_eq!(0, group_indexes[0]);

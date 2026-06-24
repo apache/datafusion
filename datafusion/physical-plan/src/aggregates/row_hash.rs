@@ -54,6 +54,7 @@ use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use crate::sorts::IncrementalSortIterator;
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::memory::get_record_batch_memory_size;
 use futures::ready;
@@ -326,6 +327,9 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Number of hash partitions used by the partitioned partial aggregation POC.
     partitioned_aggregation_num_partitions: usize,
+
+    /// Reused buffer to store group key hashes for the current batch.
+    hashes_buffer: Vec<u64>,
 
     /// Accumulators, one for each `AggregateFunctionExpr` in the query
     ///
@@ -612,6 +616,7 @@ impl GroupedHashAggregateStream {
             group_values,
             current_group_indices: Default::default(),
             partitioned_aggregation_num_partitions,
+            hashes_buffer: vec![],
             exec_state,
             baseline_metrics,
             group_by_metrics,
@@ -913,7 +918,18 @@ impl GroupedHashAggregateStream {
 
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values[0].len();
-            self.group_values[0].intern(group_values, &mut self.current_group_indices)?;
+            self.hashes_buffer.clear();
+            self.hashes_buffer.resize(group_values[0].len(), 0);
+            create_hashes(
+                group_values,
+                &aggregates::AGGREGATION_HASH_SEED,
+                &mut self.hashes_buffer,
+            )?;
+            self.group_values[0].intern(
+                group_values,
+                &mut self.current_group_indices,
+                &self.hashes_buffer,
+            )?;
             let group_indices = &self.current_group_indices;
 
             // Update ordering information if necessary
@@ -1132,7 +1148,18 @@ impl GroupedHashAggregateStream {
             cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
 
             let starting_groups = self.group_values[0].len();
-            self.group_values[0].intern(&cols, &mut self.current_group_indices)?;
+            self.hashes_buffer.clear();
+            self.hashes_buffer.resize(cols[0].len(), 0);
+            create_hashes(
+                &cols,
+                &aggregates::AGGREGATION_HASH_SEED,
+                &mut self.hashes_buffer,
+            )?;
+            self.group_values[0].intern(
+                &cols,
+                &mut self.current_group_indices,
+                &self.hashes_buffer,
+            )?;
             let total_groups = self.group_values[0].len();
             if total_groups > starting_groups {
                 self.group_ordering.new_groups(

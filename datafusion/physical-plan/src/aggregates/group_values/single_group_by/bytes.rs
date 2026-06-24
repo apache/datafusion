@@ -45,7 +45,12 @@ impl<O: OffsetSizeTrait> GroupValuesBytes<O> {
 }
 
 impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        _hashes_buffer: &[u64],
+    ) -> Result<()> {
         assert_eq!(cols.len(), 1);
 
         // look up / add entries in the table
@@ -108,7 +113,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
 
                 self.num_groups = 0;
                 let mut group_indexes = vec![];
-                self.intern(&[remaining_group_values], &mut group_indexes)?;
+                self.intern(&[remaining_group_values], &mut group_indexes, &[])?;
 
                 // Verify that the group indexes were assigned in the correct order
                 assert_eq!(0, group_indexes[0]);

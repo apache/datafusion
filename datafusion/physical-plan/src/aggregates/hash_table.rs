@@ -22,6 +22,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray, BooleanArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
@@ -134,6 +135,9 @@ struct BuildingHashTableState {
     /// Each value indexes into `group_values`, and the same index is used by every
     /// accumulator to update that group's aggregate state.
     batch_group_indices: Vec<usize>,
+
+    /// Reused buffer to store group key hashes for the current batch.
+    hashes_buffer: Vec<u64>,
 
     /// One item per aggregate expression.
     ///
@@ -315,6 +319,7 @@ impl<Mode> AggregateHashTable<Mode> {
                 group_by: Arc::clone(&agg.group_by),
                 group_values,
                 batch_group_indices: Default::default(),
+                hashes_buffer: vec![],
                 accumulators,
             }),
             _mode: PhantomData,
@@ -474,6 +479,7 @@ impl AggregateHashTable<Partial> {
                 group_by: Arc::clone(&state.group_by),
                 group_values,
                 batch_group_indices: Default::default(),
+                hashes_buffer: vec![],
                 accumulators,
             }),
             _mode: PhantomData,
@@ -486,9 +492,18 @@ impl AggregateHashTable<Partial> {
 
         let timer = self.group_by_metrics.aggregation_time.timer();
         for group_values in &evaluated_batch.grouping_set_args {
-            state
-                .group_values
-                .intern(group_values, &mut state.batch_group_indices)?;
+            state.hashes_buffer.clear();
+            state.hashes_buffer.resize(group_values[0].len(), 0);
+            create_hashes(
+                group_values,
+                &super::AGGREGATION_HASH_SEED,
+                &mut state.hashes_buffer,
+            )?;
+            state.group_values.intern(
+                group_values,
+                &mut state.batch_group_indices,
+                &state.hashes_buffer,
+            )?;
             let group_indices = &state.batch_group_indices;
             let total_num_groups = state.group_values.len();
 
@@ -577,7 +592,7 @@ impl AggregateHashTable<Partial> {
 
             state
                 .group_values
-                .intern(&cols, &mut state.batch_group_indices)?;
+                .intern(&cols, &mut state.batch_group_indices, &[])?;
             any_interned = true;
         }
 
@@ -654,9 +669,18 @@ impl AggregateHashTable<Final> {
 
         let timer = self.group_by_metrics.aggregation_time.timer();
         for group_values in &evaluated_batch.grouping_set_args {
-            state
-                .group_values
-                .intern(group_values, &mut state.batch_group_indices)?;
+            state.hashes_buffer.clear();
+            state.hashes_buffer.resize(group_values[0].len(), 0);
+            create_hashes(
+                group_values,
+                &super::AGGREGATION_HASH_SEED,
+                &mut state.hashes_buffer,
+            )?;
+            state.group_values.intern(
+                group_values,
+                &mut state.batch_group_indices,
+                &state.hashes_buffer,
+            )?;
             let group_indices = &state.batch_group_indices;
             let total_num_groups = state.group_values.len();
 

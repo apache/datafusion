@@ -135,7 +135,12 @@ impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
 where
     T::Native: HashValue,
 {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        _hashes_buffer: &[u64],
+    ) -> Result<()> {
         assert_eq!(cols.len(), 1);
         groups.clear();
 
@@ -273,7 +278,7 @@ mod tests {
         // Intern 20 distinct values; `new()` pre-allocates capacity 128 for `values`.
         let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..20i32));
         let mut groups = vec![];
-        gv.intern(&[arr], &mut groups)?;
+        gv.intern(&[arr], &mut groups, &[])?;
         let capacity_before = gv.values.capacity(); // 128
 
         // n=4, n*2=8 <= len=20 -> drain branch
