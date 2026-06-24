@@ -69,18 +69,43 @@ pub trait ExprSchemable {
     -> Result<(DataType, bool)>;
 }
 
-/// Derives the output field for a cast expression from the source field.
+/// Derives the output field for a cast expression from the source and target fields.
+///
+/// Metadata handling:
+/// - Source field metadata is propagated by default
+/// - Extension type metadata keys (`ARROW:extension:name` and `ARROW:extension:metadata`)
+///   are taken from the target field, overwriting any extension metadata from the source.
+///   This ensures casting does not incorrectly propagate extension type identity.
+///
 /// For `TryCast`, `force_nullable` is `true` since a failed cast returns NULL.
 fn cast_output_field(
     source_field: &FieldRef,
-    target_type: &DataType,
+    target_field: &FieldRef,
     force_nullable: bool,
 ) -> Arc<Field> {
+    use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
+
+    // Start with source metadata
+    let mut metadata = source_field.metadata().clone();
+
+    // Remove any extension type metadata from source - these should not propagate through casts
+    metadata.remove(EXTENSION_TYPE_NAME_KEY);
+    metadata.remove(EXTENSION_TYPE_METADATA_KEY);
+
+    // Add extension type metadata from the target field if present
+    let target_metadata = target_field.metadata();
+    if let Some(name) = target_metadata.get(EXTENSION_TYPE_NAME_KEY) {
+        metadata.insert(EXTENSION_TYPE_NAME_KEY.to_string(), name.clone());
+    }
+    if let Some(ext_meta) = target_metadata.get(EXTENSION_TYPE_METADATA_KEY) {
+        metadata.insert(EXTENSION_TYPE_METADATA_KEY.to_string(), ext_meta.clone());
+    }
+
     let mut f = source_field
         .as_ref()
         .clone()
-        .with_data_type(target_type.clone())
-        .with_metadata(source_field.metadata().clone());
+        .with_data_type(target_field.data_type().clone())
+        .with_metadata(metadata);
     if force_nullable {
         f = f.with_nullable(true);
     }
@@ -595,20 +620,16 @@ impl ExprSchemable for Expr {
                 func.return_field_from_args(args)
             }
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, field }) => {
-                expr.to_field(schema).map(|(_table_ref, src)| {
-                    cast_output_field(&src, field.data_type(), false)
-                })
-            }
+            Expr::Cast(Cast { expr, field }) => expr
+                .to_field(schema)
+                .map(|(_table_ref, src)| cast_output_field(&src, field, false)),
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
-            Expr::TryCast(TryCast { expr, field }) => {
-                expr.to_field(schema).map(|(_table_ref, src)| {
-                    cast_output_field(&src, field.data_type(), true)
-                })
-            }
+            Expr::TryCast(TryCast { expr, field }) => expr
+                .to_field(schema)
+                .map(|(_table_ref, src)| cast_output_field(&src, field, true)),
             Expr::LambdaVariable(LambdaVariable {
                 field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
@@ -1207,5 +1228,122 @@ mod tests {
         let schema = MockExprSchema::new();
 
         assert_eq!(meta, expr.metadata(&schema).unwrap());
+    }
+
+    #[test]
+    fn test_cast_extension_type_metadata() {
+        use crate::expr::Cast;
+        use arrow_schema::extension::{
+            EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY,
+        };
+
+        // Create a schema with a field that has extension type metadata
+        let mut source_meta = HashMap::new();
+        source_meta.insert(
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "arrow.uuid".to_string(),
+        );
+        source_meta.insert("custom_key".to_string(), "custom_value".to_string());
+
+        let source_field = Field::new("foo", DataType::FixedSizeBinary(16), false)
+            .with_metadata(source_meta);
+
+        let schema = MockExprSchema::new()
+            .with_data_type(DataType::FixedSizeBinary(16))
+            .with_metadata(FieldMetadata::from(source_field.metadata().clone()));
+
+        // Test 1: Cast to a type without extension metadata strips extension metadata
+        // but preserves non-extension metadata
+        let cast_expr = Expr::Cast(Cast {
+            expr: Box::new(col("foo")),
+            field: Arc::new(Field::new("", DataType::Utf8, true)),
+        });
+
+        let (_, result_field) = cast_expr.to_field(&schema).unwrap();
+        assert!(
+            result_field
+                .metadata()
+                .get(EXTENSION_TYPE_NAME_KEY)
+                .is_none(),
+            "Extension type name should be stripped when target has no extension metadata"
+        );
+        assert_eq!(
+            result_field.metadata().get("custom_key"),
+            Some(&"custom_value".to_string()),
+            "Non-extension metadata should be preserved"
+        );
+
+        // Test 2: Cast to a field with different extension type replaces extension metadata
+        let mut target_meta = HashMap::new();
+        target_meta.insert(
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "arrow.json".to_string(),
+        );
+        target_meta.insert(EXTENSION_TYPE_METADATA_KEY.to_string(), "{}".to_string());
+
+        let target_field =
+            Field::new("", DataType::Utf8, true).with_metadata(target_meta);
+
+        let cast_expr = Expr::Cast(Cast {
+            expr: Box::new(col("foo")),
+            field: Arc::new(target_field),
+        });
+
+        let (_, result_field) = cast_expr.to_field(&schema).unwrap();
+        assert_eq!(
+            result_field.metadata().get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"arrow.json".to_string()),
+            "Extension type name should come from target field"
+        );
+        assert_eq!(
+            result_field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
+            Some(&"{}".to_string()),
+            "Extension type metadata should come from target field"
+        );
+        assert_eq!(
+            result_field.metadata().get("custom_key"),
+            Some(&"custom_value".to_string()),
+            "Non-extension metadata should still be preserved from source"
+        );
+    }
+
+    #[test]
+    fn test_try_cast_extension_type_metadata() {
+        use crate::expr::TryCast;
+        use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
+
+        // Create a schema with a field that has extension type metadata
+        let mut source_meta = HashMap::new();
+        source_meta.insert(
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "arrow.uuid".to_string(),
+        );
+
+        let source_field = Field::new("foo", DataType::FixedSizeBinary(16), false)
+            .with_metadata(source_meta);
+
+        let schema = MockExprSchema::new()
+            .with_data_type(DataType::FixedSizeBinary(16))
+            .with_metadata(FieldMetadata::from(source_field.metadata().clone()));
+
+        // TryCast should also strip extension metadata when target has none
+        let try_cast_expr = Expr::TryCast(TryCast {
+            expr: Box::new(col("foo")),
+            field: Arc::new(Field::new("", DataType::Utf8, true)),
+        });
+
+        let (_, result_field) = try_cast_expr.to_field(&schema).unwrap();
+        assert!(
+            result_field
+                .metadata()
+                .get(EXTENSION_TYPE_NAME_KEY)
+                .is_none(),
+            "Extension type name should be stripped in TryCast"
+        );
+        // TryCast should force nullable
+        assert!(
+            result_field.is_nullable(),
+            "TryCast result should be nullable"
+        );
     }
 }

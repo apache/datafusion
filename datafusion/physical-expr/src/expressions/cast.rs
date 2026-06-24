@@ -24,6 +24,7 @@ use crate::physical_expr::PhysicalExpr;
 use arrow::compute::{CastOptions, can_cast_types};
 use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::nested_struct::{
@@ -151,18 +152,36 @@ impl CastExpr {
     }
 
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        if is_default_target_field(&self.target_field) {
-            self.expr.return_field(input_schema).map(|field| {
+        self.expr.return_field(input_schema).map(|source_field| {
+            if is_default_target_field(&self.target_field) {
+                // Type-only cast: derive from source field but strip extension metadata
+                let mut metadata = source_field.metadata().clone();
+                metadata.remove(EXTENSION_TYPE_NAME_KEY);
+                metadata.remove(EXTENSION_TYPE_METADATA_KEY);
+
                 Arc::new(
-                    field
+                    source_field
                         .as_ref()
                         .clone()
-                        .with_data_type(self.cast_type().clone()),
+                        .with_data_type(self.cast_type().clone())
+                        .with_metadata(metadata),
                 )
-            })
-        } else {
-            Ok(Arc::clone(&self.target_field))
-        }
+            } else {
+                // Explicit target field: use target's attributes but handle metadata carefully
+                // - Start with source's non-extension metadata
+                // - Then add all target metadata (including extension type metadata)
+                let mut metadata = source_field.metadata().clone();
+                metadata.remove(EXTENSION_TYPE_NAME_KEY);
+                metadata.remove(EXTENSION_TYPE_METADATA_KEY);
+
+                // Target metadata takes precedence (including extension type metadata)
+                for (k, v) in self.target_field.metadata() {
+                    metadata.insert(k.clone(), v.clone());
+                }
+
+                Arc::new(self.target_field.as_ref().clone().with_metadata(metadata))
+            }
+        })
     }
 
     /// Check if casting from the specified source type to the target type is a
@@ -1205,6 +1224,85 @@ mod tests {
         assert_eq!(display_string, "CAST(b@0 AS Int32)");
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         assert_eq!(sql_string, "CAST(b AS Int32)");
+
+        Ok(())
+    }
+
+    #[test]
+    fn type_only_cast_strips_extension_metadata() -> Result<()> {
+        // When using type-only cast (new()), extension metadata from source should NOT propagate
+        let source_meta = HashMap::from([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                "arrow.uuid".to_string(),
+            ),
+            ("custom_key".to_string(), "custom_value".to_string()),
+        ]);
+        let schema = Schema::new(vec![
+            Field::new("a", FixedSizeBinary(16), false).with_metadata(source_meta),
+        ]);
+
+        let expr = CastExpr::new(col("a", &schema)?, Utf8, None);
+
+        let field = expr.return_field(&schema)?;
+        assert!(
+            field.metadata().get(EXTENSION_TYPE_NAME_KEY).is_none(),
+            "Type-only cast should strip extension type name from source"
+        );
+        assert_eq!(
+            field.metadata().get("custom_key"),
+            Some(&"custom_value".to_string()),
+            "Type-only cast should preserve non-extension metadata"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn field_aware_cast_applies_target_extension_metadata() -> Result<()> {
+        // When using field-aware cast, target's extension metadata should be applied
+        let source_meta = HashMap::from([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                "source.type".to_string(),
+            ),
+            ("source_key".to_string(), "source_value".to_string()),
+        ]);
+        let target_meta = HashMap::from([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                "target.type".to_string(),
+            ),
+            (
+                EXTENSION_TYPE_METADATA_KEY.to_string(),
+                "target_ext_meta".to_string(),
+            ),
+        ]);
+        let schema = Schema::new(vec![
+            Field::new("a", FixedSizeBinary(16), false).with_metadata(source_meta),
+        ]);
+
+        let target_field =
+            Arc::new(Field::new("b", Utf8, true).with_metadata(target_meta));
+        let expr =
+            CastExpr::new_with_target_field(col("a", &schema)?, target_field, None);
+
+        let field = expr.return_field(&schema)?;
+        assert_eq!(
+            field.metadata().get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"target.type".to_string()),
+            "Field-aware cast should use target's extension type name"
+        );
+        assert_eq!(
+            field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
+            Some(&"target_ext_meta".to_string()),
+            "Field-aware cast should use target's extension type metadata"
+        );
+        assert_eq!(
+            field.metadata().get("source_key"),
+            Some(&"source_value".to_string()),
+            "Field-aware cast should preserve source's non-extension metadata"
+        );
 
         Ok(())
     }
