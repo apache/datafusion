@@ -907,36 +907,31 @@ fn check_short_circuit<'a>(
                     return ShortCircuitStrategy::None;
                 }
 
-                let true_count = bool_array.values().count_set_bits();
                 if is_and {
                     // For AND, prioritize checking for all-false (short circuit case)
-                    // Uses optimized false_count() method provided by Arrow
-
-                    // Short circuit if all values are false
-                    if true_count == 0 {
+                    if !bool_array.has_true() {
                         return ShortCircuitStrategy::ReturnLeft;
                     }
 
                     // If no false values, then all must be true
-                    if true_count == len {
+                    if !bool_array.has_false() {
                         return ShortCircuitStrategy::ReturnRight;
                     }
 
-                    // determine if we can pre-selection
+                    // Need exact count for pre-selection threshold
+                    let values = bool_array.values();
+                    let true_count = values.count_set_bits();
                     if true_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
                         return ShortCircuitStrategy::PreSelection(bool_array);
                     }
                 } else {
                     // For OR, prioritize checking for all-true (short circuit case)
-                    // Uses optimized true_count() method provided by Arrow
-
-                    // Short circuit if all values are true
-                    if true_count == len {
+                    if !bool_array.has_false() {
                         return ShortCircuitStrategy::ReturnLeft;
                     }
 
                     // If no true values, then all must be false
-                    if true_count == 0 {
+                    if !bool_array.has_true() {
                         return ShortCircuitStrategy::ReturnRight;
                     }
                 }
