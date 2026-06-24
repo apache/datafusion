@@ -27,7 +27,13 @@ use super::common::{
     AggregateHashTable, AggregateHashTableState, FinalMarker, emit_to_for_batch_size,
 };
 
-/// Methods specific to the aggregate hash table used in the final aggregation stage.
+/// Implementation specific to final aggregation, where the table stores partial
+/// aggregate states and the input rows are also partial states.
+///
+/// Example: `AVG(x) GROUP BY k`
+///
+/// - Aggregate table stores: `k, sum(x), count(x)`
+/// - Input rows: `k, sum(x), count(x)`
 impl AggregateHashTable<FinalMarker> {
     pub(in crate::aggregates) fn new(
         agg: &AggregateExec,

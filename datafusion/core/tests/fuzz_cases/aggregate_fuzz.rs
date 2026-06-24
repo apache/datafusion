@@ -350,7 +350,12 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             schema.clone(),
         )
         .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
+    );
+    assert_ne!(
+        aggregate_exec_running.input_order_mode(),
+        &InputOrderMode::Linear,
+        "running aggregate should observe ordered input for group_by: {group_by:?}"
+    );
 
     let aggregate_exec_usual = Arc::new(
         AggregateExec::try_new(
@@ -362,7 +367,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             schema.clone(),
         )
         .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
+    );
 
     let task_ctx = ctx.task_ctx();
     let collected_usual = collect(aggregate_exec_usual.clone(), task_ctx.clone())
@@ -373,9 +378,6 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         .await
         .unwrap();
     assert!(collected_running.len() > 2);
-    // Running should produce more chunk than the usual AggregateExec.
-    // Otherwise it means that we cannot generate result in running mode.
-    assert!(collected_running.len() > collected_usual.len());
     // compare
     let usual_formatted = pretty_format_batches(&collected_usual).unwrap().to_string();
     let running_formatted = pretty_format_batches(&collected_running)

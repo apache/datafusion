@@ -16,9 +16,15 @@
 // under the License.
 
 mod common;
+mod common_ordered;
 mod final_table;
+mod ordered_final_table;
+mod ordered_partial_table;
 mod partial_table;
 
 pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialSkipMarker,
+};
+pub(super) use common_ordered::{
+    OrderedAggregateTable, OrderedFinalMarker, OrderedPartialMarker,
 };
