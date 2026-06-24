@@ -17,6 +17,7 @@
 
 //! Hash aggregation
 
+use std::ops::Range;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
@@ -39,7 +40,9 @@ use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
-use arrow::datatypes::SchemaRef;
+use arrow::compute::take_arrays;
+use arrow::datatypes::{SchemaRef, UInt32Type};
+use arrow::record_batch::RecordBatchOptions;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
     internal_err, resources_datafusion_err,
@@ -76,6 +79,9 @@ pub(crate) enum ExecutionState {
     /// All input has been consumed and all groups have been emitted
     Done,
 }
+
+type PartitionRange = (usize, Range<usize>);
+type PartitionedBatch = (RecordBatch, Vec<PartitionRange>, Vec<u32>);
 
 /// This encapsulates the spilling state
 struct SpillState {
@@ -330,6 +336,9 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Reused buffer to store group key hashes for the current batch.
     hashes_buffer: Vec<u64>,
+
+    /// Reused row indices for partitioning a batch by group key hashes.
+    partition_indices: Vec<Vec<u32>>,
 
     /// Accumulators, one for each `AggregateFunctionExpr` in the query
     ///
@@ -617,6 +626,7 @@ impl GroupedHashAggregateStream {
             current_group_indices: Default::default(),
             partitioned_aggregation_num_partitions,
             hashes_buffer: vec![],
+            partition_indices: vec![vec![]; partitioned_aggregation_num_partitions],
             exec_state,
             baseline_metrics,
             group_by_metrics,
@@ -885,6 +895,14 @@ impl GroupedHashAggregateStream {
             evaluate_group_by(&self.group_by, batch)?
         };
 
+        if self.mode.input_mode() == AggregateInputMode::Raw
+            && !self.spill_state.is_stream_merging
+            && self.partitioned_aggregation_num_partitions > 1
+        {
+            self.group_aggregate_partitioned_batch(batch, &group_by_values)?;
+            return Ok(());
+        }
+
         // Only create the timer if there are actual aggregate arguments to evaluate
         let timer = match (
             self.spill_state.is_stream_merging,
@@ -913,11 +931,23 @@ impl GroupedHashAggregateStream {
             evaluate_optional(&self.filter_expressions, batch)?
         };
 
-        for group_values in &group_by_values {
-            let groups_start_time = Instant::now();
+        self.group_aggregate_single_partition_batch(
+            &group_by_values,
+            &input_values,
+            &filter_values,
+        )?;
 
-            // calculate the group indices for each input row
-            let starting_num_groups = self.group_values[0].len();
+        Ok(())
+    }
+
+    fn group_aggregate_single_partition_batch(
+        &mut self,
+        group_by_values: &[Vec<ArrayRef>],
+        input_values: &[Vec<ArrayRef>],
+        filter_values: &[Option<ArrayRef>],
+    ) -> Result<()> {
+        for group_values in group_by_values {
+            let groups_start_time = Instant::now();
             self.hashes_buffer.clear();
             self.hashes_buffer.resize(group_values[0].len(), 0);
             create_hashes(
@@ -925,6 +955,8 @@ impl GroupedHashAggregateStream {
                 &aggregates::AGGREGATION_HASH_SEED,
                 &mut self.hashes_buffer,
             )?;
+
+            let starting_num_groups = self.group_values[0].len();
             self.group_values[0].intern(
                 group_values,
                 &mut self.current_group_indices,
@@ -932,7 +964,6 @@ impl GroupedHashAggregateStream {
             )?;
             let group_indices = &self.current_group_indices;
 
-            // Update ordering information if necessary
             let total_num_groups = self.group_values[0].len();
             if total_num_groups > starting_num_groups {
                 self.group_ordering.new_groups(
@@ -942,27 +973,22 @@ impl GroupedHashAggregateStream {
                 )?;
             }
 
-            // Use this instant for both measurements to save a syscall
             let agg_start_time = Instant::now();
             self.group_by_metrics
                 .time_calculating_group_ids
                 .add_duration(agg_start_time - groups_start_time);
 
-            // Gather the inputs to call the actual accumulator
-            let t = self.accumulators[0]
+            let accumulators = self.accumulators[0]
                 .iter_mut()
                 .zip(input_values.iter())
                 .zip(filter_values.iter());
 
-            for ((acc, values), opt_filter) in t {
+            for ((accumulator, values), opt_filter) in accumulators {
                 let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
-
-                // Call the appropriate method on each aggregator with
-                // the entire input row and the relevant group indexes
                 if self.mode.input_mode() == AggregateInputMode::Raw
                     && !self.spill_state.is_stream_merging
                 {
-                    acc.update_batch(
+                    accumulator.update_batch(
                         values,
                         group_indices,
                         opt_filter,
@@ -973,10 +999,7 @@ impl GroupedHashAggregateStream {
                         opt_filter.is_none(),
                         "aggregate filter should be applied in partial stage, there should be no filter in final stage"
                     );
-
-                    // if aggregation is over intermediate states,
-                    // use merge
-                    acc.merge_batch(values, group_indices, total_num_groups)?;
+                    accumulator.merge_batch(values, group_indices, total_num_groups)?;
                 }
                 self.group_by_metrics
                     .aggregation_time
@@ -985,6 +1008,132 @@ impl GroupedHashAggregateStream {
         }
 
         Ok(())
+    }
+
+    fn group_aggregate_partitioned_batch(
+        &mut self,
+        batch: &RecordBatch,
+        group_by_values: &[Vec<ArrayRef>],
+    ) -> Result<()> {
+        assert_eq_or_internal_err!(
+            group_by_values.len(),
+            1,
+            "partitioned aggregation requires a single grouping set"
+        );
+        let group_values = &group_by_values[0];
+
+        self.hashes_buffer.clear();
+        self.hashes_buffer.resize(group_values[0].len(), 0);
+        create_hashes(
+            group_values,
+            &aggregates::AGGREGATION_HASH_SEED,
+            &mut self.hashes_buffer,
+        )?;
+
+        for indices in &mut self.partition_indices {
+            indices.clear();
+        }
+        for (row, hash) in self.hashes_buffer.iter().enumerate() {
+            let partition =
+                (*hash as usize) % self.partitioned_aggregation_num_partitions;
+            self.partition_indices[partition].push(row as u32);
+        }
+
+        let (reordered_batch, partition_ranges, reordered_indices) =
+            Self::partition_grouped_take(batch, &mut self.partition_indices)?;
+        let reordered_hashes = reordered_indices
+            .iter()
+            .map(|index| self.hashes_buffer[*index as usize])
+            .collect::<Vec<_>>();
+        let mut hash_offset = 0;
+        for (partition, range) in partition_ranges {
+            let partition_batch = reordered_batch.slice(range.start, range.len());
+            let partition_group_by_values =
+                evaluate_group_by(&self.group_by, &partition_batch)?;
+            let partition_input_values =
+                evaluate_many(&self.aggregate_arguments, &partition_batch)?;
+            let partition_filter_values =
+                evaluate_optional(&self.filter_expressions, &partition_batch)?;
+
+            assert_eq_or_internal_err!(
+                partition_group_by_values.len(),
+                1,
+                "partitioned aggregation requires a single grouping set"
+            );
+            let partition_group_values = &partition_group_by_values[0];
+            let partition_hashes =
+                &reordered_hashes[hash_offset..hash_offset + range.len()];
+            hash_offset += range.len();
+
+            let groups_start_time = Instant::now();
+            let starting_num_groups = self.group_values[partition].len();
+            self.group_values[partition].intern(
+                partition_group_values,
+                &mut self.current_group_indices,
+                partition_hashes,
+            )?;
+            let group_indices = &self.current_group_indices;
+            let total_num_groups = self.group_values[partition].len();
+            if total_num_groups > starting_num_groups {
+                self.group_ordering.new_groups(
+                    partition_group_values,
+                    group_indices,
+                    total_num_groups,
+                )?;
+            }
+
+            let agg_start_time = Instant::now();
+            self.group_by_metrics
+                .time_calculating_group_ids
+                .add_duration(agg_start_time - groups_start_time);
+
+            let accumulators = self.accumulators[partition]
+                .iter_mut()
+                .zip(partition_input_values.iter())
+                .zip(partition_filter_values.iter());
+            for ((accumulator, values), opt_filter) in accumulators {
+                let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
+                accumulator.update_batch(
+                    values,
+                    group_indices,
+                    opt_filter,
+                    total_num_groups,
+                )?;
+                self.group_by_metrics
+                    .aggregation_time
+                    .add_elapsed(agg_start_time);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn partition_grouped_take(
+        batch: &RecordBatch,
+        indices: &mut [Vec<u32>],
+    ) -> Result<PartitionedBatch> {
+        let mut partition_ranges = Vec::with_capacity(indices.len());
+        let mut reordered_indices = Vec::with_capacity(batch.num_rows());
+
+        for (partition, partition_indices) in indices.iter_mut().enumerate() {
+            if partition_indices.is_empty() {
+                continue;
+            }
+            let start = reordered_indices.len();
+            reordered_indices.extend_from_slice(partition_indices);
+            let len = reordered_indices.len() - start;
+            partition_ranges.push((partition, start..start + len));
+            partition_indices.clear();
+        }
+
+        let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.clone().into();
+        let columns = take_arrays(batch.columns(), &indices_array, None)?;
+        let mut options = RecordBatchOptions::new();
+        options = options.with_row_count(Some(indices_array.len()));
+        let reordered_batch =
+            RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
+
+        Ok((reordered_batch, partition_ranges, reordered_indices))
     }
 
     /// Attempts to update the memory reservation. If that fails due to a
