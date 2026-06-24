@@ -885,9 +885,6 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 impl GroupedHashAggregateStream {
     /// Perform group-by aggregation for the given [`RecordBatch`].
     fn group_aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        let _is_partitioned_aggregation_enabled =
-            self.partitioned_aggregation_num_partitions > 1;
-
         // Evaluate the grouping expressions
         let group_by_values = if self.spill_state.is_stream_merging {
             evaluate_group_by(&self.spill_state.merging_group_by, batch)?
@@ -895,12 +892,8 @@ impl GroupedHashAggregateStream {
             evaluate_group_by(&self.group_by, batch)?
         };
 
-        if self.mode.input_mode() == AggregateInputMode::Raw
-            && !self.spill_state.is_stream_merging
-            && self.partitioned_aggregation_num_partitions > 1
-        {
-            self.group_aggregate_partitioned_batch(batch, &group_by_values)?;
-            return Ok(());
+        if self.group_values.len() > 1 {
+            return self.group_aggregate_partitioned_batch(batch, &group_by_values);
         }
 
         // Only create the timer if there are actual aggregate arguments to evaluate
@@ -931,23 +924,11 @@ impl GroupedHashAggregateStream {
             evaluate_optional(&self.filter_expressions, batch)?
         };
 
-        self.group_aggregate_single_partition_batch(
-            &group_by_values,
-            &input_values,
-            &filter_values,
-        )?;
-
-        Ok(())
-    }
-
-    fn group_aggregate_single_partition_batch(
-        &mut self,
-        group_by_values: &[Vec<ArrayRef>],
-        input_values: &[Vec<ArrayRef>],
-        filter_values: &[Option<ArrayRef>],
-    ) -> Result<()> {
-        for group_values in group_by_values {
+        for group_values in &group_by_values {
             let groups_start_time = Instant::now();
+
+            // calculate the group indices for each input row
+            let starting_num_groups = self.group_values[0].len();
             self.hashes_buffer.clear();
             self.hashes_buffer.resize(group_values[0].len(), 0);
             create_hashes(
@@ -955,8 +936,6 @@ impl GroupedHashAggregateStream {
                 &aggregates::AGGREGATION_HASH_SEED,
                 &mut self.hashes_buffer,
             )?;
-
-            let starting_num_groups = self.group_values[0].len();
             self.group_values[0].intern(
                 group_values,
                 &mut self.current_group_indices,
@@ -964,6 +943,7 @@ impl GroupedHashAggregateStream {
             )?;
             let group_indices = &self.current_group_indices;
 
+            // Update ordering information if necessary
             let total_num_groups = self.group_values[0].len();
             if total_num_groups > starting_num_groups {
                 self.group_ordering.new_groups(
@@ -973,22 +953,27 @@ impl GroupedHashAggregateStream {
                 )?;
             }
 
+            // Use this instant for both measurements to save a syscall
             let agg_start_time = Instant::now();
             self.group_by_metrics
                 .time_calculating_group_ids
                 .add_duration(agg_start_time - groups_start_time);
 
-            let accumulators = self.accumulators[0]
+            // Gather the inputs to call the actual accumulator
+            let t = self.accumulators[0]
                 .iter_mut()
                 .zip(input_values.iter())
                 .zip(filter_values.iter());
 
-            for ((accumulator, values), opt_filter) in accumulators {
+            for ((acc, values), opt_filter) in t {
                 let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
+
+                // Call the appropriate method on each aggregator with
+                // the entire input row and the relevant group indexes
                 if self.mode.input_mode() == AggregateInputMode::Raw
                     && !self.spill_state.is_stream_merging
                 {
-                    accumulator.update_batch(
+                    acc.update_batch(
                         values,
                         group_indices,
                         opt_filter,
@@ -999,7 +984,10 @@ impl GroupedHashAggregateStream {
                         opt_filter.is_none(),
                         "aggregate filter should be applied in partial stage, there should be no filter in final stage"
                     );
-                    accumulator.merge_batch(values, group_indices, total_num_groups)?;
+
+                    // if aggregation is over intermediate states,
+                    // use merge
+                    acc.merge_batch(values, group_indices, total_num_groups)?;
                 }
                 self.group_by_metrics
                     .aggregation_time
@@ -1020,6 +1008,13 @@ impl GroupedHashAggregateStream {
             1,
             "partitioned aggregation requires a single grouping set"
         );
+        if self.mode.input_mode() != AggregateInputMode::Raw
+            || self.spill_state.is_stream_merging
+        {
+            return internal_err!(
+                "partitioned aggregation only supports raw input without stream merging"
+            );
+        }
         let group_values = &group_by_values[0];
 
         self.hashes_buffer.clear();
