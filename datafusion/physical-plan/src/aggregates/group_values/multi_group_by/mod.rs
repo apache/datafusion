@@ -926,7 +926,15 @@ macro_rules! instantiate_primitive {
 fn group_column_supported_type(data_type: &DataType) -> bool {
     // FixedSizeList<primitive> is the only nested type currently supported.
     // List / LargeList / Struct will follow in subsequent PRs of #22715.
-    if let DataType::FixedSizeList(child_field, _) = data_type {
+    if let DataType::FixedSizeList(child_field, list_size) = data_type {
+        // Arrow defines `FixedSizeList` size as a non-negative `i32`, but
+        // the enum still lets callers construct a negative size. Reject
+        // here so the schema is routed to the `GroupValuesRows` fallback
+        // instead of risking a `negative_size as usize` wrap inside the
+        // builder. Keep this guard in lockstep with `make_group_column`.
+        if *list_size < 0 {
+            return false;
+        }
         return matches!(
             child_field.data_type(),
             DataType::Int8
@@ -1087,7 +1095,17 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                 v.push(Box::new(BooleanGroupValueBuilder::<false>::new()));
             }
         }
-        DataType::FixedSizeList(ref child_field, _) => {
+        DataType::FixedSizeList(ref child_field, list_size) => {
+            // Defense in depth against an invalid Arrow type that the
+            // allow-list might have missed: negative `list_size` would
+            // wrap when cast to `usize` and trigger panics / OOM in the
+            // builder. Reject explicitly here as well so direct callers
+            // of `make_group_column` fail safely.
+            if list_size < 0 {
+                return not_impl_err!(
+                    "FixedSizeList with negative size {list_size} not supported in GroupValuesColumn"
+                );
+            }
             // `group_column_supported_type` already restricts the child to
             // the primitive subset supported here. Any unsupported child
             // type returned `false` upstream and was routed to the
