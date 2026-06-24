@@ -24,7 +24,9 @@ use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
-use arrow::compute::kernels::concat_elements::concat_elements_utf8;
+use arrow::compute::kernels::concat_elements::{
+    concat_element_binary, concat_elements_utf8,
+};
 use arrow::compute::{SlicesIterator, cast, filter_record_batch};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
@@ -34,7 +36,9 @@ use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{Interval, apply_operator};
 use datafusion_expr::sort_properties::ExprProperties;
+#[expect(deprecated)]
 use datafusion_expr::statistics::Distribution::{Bernoulli, Gaussian};
+#[expect(deprecated)]
 use datafusion_expr::statistics::{
     Distribution, combine_bernoullis, combine_gaussians,
     create_bernoulli_from_comparison, new_generic_from_binary_op,
@@ -46,7 +50,8 @@ use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
-    concat_elements_utf8view, regex_match_dyn, regex_match_dyn_scalar,
+    concat_elements_binary_view_array, concat_elements_utf8view, regex_match_dyn,
+    regex_match_dyn_scalar,
 };
 
 /// Binary expression
@@ -172,82 +177,100 @@ fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
     )
 }
 
-/// Computes the difference between two dates and returns the result as Int64 (days)
-/// This aligns with PostgreSQL, DuckDB, and MySQL behavior where date - date returns an integer
+/// Milliseconds per day, used for Date64 subtraction.
+const MILLIS_PER_DAY: i64 = 86_400_000;
+
+/// Evaluates `Date32 - Date32` or `Date64 - Date64`, returning the difference in
+/// whole days as `Int64`.
 ///
-/// Implementation: Uses Arrow's sub_wrapping to get Duration, then converts to Int64 days
+/// This matches the behavior of PostgreSQL, DuckDB, and MySQL, where
+/// `date - date` yields an integer day count rather than an interval.
 fn apply_date_subtraction(
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
 ) -> Result<ColumnarValue> {
-    use arrow::compute::kernels::numeric::sub_wrapping;
-
-    // Use Arrow's sub_wrapping to compute the Duration result
-    let duration_result = apply(lhs, rhs, sub_wrapping)?;
-
-    // Convert Duration to Int64 (days)
-    match duration_result {
-        ColumnarValue::Array(array) => {
-            let int64_array = duration_to_days(&array)?;
-            Ok(ColumnarValue::Array(int64_array))
+    match (lhs.data_type(), rhs.data_type()) {
+        (DataType::Date32, DataType::Date32) => {
+            subtract_date_to_days::<Date32Type>(lhs, rhs, |l, r| l - r)
         }
-        ColumnarValue::Scalar(scalar) => {
-            // Convert scalar Duration to Int64 days
-            let array = scalar.to_array_of_size(1)?;
-            let int64_array = duration_to_days(&array)?;
-            let int64_scalar = ScalarValue::try_from_array(int64_array.as_ref(), 0)?;
-            Ok(ColumnarValue::Scalar(int64_scalar))
+        (DataType::Date64, DataType::Date64) => {
+            subtract_date_to_days::<Date64Type>(lhs, rhs, |l, r| {
+                l.wrapping_sub(r) / MILLIS_PER_DAY
+            })
         }
+        (_, _) => unreachable!("apply_date_subtraction called with non-date types"),
     }
 }
 
-/// Converts a Duration array to Int64 days
-/// Handles different Duration time units (Second, Millisecond, Microsecond, Nanosecond)
-fn duration_to_days(array: &ArrayRef) -> Result<ArrayRef> {
-    use datafusion_common::cast::{
-        as_duration_microsecond_array, as_duration_millisecond_array,
-        as_duration_nanosecond_array, as_duration_second_array,
-    };
+/// Generic date subtraction: operates directly on the native primitive values
+/// of `T` (i32 for Date32, i64 for Date64), applying `day_diff_fn` to produce
+/// an Int64 day count.
+fn subtract_date_to_days<T: ArrowPrimitiveType>(
+    lhs: &ColumnarValue,
+    rhs: &ColumnarValue,
+    day_diff_fn: impl Fn(i64, i64) -> i64,
+) -> Result<ColumnarValue>
+where
+    T::Native: Copy + Into<i64>,
+{
+    /// Extract the date value as `i64`. Returns `None` for null scalars.
+    fn date_scalar_to_i64<P: ArrowPrimitiveType>(
+        scalar: &ScalarValue,
+    ) -> Result<Option<i64>> {
+        match scalar {
+            ScalarValue::Date32(value) if P::DATA_TYPE == DataType::Date32 => {
+                Ok(value.map(i64::from))
+            }
+            ScalarValue::Date64(value) if P::DATA_TYPE == DataType::Date64 => Ok(*value),
+            other => {
+                internal_err!(
+                    "{} date scalar expected, got: {}",
+                    P::DATA_TYPE,
+                    other.data_type()
+                )
+            }
+        }
+    }
 
-    const SECONDS_PER_DAY: i64 = 86_400;
-    const MILLIS_PER_DAY: i64 = 86_400_000;
-    const MICROS_PER_DAY: i64 = 86_400_000_000;
-    const NANOS_PER_DAY: i64 = 86_400_000_000_000;
-
-    match array.data_type() {
-        DataType::Duration(TimeUnit::Second) => {
-            let duration_array = as_duration_second_array(array)?;
-            let result: Int64Array = duration_array
-                .iter()
-                .map(|v| v.map(|val| val / SECONDS_PER_DAY))
-                .collect();
-            Ok(Arc::new(result))
+    match (lhs, rhs) {
+        (ColumnarValue::Array(left), ColumnarValue::Array(right)) => {
+            let left = left.as_primitive::<T>();
+            let right = right.as_primitive::<T>();
+            let result: Int64Array =
+                arrow::compute::binary::<_, _, _, Int64Type>(left, right, |l, r| {
+                    day_diff_fn(l.into(), r.into())
+                })?;
+            Ok(ColumnarValue::Array(Arc::new(result)))
         }
-        DataType::Duration(TimeUnit::Millisecond) => {
-            let duration_array = as_duration_millisecond_array(array)?;
-            let result: Int64Array = duration_array
-                .iter()
-                .map(|v| v.map(|val| val / MILLIS_PER_DAY))
-                .collect();
-            Ok(Arc::new(result))
+        (ColumnarValue::Array(left), ColumnarValue::Scalar(right)) => {
+            let left = left.as_primitive::<T>();
+            match date_scalar_to_i64::<T>(right)? {
+                Some(right_val) => {
+                    let result: Int64Array =
+                        left.unary(|l| day_diff_fn(l.into(), right_val));
+                    Ok(ColumnarValue::Array(Arc::new(result)))
+                }
+                None => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
+            }
         }
-        DataType::Duration(TimeUnit::Microsecond) => {
-            let duration_array = as_duration_microsecond_array(array)?;
-            let result: Int64Array = duration_array
-                .iter()
-                .map(|v| v.map(|val| val / MICROS_PER_DAY))
-                .collect();
-            Ok(Arc::new(result))
+        (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => {
+            let right = right.as_primitive::<T>();
+            match date_scalar_to_i64::<T>(left)? {
+                Some(left_val) => {
+                    let result: Int64Array =
+                        right.unary(|r| day_diff_fn(left_val, r.into()));
+                    Ok(ColumnarValue::Array(Arc::new(result)))
+                }
+                None => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
+            }
         }
-        DataType::Duration(TimeUnit::Nanosecond) => {
-            let duration_array = as_duration_nanosecond_array(array)?;
-            let result: Int64Array = duration_array
-                .iter()
-                .map(|v| v.map(|val| val / NANOS_PER_DAY))
-                .collect();
-            Ok(Arc::new(result))
+        (ColumnarValue::Scalar(left), ColumnarValue::Scalar(right)) => {
+            let left_val = date_scalar_to_i64::<T>(left)?;
+            let right_val = date_scalar_to_i64::<T>(right)?;
+            Ok(ColumnarValue::Scalar(ScalarValue::Int64(
+                left_val.zip(right_val).map(|(l, r)| day_diff_fn(l, r)),
+            )))
         }
-        other => internal_err!("duration_to_days expected Duration type, got: {}", other),
     }
 }
 
@@ -289,11 +312,11 @@ impl PhysicalExpr for BinaryExpr {
                     ColumnarValue::Array(array) => {
                         // When the array on the right is all true or all false, skip the scatter process
                         let boolean_array = array.as_boolean();
-                        let true_count = boolean_array.true_count();
-                        let length = boolean_array.len();
-                        if true_count == length {
+                        if boolean_array.null_count() == 0 && !boolean_array.has_false() {
                             return Ok(lhs);
-                        } else if true_count == 0 && boolean_array.null_count() == 0 {
+                        } else if boolean_array.null_count() == 0
+                            && !boolean_array.has_true()
+                        {
                             // If the right-hand array is returned at this point,the lengths will be inconsistent;
                             // returning a scalar can avoid this issue
                             return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
@@ -498,6 +521,7 @@ impl PhysicalExpr for BinaryExpr {
         }
     }
 
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         let (left, right) = (children[0], children[1]);
 
@@ -603,6 +627,108 @@ impl PhysicalExpr for BinaryExpr {
         write_child(f, self.left.as_ref(), precedence)?;
         write!(f, " {} ", self.op)?;
         write_child(f, self.right.as_ref(), precedence)
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Linearize a nested binary expression tree of the same operator
+        // into a flat vector of operands to avoid deep recursion in proto.
+        let op = self.op;
+        let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![&self.right];
+        let mut current_expr: &BinaryExpr = self;
+        loop {
+            match current_expr.left.downcast_ref::<BinaryExpr>() {
+                Some(bin) if bin.op == op => {
+                    operand_refs.push(&bin.right);
+                    current_expr = bin;
+                }
+                _ => {
+                    operand_refs.push(&current_expr.left);
+                    break;
+                }
+            }
+        }
+        // Reverse so operands are ordered from left innermost to right outermost.
+        operand_refs.reverse();
+
+        let operands = ctx.encode_children_expressions(operand_refs)?;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::BinaryExpr(
+                Box::new(protobuf::PhysicalBinaryExprNode {
+                    l: None,
+                    r: None,
+                    op: format!("{op:?}"),
+                    operands,
+                }),
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl BinaryExpr {
+    /// Reconstruct a [`BinaryExpr`] (or a left-deep tree of them when the proto
+    /// uses the linearized `operands` form) from its protobuf representation.
+    ///
+    /// Takes the whole [`PhysicalExprNode`] — the exact inverse of what
+    /// [`PhysicalExpr::try_to_proto`] produces — so every expression's
+    /// `try_from_proto` shares one signature. The operator string is parsed
+    /// via the canonical [`Operator::from_proto_name`] mapping, so no `op`
+    /// argument needs to be threaded in by the caller.
+    ///
+    /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    /// [`PhysicalExpr::try_to_proto`]: datafusion_physical_expr_common::physical_expr::PhysicalExpr::try_to_proto
+    /// [`PhysicalExprDecodeCtx::decode`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::decode
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_proto_models::protobuf;
+        let node = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::BinaryExpr,
+            "BinaryExpr",
+        );
+        let op = Operator::from_proto_name(&node.op).ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal(format!(
+                "Unsupported binary operator '{}'",
+                node.op
+            ))
+        })?;
+
+        if !node.operands.is_empty() {
+            // New linearized format: reduce the flat operands list back into
+            // a nested binary expression tree.
+            let operands = ctx.decode_children_expressions(&node.operands)?;
+
+            if operands.len() < 2 {
+                return internal_err!(
+                    "A binary expression must always have at least 2 operands"
+                );
+            }
+
+            Ok(operands
+                .into_iter()
+                .reduce(|left, right| {
+                    Arc::new(BinaryExpr::new(left, op, right)) as Arc<dyn PhysicalExpr>
+                })
+                .expect("Binary expression could not be reduced to a single expression."))
+        } else {
+            // Legacy format with l/r fields.
+            let left =
+                ctx.decode_required_expression(node.l.as_deref(), "BinaryExpr", "left")?;
+            let right =
+                ctx.decode_required_expression(node.r.as_deref(), "BinaryExpr", "right")?;
+            Ok(Arc::new(BinaryExpr::new(left, op, right)))
+        }
     }
 }
 
@@ -928,18 +1054,6 @@ fn pre_selection_scatter(
 }
 
 fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
-    if *left.data_type() == DataType::Binary && *right.data_type() == DataType::Binary {
-        // Cast Binary to Utf8 to validate UTF-8 encoding before concatenation
-        // Follow widespread approach of PostgreSQL, sqlite, DuckDB, Snowflake
-        // Spark does it in a different way by making a binary-to-binary concatenation
-        let left = cast(left.as_ref(), &DataType::Utf8)?;
-        let right = cast(right.as_ref(), &DataType::Utf8)?;
-        return Ok(Arc::new(concat_elements_utf8(
-            left.as_string::<i32>(),
-            right.as_string::<i32>(),
-        )?));
-    }
-
     Ok(match left.data_type() {
         DataType::Utf8 => Arc::new(concat_elements_utf8(
             left.as_string::<i32>(),
@@ -952,6 +1066,18 @@ fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
         DataType::Utf8View => Arc::new(concat_elements_utf8view(
             left.as_string_view(),
             right.as_string_view(),
+        )?),
+        DataType::Binary => Arc::new(concat_element_binary::<i32>(
+            left.as_binary(),
+            right.as_binary(),
+        )?),
+        DataType::LargeBinary => Arc::new(concat_element_binary::<i64>(
+            left.as_binary(),
+            right.as_binary(),
+        )?),
+        DataType::BinaryView => Arc::new(concat_elements_binary_view_array(
+            left.as_binary_view(),
+            right.as_binary_view(),
         )?),
         other => {
             return internal_err!(
@@ -1900,6 +2026,82 @@ mod tests {
             Operator::Minus,
             Int32Array::from(vec![0, 0, -1, -4, -11]),
         )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn date32_minus_date32_returns_int64_days() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Date32, true),
+            Field::new("b", DataType::Date32, true),
+        ]));
+        let a = Arc::new(Date32Array::from(vec![
+            Some(18_901),
+            Some(18_901),
+            None,
+            Some(18_900),
+        ]));
+        let b = Arc::new(Date32Array::from(vec![
+            Some(18_898),
+            Some(18_904),
+            Some(18_900),
+            None,
+        ]));
+
+        apply_arithmetic::<Int64Type>(
+            schema,
+            vec![a, b],
+            Operator::Minus,
+            Int64Array::from(vec![Some(3), Some(-3), None, None]),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn date64_minus_date64_returns_int64_days() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Date64, true),
+            Field::new("b", DataType::Date64, true),
+        ]));
+        let a = Arc::new(Date64Array::from(vec![
+            Some(18_901 * MILLIS_PER_DAY),
+            Some(18_901 * MILLIS_PER_DAY),
+            None,
+            Some(18_900 * MILLIS_PER_DAY),
+        ]));
+        let b = Arc::new(Date64Array::from(vec![
+            Some(18_898 * MILLIS_PER_DAY),
+            Some(18_904 * MILLIS_PER_DAY),
+            Some(18_900 * MILLIS_PER_DAY),
+            None,
+        ]));
+
+        apply_arithmetic::<Int64Type>(
+            schema,
+            vec![a, b],
+            Operator::Minus,
+            Int64Array::from(vec![Some(3), Some(-3), None, None]),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn date32_minus_null_scalar_returns_int64_null_scalar() -> Result<()> {
+        let result = apply_date_subtraction(
+            &ColumnarValue::Array(Arc::new(Date32Array::from(vec![
+                Some(18_901),
+                Some(18_900),
+            ]))),
+            &ColumnarValue::Scalar(ScalarValue::Date32(None)),
+        )?;
+
+        assert!(matches!(
+            result,
+            ColumnarValue::Scalar(ScalarValue::Int64(None))
+        ));
 
         Ok(())
     }
@@ -4670,6 +4872,7 @@ mod tests {
 
     /// Test for Uniform-Uniform, Unknown-Uniform, Uniform-Unknown and Unknown-Unknown evaluation.
     #[test]
+    #[expect(deprecated)]
     fn test_evaluate_statistics_combination_of_range_holders() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;
@@ -4737,6 +4940,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_evaluate_statistics_bernoulli() -> Result<()> {
         let schema = &Schema::new(vec![
             Field::new("a", DataType::Int64, false),
@@ -4772,6 +4976,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_propagate_statistics_combination_of_range_holders_arithmetic() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;
@@ -4841,6 +5046,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_propagate_statistics_combination_of_range_holders_comparison() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;

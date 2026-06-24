@@ -868,7 +868,7 @@ physical_plan
 01)ProjectionExec: expr=[1 as foo]
 02)--SortPreservingMergeExec: [part_key@0 ASC NULLS LAST], fetch=1
 03)----SortExec: TopK(fetch=1), expr=[part_key@0 ASC NULLS LAST], preserve_partitioning=[true]
-04)------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/test_limit_with_partitions/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/test_limit_with_partitions/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/test_limit_with_partitions/part-2.parquet]]}, projection=[part_key], file_type=parquet, predicate=DynamicFilter [ empty ]
+04)------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/test_limit_with_partitions/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/test_limit_with_partitions/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/test_limit_with_partitions/part-2.parquet]]}, projection=[part_key], file_type=parquet, predicate=DynamicFilter [ empty ], sort_order_for_reorder=[part_key@0 ASC NULLS LAST], dynamic_rg_pruning=eligible
 
 query I
 with selection as (
@@ -989,3 +989,58 @@ c-4
 
 statement ok
 DROP TABLE t21176;
+
+# Regression test for https://github.com/apache/datafusion/issues/22489
+# An outer ORDER BY / OFFSET must not reduce an inner LIMIT when the two are
+# separated by a sort on a *different* key.
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+CREATE TABLE t22489 (g INT, x INT, y INT) AS VALUES (1, 10, 4), (2, 20, 3), (3, 30, 2), (4, 40, 1);
+
+# Inner ORDER BY sx DESC LIMIT 4 keeps all four groups; the outer ORDER BY
+# sy DESC OFFSET 1 then drops only the sy-max group (g=1), so g=2,3,4 remain.
+query III
+SELECT * FROM (
+  SELECT g, SUM(x) AS sx, SUM(y) AS sy FROM t22489 GROUP BY g
+  ORDER BY sx DESC LIMIT 4
+) q
+ORDER BY sy DESC
+OFFSET 1;
+----
+2 20 3
+3 30 2
+4 40 1
+
+query TT
+EXPLAIN
+SELECT * FROM (
+  SELECT g, SUM(x) AS sx, SUM(y) AS sy FROM t22489 GROUP BY g
+  ORDER BY sx DESC LIMIT 4
+) q
+ORDER BY sy DESC
+OFFSET 1;
+----
+logical_plan
+01)Limit: skip=1, fetch=None
+02)--Sort: q.sy DESC NULLS FIRST
+03)----SubqueryAlias: q
+04)------Sort: sx DESC NULLS FIRST, fetch=4
+05)--------Projection: t22489.g, sum(t22489.x) AS sx, sum(t22489.y) AS sy
+06)----------Aggregate: groupBy=[[t22489.g]], aggr=[[sum(CAST(t22489.x AS Int64)), sum(CAST(t22489.y AS Int64))]]
+07)------------TableScan: t22489 projection=[g, x, y]
+physical_plan
+01)GlobalLimitExec: skip=1, fetch=None
+02)--SortExec: expr=[sy@2 DESC], preserve_partitioning=[false]
+03)----SortPreservingMergeExec: [sx@1 DESC], fetch=4
+04)------SortExec: TopK(fetch=4), expr=[sx@1 DESC], preserve_partitioning=[true]
+05)--------ProjectionExec: expr=[g@0 as g, sum(t22489.x)@1 as sx, sum(t22489.y)@2 as sy]
+06)----------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[sum(t22489.x), sum(t22489.y)]
+07)------------RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+08)--------------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[sum(t22489.x), sum(t22489.y)]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE t22489;

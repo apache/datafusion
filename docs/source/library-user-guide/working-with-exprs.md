@@ -167,7 +167,7 @@ In DataFusion, an `OptimizerRule` is a trait that supports rewriting `Expr`s tha
 We'll call our rule `AddOneInliner` and implement the `OptimizerRule` trait. The `OptimizerRule` trait has two methods:
 
 - `name` - returns the name of the rule
-- `try_optimize` - takes a `LogicalPlan` and returns an `Option<LogicalPlan>`. If the rule is able to optimize the plan, it returns `Some(LogicalPlan)` with the optimized plan. If the rule is not able to optimize the plan, it returns `None`.
+- `rewrite` - takes a `LogicalPlan` and `&dyn OptimizerConfig`, and returns a `Result<Transformed<LogicalPlan>>`. If the rule is able to optimize the plan, it returns `Transformed::yes` with the optimized plan. If the rule is not able to optimize the plan, it returns `Transformed::no`.
 
 ```rust
 use std::sync::Arc;

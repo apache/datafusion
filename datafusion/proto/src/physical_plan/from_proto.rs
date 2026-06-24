@@ -24,7 +24,9 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Field, Schema};
 use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, internal_datafusion_err, not_impl_err,
+};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -43,12 +45,14 @@ use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
-    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
+    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
+    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
-use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
+use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
-use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
+use datafusion_physical_plan::{
+    Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, WindowExpr,
+};
 use datafusion_proto_common::common::proto_error;
 use object_store::ObjectMeta;
 use object_store::path::Path;
@@ -57,15 +61,10 @@ use super::{
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
     PhysicalProtoConverterExtension,
 };
-use crate::logical_plan::{self};
+use crate::convert::TryFromProto;
 use crate::protobuf::physical_expr_node::ExprType;
-use crate::{convert_required, protobuf};
-
-impl From<&protobuf::PhysicalColumn> for Column {
-    fn from(c: &protobuf::PhysicalColumn) -> Column {
-        Column::new(&c.name, c.index as usize)
-    }
-}
+use crate::{convert_required, convert_required_proto, protobuf};
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 
 /// Parses a physical sort expression from a protobuf.
 ///
@@ -151,7 +150,7 @@ pub fn parse_physical_window_expr(
     let window_frame = proto
         .window_frame
         .as_ref()
-        .map(|wf| wf.clone().try_into())
+        .map(|wf| datafusion_expr::WindowFrame::try_from_proto(wf.clone()))
         .transpose()
         .map_err(|e| internal_datafusion_err!("{e}"))?
         .ok_or_else(|| {
@@ -263,57 +262,27 @@ pub fn parse_physical_expr_with_converter(
         .as_ref()
         .ok_or_else(|| proto_error("Unexpected empty physical expression"))?;
 
+    // Decoder context handed to per-expression `try_from_proto` constructors.
+    // This is the new shape the codebase is migrating toward (see #21835);
+    // the remaining `ExprType` variants stay matched inline until they migrate.
+    let decoder = ConverterDecoder {
+        ctx,
+        proto_converter,
+    };
+    let decode_ctx =
+        datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::new(
+            input_schema,
+            &decoder,
+        );
+
     let pexpr: Arc<dyn PhysicalExpr> = match expr_type {
-        ExprType::Column(c) => {
-            let pcol: Column = c.into();
-            Arc::new(pcol)
-        }
-        ExprType::UnknownColumn(c) => Arc::new(UnKnownColumn::new(&c.name)),
-        ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
-        ExprType::BinaryExpr(binary_expr) => {
-            let op = logical_plan::from_proto::from_proto_binary_op(&binary_expr.op)?;
-            if !binary_expr.operands.is_empty() {
-                // New linearized format: reduce the flat operands list back into
-                // a nested binary expression tree.
-                let operands: Vec<Arc<dyn PhysicalExpr>> = binary_expr
-                    .operands
-                    .iter()
-                    .map(|e| proto_converter.proto_to_physical_expr(e, input_schema, ctx))
-                    .collect::<Result<Vec<_>>>()?;
-
-                if operands.len() < 2 {
-                    return Err(proto_error(
-                        "A binary expression must always have at least 2 operands",
-                    ));
-                }
-
-                operands
-                    .into_iter()
-                    .reduce(|left, right| Arc::new(BinaryExpr::new(left, op, right)))
-                    .expect(
-                        "Binary expression could not be reduced to a single expression.",
-                    )
-            } else {
-                // Legacy format with l/r fields
-                Arc::new(BinaryExpr::new(
-                    parse_required_physical_expr(
-                        binary_expr.l.as_deref(),
-                        ctx,
-                        "left",
-                        input_schema,
-                        proto_converter,
-                    )?,
-                    op,
-                    parse_required_physical_expr(
-                        binary_expr.r.as_deref(),
-                        ctx,
-                        "right",
-                        input_schema,
-                        proto_converter,
-                    )?,
-                ))
-            }
-        }
+        // Migrated expressions take the whole `PhysicalExprNode` and unwrap
+        // their own `ExprType` variant — see #21835. This match only routes
+        // to the right constructor.
+        ExprType::Column(_) => Column::try_from_proto(proto, &decode_ctx)?,
+        ExprType::UnknownColumn(_) => UnKnownColumn::try_from_proto(proto, &decode_ctx)?,
+        ExprType::Literal(_) => Literal::try_from_proto(proto, &decode_ctx)?,
+        ExprType::BinaryExpr(_) => BinaryExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::AggregateExpr(_) => {
             return not_impl_err!(
                 "Cannot convert aggregate expr node to physical expression"
@@ -327,108 +296,14 @@ pub fn parse_physical_expr_with_converter(
         ExprType::Sort(_) => {
             return not_impl_err!("Cannot convert sort expr node to physical expression");
         }
-        ExprType::IsNullExpr(e) => {
-            Arc::new(IsNullExpr::new(parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?))
-        }
-        ExprType::IsNotNullExpr(e) => {
-            Arc::new(IsNotNullExpr::new(parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?))
-        }
-        ExprType::NotExpr(e) => Arc::new(NotExpr::new(parse_required_physical_expr(
-            e.expr.as_deref(),
-            ctx,
-            "expr",
-            input_schema,
-            proto_converter,
-        )?)),
-        ExprType::Negative(e) => {
-            Arc::new(NegativeExpr::new(parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?))
-        }
-        ExprType::InList(e) => in_list(
-            parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?,
-            parse_physical_exprs(&e.list, ctx, input_schema, proto_converter)?,
-            &e.negated,
-            input_schema,
-        )?,
-        ExprType::Case(e) => Arc::new(CaseExpr::try_new(
-            e.expr
-                .as_ref()
-                .map(|e| {
-                    proto_converter.proto_to_physical_expr(e.as_ref(), input_schema, ctx)
-                })
-                .transpose()?,
-            e.when_then_expr
-                .iter()
-                .map(|e| {
-                    Ok((
-                        parse_required_physical_expr(
-                            e.when_expr.as_ref(),
-                            ctx,
-                            "when_expr",
-                            input_schema,
-                            proto_converter,
-                        )?,
-                        parse_required_physical_expr(
-                            e.then_expr.as_ref(),
-                            ctx,
-                            "then_expr",
-                            input_schema,
-                            proto_converter,
-                        )?,
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?,
-            e.else_expr
-                .as_ref()
-                .map(|e| {
-                    proto_converter.proto_to_physical_expr(e.as_ref(), input_schema, ctx)
-                })
-                .transpose()?,
-        )?),
-        ExprType::Cast(e) => Arc::new(CastExpr::new(
-            parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?,
-            convert_required!(e.arrow_type)?,
-            None,
-        )),
-        ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
-            parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?,
-            convert_required!(e.arrow_type)?,
-        )),
+        ExprType::IsNullExpr(_) => IsNullExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::IsNotNullExpr(_) => IsNotNullExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::NotExpr(_) => NotExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::Negative(_) => NegativeExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::InList(_) => InListExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::Case(_) => CaseExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::Cast(_) => CastExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::TryCast(_) => TryCastExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::ScalarUdf(e) => {
             let udf = match &e.fun_definition {
                 Some(buf) => ctx.codec().try_decode_udf(&e.name, buf)?,
@@ -459,37 +334,8 @@ pub fn parse_physical_expr_with_converter(
                 .with_nullable(e.nullable),
             )
         }
-        ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
-            like_expr.negated,
-            like_expr.case_insensitive,
-            parse_required_physical_expr(
-                like_expr.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?,
-            parse_required_physical_expr(
-                like_expr.pattern.as_deref(),
-                ctx,
-                "pattern",
-                input_schema,
-                proto_converter,
-            )?,
-        )),
-        ExprType::HashExpr(hash_expr) => {
-            let on_columns = parse_physical_exprs(
-                &hash_expr.on_columns,
-                ctx,
-                input_schema,
-                proto_converter,
-            )?;
-            Arc::new(HashExpr::new(
-                on_columns,
-                SeededRandomState::with_seed(hash_expr.seed0),
-                hash_expr.description.clone(),
-            ))
-        }
+        ExprType::LikeExpr(_) => LikeExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::HashExpr(_) => HashExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::ScalarSubquery(sq) => {
             let data_type: arrow::datatypes::DataType = sq
                 .data_type
@@ -511,6 +357,9 @@ pub fn parse_physical_expr_with_converter(
                 results.clone(),
             ))
         }
+        ExprType::DynamicFilter(_) => {
+            DynamicFilterPhysicalExpr::try_from_proto(proto, &decode_ctx)?
+        }
         ExprType::Extension(extension) => {
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
                 .inputs
@@ -523,18 +372,6 @@ pub fn parse_physical_expr_with_converter(
     };
 
     Ok(pexpr)
-}
-
-fn parse_required_physical_expr(
-    expr: Option<&protobuf::PhysicalExprNode>,
-    ctx: &PhysicalPlanDecodeContext<'_>,
-    field: &str,
-    input_schema: &Schema,
-    proto_converter: &dyn PhysicalProtoConverterExtension,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.map(|e| proto_converter.proto_to_physical_expr(e, input_schema, ctx))
-        .transpose()?
-        .ok_or_else(|| internal_datafusion_err!("Missing required field {field:?}"))
 }
 
 pub fn parse_protobuf_hash_partitioning(
@@ -582,6 +419,14 @@ pub fn parse_protobuf_partitioning(
                     proto_converter,
                 )
             }
+            Some(protobuf::partitioning::PartitionMethod::Range(range_partitioning)) => {
+                Ok(Some(parse_protobuf_range_partitioning(
+                    range_partitioning,
+                    ctx,
+                    input_schema,
+                    proto_converter,
+                )?))
+            }
             Some(protobuf::partitioning::PartitionMethod::Unknown(partition_count)) => {
                 Ok(Some(Partitioning::UnknownPartitioning(
                     *partition_count as usize,
@@ -591,6 +436,49 @@ pub fn parse_protobuf_partitioning(
         },
         None => Ok(None),
     }
+}
+
+fn parse_protobuf_range_partitioning(
+    range_partitioning: &protobuf::PhysicalRangePartitioning,
+    ctx: &PhysicalPlanDecodeContext<'_>,
+    input_schema: &Schema,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+) -> Result<Partitioning> {
+    let sort_exprs = parse_physical_sort_exprs(
+        &range_partitioning.sort_expr,
+        ctx,
+        input_schema,
+        proto_converter,
+    )?;
+    let sort_expr_count = sort_exprs.len();
+    let ordering = LexOrdering::new(sort_exprs).ok_or_else(|| {
+        internal_datafusion_err!("Range partitioning requires non-empty ordering")
+    })?;
+    if ordering.len() != sort_expr_count {
+        return Err(internal_datafusion_err!(
+            "Range partitioning ordering must not contain duplicate expressions"
+        ));
+    }
+    let split_points = range_partitioning
+        .split_point
+        .iter()
+        .map(parse_protobuf_range_split_point)
+        .collect::<Result<_>>()?;
+    Ok(Partitioning::Range(RangePartitioning::try_new(
+        ordering,
+        split_points,
+    )?))
+}
+
+fn parse_protobuf_range_split_point(
+    split_point: &protobuf::PhysicalRangeSplitPoint,
+) -> Result<SplitPoint> {
+    let values = split_point
+        .value
+        .iter()
+        .map(|value| ScalarValue::try_from(value).map_err(Into::into))
+        .collect::<Result<_>>()?;
+    Ok(SplitPoint::new(values))
 }
 
 pub fn parse_protobuf_file_scan_schema(
@@ -627,7 +515,9 @@ pub fn parse_table_schema_from_proto(
         .with_metadata(schema.metadata.clone()),
     );
 
-    Ok(TableSchema::new(file_schema, table_partition_cols))
+    Ok(TableSchema::builder(file_schema)
+        .with_table_partition_cols(table_partition_cols)
+        .build())
 }
 
 pub fn parse_protobuf_file_scan_config(
@@ -644,7 +534,7 @@ pub fn parse_protobuf_file_scan_config(
     let file_groups = proto
         .file_groups
         .iter()
-        .map(|f| f.try_into())
+        .map(FileGroup::try_from_proto)
         .collect::<Result<Vec<_>, _>>()?;
 
     let object_store_url = match proto.object_store_url.is_empty() {
@@ -662,6 +552,12 @@ pub fn parse_protobuf_file_scan_config(
         )?;
         output_ordering.extend(LexOrdering::new(sort_exprs));
     }
+    let output_partitioning = parse_protobuf_partitioning(
+        proto.output_partitioning.as_ref(),
+        ctx,
+        &schema,
+        proto_converter,
+    )?;
 
     // Parse projection expressions if present and apply to file source
     let file_source = if let Some(proto_projection_exprs) = &proto.projection_exprs {
@@ -690,14 +586,18 @@ pub fn parse_protobuf_file_scan_config(
         file_source
     };
 
-    let config = FileScanConfigBuilder::new(object_store_url, file_source)
+    let mut config_builder = FileScanConfigBuilder::new(object_store_url, file_source)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_output_ordering(output_ordering)
-        .with_batch_size(proto.batch_size.map(|s| s as usize))
-        .build();
+        .with_output_partitioning(output_partitioning)
+        .with_batch_size(proto.batch_size.map(|s| s as usize));
+    if proto.partitioned_by_file_group.unwrap_or(false) {
+        config_builder = config_builder.with_partitioned_by_file_group(true);
+    }
+    let config = config_builder.build();
     Ok(config)
 }
 
@@ -713,10 +613,10 @@ pub fn parse_record_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
     Ok(batches)
 }
 
-impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
+impl TryFromProto<&protobuf::PartitionedFile> for PartitionedFile {
     type Error = DataFusionError;
 
-    fn try_from(val: &protobuf::PartitionedFile) -> Result<Self, Self::Error> {
+    fn try_from_proto(val: &protobuf::PartitionedFile) -> Result<Self, Self::Error> {
         let mut pf = PartitionedFile::new_from_meta(ObjectMeta {
             location: Path::parse(val.path.as_str())
                 .map_err(|e| proto_error(format!("Invalid object_store path: {e}")))?,
@@ -731,8 +631,13 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
         );
+        if let Some(proto_schema) = val.arrow_schema.as_ref() {
+            pf = pf.with_arrow_schema(Arc::new(
+                proto_schema.try_into().map_err(DataFusionError::from)?,
+            ));
+        }
         if let Some(range) = val.range.as_ref() {
-            let file_range: FileRange = range.try_into()?;
+            let file_range = FileRange::try_from_proto(range)?;
             pf = pf.with_range(file_range.start, file_range.end);
         }
         if let Some(proto_stats) = val.statistics.as_ref() {
@@ -742,10 +647,10 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
     }
 }
 
-impl TryFrom<&protobuf::FileRange> for FileRange {
+impl TryFromProto<&protobuf::FileRange> for FileRange {
     type Error = DataFusionError;
 
-    fn try_from(value: &protobuf::FileRange) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &protobuf::FileRange) -> Result<Self, Self::Error> {
         Ok(FileRange {
             start: value.start,
             end: value.end,
@@ -753,61 +658,61 @@ impl TryFrom<&protobuf::FileRange> for FileRange {
     }
 }
 
-impl TryFrom<&protobuf::FileGroup> for FileGroup {
+impl TryFromProto<&protobuf::FileGroup> for FileGroup {
     type Error = DataFusionError;
 
-    fn try_from(val: &protobuf::FileGroup) -> Result<Self, Self::Error> {
+    fn try_from_proto(val: &protobuf::FileGroup) -> Result<Self, Self::Error> {
         let files = val
             .files
             .iter()
-            .map(|f| f.try_into())
+            .map(PartitionedFile::try_from_proto)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(FileGroup::new(files))
     }
 }
 
-impl TryFrom<&protobuf::JsonSink> for JsonSink {
+impl TryFromProto<&protobuf::JsonSink> for JsonSink {
     type Error = DataFusionError;
 
-    fn try_from(value: &protobuf::JsonSink) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &protobuf::JsonSink) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            convert_required!(value.config)?,
+            convert_required_proto!(FileSinkConfig, value.config)?,
             convert_required!(value.writer_options)?,
         ))
     }
 }
 
 #[cfg(feature = "parquet")]
-impl TryFrom<&protobuf::ParquetSink> for ParquetSink {
+impl TryFromProto<&protobuf::ParquetSink> for ParquetSink {
     type Error = DataFusionError;
 
-    fn try_from(value: &protobuf::ParquetSink) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &protobuf::ParquetSink) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            convert_required!(value.config)?,
+            convert_required_proto!(FileSinkConfig, value.config)?,
             convert_required!(value.parquet_options)?,
         ))
     }
 }
 
-impl TryFrom<&protobuf::CsvSink> for CsvSink {
+impl TryFromProto<&protobuf::CsvSink> for CsvSink {
     type Error = DataFusionError;
 
-    fn try_from(value: &protobuf::CsvSink) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &protobuf::CsvSink) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            convert_required!(value.config)?,
+            convert_required_proto!(FileSinkConfig, value.config)?,
             convert_required!(value.writer_options)?,
         ))
     }
 }
 
-impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
+impl TryFromProto<&protobuf::FileSinkConfig> for FileSinkConfig {
     type Error = DataFusionError;
 
-    fn try_from(conf: &protobuf::FileSinkConfig) -> Result<Self, Self::Error> {
+    fn try_from_proto(conf: &protobuf::FileSinkConfig) -> Result<Self, Self::Error> {
         let file_group = FileGroup::new(
             conf.file_groups
                 .iter()
-                .map(|f| f.try_into())
+                .map(PartitionedFile::try_from_proto)
                 .collect::<Result<Vec<_>>>()?,
         );
         let table_paths = conf
@@ -854,6 +759,33 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
     }
 }
 
+/// Concrete [`PhysicalExprDecode`] driver that backs
+/// [`PhysicalExprDecodeCtx`] inside `parse_physical_expr_with_converter`.
+///
+/// Today this is a thin wrapper that re-enters the central match through
+/// `proto_to_physical_expr`; once more expressions migrate, the central match
+/// shrinks and a future builder-style decoder can take over.
+///
+/// [`PhysicalExprDecode`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode
+/// [`PhysicalExprDecodeCtx`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx
+struct ConverterDecoder<'a, 'b> {
+    ctx: &'a PhysicalPlanDecodeContext<'b>,
+    proto_converter: &'a dyn PhysicalProtoConverterExtension,
+}
+
+impl datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode
+    for ConverterDecoder<'_, '_>
+{
+    fn decode(
+        &self,
+        node: &protobuf::PhysicalExprNode,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        self.proto_converter
+            .proto_to_physical_expr(node, schema, self.ctx)
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -870,10 +802,10 @@ mod tests {
             version: None,
         });
 
-        let proto = protobuf::PartitionedFile::try_from(&pf).unwrap();
+        let proto = protobuf::PartitionedFile::try_from_proto(&pf).unwrap();
         assert_eq!(proto.path, path_str);
 
-        let pf2 = PartitionedFile::try_from(&proto).unwrap();
+        let pf2 = PartitionedFile::try_from_proto(&proto).unwrap();
         assert_eq!(pf2.object_meta.location.as_ref(), path_str);
         assert_eq!(pf2.object_meta.location, pf.object_meta.location);
         assert_eq!(pf2.object_meta.size, pf.object_meta.size);
@@ -881,8 +813,36 @@ mod tests {
     }
 
     #[test]
+    fn partitioned_file_arrow_schema_roundtrip() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use std::collections::HashMap;
+
+        let arrow_schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("value", DataType::Utf8, true).with_metadata(HashMap::from([
+                    ("field_meta".to_string(), "field_value".to_string()),
+                ])),
+            ],
+            HashMap::from([("schema_meta".to_string(), "schema_value".to_string())]),
+        ));
+        let pf = PartitionedFile::new("foo/bar.parquet", 10)
+            .with_arrow_schema(Arc::clone(&arrow_schema));
+
+        let proto = protobuf::PartitionedFile::try_from_proto(&pf).unwrap();
+        assert!(proto.arrow_schema.is_some());
+
+        let decoded = PartitionedFile::try_from_proto(&proto).unwrap();
+        assert_eq!(
+            decoded.arrow_schema.as_ref().map(|s| s.as_ref()),
+            Some(arrow_schema.as_ref())
+        );
+    }
+
+    #[test]
     fn partitioned_file_from_proto_invalid_path() {
         let proto = protobuf::PartitionedFile {
+            arrow_schema: None,
             path: "foo//bar".to_string(),
             size: 1,
             last_modified_ns: 0,
@@ -891,7 +851,7 @@ mod tests {
             statistics: None,
         };
 
-        let err = PartitionedFile::try_from(&proto).unwrap_err();
+        let err = PartitionedFile::try_from_proto(&proto).unwrap_err();
         assert!(err.to_string().contains("Invalid object_store path"));
     }
 }

@@ -23,65 +23,51 @@ use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
 pub(crate) enum NullMaskResolution {
-    /// Return NULL as the result (e.g., scalar inputs with at least one NULL)
+    /// All inputs are scalars and at least one is NULL -> return NULL
     ReturnNull,
-    /// No null mask needed (e.g., all scalar inputs are non-NULL)
+    /// All inputs are non-NULL -> no null mask needed
     NoMask,
     /// Null mask to apply for arrays
     Apply(NullBuffer),
 }
 
-/// Compute NULL mask for the arguments using NullBuffer::union
-pub(crate) fn compute_null_mask(
-    args: &[ColumnarValue],
-    number_rows: usize,
-) -> Result<NullMaskResolution> {
-    // Check if all arguments are scalars
-    let all_scalars = args
-        .iter()
-        .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
+pub(crate) fn compute_null_mask(args: &[ColumnarValue]) -> NullMaskResolution {
+    let mut array_len = None;
+    let mut has_null_scalar = false;
 
-    if all_scalars {
-        // For scalars, check if any is NULL
-        for arg in args {
-            if let ColumnarValue::Scalar(scalar) = arg
-                && scalar.is_null()
-            {
-                return Ok(NullMaskResolution::ReturnNull);
+    for arg in args {
+        match arg {
+            ColumnarValue::Array(array) => {
+                array_len.get_or_insert_with(|| array.len());
+            }
+            ColumnarValue::Scalar(scalar) => {
+                has_null_scalar |= scalar.is_null();
             }
         }
-        // No NULLs in scalars
-        Ok(NullMaskResolution::NoMask)
-    } else {
-        // For arrays, compute NULL mask for each row using NullBuffer::union
-        let array_len = args
-            .iter()
-            .find_map(|arg| match arg {
-                ColumnarValue::Array(array) => Some(array.len()),
-                _ => None,
-            })
-            .unwrap_or(number_rows);
+    }
 
-        // Convert all scalars to arrays for uniform processing
-        let arrays: Result<Vec<_>> = args
-            .iter()
-            .map(|arg| match arg {
-                ColumnarValue::Array(array) => Ok(Arc::clone(array)),
-                ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(array_len),
-            })
-            .collect();
-        let arrays = arrays?;
+    let Some(array_len) = array_len else {
+        // All arguments are scalars
+        return if has_null_scalar {
+            NullMaskResolution::ReturnNull
+        } else {
+            NullMaskResolution::NoMask
+        };
+    };
 
-        // Use NullBuffer::union to combine all null buffers
-        let combined_nulls = arrays
-            .iter()
-            .map(|arr| arr.nulls())
-            .fold(None, |acc, nulls| NullBuffer::union(acc.as_ref(), nulls));
+    if has_null_scalar {
+        return NullMaskResolution::Apply(NullBuffer::new_null(array_len));
+    }
 
-        match combined_nulls {
-            Some(nulls) => Ok(NullMaskResolution::Apply(nulls)),
-            None => Ok(NullMaskResolution::NoMask),
-        }
+    let combined_nulls =
+        NullBuffer::union_many(args.iter().filter_map(|arg| match arg {
+            ColumnarValue::Array(array) => Some(array.nulls()),
+            ColumnarValue::Scalar(_) => None,
+        }));
+
+    match combined_nulls {
+        Some(nulls) => NullMaskResolution::Apply(nulls),
+        None => NullMaskResolution::NoMask,
     }
 }
 

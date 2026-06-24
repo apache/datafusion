@@ -18,6 +18,7 @@
 use std::fs;
 use std::sync::Arc;
 
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::TableProvider;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
@@ -26,12 +27,14 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::prelude::SessionContext;
-use datafusion_common::DFSchema;
+use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::stats::Precision;
-use datafusion_execution::cache::DefaultListFilesCache;
-use datafusion_execution::cache::cache_manager::CacheManagerConfig;
-use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
+use datafusion_common::{DFSchema, TableReference};
+use datafusion_execution::cache::cache_manager::{
+    CacheManagerConfig, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
+    DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, FileStatisticsCache, ListFilesCache,
+};
+use datafusion_execution::cache::default_cache::DefaultCache;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{Expr, col, lit};
@@ -42,6 +45,7 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::statistics::StatisticsArgs;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -50,18 +54,20 @@ async fn check_stats_precision_with_filter_pushdown() {
     let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
     let table_path = ListingTableUrl::parse(filename).unwrap();
 
-    let opt =
-        ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
+    let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
     let table = get_listing_table(&table_path, None, &opt).await;
 
     let (_, _, state) = get_cache_runtime_state();
     let mut options: ConfigOptions = state.config().options().as_ref().clone();
     options.execution.parquet.pushdown_filters = true;
+    options.execution.collect_statistics = true;
 
     // Scan without filter, stats are exact
     let exec = table.scan(&state, None, &[], None).await.unwrap();
     assert_eq!(
-        exec.partition_statistics(None).unwrap().num_rows,
+        exec.statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .num_rows,
         Precision::Exact(8),
         "Stats without filter should be exact"
     );
@@ -93,7 +99,10 @@ async fn check_stats_precision_with_filter_pushdown() {
     );
     // Scan with filter pushdown, stats are inexact
     assert_eq!(
-        optimized_exec.partition_statistics(None).unwrap().num_rows,
+        optimized_exec
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .num_rows,
         Precision::Inexact(8),
         "Stats after filter pushdown should be inexact"
     );
@@ -103,15 +112,20 @@ async fn check_stats_precision_with_filter_pushdown() {
 async fn load_table_stats_with_session_level_cache() {
     let testdata = datafusion::test_util::parquet_test_data();
     let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
-    let table_path = ListingTableUrl::parse(filename).unwrap();
+    let table_path = ListingTableUrl::parse(filename)
+        .unwrap()
+        .with_table_ref(TableReference::bare("alltypes_plain"));
 
-    let (cache1, _, state1) = get_cache_runtime_state();
+    let (cache1, _, mut state1) = get_cache_runtime_state();
+    let cfg_1 = state1.config_mut();
+    cfg_1.options_mut().execution.collect_statistics = true;
 
     // Create a separate DefaultFileStatisticsCache
-    let (cache2, _, state2) = get_cache_runtime_state();
+    let (cache2, _, mut state2) = get_cache_runtime_state();
+    let cfg_2 = state2.config_mut();
+    cfg_2.options_mut().execution.collect_statistics = true;
 
-    let opt =
-        ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
+    let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
 
     let table1 = get_listing_table(&table_path, Some(cache1), &opt).await;
     let table2 = get_listing_table(&table_path, Some(cache2), &opt).await;
@@ -121,11 +135,17 @@ async fn load_table_stats_with_session_level_cache() {
     let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
 
     assert_eq!(
-        exec1.partition_statistics(None).unwrap().num_rows,
+        exec1
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .num_rows,
         Precision::Exact(8)
     );
     assert_eq!(
-        exec1.partition_statistics(None).unwrap().total_byte_size,
+        exec1
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .total_byte_size,
         // Byte size is absent because we cannot estimate the output size
         // of the Arrow data since there are variable length columns.
         Precision::Absent,
@@ -137,11 +157,17 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(get_static_cache_size(&state2), 0);
     let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
     assert_eq!(
-        exec2.partition_statistics(None).unwrap().num_rows,
+        exec2
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .num_rows,
         Precision::Exact(8)
     );
     assert_eq!(
-        exec2.partition_statistics(None).unwrap().total_byte_size,
+        exec2
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .total_byte_size,
         // Absent because the data contains variable length columns
         Precision::Absent,
     );
@@ -152,16 +178,84 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(get_static_cache_size(&state1), 1);
     let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
     assert_eq!(
-        exec3.partition_statistics(None).unwrap().num_rows,
+        exec3
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .num_rows,
         Precision::Exact(8)
     );
     assert_eq!(
-        exec3.partition_statistics(None).unwrap().total_byte_size,
+        exec3
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .total_byte_size,
         // Absent because the data contains variable length columns
         Precision::Absent,
     );
     // List same file no increase
     assert_eq!(get_static_cache_size(&state1), 1);
+}
+
+#[tokio::test]
+async fn anonymous_parquet_stats_cache_with_explicit_wider_schema() {
+    let temp_dir = tempdir().unwrap();
+    let parquet_path = temp_dir.path().join("data.parquet");
+    let parquet_path = parquet_path.to_string_lossy().to_string();
+
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_collect_statistics(true),
+    );
+    let cache = ctx
+        .runtime_env()
+        .cache_manager
+        .get_file_statistic_cache()
+        .unwrap();
+
+    ctx.sql(&format!(
+        "COPY (
+            SELECT 1::BIGINT AS id, 1000::BIGINT AS population
+        ) TO '{parquet_path}' STORED AS PARQUET"
+    ))
+    .await
+    .unwrap()
+    .collect()
+    .await
+    .unwrap();
+
+    assert_eq!(cache.len(), 0);
+
+    ctx.read_parquet(&parquet_path, ParquetReadOptions::default())
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    assert_eq!(cache.len(), 1);
+
+    let wider_schema = Schema::new(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new("population", DataType::Int64, true),
+        Field::new("extra", DataType::Int64, true),
+    ]);
+
+    let plan = ctx
+        .read_parquet(
+            &parquet_path,
+            ParquetReadOptions::default().schema(&wider_schema),
+        )
+        .await
+        .unwrap()
+        .select_columns(&["id", "extra"])
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+
+    let stats = plan.statistics_with_args(&StatisticsArgs::new()).unwrap();
+    assert_eq!(stats.column_statistics.len(), 2);
+    assert_eq!(stats.column_statistics[1].null_count, Precision::Exact(1));
+    assert_eq!(cache.len(), 1);
 }
 
 #[tokio::test]
@@ -236,7 +330,7 @@ async fn list_files_with_session_level_cache() {
 
 async fn get_listing_table(
     table_path: &ListingTableUrl,
-    static_cache: Option<Arc<DefaultFileStatisticsCache>>,
+    static_cache: Option<Arc<FileStatisticsCache>>,
     opt: &ListingOptions,
 ) -> ListingTable {
     let schema = opt
@@ -249,25 +343,21 @@ async fn get_listing_table(
     let config1 = ListingTableConfig::new(table_path.clone())
         .with_listing_options(opt.clone())
         .with_schema(schema);
-    let table = ListingTable::try_new(config1).unwrap();
-    if let Some(c) = static_cache {
-        table.with_cache(Some(c))
-    } else {
-        table
-    }
+    ListingTable::try_new(config1)
+        .unwrap()
+        .with_cache(static_cache)
 }
 
-fn get_cache_runtime_state() -> (
-    Arc<DefaultFileStatisticsCache>,
-    Arc<DefaultListFilesCache>,
-    SessionState,
-) {
+fn get_cache_runtime_state()
+-> (Arc<FileStatisticsCache>, Arc<ListFilesCache>, SessionState) {
     let cache_config = CacheManagerConfig::default();
-    let file_static_cache = Arc::new(DefaultFileStatisticsCache::default());
-    let list_file_cache = Arc::new(DefaultListFilesCache::default());
+    let file_static_cache =
+        Arc::new(DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT));
+    let list_file_cache =
+        Arc::new(DefaultCache::new(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT));
 
     let cache_config = cache_config
-        .with_files_statistics_cache(Some(file_static_cache.clone()))
+        .with_file_statistics_cache(Some(file_static_cache.clone()))
         .with_list_files_cache(Some(list_file_cache.clone()));
 
     let rt = RuntimeEnvBuilder::new()

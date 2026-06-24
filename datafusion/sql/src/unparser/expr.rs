@@ -30,7 +30,8 @@ use std::sync::Arc;
 use std::vec;
 
 use super::Unparser;
-use super::dialect::IntervalStyle;
+use super::dialect::{DistinctFromStyle, IntervalStyle};
+use crate::stack::StackGuard;
 use arrow::array::{
     ArrayRef, Date32Array, Date64Array, PrimitiveArray,
     types::{
@@ -94,6 +95,26 @@ const IS: &BinaryOperator = &BinaryOperator::BitwiseAnd;
 
 impl Unparser<'_> {
     pub fn expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
+        // Unparsing recurses once per nesting level. The function-argument and
+        // dialect scalar-function-override paths cost more per level than the
+        // default `recursive` red zone, so without raising the minimum stack
+        // size the stack-growing trampoline engages too late and the OS stack
+        // overflows on deeply nested expressions (issue #23056). The size
+        // mirrors the planner's `StackGuard` usage in `query.rs`.
+        let _guard = StackGuard::new(256 * 1024);
+        self.expr_to_sql_with_nesting(expr)
+    }
+
+    /// Recursive entry point shared by the public [`Self::expr_to_sql`] and the
+    /// internal recursion sites (scalar-function arguments, arrays, maps, and
+    /// dialect scalar-function overrides).
+    ///
+    /// This carries the `recursive` annotation so every nesting level becomes a
+    /// stack-growth checkpoint. Internal recursion must call this rather than
+    /// the public [`Self::expr_to_sql`]: the public entry point is not
+    /// annotated and would re-install the [`StackGuard`] on every level.
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    pub(crate) fn expr_to_sql_with_nesting(&self, expr: &Expr) -> Result<ast::Expr> {
         let mut root_expr = self.expr_to_sql_inner(expr)?;
         if self.pretty {
             root_expr = self.remove_unnecessary_nesting(root_expr, LOWEST, LOWEST);
@@ -148,6 +169,53 @@ impl Unparser<'_> {
                 ))))
             }
             Expr::Column(col) => self.col_to_sql(col),
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::IsDistinctFrom,
+                right,
+            }) => {
+                let l = self.expr_to_sql_inner(left.as_ref())?;
+                let r = self.expr_to_sql_inner(right.as_ref())?;
+
+                match self.dialect.distinct_from_style() {
+                    DistinctFromStyle::FullText => Ok(ast::Expr::Nested(Box::new(
+                        ast::Expr::IsDistinctFrom(Box::new(l), Box::new(r)),
+                    ))),
+                    DistinctFromStyle::Spaceship => {
+                        Ok(ast::Expr::Nested(Box::new(ast::Expr::UnaryOp {
+                            op: UnaryOperator::Not,
+                            expr: Box::new(ast::Expr::Nested(Box::new(
+                                ast::Expr::BinaryOp {
+                                    left: Box::new(l),
+                                    right: Box::new(r),
+                                    op: BinaryOperator::Spaceship,
+                                },
+                            ))),
+                        })))
+                    }
+                }
+            }
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::IsNotDistinctFrom,
+                right,
+            }) => {
+                let l = self.expr_to_sql_inner(left.as_ref())?;
+                let r = self.expr_to_sql_inner(right.as_ref())?;
+
+                match self.dialect.distinct_from_style() {
+                    DistinctFromStyle::FullText => Ok(ast::Expr::Nested(Box::new(
+                        ast::Expr::IsNotDistinctFrom(Box::new(l), Box::new(r)),
+                    ))),
+                    DistinctFromStyle::Spaceship => {
+                        Ok(ast::Expr::Nested(Box::new(ast::Expr::BinaryOp {
+                            left: Box::new(l),
+                            right: Box::new(r),
+                            op: BinaryOperator::Spaceship,
+                        })))
+                    }
+                }
+            }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
@@ -291,7 +359,8 @@ impl Unparser<'_> {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
                 pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                escape_char: escape_char.map(|c| SingleQuotedString(c.to_string())),
+                escape_char: escape_char
+                    .map(|c| SingleQuotedString(c.to_string()).into()),
                 any: false,
             }),
             Expr::Like(Like {
@@ -307,7 +376,7 @@ impl Unparser<'_> {
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                         escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string())),
+                            .map(|c| SingleQuotedString(c.to_string()).into()),
                         any: false,
                     })
                 } else {
@@ -316,7 +385,7 @@ impl Unparser<'_> {
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                         escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string())),
+                            .map(|c| SingleQuotedString(c.to_string()).into()),
                         any: false,
                     })
                 }
@@ -572,7 +641,10 @@ impl Unparser<'_> {
                     params: ast::OneOrManyWithParens::Many(
                         params
                             .iter()
-                            .map(|param| self.new_ident_quoted_if_needs(param.clone()))
+                            .map(|param| ast::LambdaFunctionParameter {
+                                name: self.new_ident_quoted_if_needs(param.clone()),
+                                data_type: None,
+                            })
                             .collect(),
                     ),
                     body: Box::new(self.expr_to_sql_inner(body)?),
@@ -630,7 +702,7 @@ impl Unparser<'_> {
     fn make_array_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
         let args = args
             .iter()
-            .map(|e| self.expr_to_sql(e))
+            .map(|e| self.expr_to_sql_with_nesting(e))
             .collect::<Result<Vec<_>>>()?;
         Ok(ast::Expr::Array(Array {
             elem: args,
@@ -657,8 +729,8 @@ impl Unparser<'_> {
             2,
             "array_element must have exactly 2 arguments"
         );
-        let array = self.expr_to_sql(&args[0])?;
-        let index = self.expr_to_sql(&args[1])?;
+        let array = self.expr_to_sql_with_nesting(&args[0])?;
+        let index = self.expr_to_sql_with_nesting(&args[1])?;
         Ok(ast::Expr::CompoundFieldAccess {
             root: Box::new(array),
             access_chain: vec![ast::AccessExpr::Subscript(Subscript::Index { index })],
@@ -681,7 +753,7 @@ impl Unparser<'_> {
 
                 Ok(ast::DictionaryField {
                     key,
-                    value: Box::new(self.expr_to_sql(&chunk[1])?),
+                    value: Box::new(self.expr_to_sql_with_nesting(&chunk[1])?),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -751,7 +823,8 @@ impl Unparser<'_> {
     fn map_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
         assert_eq_or_internal_err!(args.len(), 2, "map must have exactly 2 arguments");
 
-        let ast::Expr::Array(Array { elem: keys, .. }) = self.expr_to_sql(&args[0])?
+        let ast::Expr::Array(Array { elem: keys, .. }) =
+            self.expr_to_sql_with_nesting(&args[0])?
         else {
             return internal_err!(
                 "map expects first argument to be an array, but received: {:?}",
@@ -759,7 +832,8 @@ impl Unparser<'_> {
             );
         };
 
-        let ast::Expr::Array(Array { elem: values, .. }) = self.expr_to_sql(&args[1])?
+        let ast::Expr::Array(Array { elem: values, .. }) =
+            self.expr_to_sql_with_nesting(&args[1])?
         else {
             return internal_err!(
                 "map expects second argument to be an array, but received: {:?}",
@@ -893,7 +967,7 @@ impl Unparser<'_> {
                 ) {
                     Ok(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
                 } else {
-                    self.expr_to_sql(e)
+                    self.expr_to_sql_with_nesting(e)
                         .map(|e| ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e)))
                 }
             })
@@ -938,6 +1012,7 @@ impl Unparser<'_> {
     ///
     /// Also note that when fetching the precedence of a nested expression, we ignore other nested
     /// expressions, so precedence of expr `(a * (b + c))` equals `*` and not `+`.
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn remove_unnecessary_nesting(
         &self,
         expr: ast::Expr,
@@ -1338,19 +1413,27 @@ impl Unparser<'_> {
             ScalarValue::Utf8(None)
             | ScalarValue::Utf8View(None)
             | ScalarValue::LargeUtf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::Binary(Some(_)) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::Binary(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::BinaryView(Some(_)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+            ScalarValue::Binary(Some(bin))
+            | ScalarValue::BinaryView(Some(bin))
+            | ScalarValue::LargeBinary(Some(bin))
+            | ScalarValue::FixedSizeBinary(_, Some(bin)) => {
+                let hex = bin
+                    .iter()
+                    .flat_map(|x| {
+                        const HEX: [char; 16] = [
+                            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b',
+                            'c', 'd', 'e', 'f',
+                        ];
+                        let (hi, lo) = (((*x >> 4) & 0xfu8), (*x & 0xfu8));
+                        [HEX[hi as usize], HEX[lo as usize]]
+                    })
+                    .collect::<String>();
+                Ok(ast::Expr::value(ast::Value::HexStringLiteral(hex)))
             }
-            ScalarValue::BinaryView(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::FixedSizeBinary(..) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::LargeBinary(Some(_)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::LargeBinary(None) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Binary(None)
+            | ScalarValue::BinaryView(None)
+            | ScalarValue::FixedSizeBinary(_, None)
+            | ScalarValue::LargeBinary(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::FixedSizeList(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::List(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::LargeList(a) => self.scalar_value_list_to_sql(a.values()),
@@ -1870,19 +1953,20 @@ mod tests {
     use std::ops::{Add, Sub};
     use std::{sync::Arc, vec};
 
-    use crate::unparser::dialect::SqliteDialect;
+    use crate::unparser::dialect::{MySqlDialect, SqliteDialect};
     use arrow::array::{LargeListArray, LargeListViewArray, ListArray, ListViewArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
     use datafusion_common::datatype::DataTypeExt;
     use datafusion_common::{Spans, TableReference};
-    use datafusion_expr::expr::{LambdaVariable, WildcardOptions};
+    use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
-        ColumnarValue, HigherOrderUDF, LambdaParametersProgress, ScalarFunctionArgs,
-        ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda, Volatility, WindowFrame,
-        WindowFunctionDefinition, case, cast, col, cube, exists, grouping_set,
-        interval_datetime_lit, interval_year_month_lit, lambda, lit, not, not_exists,
-        out_ref_col, placeholder, rollup, table_scan, try_cast, when,
+        ColumnarValue, HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda,
+        Volatility, WindowFrame, WindowFunctionDefinition, case, cast, col, cube, exists,
+        grouping_set, interval_datetime_lit, interval_year_month_lit, lambda, lambda_var,
+        lit, not, not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast,
+        when,
     };
     use datafusion_expr::{ExprFunctionExt, interval_month_day_nano_lit};
     use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
@@ -1939,7 +2023,7 @@ mod tests {
     #[derive(Debug, Hash, Eq, PartialEq)]
     struct DummyHigherOrderUDF;
 
-    impl HigherOrderUDF for DummyHigherOrderUDF {
+    impl HigherOrderUDFImpl for DummyHigherOrderUDF {
         fn name(&self) -> &str {
             "dummy_higher_order_function"
         }
@@ -2057,17 +2141,8 @@ mod tests {
             ),
             (
                 Expr::HigherOrderFunction(HigherOrderFunction::new(
-                    Arc::new(DummyHigherOrderUDF),
-                    vec![
-                        col("a"),
-                        lambda(
-                            ["v"],
-                            -Expr::LambdaVariable(LambdaVariable::new(
-                                "v".to_string(),
-                                Some(Arc::new(Field::new("", DataType::Null, true))),
-                            )),
-                        ),
-                    ],
+                    Arc::new(HigherOrderUDF::new_from_impl(DummyHigherOrderUDF)),
+                    vec![col("a"), lambda(["v"], -lambda_var("v"))],
                 )),
                 r#"dummy_higher_order_function(a, (v) -> -v)"#,
             ),
@@ -3256,6 +3331,72 @@ mod tests {
         Ok(())
     }
 
+    /// Regression test for https://github.com/apache/datafusion/issues/23056
+    ///
+    /// Deeply-nested expressions whose unparse path routes through scalar
+    /// function arguments and dialect scalar-function overrides used to
+    /// overflow the OS stack even with `recursive_protection` enabled,
+    /// because the per-level stack cost of those paths exceeds the default
+    /// `recursive` red zone and the unparser installed no [`StackGuard`].
+    ///
+    /// This test only asserts the protected behavior, so it is gated on the
+    /// `recursive_protection` feature. Without that feature the unparser is
+    /// not stack-safe by design and a deep enough expression will overflow.
+    #[cfg(feature = "recursive_protection")]
+    #[test]
+    fn test_deeply_nested_expr_does_not_overflow_stack() {
+        // Far deeper than the ~60 levels that overflow without protection, but
+        // bounded so the trampoline's heap stacks stay reasonable in debug.
+        const DEPTH: usize = 2_000;
+
+        // Run on an explicit, realistically-sized thread stack. The work is
+        // performed on a spawned thread so an overflow (in the unfixed code)
+        // aborts the process and fails the test deterministically rather than
+        // depending on the harness thread's stack size.
+        let handle = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                // 1. Linear chain through a dialect scalar-function override:
+                //    array_has(array_has(... array_has(col, 'x') ...), 'x').
+                //    PostgreSqlDialect unparses array_has via array_has_to_sql_any,
+                //    which recurses back into the unparser for each argument.
+                let mut nested_fn: Expr = col("c");
+                for _ in 0..DEPTH {
+                    nested_fn = array_has(nested_fn, lit("x"));
+                }
+                let pg = PostgreSqlDialect {};
+                Unparser::new(&pg)
+                    .expr_to_sql(&nested_fn)
+                    .expect("deeply nested scalar function should unparse");
+
+                // 2. Linear chain of plain binary operators, exercising the
+                //    inner -> inner recursion on the default dialect.
+                let mut nested_binary: Expr = col("c");
+                for _ in 0..DEPTH {
+                    nested_binary = nested_binary + lit(1);
+                }
+                Unparser::default()
+                    .expr_to_sql(&nested_binary)
+                    .expect("deeply nested binary expression should unparse");
+
+                // 3. Same binary chain in pretty mode. Pretty mode runs
+                //    `remove_unnecessary_nesting` at every level, which recurses
+                //    alongside the unparse itself; this locks down that second
+                //    recursion site fixed by this PR.
+                Unparser::default()
+                    .with_pretty(true)
+                    .expr_to_sql(&nested_binary)
+                    .expect(
+                        "deeply nested binary expression should unparse in pretty mode",
+                    );
+            })
+            .unwrap();
+
+        // If the unparser overflows, the process aborts and this join is never
+        // reached; otherwise the spawned thread returns cleanly.
+        handle.join().expect("unparsing thread should not panic");
+    }
+
     #[test]
     fn test_window_func_support_window_frame() -> Result<()> {
         let default_dialect: Arc<dyn Dialect> =
@@ -3680,5 +3821,100 @@ mod tests {
         assert_eq!(actual, "CAST(`a` AS TIMESTAMP)");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_is_distinct_from() {
+        let mysql_unparser = Unparser::new(&MySqlDialect {});
+
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("c1")),
+            Operator::IsDistinctFrom,
+            Box::new(lit(true)),
+        ));
+
+        let sql = expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(c1 IS DISTINCT FROM true)");
+        let sql = mysql_unparser.expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(NOT (`c1` <=> true))");
+
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("c1")),
+            Operator::IsNotDistinctFrom,
+            Box::new(lit(true)),
+        ));
+
+        let sql = expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(c1 IS NOT DISTINCT FROM true)");
+        let sql = mysql_unparser.expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(`c1` <=> true)");
+    }
+
+    #[test]
+    fn test_binary_literal() {
+        let value = vec![0xDEu8, 0xAD, 0xBE, 0xEF];
+        let expected_hex = "X'deadbeef'";
+
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::Binary(Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::BinaryView(Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::FixedSizeBinary(4, Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::LargeBinary(Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::Binary(None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::BinaryView(None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::FixedSizeBinary(1, None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::LargeBinary(None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
     }
 }

@@ -1215,6 +1215,10 @@ NULL 3917
 -1114 -1114
 15673 15673
 
+statement error Execution error: The second argument of nth_value must not be i64::MIN
+SELECT nth_value(x, -9223372036854775808) OVER (ORDER BY x)
+FROM (VALUES (1)) AS t(x);
+
 
 
 
@@ -3814,6 +3818,71 @@ Simpsons Lisa 710 1
 Simpsons Marge 990 1
 Simpsons Bart 2010 1
 
+# Regression: when num_rows is not a multiple of n, the SQL standard requires the
+# first `num_rows mod n` buckets to be the larger ones. Earlier the formula
+# `i * n / num_rows` produced sizes 3,2,3,2 for NTILE(4) over 10 rows; the
+# correct sizes are 3,3,2,2.
+query I
+SELECT NTILE(4) OVER (ORDER BY column1)
+FROM (VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10));
+----
+1
+1
+1
+2
+2
+2
+3
+3
+4
+4
+
+# 7 rows / 3 buckets -> sizes 3,2,2
+query I
+SELECT NTILE(3) OVER (ORDER BY column1)
+FROM (VALUES (1),(2),(3),(4),(5),(6),(7));
+----
+1
+1
+1
+2
+2
+3
+3
+
+# Same regression with PARTITION BY: every 10-row partition must produce 3,3,2,2.
+query III
+SELECT a, b,
+       NTILE(4) OVER (PARTITION BY a ORDER BY b) AS ntile_4
+FROM (VALUES
+        (0, 0), (0, 1), (0, 2), (0, 3), (0, 4),
+        (0, 5), (0, 6), (0, 7), (0, 8), (0, 9),
+        (1, 0), (1, 1), (1, 2), (1, 3), (1, 4),
+        (1, 5), (1, 6), (1, 7), (1, 8), (1, 9))
+     t(a, b)
+ORDER BY a, b;
+----
+0 0 1
+0 1 1
+0 2 1
+0 3 2
+0 4 2
+0 5 2
+0 6 3
+0 7 3
+0 8 4
+0 9 4
+1 0 1
+1 1 1
+1 2 1
+1 3 2
+1 4 2
+1 5 2
+1 6 3
+1 7 3
+1 8 4
+1 9 4
+
 # incorrect number of parameters for ntile
 query error DataFusion error: Execution error: NTILE requires a positive integer, but finds NULL
 SELECT
@@ -5890,6 +5959,63 @@ physical_plan
 07)------------DataSourceExec: partitions=2, partition_sizes=[5, 4]
 
 
+# SUM(DISTINCT) over sliding frames must skip NULLs and return NULL
+# for frames containing no non-null values.
+statement ok
+CREATE TABLE table_distinct_sum_nulls(ts INT, v BIGINT) AS VALUES
+  (1, NULL), (2, 3), (3, NULL), (4, NULL), (5, 5);
+
+query II
+SELECT
+  ts,
+  SUM(DISTINCT v) OVER (
+    ORDER BY ts
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ) AS s
+FROM table_distinct_sum_nulls;
+----
+1 NULL
+2 3
+3 3
+4 NULL
+5 5
+
+
+# SUM(DISTINCT) over sliding (bounded) window frames is only implemented
+# for Int64. Other SUM-supported input types must fail with a clear
+# capability error instead of an accumulator-internal one.
+statement ok
+CREATE TABLE table_distinct_sum_types(ts INT, f DOUBLE, d DECIMAL(10, 2)) AS VALUES
+  (1, 1.5, 1.50), (2, 2.5, 2.50), (3, 1.5, 1.50);
+
+query error DataFusion error: This feature is not implemented: SUM\(DISTINCT\) over sliding window frames is only supported for Int64, got Float64
+SELECT SUM(DISTINCT f) OVER (
+  ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+) FROM table_distinct_sum_types;
+
+query error DataFusion error: This feature is not implemented: SUM\(DISTINCT\) over sliding window frames is only supported for Int64, got Decimal128\(10, 2\)
+SELECT SUM(DISTINCT d) OVER (
+  ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+) FROM table_distinct_sum_types;
+
+query error DataFusion error: This feature is not implemented: SUM\(DISTINCT\) over sliding window frames is only supported for Int64, got UInt64
+SELECT SUM(DISTINCT arrow_cast(ts, 'UInt64')) OVER (
+  ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+) FROM table_distinct_sum_types;
+
+# Unbounded frames take the regular distinct-sum path and keep
+# supporting all SUM input types.
+query R
+SELECT SUM(DISTINCT f) OVER (ORDER BY ts) FROM table_distinct_sum_types;
+----
+1.5
+4
+4
+
+statement ok
+DROP TABLE table_distinct_sum_types;
+
+
 # FILTER clause with window functions
 
 # Verify FILTER clause with non-aggregate window functions fails with a clear message
@@ -5958,7 +6084,7 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[sum(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "count(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable List(Int64) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable List(Int64) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortPreservingMergeExec: [c1@2 ASC NULLS LAST, c2@3 ASC NULLS LAST], fetch=5
 05)--------SortExec: TopK(fetch=5), expr=[c1@2 ASC NULLS LAST, c2@3 ASC NULLS LAST], preserve_partitioning=[true]
-06)----------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-0.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-1.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-2.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-3.csv]]}, projection=[c2@1 >= 2 as __common_expr_1, c2@1 >= 2 AND c2@1 < 4 AND c1@0 > 0 as __common_expr_2, c1, c2], file_type=csv, has_header=false
+06)----------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-0.csv, WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-1.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-2.csv, WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-3.csv]]}, projection=[c2@1 >= 2 as __common_expr_1, c2@1 >= 2 AND c2@1 < 4 AND c1@0 > 0 as __common_expr_2, c1, c2], file_type=csv, has_header=false
 
 
 # FILTER filters out some rows
@@ -6170,6 +6296,521 @@ INNER JOIN issue_20194_t2 t2
   AND nvl(t2.value_2_3, '0') = '0';
 ----
 6774502793 10040029 1
+
+# Regression tests for RANGE window frames whose value-offset boundary
+# computation overflows the type's representable range. Previously these
+# queries panicked in functions-window/src/nth_value.rs with
+# "attempt to subtract with overflow" because the wrapped-around target
+# produced a frame range where `end < start`. Both positive overflows
+# (target above type MAX) and negative overflows (target below type MIN)
+# must be treated as unbounded within the partition.
+
+############################################################################
+# Positive overflow: value + delta exceeds type MAX
+############################################################################
+
+# ASC + FOLLOWING: end bound wraps past i64::MAX.
+query II
+SELECT a, last_value(a) OVER (ORDER BY a RANGE BETWEEN CURRENT ROW AND 4 FOLLOWING)
+FROM (
+  SELECT 9223372036854775804 AS a
+  UNION ALL SELECT 9223372036854775805
+  UNION ALL SELECT 9223372036854775806
+);
+----
+9223372036854775804 9223372036854775806
+9223372036854775805 9223372036854775806
+9223372036854775806 9223372036854775806
+
+query II
+SELECT a, first_value(a) OVER (ORDER BY a RANGE BETWEEN CURRENT ROW AND 4 FOLLOWING)
+FROM (
+  SELECT 9223372036854775804 AS a
+  UNION ALL SELECT 9223372036854775805
+  UNION ALL SELECT 9223372036854775806
+);
+----
+9223372036854775804 9223372036854775804
+9223372036854775805 9223372036854775805
+9223372036854775806 9223372036854775806
+
+# Symmetric PRECEDING/FOLLOWING where the FOLLOWING side overflows past MAX.
+query II
+SELECT a, last_value(a) OVER (ORDER BY a RANGE BETWEEN 4 PRECEDING AND 4 FOLLOWING)
+FROM (
+  SELECT 9223372036854775804 AS a
+  UNION ALL SELECT 9223372036854775805
+  UNION ALL SELECT 9223372036854775806
+);
+----
+9223372036854775804 9223372036854775806
+9223372036854775805 9223372036854775806
+9223372036854775806 9223372036854775806
+
+# DESC + PRECEDING: "PRECEDING" walks toward larger values in DESC order,
+# so offsetting past i64::MAX exercises the ADD-overflow path.
+query II
+SELECT a, first_value(a) OVER (ORDER BY a DESC RANGE BETWEEN 4 PRECEDING AND CURRENT ROW)
+FROM (
+  SELECT 9223372036854775804 AS a
+  UNION ALL SELECT 9223372036854775805
+  UNION ALL SELECT 9223372036854775806
+);
+----
+9223372036854775806 9223372036854775806
+9223372036854775805 9223372036854775806
+9223372036854775804 9223372036854775806
+
+query II
+SELECT a, last_value(a) OVER (ORDER BY a DESC RANGE BETWEEN 4 PRECEDING AND CURRENT ROW)
+FROM (
+  SELECT 9223372036854775804 AS a
+  UNION ALL SELECT 9223372036854775805
+  UNION ALL SELECT 9223372036854775806
+);
+----
+9223372036854775806 9223372036854775806
+9223372036854775805 9223372036854775805
+9223372036854775804 9223372036854775804
+
+# Unsigned ordering column: add past u64::MAX must not wrap.
+query II
+SELECT a, last_value(a) OVER (ORDER BY a RANGE BETWEEN CURRENT ROW AND 4 FOLLOWING)
+FROM (
+  SELECT arrow_cast(18446744073709551612, 'UInt64') AS a
+  UNION ALL SELECT arrow_cast(18446744073709551613, 'UInt64')
+  UNION ALL SELECT arrow_cast(18446744073709551614, 'UInt64')
+);
+----
+18446744073709551612 18446744073709551614
+18446744073709551613 18446744073709551614
+18446744073709551614 18446744073709551614
+
+query II
+SELECT a, first_value(a) OVER (ORDER BY a RANGE BETWEEN CURRENT ROW AND 4 FOLLOWING)
+FROM (
+  SELECT arrow_cast(18446744073709551612, 'UInt64') AS a
+  UNION ALL SELECT arrow_cast(18446744073709551613, 'UInt64')
+  UNION ALL SELECT arrow_cast(18446744073709551614, 'UInt64')
+);
+----
+18446744073709551612 18446744073709551612
+18446744073709551613 18446744073709551613
+18446744073709551614 18446744073709551614
+
+############################################################################
+# Negative overflow: value - delta falls below type MIN
+############################################################################
+
+# ASC + PRECEDING: start bound wraps below i64::MIN.
+query II
+SELECT a, first_value(a) OVER (ORDER BY a RANGE BETWEEN 4 PRECEDING AND CURRENT ROW)
+FROM (
+  SELECT -9223372036854775807 AS a
+  UNION ALL SELECT -9223372036854775806
+  UNION ALL SELECT -9223372036854775805
+);
+----
+-9223372036854775807 -9223372036854775807
+-9223372036854775806 -9223372036854775807
+-9223372036854775805 -9223372036854775807
+
+query II
+SELECT a, last_value(a) OVER (ORDER BY a RANGE BETWEEN 4 PRECEDING AND CURRENT ROW)
+FROM (
+  SELECT -9223372036854775807 AS a
+  UNION ALL SELECT -9223372036854775806
+  UNION ALL SELECT -9223372036854775805
+);
+----
+-9223372036854775807 -9223372036854775807
+-9223372036854775806 -9223372036854775806
+-9223372036854775805 -9223372036854775805
+
+# Symmetric PRECEDING/FOLLOWING where the PRECEDING side underflows past MIN.
+query II
+SELECT a, first_value(a) OVER (ORDER BY a RANGE BETWEEN 4 PRECEDING AND 4 FOLLOWING)
+FROM (
+  SELECT -9223372036854775807 AS a
+  UNION ALL SELECT -9223372036854775806
+  UNION ALL SELECT -9223372036854775805
+);
+----
+-9223372036854775807 -9223372036854775807
+-9223372036854775806 -9223372036854775807
+-9223372036854775805 -9223372036854775807
+
+# DESC + FOLLOWING: "FOLLOWING" walks toward smaller values in DESC order,
+# so offsetting past i64::MIN exercises the SUB-underflow path.
+query II
+SELECT a, last_value(a) OVER (ORDER BY a DESC RANGE BETWEEN CURRENT ROW AND 4 FOLLOWING)
+FROM (
+  SELECT -9223372036854775805 AS a
+  UNION ALL SELECT -9223372036854775806
+  UNION ALL SELECT -9223372036854775807
+);
+----
+-9223372036854775805 -9223372036854775807
+-9223372036854775806 -9223372036854775807
+-9223372036854775807 -9223372036854775807
+
+query II
+SELECT a, first_value(a) OVER (ORDER BY a DESC RANGE BETWEEN CURRENT ROW AND 4 FOLLOWING)
+FROM (
+  SELECT -9223372036854775805 AS a
+  UNION ALL SELECT -9223372036854775806
+  UNION ALL SELECT -9223372036854775807
+);
+----
+-9223372036854775805 -9223372036854775805
+-9223372036854775806 -9223372036854775806
+-9223372036854775807 -9223372036854775807
+
+# Unsigned ordering column: subtracting an offset that would go below 0
+# must saturate to 0, not wrap to u64::MAX.
+query II
+SELECT a, first_value(a) OVER (ORDER BY a RANGE BETWEEN 4 PRECEDING AND CURRENT ROW)
+FROM (
+  SELECT arrow_cast(1, 'UInt64') AS a
+  UNION ALL SELECT arrow_cast(2, 'UInt64')
+  UNION ALL SELECT arrow_cast(3, 'UInt64')
+);
+----
+1 1
+2 1
+3 1
+
+query II
+SELECT a, last_value(a) OVER (ORDER BY a RANGE BETWEEN 4 PRECEDING AND CURRENT ROW)
+FROM (
+  SELECT arrow_cast(1, 'UInt64') AS a
+  UNION ALL SELECT arrow_cast(2, 'UInt64')
+  UNION ALL SELECT arrow_cast(3, 'UInt64')
+);
+----
+1 1
+2 2
+3 3
+
+############################################################################
+# RANGE frame with DECIMAL ORDER BY: decimal arithmetic widens the result
+# precision (e.g. Decimal(10,0) ± Decimal(10,0) → Decimal(11,0)), which
+# previously left the boundary target incomparable with the ORDER BY
+# column and failed with "Internal error: Uncomparable values".
+############################################################################
+query I
+SELECT COUNT(*) OVER (
+  PARTITION BY 1
+  ORDER BY cast(1 as decimal(10, 0)) DESC
+  RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING
+) FROM (SELECT 1);
+----
+1
+
+# ASC + PRECEDING
+query RRR
+SELECT a,
+       first_value(a) OVER (ORDER BY a ASC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW),
+       last_value(a)  OVER (ORDER BY a ASC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (
+  SELECT CAST(1 AS DECIMAL(10,0)) AS a
+  UNION ALL SELECT CAST(2 AS DECIMAL(10,0))
+  UNION ALL SELECT CAST(3 AS DECIMAL(10,0))
+)
+ORDER BY a;
+----
+1 1 1
+2 1 2
+3 2 3
+
+# ASC + FOLLOWING
+query RRR
+SELECT a,
+       first_value(a) OVER (ORDER BY a ASC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING),
+       last_value(a)  OVER (ORDER BY a ASC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING)
+FROM (
+  SELECT CAST(1 AS DECIMAL(10,0)) AS a
+  UNION ALL SELECT CAST(2 AS DECIMAL(10,0))
+  UNION ALL SELECT CAST(3 AS DECIMAL(10,0))
+)
+ORDER BY a;
+----
+1 1 2
+2 2 3
+3 3 3
+
+# DESC + PRECEDING
+query RRR
+SELECT a,
+       first_value(a) OVER (ORDER BY a DESC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW),
+       last_value(a)  OVER (ORDER BY a DESC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (
+  SELECT CAST(1 AS DECIMAL(10,0)) AS a
+  UNION ALL SELECT CAST(2 AS DECIMAL(10,0))
+  UNION ALL SELECT CAST(3 AS DECIMAL(10,0))
+)
+ORDER BY a DESC;
+----
+3 3 3
+2 3 2
+1 2 1
+
+# DESC + FOLLOWING
+query RRR
+SELECT a,
+       first_value(a) OVER (ORDER BY a DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING),
+       last_value(a)  OVER (ORDER BY a DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING)
+FROM (
+  SELECT CAST(1 AS DECIMAL(10,0)) AS a
+  UNION ALL SELECT CAST(2 AS DECIMAL(10,0))
+  UNION ALL SELECT CAST(3 AS DECIMAL(10,0))
+)
+ORDER BY a DESC;
+----
+3 3 2
+2 2 1
+1 1 1
+
+# Symmetric N PRECEDING AND N FOLLOWING
+query RRR
+SELECT a,
+       first_value(a) OVER (ORDER BY a ASC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+       last_value(a)  OVER (ORDER BY a ASC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+FROM (
+  SELECT CAST(1 AS DECIMAL(10,0)) AS a
+  UNION ALL SELECT CAST(2 AS DECIMAL(10,0))
+  UNION ALL SELECT CAST(3 AS DECIMAL(10,0))
+)
+ORDER BY a;
+----
+1 1 2
+2 1 3
+3 2 3
+
+# Non-zero scale: Decimal(10,2)
+query RRR
+SELECT a,
+       first_value(a) OVER (ORDER BY a ASC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+       last_value(a)  OVER (ORDER BY a ASC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+FROM (
+  SELECT CAST(1.50 AS DECIMAL(10,2)) AS a
+  UNION ALL SELECT CAST(2.50 AS DECIMAL(10,2))
+  UNION ALL SELECT CAST(3.50 AS DECIMAL(10,2))
+)
+ORDER BY a;
+----
+1.5 1.5 2.5
+2.5 1.5 3.5
+3.5 2.5 3.5
+
+############################################################################
+# ROWS frame regression guard: huge offsets already saturate via
+# saturating_sub / min(length), verify we keep that behavior.
+############################################################################
+
+query II
+SELECT a, last_value(a) OVER (ORDER BY a ROWS BETWEEN CURRENT ROW AND 9223372036854775807 FOLLOWING)
+FROM (
+  SELECT 1 AS a UNION ALL SELECT 2 UNION ALL SELECT 3
+);
+----
+1 3
+2 3
+3 3
+
+query II
+SELECT a, first_value(a) OVER (ORDER BY a ROWS BETWEEN 9223372036854775807 PRECEDING AND CURRENT ROW)
+FROM (
+  SELECT 1 AS a UNION ALL SELECT 2 UNION ALL SELECT 3
+);
+----
+1 1
+2 1
+3 1
+
+# AVG over a sliding window must yield NULL when the frame has no non-NULL
+# values — including frames that became empty via `retract_batch`. Covers
+# Float64, Decimal, and the narrow-frame retract-to-empty case.
+query IR
+SELECT i, AVG(v) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM (VALUES(1,1),(2,2),(3,CAST(NULL AS INT)),(4,CAST(NULL AS INT))) t(i,v)
+ORDER BY i;
+----
+1 1.5
+2 2
+3 NULL
+4 NULL
+
+# All-NULL input — every frame is empty.
+query IR
+SELECT i, AVG(v) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM (VALUES(1,CAST(NULL AS INT)),(2,CAST(NULL AS INT))) t(i,v)
+ORDER BY i;
+----
+1 NULL
+2 NULL
+
+# Narrow sliding frame that drains to empty each row.
+query IR
+SELECT i, AVG(v) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)
+FROM (VALUES(1,CAST(NULL AS INT)),(2,1),(3,CAST(NULL AS INT)),(4,CAST(NULL AS INT))) t(i,v)
+ORDER BY i;
+----
+1 NULL
+2 NULL
+3 1
+4 NULL
+
+# Covariance/correlation sliding-window regression test. Verifies correct
+# results across row removals and a NULL-gap empty-frame transition.
+query IRRR
+SELECT
+  column1,
+  covar_pop(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  covar_samp(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  corr(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  )
+FROM (
+  VALUES
+    (1, 10.0, 5.0),
+    (2, NULL, NULL),
+    (3, NULL, NULL),
+    (4, 30.0, 10.0),
+    (5, 40.0, 20.0),
+    (6, 50.0, 10.0)
+);
+----
+1 0 NULL NULL
+2 0 NULL NULL
+3 NULL NULL NULL
+4 0 NULL NULL
+5 25 50 1
+6 -25 -50 -1
+
+# Multi-row covariance/correlation sliding-window regression test. Verifies
+# correct accumulation when valid rows enter the frame after a reset.
+query IRRR
+SELECT
+  column1,
+  covar_pop(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+  ),
+  covar_samp(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+  ),
+  corr(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+  )
+FROM (
+  VALUES
+    (1, 10.0, 5.0),
+    (2, NULL, NULL),
+    (3, NULL, NULL),
+    (4, 30.0, 10.0),
+    (5, 40.0, 20.0),
+    (6, 50.0, 10.0)
+);
+----
+1 0 NULL NULL
+2 0 NULL NULL
+3 0 NULL NULL
+4 0 NULL NULL
+5 25 50 1
+6 0 0 0
+
+# Covariance/correlation sliding-window regression test. Rows with NULL in
+# either input column must not contribute to the aggregate state.
+query IRRR
+SELECT
+  column1,
+  covar_pop(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 3 PRECEDING AND CURRENT ROW
+  ),
+  covar_samp(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 3 PRECEDING AND CURRENT ROW
+  ),
+  corr(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 3 PRECEDING AND CURRENT ROW
+  )
+FROM (
+  VALUES
+    (1, 10.0, 5.0),
+    (2, 20.0, NULL),
+    (3, NULL, 15.0),
+    (4, 30.0, 10.0),
+    (5, 40.0, 20.0)
+);
+----
+1 0 NULL NULL
+2 0 NULL NULL
+3 0 NULL NULL
+4 25 50 1
+5 25 50 1
+
+# Variance/stddev sliding-window regression test. Verifies that retracting
+# the last valid row resets the aggregate state.
+query IRRRR
+SELECT
+  column1,
+  var_pop(column2) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  var_samp(column2) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  stddev_pop(column2) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  stddev_samp(column2) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  )
+FROM (
+  VALUES
+    (1, 10.0),
+    (2, NULL),
+    (3, NULL),
+    (4, 30.0),
+    (5, 40.0)
+);
+----
+1 0 NULL 0 NULL
+2 0 NULL 0 NULL
+3 NULL NULL NULL NULL
+4 0 NULL 0 NULL
+5 25 50 5 7.071067811865
+
+# Decimal variant — the integer-division path would otherwise panic on an
+# empty frame.
+query IR
+SELECT i, AVG(v) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM (VALUES(1,CAST(1.5 AS DECIMAL(10,2))),
+            (2,CAST(2.5 AS DECIMAL(10,2))),
+            (3,CAST(NULL AS DECIMAL(10,2))),
+            (4,CAST(NULL AS DECIMAL(10,2)))) t(i,v)
+ORDER BY i;
+----
+1 2
+2 2.5
+3 NULL
+4 NULL
 
 # Config reset
 statement ok

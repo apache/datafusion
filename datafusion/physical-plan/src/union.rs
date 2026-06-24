@@ -27,9 +27,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 use crate::check_if_same_properties;
@@ -44,13 +43,13 @@ use crate::filter_pushdown::{
 };
 use crate::metrics::BaselineMetrics;
 use crate::projection::{ProjectionExec, make_with_child};
+use crate::statistics::StatisticsArgs;
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::stats::{Precision, estimate_ndv_with_overlap};
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::stats::NdvFallback;
 use datafusion_common::{
     Result, assert_or_internal_err, exec_err, internal_datafusion_err,
 };
@@ -112,24 +111,6 @@ pub struct UnionExec {
 }
 
 impl UnionExec {
-    /// Create a new UnionExec
-    #[deprecated(since = "44.0.0", note = "Use UnionExec::try_new instead")]
-    pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
-        let schema =
-            union_schema(&inputs).expect("UnionExec::new called with empty inputs");
-        // The schema of the inputs and the union schema is consistent when:
-        // - They have the same number of fields, and
-        // - Their fields have same types at the same indices.
-        // Here, we know that schemas are consistent and the call below can
-        // not return an error.
-        let cache = Self::compute_properties(&inputs, schema).unwrap();
-        UnionExec {
-            inputs,
-            metrics: ExecutionPlanMetricsSet::new(),
-            cache: Arc::new(cache),
-        }
-    }
-
     /// Try to create a new UnionExec.
     ///
     /// # Errors
@@ -270,13 +251,6 @@ impl ExecutionPlan for UnionExec {
         self.inputs.iter().collect()
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -327,38 +301,36 @@ impl ExecutionPlan for UnionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if let Some(partition_idx) = partition {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        if let Some(partition_idx) = args.partition() {
             // For a specific partition, find which input it belongs to
             let mut remaining_idx = partition_idx;
-            for input in &self.inputs {
+            for (i, input) in self.inputs.iter().enumerate() {
                 let input_partition_count = input.output_partitioning().partition_count();
                 if remaining_idx < input_partition_count {
-                    // This partition belongs to this input
-                    return input.partition_statistics(Some(remaining_idx));
+                    // This partition belongs to this input - compute stats
+                    // for the specific child at the specific partition
+                    let child = &self.inputs[i];
+                    return args.compute_child_statistics(child, Some(remaining_idx));
                 }
                 remaining_idx -= input_partition_count;
             }
             // If we get here, the partition index is out of bounds
             Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         } else {
-            // Collect statistics from all inputs
+            // Collect overall stats for each input from the cache
             let stats = self
                 .inputs
                 .iter()
-                .map(|input_exec| {
-                    input_exec
-                        .partition_statistics(None)
-                        .map(Arc::unwrap_or_clone)
-                })
+                .map(|input| args.compute_child_statistics(input, None))
                 .collect::<Result<Vec<_>>>()?;
+            let stats_refs = stats.iter().map(|s| s.as_ref()).collect::<Vec<_>>();
 
-            Ok(Arc::new(
-                stats
-                    .into_iter()
-                    .reduce(stats_union)
-                    .unwrap_or_else(|| Statistics::new_unknown(&self.schema())),
-            ))
+            Ok(Arc::new(Statistics::try_merge_iter_with_ndv_fallback(
+                stats_refs,
+                self.schema().as_ref(),
+                NdvFallback::Sum,
+            )?))
         }
     }
 
@@ -601,13 +573,6 @@ impl ExecutionPlan for InterleaveExec {
         vec![false; self.inputs().len()]
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -668,22 +633,21 @@ impl ExecutionPlan for InterleaveExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         let stats = self
             .inputs
             .iter()
-            .map(|stat| {
-                stat.partition_statistics(partition)
+            .map(|input| {
+                args.compute_child_statistics(input, args.partition())
                     .map(Arc::unwrap_or_clone)
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Arc::new(
-            stats
-                .into_iter()
-                .reduce(stats_union)
-                .unwrap_or_else(|| Statistics::new_unknown(&self.schema())),
-        ))
+        Ok(Arc::new(Statistics::try_merge_iter_with_ndv_fallback(
+            stats.iter(),
+            self.schema().as_ref(),
+            NdvFallback::Sum,
+        )?))
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -842,69 +806,19 @@ impl Stream for CombinedRecordBatchStream {
     }
 }
 
-fn col_stats_union(
-    mut left: ColumnStatistics,
-    right: &ColumnStatistics,
-) -> ColumnStatistics {
-    left.distinct_count = union_distinct_count(&left, right);
-    left.min_value = left.min_value.min(&right.min_value);
-    left.max_value = left.max_value.max(&right.max_value);
-    left.sum_value = left.sum_value.add_for_sum(&right.sum_value);
-    left.null_count = left.null_count.add(&right.null_count);
-
-    left
-}
-
-fn union_distinct_count(
-    left: &ColumnStatistics,
-    right: &ColumnStatistics,
-) -> Precision<usize> {
-    let (ndv_left, ndv_right) = match (
-        left.distinct_count.get_value(),
-        right.distinct_count.get_value(),
-    ) {
-        (Some(&l), Some(&r)) => (l, r),
-        _ => return Precision::Absent,
-    };
-
-    // Even with exact inputs, the union NDV depends on how
-    // many distinct values are shared between the left and right.
-    // We can only estimate this via range overlap. Thus both paths
-    // below return `Inexact`.
-    if let Some(ndv) = estimate_ndv_with_overlap(left, right, ndv_left, ndv_right) {
-        return Precision::Inexact(ndv);
-    }
-
-    Precision::Inexact(ndv_left + ndv_right)
-}
-
-fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
-    let Statistics {
-        num_rows: right_num_rows,
-        total_byte_size: right_total_bytes,
-        column_statistics: right_column_statistics,
-        ..
-    } = right;
-    left.num_rows = left.num_rows.add(&right_num_rows);
-    left.total_byte_size = left.total_byte_size.add(&right_total_bytes);
-    left.column_statistics = left
-        .column_statistics
-        .into_iter()
-        .zip(right_column_statistics.iter())
-        .map(|(a, b)| col_stats_union(a, b))
-        .collect::<Vec<_>>();
-    left
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::collect;
+    use crate::repartition::RepartitionExec;
+    use crate::statistics::StatisticsArgs;
+    use crate::test::exec::StatisticsExec;
     use crate::test::{self, TestMemoryExec};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::DataType;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::stats::Precision;
+    use datafusion_common::{ColumnStatistics, ScalarValue};
     use datafusion_physical_expr::equivalence::convert_to_orderings;
     use datafusion_physical_expr::expressions::col;
 
@@ -959,294 +873,205 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_stats_union() {
-        let left = Statistics {
-            num_rows: Precision::Exact(5),
-            total_byte_size: Precision::Exact(23),
-            column_statistics: vec![
-                ColumnStatistics {
-                    distinct_count: Precision::Exact(5),
-                    max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
-                    min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
-                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
-                    null_count: Precision::Exact(0),
-                    byte_size: Precision::Absent,
-                },
-                ColumnStatistics {
-                    distinct_count: Precision::Exact(1),
-                    max_value: Precision::Exact(ScalarValue::from("x")),
-                    min_value: Precision::Exact(ScalarValue::from("a")),
-                    sum_value: Precision::Absent,
-                    null_count: Precision::Exact(3),
-                    byte_size: Precision::Absent,
-                },
-                ColumnStatistics {
-                    distinct_count: Precision::Absent,
-                    max_value: Precision::Exact(ScalarValue::Float32(Some(1.1))),
-                    min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
-                    sum_value: Precision::Exact(ScalarValue::Float32(Some(42.0))),
-                    null_count: Precision::Absent,
-                    byte_size: Precision::Absent,
-                },
-            ],
-        };
+    fn stats_merge_inputs() -> (SchemaRef, Statistics, Statistics, Statistics) {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, true)]));
 
-        let right = Statistics {
-            num_rows: Precision::Exact(7),
-            total_byte_size: Precision::Exact(29),
-            column_statistics: vec![
-                ColumnStatistics {
-                    distinct_count: Precision::Exact(3),
-                    max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
-                    min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
-                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
-                    null_count: Precision::Exact(1),
-                    byte_size: Precision::Absent,
-                },
-                ColumnStatistics {
-                    distinct_count: Precision::Absent,
-                    max_value: Precision::Exact(ScalarValue::from("c")),
-                    min_value: Precision::Exact(ScalarValue::from("b")),
-                    sum_value: Precision::Absent,
-                    null_count: Precision::Absent,
-                    byte_size: Precision::Absent,
-                },
-                ColumnStatistics {
-                    distinct_count: Precision::Absent,
-                    max_value: Precision::Absent,
-                    min_value: Precision::Absent,
-                    sum_value: Precision::Absent,
-                    null_count: Precision::Absent,
-                    byte_size: Precision::Absent,
-                },
-            ],
-        };
+        let left = Statistics::default()
+            .with_num_rows(Precision::Exact(5))
+            .with_total_byte_size(Precision::Exact(23))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Exact(5))
+                    .with_min_value(Precision::Exact(ScalarValue::UInt32(Some(1))))
+                    .with_max_value(Precision::Exact(ScalarValue::UInt32(Some(21))))
+                    .with_sum_value(Precision::Exact(ScalarValue::UInt32(Some(42))))
+                    .with_null_count(Precision::Exact(0))
+                    .with_byte_size(Precision::Exact(40)),
+            );
 
-        let result = stats_union(left, right);
-        let expected = Statistics {
-            num_rows: Precision::Exact(12),
-            total_byte_size: Precision::Exact(52),
-            column_statistics: vec![
-                ColumnStatistics {
-                    distinct_count: Precision::Inexact(6),
-                    max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
-                    min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
-                    sum_value: Precision::Exact(ScalarValue::Int64(Some(84))),
-                    null_count: Precision::Exact(1),
-                    byte_size: Precision::Absent,
-                },
-                ColumnStatistics {
-                    distinct_count: Precision::Absent,
-                    max_value: Precision::Exact(ScalarValue::from("x")),
-                    min_value: Precision::Exact(ScalarValue::from("a")),
-                    sum_value: Precision::Absent,
-                    null_count: Precision::Absent,
-                    byte_size: Precision::Absent,
-                },
-                ColumnStatistics {
-                    distinct_count: Precision::Absent,
-                    max_value: Precision::Absent,
-                    min_value: Precision::Absent,
-                    sum_value: Precision::Absent,
-                    null_count: Precision::Absent,
-                    byte_size: Precision::Absent,
-                },
-            ],
-        };
+        let right = Statistics::default()
+            .with_num_rows(Precision::Exact(7))
+            .with_total_byte_size(Precision::Exact(29))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Exact(3))
+                    .with_min_value(Precision::Exact(ScalarValue::UInt32(Some(22))))
+                    .with_max_value(Precision::Exact(ScalarValue::UInt32(Some(34))))
+                    .with_sum_value(Precision::Exact(ScalarValue::UInt32(Some(8))))
+                    .with_null_count(Precision::Exact(1))
+                    .with_byte_size(Precision::Exact(60)),
+            );
 
-        assert_eq!(result, expected);
+        let expected = Statistics::default()
+            .with_num_rows(Precision::Exact(12))
+            .with_total_byte_size(Precision::Exact(52))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Inexact(8))
+                    .with_min_value(Precision::Exact(ScalarValue::UInt32(Some(1))))
+                    .with_max_value(Precision::Exact(ScalarValue::UInt32(Some(34))))
+                    .with_sum_value(Precision::Exact(ScalarValue::UInt64(Some(50))))
+                    .with_null_count(Precision::Exact(1))
+                    .with_byte_size(Precision::Exact(100)),
+            );
+
+        (schema, left, right, expected)
+    }
+
+    fn stats_merge_multicolumn_inputs() -> (SchemaRef, Statistics, Statistics, Statistics)
+    {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float32, true),
+        ]));
+
+        let left = Statistics::default()
+            .with_num_rows(Precision::Exact(5))
+            .with_total_byte_size(Precision::Exact(23))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Exact(5))
+                    .with_min_value(Precision::Exact(ScalarValue::Int64(Some(-4))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int64(Some(21))))
+                    .with_sum_value(Precision::Exact(ScalarValue::Int64(Some(42))))
+                    .with_null_count(Precision::Exact(0)),
+            )
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Exact(2))
+                    .with_min_value(Precision::Exact(ScalarValue::from("a")))
+                    .with_max_value(Precision::Exact(ScalarValue::from("x")))
+                    .with_null_count(Precision::Exact(3)),
+            )
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_max_value(Precision::Exact(ScalarValue::Float32(Some(1.1))))
+                    .with_min_value(Precision::Exact(ScalarValue::Float32(Some(0.1))))
+                    .with_sum_value(Precision::Exact(ScalarValue::Float32(Some(42.0)))),
+            );
+
+        let right = Statistics::default()
+            .with_num_rows(Precision::Exact(7))
+            .with_total_byte_size(Precision::Exact(29))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Exact(3))
+                    .with_min_value(Precision::Exact(ScalarValue::Int64(Some(1))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int64(Some(34))))
+                    .with_sum_value(Precision::Exact(ScalarValue::Int64(Some(42))))
+                    .with_null_count(Precision::Exact(1)),
+            )
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Exact(3))
+                    .with_min_value(Precision::Exact(ScalarValue::from("b")))
+                    .with_max_value(Precision::Exact(ScalarValue::from("z"))),
+            )
+            .add_column_statistics(ColumnStatistics::new_unknown());
+
+        let expected = Statistics::default()
+            .with_num_rows(Precision::Exact(12))
+            .with_total_byte_size(Precision::Exact(52))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Inexact(6))
+                    .with_min_value(Precision::Exact(ScalarValue::Int64(Some(-4))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int64(Some(34))))
+                    .with_sum_value(Precision::Exact(ScalarValue::Int64(Some(84))))
+                    .with_null_count(Precision::Exact(1)),
+            )
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Inexact(5))
+                    .with_min_value(Precision::Exact(ScalarValue::from("a")))
+                    .with_max_value(Precision::Exact(ScalarValue::from("z"))),
+            )
+            .add_column_statistics(ColumnStatistics::new_unknown());
+
+        (schema, left, right, expected)
     }
 
     #[test]
-    fn test_union_distinct_count() {
-        // (left_ndv, left_min, left_max, right_ndv, right_min, right_max, expected)
-        type NdvTestCase = (
-            Precision<usize>,
-            Option<i64>,
-            Option<i64>,
-            Precision<usize>,
-            Option<i64>,
-            Option<i64>,
-            Precision<usize>,
-        );
-        let cases: Vec<NdvTestCase> = vec![
-            // disjoint ranges: NDV = 5 + 3
-            (
-                Precision::Exact(5),
-                Some(0),
-                Some(10),
-                Precision::Exact(3),
-                Some(20),
-                Some(30),
-                Precision::Inexact(8),
-            ),
-            // identical ranges: intersection = max(10, 8) = 10
-            (
-                Precision::Exact(10),
-                Some(0),
-                Some(100),
-                Precision::Exact(8),
-                Some(0),
-                Some(100),
-                Precision::Inexact(10),
-            ),
-            // partial overlap: 50 + 50 + 25 = 125
-            (
-                Precision::Exact(100),
-                Some(0),
-                Some(100),
-                Precision::Exact(50),
-                Some(50),
-                Some(150),
-                Precision::Inexact(125),
-            ),
-            // right contained in left: 50 + 50 + 0 = 100
-            (
-                Precision::Exact(100),
-                Some(0),
-                Some(100),
-                Precision::Exact(50),
-                Some(25),
-                Some(75),
-                Precision::Inexact(100),
-            ),
-            // both constant, same value
-            (
-                Precision::Exact(1),
-                Some(5),
-                Some(5),
-                Precision::Exact(1),
-                Some(5),
-                Some(5),
-                Precision::Inexact(1),
-            ),
-            // both constant, different values
-            (
-                Precision::Exact(1),
-                Some(5),
-                Some(5),
-                Precision::Exact(1),
-                Some(10),
-                Some(10),
-                Precision::Inexact(2),
-            ),
-            // left constant within right range
-            (
-                Precision::Exact(1),
-                Some(5),
-                Some(5),
-                Precision::Exact(10),
-                Some(0),
-                Some(10),
-                Precision::Inexact(10),
-            ),
-            // left constant outside right range
-            (
-                Precision::Exact(1),
-                Some(20),
-                Some(20),
-                Precision::Exact(10),
-                Some(0),
-                Some(10),
-                Precision::Inexact(11),
-            ),
-            // right constant within left range
-            (
-                Precision::Exact(10),
-                Some(0),
-                Some(10),
-                Precision::Exact(1),
-                Some(5),
-                Some(5),
-                Precision::Inexact(10),
-            ),
-            // right constant outside left range
-            (
-                Precision::Exact(10),
-                Some(0),
-                Some(10),
-                Precision::Exact(1),
-                Some(20),
-                Some(20),
-                Precision::Inexact(11),
-            ),
-            // missing min/max falls back to sum (exact + exact)
-            (
-                Precision::Exact(10),
-                None,
-                None,
-                Precision::Exact(5),
-                None,
-                None,
-                Precision::Inexact(15),
-            ),
-            // missing min/max falls back to sum (exact + inexact)
-            (
-                Precision::Exact(10),
-                None,
-                None,
-                Precision::Inexact(5),
-                None,
-                None,
-                Precision::Inexact(15),
-            ),
-            // missing min/max falls back to sum (inexact + inexact)
-            (
-                Precision::Inexact(7),
-                None,
-                None,
-                Precision::Inexact(3),
-                None,
-                None,
-                Precision::Inexact(10),
-            ),
-            // one side absent
-            (
-                Precision::Exact(10),
-                None,
-                None,
-                Precision::Absent,
-                None,
-                None,
-                Precision::Absent,
-            ),
-            // one side absent (inexact + absent)
-            (
-                Precision::Inexact(4),
-                None,
-                None,
-                Precision::Absent,
-                None,
-                None,
-                Precision::Absent,
-            ),
-        ];
+    fn test_union_partition_statistics_uses_shared_statistics_merge() -> Result<()> {
+        let (schema, left, right, expected) = stats_merge_inputs();
 
-        for (
-            i,
-            (left_ndv, left_min, left_max, right_ndv, right_min, right_max, expected),
-        ) in cases.into_iter().enumerate()
-        {
-            let to_sv = |v| Precision::Exact(ScalarValue::Int64(Some(v)));
-            let left = ColumnStatistics {
-                distinct_count: left_ndv,
-                min_value: left_min.map(to_sv).unwrap_or(Precision::Absent),
-                max_value: left_max.map(to_sv).unwrap_or(Precision::Absent),
-                ..Default::default()
-            };
-            let right = ColumnStatistics {
-                distinct_count: right_ndv,
-                min_value: right_min.map(to_sv).unwrap_or(Precision::Absent),
-                max_value: right_max.map(to_sv).unwrap_or(Precision::Absent),
-                ..Default::default()
-            };
-            assert_eq!(
-                union_distinct_count(&left, &right),
-                expected,
-                "case {i} failed"
-            );
-        }
+        let left: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(left, schema.as_ref().clone()));
+        let right: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(right, schema.as_ref().clone()));
+
+        let union = UnionExec::try_new(vec![left, right])?;
+        let stats = union.statistics_with_args(&StatisticsArgs::new())?;
+
+        assert_eq!(stats.as_ref(), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_partition_statistics_uses_shared_statistics_merge_multicolumn()
+    -> Result<()> {
+        let (schema, left, right, expected) = stats_merge_multicolumn_inputs();
+
+        let left: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(left, schema.as_ref().clone()));
+        let right: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(right, schema.as_ref().clone()));
+
+        let union = UnionExec::try_new(vec![left, right])?;
+        let stats = union.statistics_with_args(&StatisticsArgs::new())?;
+
+        assert_eq!(stats.as_ref(), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_interleave_partition_statistics_uses_shared_statistics_merge() -> Result<()> {
+        let (schema, left, right, expected) = stats_merge_inputs();
+        let hash_expr = vec![col("a", schema.as_ref())?];
+
+        let left: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            Arc::new(StatisticsExec::new(left, schema.as_ref().clone())),
+            Partitioning::Hash(hash_expr.clone(), 2),
+        )?);
+        let right: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            Arc::new(StatisticsExec::new(right, schema.as_ref().clone())),
+            Partitioning::Hash(hash_expr, 2),
+        )?);
+
+        let interleave = InterleaveExec::try_new(vec![left, right])?;
+        let stats = interleave.statistics_with_args(&StatisticsArgs::new())?;
+
+        assert_eq!(stats.as_ref(), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_interleave_partition_statistics_for_partition_uses_shared_statistics_merge()
+    -> Result<()> {
+        let (schema, left, right, _) = stats_merge_inputs();
+        let hash_expr = vec![col("a", schema.as_ref())?];
+
+        let left: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            Arc::new(StatisticsExec::new(left, schema.as_ref().clone())),
+            Partitioning::Hash(hash_expr.clone(), 2),
+        )?);
+        let right: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            Arc::new(StatisticsExec::new(right, schema.as_ref().clone())),
+            Partitioning::Hash(hash_expr, 2),
+        )?);
+
+        let interleave = InterleaveExec::try_new(vec![left, right])?;
+        let stats = interleave
+            .statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))?;
+
+        let expected = Statistics::default()
+            .with_num_rows(Precision::Inexact(5))
+            .with_total_byte_size(Precision::Inexact(25))
+            .add_column_statistics(ColumnStatistics::new_unknown());
+
+        assert_eq!(stats.as_ref(), &expected);
+        Ok(())
     }
 
     #[tokio::test]

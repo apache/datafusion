@@ -175,7 +175,7 @@ fn build_fixed_size_binary_table(
     let batch = RecordBatch::try_new(
         Arc::new(schema),
         vec![
-            Arc::new(FixedSizeBinaryArray::from(a.1.clone())),
+            Arc::new(FixedSizeBinaryArray::try_from_iter(a.1.iter().copied()).unwrap()),
             Arc::new(Int32Array::from(b.1.clone())),
             Arc::new(Int32Array::from(c.1.clone())),
         ],
@@ -2459,6 +2459,24 @@ async fn overallocation_multi_batch_spill() -> Result<()> {
             assert!(join.metrics().unwrap().spilled_bytes().unwrap() > 0);
             assert!(join.metrics().unwrap().spilled_rows().unwrap() > 0);
 
+            // For Full joins, get_required_batch_indices extends 0..batches.len(), so
+            // poll_spilled_batches can restore all spilled batches at once via infallible
+            // grow(). Verify accounting tracked the transient spike and cleaned up.
+            let peak_mem = join
+                .metrics()
+                .and_then(|m| m.sum_by_name("peak_mem_used"))
+                .map(|m| m.as_usize())
+                .unwrap_or(0);
+            assert!(
+                peak_mem > 0,
+                "peak_mem_used should be > 0 for {join_type:?} batch_size={batch_size}"
+            );
+            assert_eq!(
+                runtime.memory_pool.reserved(),
+                0,
+                "memory should be fully released after {join_type:?} completes 
+                (batch_size={batch_size}): infallible grow during restore must be balanced"
+            );
             // Run the test with no spill configuration as
             let task_ctx_no_spill =
                 TaskContext::default().with_session_config(session_config.clone());
@@ -2483,6 +2501,223 @@ async fn overallocation_multi_batch_spill() -> Result<()> {
             assert_eq!(spilled_join_result, no_spilled_join_result);
         }
     }
+
+    Ok(())
+}
+
+/// Verifies that `peak_mem_used` reflects join_arrays memory on the spill path.
+///
+/// Uses a memory limit smaller than a single batch's `size_estimation` so that
+/// every batch spills — the `Ok` arm of `allocate_reservation` is never hit.
+/// Before the fix, `peak_mem_used` would stay 0 because `set_max` was only
+/// called in the `Ok` arm. After the fix, the spill path calls
+/// `grow(join_arrays_mem)` + `set_max`, so `peak_mem_used > 0`.
+#[tokio::test]
+async fn spill_join_arrays_memory_accounting() -> Result<()> {
+    use arrow::array::Array;
+
+    let left_batch = build_table_i32(
+        ("a1", &vec![0, 1]),
+        ("b1", &vec![1, 1]),
+        ("c1", &vec![4, 5]),
+    );
+    let size_estimation = left_batch.get_array_memory_size()
+        + Int32Array::from(vec![1, 1]).get_array_memory_size()
+        + 2usize.next_power_of_two() * size_of::<usize>()
+        + size_of::<std::ops::Range<usize>>()
+        + size_of::<usize>();
+    let join_arrays_mem = Int32Array::from(vec![1, 1]).get_array_memory_size();
+
+    // Memory limit: too small for a full batch, large enough for join_arrays.
+    // Every batch hits the Err arm → spills → grow(join_arrays_mem).
+    let memory_limit = (size_estimation + join_arrays_mem) / 2;
+    assert!(
+        memory_limit < size_estimation && memory_limit > join_arrays_mem,
+        "limit {memory_limit} must be between join_arrays_mem {join_arrays_mem} \
+         and size_estimation {size_estimation}"
+    );
+
+    let left_batches: Vec<RecordBatch> = (0..4)
+        .map(|i| {
+            build_table_i32(
+                ("a1", &vec![i * 2, i * 2 + 1]),
+                ("b1", &vec![1, 1]),
+                ("c1", &vec![100 + i, 101 + i]),
+            )
+        })
+        .collect();
+    let left = build_table_from_batches(left_batches);
+
+    let right_batches: Vec<RecordBatch> = (0..2)
+        .map(|i| {
+            build_table_i32(
+                ("a2", &vec![i * 2, i * 2 + 1]),
+                ("b2", &vec![1, 1]),
+                ("c2", &vec![200 + i, 201 + i]),
+            )
+        })
+        .collect();
+    let right = build_table_from_batches(right_batches);
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(memory_limit, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    let session_config = SessionConfig::default().with_batch_size(50);
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(session_config)
+            .with_runtime(Arc::clone(&runtime)),
+    );
+
+    let join = join_with_options(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        on.clone(),
+        Inner,
+        sort_options,
+        NullEquality::NullEqualsNothing,
+    )?;
+
+    let stream = join.execute(0, task_ctx)?;
+    let result = common::collect(stream).await.unwrap();
+
+    assert!(!result.is_empty(), "Expected non-empty join result");
+
+    let metrics = join.metrics().unwrap();
+    assert!(
+        metrics.spill_count().unwrap() > 0,
+        "Expected spilling to occur"
+    );
+
+    // Before the fix, peak_mem_used was 0 here because set_max was only
+    // called in the Ok arm of allocate_reservation, which is never reached
+    // when every batch spills. After the fix, the spill path calls
+    // grow(join_arrays_mem) + set_max unconditionally.
+    let peak_mem = metrics
+        .sum_by_name("peak_mem_used")
+        .map(|m| m.as_usize())
+        .unwrap_or(0);
+    assert!(
+        peak_mem >= join_arrays_mem,
+        "peak_mem_used ({peak_mem}) should be >= join_arrays_mem ({join_arrays_mem})"
+    );
+
+    // All memory must be released (grow/shrink balanced, no underflow)
+    assert_eq!(
+        runtime.memory_pool.reserved(),
+        0,
+        "All memory should be released after join completes"
+    );
+
+    Ok(())
+}
+
+/// Test the no-headroom scenario: pool is so tight that even
+/// join_arrays_mem exceeds the pool limit. With force-grow, the
+/// reservation still tracks the join_arrays unconditionally so the
+/// pool reflects actual memory usage.
+#[tokio::test]
+async fn spill_join_arrays_no_headroom() -> Result<()> {
+    use arrow::array::Array;
+
+    let join_arrays_mem = Int32Array::from(vec![1, 1]).get_array_memory_size();
+
+    // Pool smaller than join_arrays_mem: try_grow(size_estimation) fails → spill.
+    // Force-grow(join_arrays_mem) succeeds unconditionally → reserved_amount > 0.
+    let memory_limit = join_arrays_mem / 2;
+    assert!(
+        memory_limit < join_arrays_mem,
+        "limit {memory_limit} must be smaller than join_arrays_mem {join_arrays_mem}"
+    );
+
+    let left_batches: Vec<RecordBatch> = (0..4)
+        .map(|i| {
+            build_table_i32(
+                ("a1", &vec![i * 2, i * 2 + 1]),
+                ("b1", &vec![1, 1]),
+                ("c1", &vec![100 + i, 101 + i]),
+            )
+        })
+        .collect();
+    let left = build_table_from_batches(left_batches);
+
+    let right_batches: Vec<RecordBatch> = (0..2)
+        .map(|i| {
+            build_table_i32(
+                ("a2", &vec![i * 2, i * 2 + 1]),
+                ("b2", &vec![1, 1]),
+                ("c2", &vec![200 + i, 201 + i]),
+            )
+        })
+        .collect();
+    let right = build_table_from_batches(right_batches);
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(memory_limit, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    let session_config = SessionConfig::default().with_batch_size(50);
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(session_config)
+            .with_runtime(Arc::clone(&runtime)),
+    );
+
+    let join = join_with_options(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        on.clone(),
+        Inner,
+        sort_options,
+        NullEquality::NullEqualsNothing,
+    )?;
+
+    let stream = join.execute(0, task_ctx)?;
+    let result = common::collect(stream).await.unwrap();
+
+    assert!(!result.is_empty(), "Expected non-empty join result");
+
+    let metrics = join.metrics().unwrap();
+    assert!(
+        metrics.spill_count().unwrap() > 0,
+        "Expected spilling to occur"
+    );
+
+    // Force-grow means peak_mem_used is always tracked, even when pool is tight.
+    let peak_mem = metrics
+        .sum_by_name("peak_mem_used")
+        .map(|m| m.as_usize())
+        .unwrap_or(0);
+    assert!(
+        peak_mem >= join_arrays_mem,
+        "peak_mem_used ({peak_mem}) should be >= join_arrays_mem ({join_arrays_mem})"
+    );
+
+    // Pool should be fully released (grow/shrink balanced)
+    assert_eq!(
+        runtime.memory_pool.reserved(),
+        0,
+        "All memory should be released after join completes"
+    );
 
     Ok(())
 }
@@ -3148,7 +3383,7 @@ async fn test_left_outer_join_filtered_mask() -> Result<()> {
 
 #[test]
 fn test_partition_statistics() -> Result<()> {
-    use crate::ExecutionPlan;
+    use crate::statistics::StatisticsArgs;
     use datafusion_common::stats::Precision;
 
     let left = build_table(
@@ -3185,7 +3420,7 @@ fn test_partition_statistics() -> Result<()> {
 
         // Test aggregate statistics (partition = None)
         // Should return meaningful statistics computed from both inputs
-        let stats = join_exec.partition_statistics(None)?;
+        let stats = join_exec.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(
             stats.column_statistics.len(),
             expected_cols,
@@ -3203,7 +3438,8 @@ fn test_partition_statistics() -> Result<()> {
         // Since the child TestMemoryExec returns unknown stats for specific partitions,
         // the join output will also have Absent num_rows. This is expected behavior
         // as the statistics depend on what the children can provide.
-        let partition_stats = join_exec.partition_statistics(Some(0))?;
+        let partition_stats = join_exec
+            .statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))?;
         assert_eq!(
             partition_stats.column_statistics.len(),
             expected_cols,
@@ -4106,6 +4342,105 @@ async fn no_filter_boundary_pending_loses_outer_rows() -> Result<()> {
     Ok(())
 }
 
+/// Verifies no-filter semi/anti joins when a matching outer key group spans
+/// multiple batches and the next outer batch is temporarily unavailable.
+///
+/// The outer input has an unmatched prefix row followed by a matching key
+/// group that continues in the next batch. Both rows with key=1 should be
+/// treated as matched. Returning `Pending` before the second batch forces
+/// `poll_join` to return and later resume from its top-level state, rather
+/// than continuing the same in-progress boundary loop.
+#[tokio::test]
+async fn no_filter_boundary_pending_with_unmatched_prefix() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("a1", DataType::Int32, false),
+        Field::new("b1", DataType::Int32, false),
+        Field::new("c1", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("a2", DataType::Int32, false),
+        Field::new("b1", DataType::Int32, false),
+        Field::new("c2", DataType::Int32, false),
+    ]));
+
+    // Key=0 is unmatched. Key=1 matches inner and spans the batch boundary.
+    let outer_batch1 = RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Int32Array::from(vec![0, 10])),
+        ],
+    )?;
+    let outer_batch2 = RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![2])),
+            Arc::new(Int32Array::from(vec![1])), // same key
+            Arc::new(Int32Array::from(vec![20])),
+        ],
+    )?;
+
+    // Key=1 matches two outer rows. Key=2 keeps the inner input non-exhausted.
+    let inner_batch = RecordBatch::try_new(
+        Arc::clone(&right_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![100, 200])),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            Arc::new(Int32Array::from(vec![50, 60])),
+        ],
+    )?;
+
+    let on_outer: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("b1", 1))];
+    let on_inner: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("b1", 1))];
+
+    for (join_type, expected_a1) in [(LeftSemi, vec![1, 2]), (LeftAnti, vec![0])] {
+        let outer: SendableRecordBatchStream = Box::pin(PendingStream::new(
+            vec![outer_batch1.clone(), outer_batch2.clone()],
+            vec![false, true], // Pending before 2nd outer batch
+        ));
+        let inner: SendableRecordBatchStream =
+            Box::pin(PendingStream::new(vec![inner_batch.clone()], vec![false]));
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let inner_schema = inner.schema();
+        let (reservation, spill_manager, runtime_env) =
+            test_stream_resources(inner_schema, &metrics);
+        let stream = BitwiseSortMergeJoinStream::try_new(
+            Arc::clone(&left_schema),
+            vec![SortOptions::default()],
+            NullEquality::NullEqualsNothing,
+            outer,
+            inner,
+            on_outer.clone(),
+            on_inner.clone(),
+            None, // no filter
+            join_type,
+            8192,
+            0,
+            &metrics,
+            reservation,
+            spill_manager,
+            runtime_env,
+        )?;
+
+        let batches = collect_stream(stream).await?;
+        let actual_a1 = batches
+            .iter()
+            .flat_map(|batch| {
+                let values = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap();
+                (0..batch.num_rows()).map(|row| values.value(row))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual_a1, expected_a1, "{join_type:?}");
+    }
+    Ok(())
+}
+
 /// Tests the filtered boundary Pending re-entry: outer key group spans
 /// batches with a filter, and poll_next_outer_batch returns Pending.
 ///
@@ -4504,6 +4839,229 @@ async fn spill_filtered_boundary_loses_outer_rows() -> Result<()> {
             _ => unreachable!(),
         }
     }
+
+    Ok(())
+}
+
+/// Verifies that `peak_mem_used` reflects spill read-back memory during
+/// output materialization (multi-source path).
+///
+/// When spilled buffered batches are read back from disk to produce join
+/// output, a scoped `MemoryReservation` (via `new_empty()`) tracks the
+/// transient memory. Its `Drop` guarantees the pool is balanced on every
+/// exit path — normal return or early `?` error.
+#[tokio::test]
+async fn spill_read_back_memory_accounting() -> Result<()> {
+    use arrow::array::Array;
+
+    let left_batch = build_table_i32(
+        ("a1", &vec![0, 1]),
+        ("b1", &vec![1, 1]),
+        ("c1", &vec![4, 5]),
+    );
+    let size_estimation = left_batch.get_array_memory_size()
+        + Int32Array::from(vec![1, 1]).get_array_memory_size()
+        + 2usize.next_power_of_two() * size_of::<usize>()
+        + size_of::<std::ops::Range<usize>>()
+        + size_of::<usize>();
+
+    // Memory limit too small for a full batch — forces spilling.
+    let memory_limit = size_estimation / 2;
+
+    // All rows share the same join key (b=1) to force multiple buffered
+    // batches in the same key group — triggering spill read-back during
+    // output materialization.
+    let left_batches: Vec<RecordBatch> = (0..4)
+        .map(|i| {
+            build_table_i32(
+                ("a1", &vec![i * 2, i * 2 + 1]),
+                ("b1", &vec![1, 1]),
+                ("c1", &vec![100 + i, 101 + i]),
+            )
+        })
+        .collect();
+    let left = build_table_from_batches(left_batches);
+
+    let right_batches: Vec<RecordBatch> = (0..4)
+        .map(|i| {
+            build_table_i32(
+                ("a2", &vec![i * 2, i * 2 + 1]),
+                ("b2", &vec![1, 1]),
+                ("c2", &vec![200 + i, 201 + i]),
+            )
+        })
+        .collect();
+    let right = build_table_from_batches(right_batches);
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(memory_limit, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    let session_config = SessionConfig::default().with_batch_size(50);
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(session_config)
+            .with_runtime(Arc::clone(&runtime)),
+    );
+
+    let join = join_with_options(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        on.clone(),
+        Inner,
+        sort_options,
+        NullEquality::NullEqualsNothing,
+    )?;
+
+    let stream = join.execute(0, task_ctx)?;
+    let result = common::collect(stream).await.unwrap();
+
+    assert!(!result.is_empty(), "Expected non-empty join result");
+
+    let metrics = join.metrics().unwrap();
+    assert!(
+        metrics.spill_count().unwrap() > 0,
+        "Expected spilling to occur"
+    );
+
+    // peak_mem_used should reflect the spill read-back: when buffered
+    // batches are read from disk during output materialization, grow()
+    // temporarily reserves size_estimation. This pushes peak above what
+    // join_arrays_mem alone would show.
+    let peak_mem = metrics
+        .sum_by_name("peak_mem_used")
+        .map(|m| m.as_usize())
+        .unwrap_or(0);
+    assert!(
+        peak_mem >= size_estimation,
+        "peak_mem_used ({peak_mem}) should be >= size_estimation ({size_estimation}) \
+         because spill read-back temporarily loads full batch into memory"
+    );
+
+    // All memory must be released (grow/shrink balanced)
+    assert_eq!(
+        runtime.memory_pool.reserved(),
+        0,
+        "All memory should be released after join completes"
+    );
+
+    Ok(())
+}
+
+/// Verifies spill read-back memory tracking for the single-source path.
+///
+/// When only ONE buffered batch exists for a key group and it's spilled,
+/// `fetch_right_columns_by_idxs` reads it back. A scoped `MemoryReservation`
+/// (via `new_empty()`) tracks the transient memory and releases it on drop.
+#[tokio::test]
+async fn spill_read_back_single_source() -> Result<()> {
+    use arrow::array::Array;
+
+    let left_batch = build_table_i32(
+        ("a1", &vec![0, 1]),
+        ("b1", &vec![1, 1]),
+        ("c1", &vec![4, 5]),
+    );
+    let size_estimation = left_batch.get_array_memory_size()
+        + Int32Array::from(vec![1, 1]).get_array_memory_size()
+        + 2usize.next_power_of_two() * size_of::<usize>()
+        + size_of::<std::ops::Range<usize>>()
+        + size_of::<usize>();
+
+    // Memory limit too small for a full batch — forces spilling.
+    let memory_limit = size_estimation / 2;
+
+    // Multiple distinct keys so each key group has exactly ONE buffered batch.
+    // This ensures the single-source path is exercised.
+    let left_batches: Vec<RecordBatch> = (0..4)
+        .map(|i| {
+            build_table_i32(
+                ("a1", &vec![i * 2, i * 2 + 1]),
+                ("b1", &vec![i, i]),
+                ("c1", &vec![100 + i, 101 + i]),
+            )
+        })
+        .collect();
+    let left = build_table_from_batches(left_batches);
+
+    // One batch per key — each key group has single source
+    let right_batches: Vec<RecordBatch> = (0..4)
+        .map(|i| {
+            build_table_i32(
+                ("a2", &vec![i * 2, i * 2 + 1]),
+                ("b2", &vec![i, i]),
+                ("c2", &vec![200 + i, 201 + i]),
+            )
+        })
+        .collect();
+    let right = build_table_from_batches(right_batches);
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(memory_limit, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    let session_config = SessionConfig::default().with_batch_size(50);
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(session_config)
+            .with_runtime(Arc::clone(&runtime)),
+    );
+
+    let join = join_with_options(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        on.clone(),
+        Inner,
+        sort_options,
+        NullEquality::NullEqualsNothing,
+    )?;
+
+    let stream = join.execute(0, task_ctx)?;
+    let result = common::collect(stream).await.unwrap();
+
+    assert!(!result.is_empty(), "Expected non-empty join result");
+
+    let metrics = join.metrics().unwrap();
+    assert!(
+        metrics.spill_count().unwrap() > 0,
+        "Expected spilling to occur"
+    );
+
+    // peak_mem_used should reflect the single-batch read-back
+    let peak_mem = metrics
+        .sum_by_name("peak_mem_used")
+        .map(|m| m.as_usize())
+        .unwrap_or(0);
+    assert!(
+        peak_mem >= size_estimation,
+        "peak_mem_used ({peak_mem}) should be >= size_estimation ({size_estimation}) \
+         because single-source spill read-back loads full batch"
+    );
+
+    // All memory must be released
+    assert_eq!(
+        runtime.memory_pool.reserved(),
+        0,
+        "All memory should be released after join completes"
+    );
 
     Ok(())
 }

@@ -256,8 +256,8 @@ where
         let end = offset_window[1];
         let len = end - start;
 
-        // array is null
-        if array.is_null(row_index) {
+        // array or index is null
+        if array.is_null(row_index) || indexes.is_null(row_index) {
             mutable.extend_nulls(1);
             continue;
         }
@@ -602,14 +602,12 @@ fn combine_input_nulls(
     to_array: &Int64Array,
     stride: Option<&Int64Array>,
 ) -> Option<NullBuffer> {
-    [
+    NullBuffer::union_many([
         array.nulls(),
         from_array.nulls(),
         to_array.nulls(),
         stride.and_then(|s| s.nulls()),
-    ]
-    .into_iter()
-    .fold(None, |acc, nulls| NullBuffer::union(acc.as_ref(), nulls))
+    ])
 }
 
 fn general_array_slice<O: OffsetSizeTrait>(
@@ -1109,7 +1107,7 @@ mod tests {
     };
     use arrow::array::{ListArray, RecordBatch};
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::{Column, DFSchema, Result, assert_batches_eq};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{Expr, ExprSchemable};
@@ -1196,6 +1194,26 @@ mod tests {
         let batch = RecordBatch::try_from_iter([("result", result)])?;
 
         assert_batches_eq!(expected, &[batch]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_element_null_index_with_non_zero_buffer_returns_null() -> Result<()> {
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4)]),
+            Some(vec![Some(5)]),
+        ]);
+        let indexes = Int64Array::new(
+            ScalarBuffer::from(vec![1, 1, 1]),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        let result = general_array_element(&list_array, &indexes)?;
+        let expected = Int32Array::from(vec![Some(1), None, Some(5)]);
+
+        assert_eq!(result.as_primitive::<Int32Type>(), &expected);
 
         Ok(())
     }

@@ -43,16 +43,13 @@ static SQL_BENCHMARK_DIRECTORY: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
-#[cfg(all(feature = "snmalloc", feature = "mimalloc"))]
-compile_error!(
-    "feature \"snmalloc\" and feature \"mimalloc\" cannot be enabled at the same time"
-);
-
 #[cfg(feature = "snmalloc")]
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
-#[cfg(feature = "mimalloc")]
+// `cargo clippy --all-features` enables both allocator features, so prefer
+// `snmalloc` in that case and fall back to `mimalloc` otherwise.
+#[cfg(all(not(feature = "snmalloc"), feature = "mimalloc"))]
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -85,7 +82,7 @@ struct EnvParser {
     subgroup: Option<String>,
 
     #[arg(env = "BENCH_QUERY")]
-    query: Option<i32>,
+    query: Option<String>,
 }
 
 pub fn sql(c: &mut Criterion) {
@@ -309,9 +306,14 @@ fn filter_benchmarks(
                 if let Some(subgroup) = &args.subgroup {
                     val.retain(|bench| bench.subgroup().eq_ignore_ascii_case(subgroup));
                 }
-                if let Some(query_number) = &args.query {
-                    let padded = format!("Q{query_number:0>2}");
-                    val.retain(|bench| bench.name().eq_ignore_ascii_case(&padded));
+                if let Some(query) = &args.query {
+                    // Accept `1`, `01`, `6a`, `Q06a`, ... case-insensitively.
+                    // Bench names are canonical, e.g. `Q01`, `Q06a`.
+                    let q = query.trim_start_matches(['Q', 'q']);
+                    let split = q.find(|c: char| !c.is_ascii_digit()).unwrap_or(q.len());
+                    let (num, suffix) = q.split_at(split);
+                    let normalized = format!("Q{num:0>2}{suffix}");
+                    val.retain(|bench| bench.name().eq_ignore_ascii_case(&normalized));
                 }
                 (key, val)
             })

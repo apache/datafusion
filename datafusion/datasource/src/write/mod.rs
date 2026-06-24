@@ -75,22 +75,6 @@ pub trait BatchSerializer: Sync + Send {
     fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes>;
 }
 
-/// Returns an [`AsyncWrite`] which writes to the given object store location
-/// with the specified compression.
-///
-/// The writer will have a default buffer size as chosen by [`BufWriter::new`].
-///
-/// We drop the `AbortableWrite` struct and the writer will not try to cleanup on failure.
-/// Users can configure automatic cleanup with their cloud provider.
-#[deprecated(since = "48.0.0", note = "Use ObjectWriterBuilder::new(...) instead")]
-pub async fn create_writer(
-    file_compression_type: FileCompressionType,
-    location: &Path,
-    object_store: Arc<dyn ObjectStore>,
-) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
-    ObjectWriterBuilder::new(file_compression_type, location, object_store).build()
-}
-
 /// Converts table schema to writer schema, which may differ in the case
 /// of hive style partitioning where some columns are removed from the
 /// underlying files.
