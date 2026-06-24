@@ -2655,13 +2655,6 @@ impl Filter {
         Self::try_new_internal(predicate, input)
     }
 
-    /// Create a new filter operator for a having clause.
-    /// This is similar to a filter, but its having flag is set to true.
-    #[deprecated(since = "48.0.0", note = "Use `try_new` instead")]
-    pub fn try_new_with_having(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
-        Self::try_new_internal(predicate, input)
-    }
-
     fn is_allowed_filter_type(data_type: &DataType) -> bool {
         match data_type {
             // Interpret NULL as a missing boolean value.
