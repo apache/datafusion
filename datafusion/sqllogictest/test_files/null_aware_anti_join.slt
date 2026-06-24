@@ -453,9 +453,9 @@ statement ok
 DROP TABLE all_null_banned;
 
 #############
-## Test: dynamic filter pushdown must not drop the inner NULL.
+## Test: dynamic filter pushdown must not drop inner (probe-side) NULLs.
 ## With join dynamic filter pushdown on, the build-side filter pushed to the probe scan would drop
-## the inner NULL, but NOT IN three-valued logic needs it to collapse the result to zero rows. The
+## inner NULLs, but NOT IN three-valued logic needs them to collapse the result to zero rows. The
 ## in-memory VALUES scans above never apply the pushed filter, so this case needs a parquet scan.
 #############
 
@@ -493,7 +493,7 @@ CREATE EXTERNAL TABLE asa_inner_parquet(eid INT)
 STORED AS PARQUET
 LOCATION 'test_files/scratch/null_aware_anti_join/asa_inner.parquet';
 
-# Expected: zero rows. Before the fix the pushed dynamic filter dropped the inner NULL, so the join
+# Expected: zero rows. Before the fix the pushed dynamic filter dropped inner NULLs, so the join
 # wrongly returned id = 1 and id = 3.
 query I
 SELECT id FROM asa_outer_parquet WHERE id NOT IN (SELECT eid FROM asa_inner_parquet) ORDER BY id;
@@ -512,7 +512,7 @@ statement ok
 DROP TABLE asa_inner_parquet;
 
 statement ok
-set datafusion.execution.parquet.pushdown_filters = false;
+RESET datafusion.execution.parquet.pushdown_filters;
 
 statement ok
-set datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
+RESET datafusion.optimizer.enable_join_dynamic_filter_pushdown;
