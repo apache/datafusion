@@ -20,11 +20,12 @@ use std::sync::Arc;
 use crate::physical_optimizer::test_utils::{parquet_exec, schema, sort_exec, sort_expr};
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
-use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::get_plan_string;
+use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
+use datafusion_physical_plan::{ExecutionPlan, displayable, get_plan_string};
 
 /// `OutputRequirements::new_add_mode()` must be idempotent: re-applying it to
 /// its own output must not stack additional `OutputRequirementExec` wrappers.
@@ -62,4 +63,40 @@ fn assert_add_mode_idempotent(plan: Arc<dyn ExecutionPlan>) {
         get_plan_string(&twice),
         "second invocation of OutputRequirements::new_add_mode mutated the plan",
     );
+}
+
+/// For a `ScalarSubqueryExec` root, `new_add_mode()` descends through the main
+/// input (child 0) and wraps the global `SortExec` with an `OutputRequirementExec`
+/// carrying its ordering, leaving the subquery child untouched. Without this, the
+/// multi-child root is skipped and the query's global ORDER BY requirement is lost.
+#[test]
+fn add_mode_descends_through_scalar_subquery() {
+    let s = schema();
+    let ordering: LexOrdering = [sort_expr("a", &s)].into();
+    let sort = sort_exec(ordering, parquet_exec(Arc::clone(&s)));
+
+    // A subquery child makes `children.len() == 2`, exercising the multi-child path.
+    let subqueries = vec![ScalarSubqueryLink {
+        plan: parquet_exec(Arc::clone(&s)),
+        index: SubqueryIndex::new(0),
+    }];
+    let plan = Arc::new(ScalarSubqueryExec::new(
+        sort,
+        subqueries,
+        ScalarSubqueryResults::new(1),
+    )) as Arc<dyn ExecutionPlan>;
+
+    let optimized = OutputRequirements::new_add_mode()
+        .optimize(plan, &ConfigOptions::new())
+        .unwrap();
+
+    insta::assert_snapshot!(
+        displayable(optimized.as_ref()).indent(true).to_string(),
+        @r"
+    ScalarSubqueryExec: subqueries=1
+      OutputRequirementExec: order_by=[(a@0, asc)], dist_by=SinglePartition
+        SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
 }
