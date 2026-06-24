@@ -44,7 +44,7 @@ use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
-    exec_datafusion_err, internal_err, resources_datafusion_err,
+    internal_err, resources_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -1048,11 +1048,10 @@ impl GroupedHashAggregateStream {
 
         // Step 2: Reorder only evaluated arrays instead of the full input batch.
         Self::partition_grouped_take(
-            group_values[0].len(),
             &mut self.partition_indices,
             &mut self.partition_ranges,
             &mut self.reordered_indices,
-        )?;
+        );
         self.reordered_hashes.clear();
         self.reordered_hashes.extend(
             self.reordered_indices
@@ -1115,18 +1114,12 @@ impl GroupedHashAggregateStream {
     }
 
     fn partition_grouped_take(
-        num_rows: usize,
         indices: &mut [Vec<u32>],
         partition_ranges: &mut Vec<PartitionRange>,
         reordered_indices: &mut Vec<u32>,
-    ) -> Result<()> {
+    ) {
         partition_ranges.clear();
         reordered_indices.clear();
-        reordered_indices.try_reserve(num_rows).map_err(|error| {
-            exec_datafusion_err!(
-                "failed to reserve {num_rows} reordered partition indices: {error}"
-            )
-        })?;
 
         for (partition, partition_indices) in indices.iter_mut().enumerate() {
             if partition_indices.is_empty() {
@@ -1138,8 +1131,6 @@ impl GroupedHashAggregateStream {
             partition_ranges.push((partition, start..start + len));
             partition_indices.clear();
         }
-
-        Ok(())
     }
 
     /// Attempts to update the memory reservation. If that fails due to a
