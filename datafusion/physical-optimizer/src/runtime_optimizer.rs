@@ -41,7 +41,9 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::pipeline_breaker_buffer::PipelineBreakerBuffer;
-use datafusion_physical_plan::runtime_optimizer::RuntimeOptimizerExec;
+use datafusion_physical_plan::runtime_optimizer::{
+    RuntimeOptimizerExec, RuntimeRule, SwapBuildSideIfInverted,
+};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use futures::task::AtomicWaker;
 
@@ -91,8 +93,14 @@ impl PhysicalOptimizerRule for InsertRuntimeOptimizer {
             })?
             .data;
 
-        // Phase 2: wrap the root.
-        Ok(Arc::new(RuntimeOptimizerExec::new(with_buffers, rto_waker)))
+        // Phase 2: wrap the root with the default rule set.
+        let rules: Vec<Arc<dyn RuntimeRule>> =
+            vec![Arc::new(SwapBuildSideIfInverted::new())];
+        Ok(Arc::new(RuntimeOptimizerExec::new(
+            with_buffers,
+            rto_waker,
+            rules,
+        )))
     }
 
     fn schema_check(&self) -> bool {

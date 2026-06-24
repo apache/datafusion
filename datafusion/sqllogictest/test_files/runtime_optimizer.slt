@@ -90,14 +90,15 @@ SELECT count(*) FROM (SELECT group_key FROM big GROUP BY group_key) t;
 5
 
 # ---------------------------------------------------------------------------
-# EXPLAIN — RED today. Without RuntimeOptimizerExec, JoinSelection trusts
-# the (badly-estimated) aggregated_big size and picks `small` as the build
-# side. We're penciling in the target plan that RuntimeOptimizerExec will
-# produce: the join with `aggregated_big` as the left/build child and
-# `small` as the right/probe child, wrapped in a RuntimeOptimizerExec.
-#
-# Statistics decoration is intentionally minimal; an update-mode pass once
-# RuntimeOptimizerExec renders itself will fill in exact text.
+# EXPLAIN — shows the *static* plan with AQE primitives wrapped in
+# (RuntimeOptimizerExec at root; PipelineBreakerBuffer above each
+# pipeline breaker). JoinSelection picked `small` as build statically
+# because aggregated_big's row-count estimate (Inexact, ~100K) overstates
+# the actual (5). RuntimeOptimizerExec detects this inversion at runtime
+# and would call `HashJoinExec::flip_sides()` to swap — but flip_sides
+# isn't implemented yet, so for now the rule only logs intent. EXPLAIN
+# stays the static plan; the swap is verified via log output and (later)
+# via metrics.
 # ---------------------------------------------------------------------------
 query TT
 EXPLAIN SELECT bg.group_key, bg.sum_payload, s.payload
@@ -117,16 +118,16 @@ logical_plan
 08)------TableScan: small projection=[id, payload]
 physical_plan
 01)RuntimeOptimizerExec
-02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(group_key@0, id@0)], projection=[group_key@0, sum_payload@1, payload@3]
-03)----ProjectionExec: expr=[group_key@0 as group_key, sum(big.payload)@1 as sum_payload]
-04)------PipelineBreakerBuffer
-05)--------AggregateExec: mode=FinalPartitioned, gby=[group_key@0 as group_key], aggr=[sum(big.payload)]
-06)----------RepartitionExec: partitioning=Hash([group_key@0], 4), input_partitions=4
-07)------------PipelineBreakerBuffer
-08)--------------AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[sum(big.payload)]
-09)----------------DataSourceExec
-10)----CoalescePartitionsExec
-11)------DataSourceExec
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, group_key@0)], projection=[group_key@2, sum_payload@3, payload@1]
+03)----CoalescePartitionsExec
+04)------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+05)----ProjectionExec: expr=[group_key@0 as group_key, sum(big.payload)@1 as sum_payload]
+06)------PipelineBreakerBuffer
+07)--------AggregateExec: mode=FinalPartitioned, gby=[group_key@0 as group_key], aggr=[sum(big.payload)]
+08)----------RepartitionExec: partitioning=Hash([group_key@0], 4), input_partitions=4
+09)------------PipelineBreakerBuffer
+10)--------------AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[sum(big.payload)]
+11)----------------DataSourceExec: partitions=4, partition_sizes=[4, 3, 3, 3]
 
 # ---------------------------------------------------------------------------
 # Result — GREEN regardless of build-side choice (correctness is plan-

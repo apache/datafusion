@@ -21,14 +21,17 @@
 //! ([`crate::runtime_optimizer::RuntimeOptimizerExec`]) before downstream
 //! consumers see any data.
 //!
-//! Two flags govern behavior:
+//! Three flags govern behavior:
 //! - `is_ready` (mechanical): set automatically when every input partition
-//!   has produced its first poll result (a batch or termination). Signals
-//!   that runtime stats from the breaker are now derivable.
-//! - `go_ahead` (semantic): set externally by the coordinator after rules
-//!   have evaluated. While false, per-partition streams hold their
-//!   absorbed batches and return `Pending`, storing the caller's waker so
-//!   `set_go_ahead` can wake them.
+//!   has produced its first poll result. Runtime stats from the breaker
+//!   become derivable.
+//! - `streaming_enabled` (rule-controlled proposal): reset each poll cycle
+//!   by RTO — set to `is_ready` as the permissive default. Rules can
+//!   flip it back to `false` to veto release. No side effects.
+//! - `streaming_started` (actual emission control): only RTO flips this,
+//!   via `start_streaming()`, which also wakes per-partition wakers.
+//!   Once true, partition streams emit their held batches and continue
+//!   forwarding.
 //!
 //! Coordination uses a shared [`AtomicWaker`] (`rto_waker`) populated at
 //! plan time by [`crate::runtime_optimizer::RuntimeOptimizerExec`]. The
@@ -77,9 +80,17 @@ struct BufferState {
     /// Partitions whose first poll has completed (with or without a batch).
     seen: HashSet<usize>,
     is_ready: bool,
-    go_ahead: bool,
+    /// Rule-controllable proposal. Reset by RTO each poll cycle: set
+    /// to `is_ready` as the permissive default, then rules may flip it
+    /// to false to veto.
+    streaming_enabled: bool,
+    /// Actual emission control. Only RTO flips this via `start_streaming`.
+    /// Per-partition streams check this; while false, they hold their
+    /// first batch and return Pending.
+    streaming_started: bool,
     num_partitions: usize,
-    /// Wakers stashed by per-partition streams while awaiting `go_ahead`.
+    /// Wakers stashed by per-partition streams while awaiting
+    /// `streaming_started`.
     wakers: HashMap<usize, Waker>,
 }
 
@@ -94,7 +105,8 @@ impl PipelineBreakerBuffer {
                 held: HashMap::new(),
                 seen: HashSet::new(),
                 is_ready: false,
-                go_ahead: false,
+                streaming_enabled: false,
+                streaming_started: false,
                 num_partitions,
                 wakers: HashMap::new(),
             })),
@@ -107,15 +119,32 @@ impl PipelineBreakerBuffer {
         self.state.lock().unwrap().is_ready
     }
 
-    /// Release per-partition streams: emit held batches and resume
-    /// forwarding. Idempotent.
-    pub fn set_go_ahead(&self) {
+    /// Rule-controllable proposal flag. RTO resets this to `is_ready` at
+    /// the start of each poll cycle as the permissive default; rules may
+    /// then flip it to false to veto release this cycle. No side effects.
+    pub fn streaming_enabled(&self) -> bool {
+        self.state.lock().unwrap().streaming_enabled
+    }
+
+    pub fn set_streaming_enabled(&self, enabled: bool) {
+        self.state.lock().unwrap().streaming_enabled = enabled;
+    }
+
+    /// True once `start_streaming` has been called. After this, per-
+    /// partition streams emit their held batches and resume forwarding.
+    pub fn streaming_started(&self) -> bool {
+        self.state.lock().unwrap().streaming_started
+    }
+
+    /// Start actual emission: flips `streaming_started` and wakes all
+    /// per-partition wakers. Idempotent. Only RTO should call this.
+    pub fn start_streaming(&self) {
         let wakers = {
             let mut state = self.state.lock().unwrap();
-            if state.go_ahead {
+            if state.streaming_started {
                 return;
             }
-            state.go_ahead = true;
+            state.streaming_started = true;
             state.wakers.drain().map(|(_, w)| w).collect::<Vec<_>>()
         };
         for w in wakers {
@@ -183,10 +212,11 @@ impl ExecutionPlan for PipelineBreakerBuffer {
 enum Phase {
     /// Haven't yet pulled the first batch from this input partition.
     NeedFirstBatch,
-    /// First batch absorbed (or input was empty). Holding until `go_ahead`.
-    WaitForGoAhead,
-    /// `go_ahead` set; emit our held batch (if any) then transition to
-    /// streaming.
+    /// First batch absorbed (or input was empty). Holding until RTO calls
+    /// `start_streaming`.
+    WaitForStreaming,
+    /// `streaming_started` is set; emit our held batch (if any) then
+    /// transition to streaming.
     EmitHeld,
     /// Pass through input batches as they arrive.
     Streaming,
@@ -243,11 +273,11 @@ impl Stream for BufferStream {
                         // wakes the actual top-of-plan task.
                         this.rto_waker.wake();
                     }
-                    this.phase = Phase::WaitForGoAhead;
+                    this.phase = Phase::WaitForStreaming;
                 }
-                Phase::WaitForGoAhead => {
+                Phase::WaitForStreaming => {
                     let mut state = this.state.lock().unwrap();
-                    if state.go_ahead {
+                    if state.streaming_started {
                         drop(state);
                         this.phase = Phase::EmitHeld;
                         continue;

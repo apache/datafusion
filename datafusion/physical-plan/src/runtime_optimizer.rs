@@ -15,20 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Coordinator wrapper at the root of the plan. On every poll, walks its
-//! subtree and releases any [`PipelineBreakerBuffer`] whose `is_ready`
-//! flag has flipped. Buffers schedule re-polls via `cx.waker().wake_by_ref()`
-//! when they become ready, so the wrapper sees the state change without
-//! any explicit notification channel.
+//! Coordinator wrapper at the root of the plan. On every poll, it walks
+//! its subtree to release any [`PipelineBreakerBuffer`] whose `is_ready`
+//! flag has flipped, then runs each registered [`RuntimeRule`] over the
+//! plan. Rules observe runtime stats (via `runtime_row_count` and
+//! similar) and mutate adaptive operators in place (e.g.
+//! `HashJoinExec::flip_sides`).
 //!
-//! Base case today is unconditional release: as soon as a buffer reports
-//! ready, `set_go_ahead` is called. A future `Vec<RuntimeRule>` will run
-//! between "all ready" and "release," allowing rules to mutate adaptive
-//! operators (e.g. `HashJoinExec::flip_sides`) or hold specific buffers
-//! by leaving `go_ahead` false.
+//! Buffers notify us via a shared [`AtomicWaker`] (`rto_waker`) that we
+//! register on each `poll_next` — `cx.waker()` is task-local and won't
+//! cross a spawned-subtask boundary like `RepartitionExec`'s internals,
+//! but `AtomicWaker.wake()` does.
 
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
 use arrow::array::RecordBatch;
@@ -36,13 +37,27 @@ use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use futures::task::AtomicWaker;
 use futures::{Stream, StreamExt};
+use log::info;
 
+use crate::joins::HashJoinExec;
 use crate::pipeline_breaker_buffer::PipelineBreakerBuffer;
+use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     SendableRecordBatchStream,
 };
+
+/// A runtime adaptive-execution rule that may inspect the plan tree and
+/// mutate adaptive operators in place. Rules are called from
+/// [`RuntimeOptimizerExec`] on every poll, *after* ready buffers have
+/// been released. They are expected to be cheap and idempotent (track
+/// their own "already fired" state if they should only run once per
+/// query).
+pub trait RuntimeRule: Send + Sync + std::fmt::Debug {
+    fn name(&self) -> &str;
+    fn evaluate(&self, plan: &Arc<dyn ExecutionPlan>);
+}
 
 #[derive(Debug)]
 pub struct RuntimeOptimizerExec {
@@ -51,19 +66,24 @@ pub struct RuntimeOptimizerExec {
     /// Shared with every `PipelineBreakerBuffer` in this subplan.
     /// Buffers wake this AtomicWaker when `is_ready` flips; we register
     /// the current task's waker on it during each `poll_next` so a
-    /// wake-up from inside a spawned subtask (e.g. one of
-    /// `RepartitionExec`'s internals) reaches the actual top-of-plan
-    /// task — `cx.waker()` propagation alone can't cross that boundary.
+    /// wake-up from inside a spawned subtask reaches the actual
+    /// top-of-plan task.
     rto_waker: Arc<AtomicWaker>,
+    rules: Vec<Arc<dyn RuntimeRule>>,
 }
 
 impl RuntimeOptimizerExec {
-    pub fn new(input: Arc<dyn ExecutionPlan>, rto_waker: Arc<AtomicWaker>) -> Self {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        rto_waker: Arc<AtomicWaker>,
+        rules: Vec<Arc<dyn RuntimeRule>>,
+    ) -> Self {
         let cache = Arc::clone(input.properties());
         Self {
             input,
             cache,
             rto_waker,
+            rules,
         }
     }
 }
@@ -98,6 +118,7 @@ impl ExecutionPlan for RuntimeOptimizerExec {
         Ok(Arc::new(Self::new(
             children.swap_remove(0),
             Arc::clone(&self.rto_waker),
+            self.rules.clone(),
         )))
     }
 
@@ -116,19 +137,17 @@ impl ExecutionPlan for RuntimeOptimizerExec {
             child,
             plan: Arc::clone(&self.input),
             rto_waker: Arc::clone(&self.rto_waker),
+            rules: self.rules.clone(),
         };
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 }
 
-/// Wraps the child stream. Each poll registers our task waker with the
-/// shared `rto_waker` (so any buffer in the subtree can pull us out of
-/// `Pending` when its `is_ready` flips), walks the subtree releasing
-/// ready buffers, then forwards the child poll.
 struct CoordinatorStream {
     child: SendableRecordBatchStream,
     plan: Arc<dyn ExecutionPlan>,
     rto_waker: Arc<AtomicWaker>,
+    rules: Vec<Arc<dyn RuntimeRule>>,
 }
 
 impl Stream for CoordinatorStream {
@@ -142,21 +161,156 @@ impl Stream for CoordinatorStream {
         // Register before walking so a buffer flipping is_ready *after*
         // we walked but *before* we return Pending still wakes us.
         this.rto_waker.register(cx.waker());
-        release_ready_buffers(&this.plan);
+
+        // Phase 1: set the permissive default — every ready buffer is
+        // proposed for release.
+        propose_release_for_ready_buffers(&this.plan);
+
+        // Phase 2: rules may veto specific buffers (set
+        // streaming_enabled=false) or mutate adaptive operators.
+        for rule in &this.rules {
+            rule.evaluate(&this.plan);
+        }
+
+        // Phase 3: commit — actually start streaming on any buffer that
+        // is still enabled.
+        start_streaming_on_enabled_buffers(&this.plan);
+
         this.child.poll_next_unpin(cx)
     }
 }
 
-/// Walk the subtree; for every `PipelineBreakerBuffer` whose `is_ready`
-/// flag is set, call `set_go_ahead`. Idempotent — released buffers
-/// short-circuit on the next call.
-fn release_ready_buffers(plan: &Arc<dyn ExecutionPlan>) {
-    if let Some(buffer) = plan.downcast_ref::<PipelineBreakerBuffer>()
-        && buffer.is_ready()
-    {
-        buffer.set_go_ahead();
+fn propose_release_for_ready_buffers(plan: &Arc<dyn ExecutionPlan>) {
+    if let Some(buffer) = plan.downcast_ref::<PipelineBreakerBuffer>() {
+        buffer.set_streaming_enabled(buffer.is_ready());
     }
     for child in plan.children() {
-        release_ready_buffers(child);
+        propose_release_for_ready_buffers(child);
     }
+}
+
+fn start_streaming_on_enabled_buffers(plan: &Arc<dyn ExecutionPlan>) {
+    if let Some(buffer) = plan.downcast_ref::<PipelineBreakerBuffer>()
+        && buffer.streaming_enabled()
+    {
+        buffer.start_streaming();
+    }
+    for child in plan.children() {
+        start_streaming_on_enabled_buffers(child);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SwapBuildSideIfInverted — first concrete RuntimeRule.
+//
+// When a HashJoinExec's current build side (the LEFT child under
+// `mode=CollectLeft`) ends up larger at runtime than the probe side,
+// the static planner made the wrong choice — it picked build based on
+// (Inexact) estimates. The fix is `HashJoinExec::flip_sides()`, which
+// isn't implemented yet; for now this rule only logs intent so we can
+// verify the detection logic end-to-end.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub struct SwapBuildSideIfInverted {
+    fired: AtomicBool,
+}
+
+impl SwapBuildSideIfInverted {
+    pub fn new() -> Self {
+        Self {
+            fired: AtomicBool::new(false),
+        }
+    }
+}
+
+impl Default for SwapBuildSideIfInverted {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RuntimeRule for SwapBuildSideIfInverted {
+    fn name(&self) -> &str {
+        "SwapBuildSideIfInverted"
+    }
+
+    fn evaluate(&self, plan: &Arc<dyn ExecutionPlan>) {
+        if self.fired.load(Ordering::Relaxed) {
+            return;
+        }
+        self.walk_for_swap(plan);
+    }
+}
+
+impl SwapBuildSideIfInverted {
+    fn walk_for_swap(&self, plan: &Arc<dyn ExecutionPlan>) {
+        if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
+            let children = join.children();
+            if children.len() == 2 {
+                // Current HashJoinExec: LEFT child is the build side
+                // under `mode=CollectLeft`.
+                let left = side_runtime_rows(children[0]);
+                let right = side_runtime_rows(children[1]);
+                if let (Some(l), Some(r)) = (left, right)
+                    && l > r
+                    && self
+                        .fired
+                        .compare_exchange(
+                            false,
+                            true,
+                            Ordering::AcqRel,
+                            Ordering::Relaxed,
+                        )
+                        .is_ok()
+                {
+                    info!(
+                        "SwapBuildSideIfInverted: would flip HashJoinExec — \
+                         current build (left) = {l} rows, probe (right) = {r} \
+                         rows. flip_sides() not yet implemented; logging \
+                         intent only."
+                    );
+                }
+            }
+            return;
+        }
+        for child in plan.children() {
+            self.walk_for_swap(child);
+        }
+    }
+}
+
+/// Row count of a join input's subtree. Prefers runtime stats from the
+/// deepest node that reports `runtime_row_count` (typically an
+/// `AggregateExec` once its build phase has begun emitting). Falls back
+/// to plan-time `statistics()` for pure static-source subtrees (e.g. a
+/// small in-memory table behind a `CoalescePartitionsExec`).
+fn side_runtime_rows(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
+    if let Some(rows) = sum_runtime_rows_in_subtree(plan) {
+        return Some(rows);
+    }
+    plan.statistics_with_args(&StatisticsArgs::new())
+        .ok()
+        .and_then(|s| s.num_rows.get_value().copied())
+}
+
+fn sum_runtime_rows_in_subtree(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
+    let n = plan.output_partitioning().partition_count();
+    let mut total: usize = 0;
+    let mut found_any = false;
+    for p in 0..n {
+        if let Some(rows) = plan.runtime_row_count(p) {
+            total += rows;
+            found_any = true;
+        }
+    }
+    if found_any {
+        return Some(total);
+    }
+    for child in plan.children() {
+        if let Some(rows) = sum_runtime_rows_in_subtree(child) {
+            return Some(rows);
+        }
+    }
+    None
 }
