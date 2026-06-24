@@ -282,6 +282,9 @@ select array_position([1, 2, 3], 3, 4), array_position([1], 1, 2);
 ----
 NULL NULL
 
+query error DataFusion error: Execution error: start_from out of bounds: -9223372036854775807
+SELECT array_position([1], 1, -9223372036854775808);
+
 # array_position with empty array in various contexts
 query II
 select array_position(arrow_cast(make_array(), 'List(Int64)'), 1), array_position(arrow_cast(make_array(), 'LargeList(Int64)'), 1);

@@ -207,15 +207,21 @@ fn resolve_start_from(
     match third_arg {
         None => Ok(vec![0i64; num_rows]),
         Some(ColumnarValue::Scalar(ScalarValue::Int64(Some(v)))) => {
-            Ok(vec![v - 1; num_rows])
+            Ok(vec![normalize_start_from(*v)?; num_rows])
         }
         Some(ColumnarValue::Scalar(s)) => {
             exec_err!("array_position expected Int64 for start_from, got {s}")
         }
-        Some(ColumnarValue::Array(a)) => {
-            Ok(as_int64_array(a)?.values().iter().map(|&x| x - 1).collect())
-        }
+        Some(ColumnarValue::Array(a)) => as_int64_array(a)?
+            .values()
+            .iter()
+            .map(|&x| normalize_start_from(x))
+            .collect(),
     }
+}
+
+fn normalize_start_from(start_from: i64) -> Result<i64> {
+    Ok(start_from.saturating_sub(1))
 }
 
 /// Fast path for `array_position` when the needle is scalar.
@@ -309,8 +315,8 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
         as_int64_array(&args[2])?
             .values()
             .iter()
-            .map(|&x| x - 1)
-            .collect::<Vec<_>>()
+            .map(|&x| normalize_start_from(x))
+            .collect::<Result<Vec<_>>>()?
     } else {
         vec![0; haystack.len()]
     };
@@ -592,8 +598,28 @@ fn array_positions_scalar<O: OffsetSizeTrait>(
 mod tests {
     use super::*;
     use arrow::array::AsArray;
-    use arrow::datatypes::Int32Type;
+    use arrow::array::Int64Array;
+    use arrow::datatypes::{Int32Type, Int64Type};
     use datafusion_common::config::ConfigOptions;
+
+    #[test]
+    fn test_array_position_start_from_min_value() -> Result<()> {
+        let haystack = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1)]),
+        ])) as ArrayRef;
+        let needle = Arc::new(Int64Array::from(vec![1])) as ArrayRef;
+        let start_from = Arc::new(Int64Array::from(vec![i64::MIN])) as ArrayRef;
+
+        let err = array_position_inner(&[haystack, needle, start_from])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("start_from out of bounds: -9223372036854775807"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
+    }
 
     #[test]
     fn test_array_position_sliced_list() -> Result<()> {
