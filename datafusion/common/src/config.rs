@@ -721,7 +721,7 @@ config_namespace! {
         /// will be removed after the migration is finished.
         ///
         /// See <https://github.com/apache/datafusion/issues/22710> for details.
-        pub enable_migration_aggregate: bool, default = true
+        pub enable_migration_aggregate: bool, default = false
 
         /// Sets the compression codec used when spilling data to disk.
         ///
