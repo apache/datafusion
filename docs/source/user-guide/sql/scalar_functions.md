@@ -3248,6 +3248,7 @@ _Alias of [current_date](#current_date)._
 - [array_any_match](#array_any_match)
 - [array_any_value](#array_any_value)
 - [array_append](#array_append)
+- [array_avg](#array_avg)
 - [array_cat](#array_cat)
 - [array_compact](#array_compact)
 - [array_concat](#array_concat)
@@ -3309,6 +3310,7 @@ _Alias of [current_date](#current_date)._
 - [list_any_match](#list_any_match)
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
+- [list_avg](#list_avg)
 - [list_cat](#list_cat)
 - [list_compact](#list_compact)
 - [list_concat](#list_concat)
@@ -3480,6 +3482,33 @@ array_append(array, element)
 - list_append
 - array_push_back
 - list_push_back
+
+### `array_avg`
+
+Returns the arithmetic mean (sum divided by count) of the elements of the input array. NULL elements are skipped (per SQL aggregate convention) and excluded from the count. Returns NULL if the input row is NULL, every element is NULL, or the array is empty.
+
+```sql
+array_avg(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_avg([1.0, 2.0, 3.0]);
++----------------------------+
+| array_avg(List([1.0,2.0,3.0])) |
++----------------------------+
+| 2.0                        |
++----------------------------+
+```
+
+#### Aliases
+
+- list_avg
 
 ### `array_cat`
 
@@ -4908,6 +4937,10 @@ _Alias of [array_any_value](#array_any_value)._
 ### `list_append`
 
 _Alias of [array_append](#array_append)._
+
+### `list_avg`
+
+_Alias of [array_avg](#array_avg)._
 
 ### `list_cat`
 
