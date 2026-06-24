@@ -932,6 +932,7 @@ impl Stream for GroupedHashAggregateStream {
                         } else if self.mode == AggregateMode::Partial
                             && self.should_skip_aggregation()
                         {
+                            panic!("aaaaaaa");
                             self.exec_state = ExecutionState::SkippingAggregation;
                         } else {
                             self.exec_state = ExecutionState::ReadingInput;
