@@ -324,6 +324,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// processed. Reused across batches here to avoid reallocations
     current_group_indices: Vec<usize>,
 
+    /// Number of hash partitions used by the partitioned partial aggregation POC.
+    partitioned_aggregation_num_partitions: usize,
+
     /// Accumulators, one for each `AggregateFunctionExpr` in the query
     ///
     /// For example, if the query has aggregates, `SUM(x)`,
@@ -501,6 +504,14 @@ impl GroupedHashAggregateStream {
             _ => OutOfMemoryMode::ReportError,
         };
 
+        let partitioned_aggregation_num_partitions =
+            partitioned_aggregation_num_partitions(
+                agg.mode,
+                &group_ordering,
+                agg_group_by.as_ref(),
+                context.session_config().target_partitions(),
+            );
+
         let group_values = new_group_values(group_schema, &group_ordering)?;
         let reservation = MemoryConsumer::new(name)
             // We interpret 'can spill' as 'can handle memory back pressure'.
@@ -592,6 +603,7 @@ impl GroupedHashAggregateStream {
             oom_mode,
             group_values,
             current_group_indices: Default::default(),
+            partitioned_aggregation_num_partitions,
             exec_state,
             baseline_metrics,
             group_by_metrics,
@@ -609,6 +621,22 @@ impl GroupedHashAggregateStream {
 /// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
 /// that is supported by the aggregate, or a
 /// [`GroupsAccumulatorAdapter`] if not.
+fn partitioned_aggregation_num_partitions(
+    mode: AggregateMode,
+    group_ordering: &GroupOrdering,
+    group_by: &PhysicalGroupBy,
+    target_partitions: usize,
+) -> usize {
+    if mode == AggregateMode::Partial
+        && matches!(group_ordering, GroupOrdering::None)
+        && group_by.groups().len() == 1
+    {
+        target_partitions
+    } else {
+        1
+    }
+}
+
 pub(crate) fn create_group_accumulator(
     agg_expr: &Arc<AggregateFunctionExpr>,
 ) -> Result<Box<dyn GroupsAccumulator>> {
@@ -834,6 +862,9 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 impl GroupedHashAggregateStream {
     /// Perform group-by aggregation for the given [`RecordBatch`].
     fn group_aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let _is_partitioned_aggregation_enabled =
+            self.partitioned_aggregation_num_partitions > 1;
+
         // Evaluate the grouping expressions
         let group_by_values = if self.spill_state.is_stream_merging {
             evaluate_group_by(&self.spill_state.merging_group_by, batch)?
