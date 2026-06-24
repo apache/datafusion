@@ -932,7 +932,6 @@ impl Stream for GroupedHashAggregateStream {
                         } else if self.mode == AggregateMode::Partial
                             && self.should_skip_aggregation()
                         {
-                            panic!("aaaaaaa");
                             self.exec_state = ExecutionState::SkippingAggregation;
                         } else {
                             self.exec_state = ExecutionState::ReadingInput;
@@ -1681,7 +1680,12 @@ impl GroupedHashAggregateStream {
             // Skip aggregation probe is not supported if stream has any spills,
             // currently spilling is not supported for Partial aggregation
             assert!(self.spill_state.spills.is_empty());
-            probe.update_state(input_rows, self.group_values[0].len());
+            let num_groups = self
+                .group_values
+                .iter()
+                .map(|group_values| group_values.len())
+                .sum();
+            probe.update_state(input_rows, num_groups);
         };
     }
 
