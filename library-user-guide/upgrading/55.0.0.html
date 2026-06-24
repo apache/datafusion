@@ -456,6 +456,13 @@ to the main branch and are awaiting release in this version.</p>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_common::config::Dialect::AVAILABLE</span></code> has been removed. Use
 <code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code> instead.</p>
 </section>
+<section id="spill-record-batch-by-size-removed">
+<h3><code class="docutils literal notranslate"><span class="pre">spill_record_batch_by_size</span></code> removed<a class="headerlink" href="#spill-record-batch-by-size-removed" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_plan::spill::spill_record_batch_by_size</span></code> has been removed.
+This function was deprecated in DataFusion <code class="docutils literal notranslate"><span class="pre">46.0.0</span></code>.</p>
+<p>Use <code class="docutils literal notranslate"><span class="pre">datafusion_physical_plan::spill::SpillManager::spill_record_batch_by_size</span></code>
+instead.</p>
+</section>
 <section id="decimal-scalar-formatting-uses-human-readable-values">
 <h3>Decimal scalar formatting uses human-readable values<a class="headerlink" href="#decimal-scalar-formatting-uses-human-readable-values" title="Link to this heading">#</a></h3>
 <p>Decimal scalar literals in <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code> output, expression display strings, and
@@ -858,6 +865,7 @@ type aliases:</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-55-0-0">DataFusion 55.0.0</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dialect-available-replaced-by-dialect-available"><code class="docutils literal notranslate"><span class="pre">Dialect::AVAILABLE</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spill-record-batch-by-size-removed"><code class="docutils literal notranslate"><span class="pre">spill_record_batch_by_size</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#decimal-scalar-formatting-uses-human-readable-values">Decimal scalar formatting uses human-readable values</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupsaccumulator-merge-batch-no-longer-takes-opt-filter"><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::merge_batch</span></code> no longer takes <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#is-dynamic-physical-expr-is-deprecated"><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated</a></li>
