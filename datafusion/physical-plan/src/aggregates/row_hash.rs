@@ -44,7 +44,7 @@ use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err, resources_datafusion_err,
+    exec_datafusion_err, internal_err, resources_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -80,7 +80,6 @@ pub(crate) enum ExecutionState {
 }
 
 type PartitionRange = (usize, Range<usize>);
-type PartitionedIndices = (Vec<PartitionRange>, Vec<u32>);
 
 /// This encapsulates the spilling state
 struct SpillState {
@@ -338,6 +337,15 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Reused row indices for partitioning a batch by group key hashes.
     partition_indices: Vec<Vec<u32>>,
+
+    /// Reused ranges into the reordered partition buffer.
+    partition_ranges: Vec<PartitionRange>,
+
+    /// Reused row indices in partition order.
+    reordered_indices: Vec<u32>,
+
+    /// Reused group key hashes in partition order.
+    reordered_hashes: Vec<u64>,
 
     /// Accumulators, one for each `AggregateFunctionExpr` in the query
     ///
@@ -626,6 +634,9 @@ impl GroupedHashAggregateStream {
             partitioned_aggregation_num_partitions,
             hashes_buffer: vec![],
             partition_indices: vec![vec![]; partitioned_aggregation_num_partitions],
+            partition_ranges: vec![],
+            reordered_indices: vec![],
+            reordered_hashes: vec![],
             exec_state,
             baseline_metrics,
             group_by_metrics,
@@ -1035,15 +1046,20 @@ impl GroupedHashAggregateStream {
         }
 
         // Step 2: Reorder only evaluated arrays instead of the full input batch.
-        let (partition_ranges, reordered_indices) = Self::partition_grouped_take(
+        Self::partition_grouped_take(
             group_values[0].len(),
             &mut self.partition_indices,
+            &mut self.partition_ranges,
+            &mut self.reordered_indices,
+        )?;
+        self.reordered_hashes.clear();
+        self.reordered_hashes.extend(
+            self.reordered_indices
+                .iter()
+                .map(|index| self.hashes_buffer[*index as usize]),
         );
-        let reordered_hashes = reordered_indices
-            .iter()
-            .map(|index| self.hashes_buffer[*index as usize])
-            .collect::<Vec<_>>();
-        let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.into();
+        let indices_array: PrimitiveArray<UInt32Type> =
+            self.reordered_indices.iter().copied().collect();
         let reordered_group_values = take_group_values(group_values, &indices_array)?;
         let reordered_input_values = take_nested_values(input_values, &indices_array)?;
         let reordered_filter_values =
@@ -1051,26 +1067,26 @@ impl GroupedHashAggregateStream {
 
         // Step 3: Slice each partition and update the matching group values and accumulators.
         let mut hash_offset = 0;
-        for (partition, range) in partition_ranges {
+        for (partition, range) in &self.partition_ranges {
             let partition_group_values =
-                slice_group_values(&reordered_group_values, &range);
+                slice_group_values(&reordered_group_values, range);
             let partition_input_values =
-                slice_nested_values(&reordered_input_values, &range);
+                slice_nested_values(&reordered_input_values, range);
             let partition_filter_values =
-                slice_optional_values(&reordered_filter_values, &range);
+                slice_optional_values(&reordered_filter_values, range);
             let partition_hashes =
-                &reordered_hashes[hash_offset..hash_offset + range.len()];
+                &self.reordered_hashes[hash_offset..hash_offset + range.len()];
             hash_offset += range.len();
 
             let groups_start_time = Instant::now();
-            let starting_num_groups = self.group_values[partition].len();
-            self.group_values[partition].intern(
+            let starting_num_groups = self.group_values[*partition].len();
+            self.group_values[*partition].intern(
                 &partition_group_values,
                 &mut self.current_group_indices,
                 partition_hashes,
             )?;
             let group_indices = &self.current_group_indices;
-            let total_num_groups = self.group_values[partition].len();
+            let total_num_groups = self.group_values[*partition].len();
             if total_num_groups > starting_num_groups {
                 self.group_ordering.new_groups(
                     &partition_group_values,
@@ -1084,7 +1100,7 @@ impl GroupedHashAggregateStream {
                 .time_calculating_group_ids
                 .add_duration(agg_start_time - groups_start_time);
 
-            let accumulators = self.accumulators[partition]
+            let accumulators = self.accumulators[*partition]
                 .iter_mut()
                 .zip(partition_input_values.iter())
                 .zip(partition_filter_values.iter());
@@ -1108,9 +1124,16 @@ impl GroupedHashAggregateStream {
     fn partition_grouped_take(
         num_rows: usize,
         indices: &mut [Vec<u32>],
-    ) -> PartitionedIndices {
-        let mut partition_ranges = Vec::with_capacity(indices.len());
-        let mut reordered_indices = Vec::with_capacity(num_rows);
+        partition_ranges: &mut Vec<PartitionRange>,
+        reordered_indices: &mut Vec<u32>,
+    ) -> Result<()> {
+        partition_ranges.clear();
+        reordered_indices.clear();
+        reordered_indices.try_reserve(num_rows).map_err(|error| {
+            exec_datafusion_err!(
+                "failed to reserve {num_rows} reordered partition indices: {error}"
+            )
+        })?;
 
         for (partition, partition_indices) in indices.iter_mut().enumerate() {
             if partition_indices.is_empty() {
@@ -1123,7 +1146,7 @@ impl GroupedHashAggregateStream {
             partition_indices.clear();
         }
 
-        (partition_ranges, reordered_indices)
+        Ok(())
     }
 
     /// Attempts to update the memory reservation. If that fails due to a
