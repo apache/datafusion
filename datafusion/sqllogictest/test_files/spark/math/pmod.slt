@@ -208,17 +208,17 @@ SELECT pmod(10.5::float4, 3.0::float4) as pmod_float32_1;
 ----
 1.5
 
-query R
+query L
 SELECT CAST(pmod(CAST(-7.2 AS float4), CAST(3.0 AS float4)) AS DECIMAL(3,1)) as pmod_float32_2;
 ----
 1.8
 
-query R
+query L
 SELECT CAST(pmod(15.8::float4, 4.2::float4) AS DECIMAL(3,1)) as pmod_float32_3;
 ----
 3.2
 
-query R
+query L
 SELECT CAST(pmod(-15.8::float4, 4.2::float4) AS DECIMAL(3,1)) as pmod_float32_4;
 ----
 1
@@ -260,22 +260,22 @@ SELECT pmod('Infinity'::float8, 'NaN'::float8) as pmod_inf_nan_1;
 NaN
 
 # PMOD tests with decimal types
-query R
+query L
 SELECT pmod(2.5::decimal(3,1), 1.2::decimal(2,1)) as pmod_decimal_1;
 ----
 0.1
 
-query R
+query L
 SELECT pmod(-2.5::decimal(3,1), 1.2::decimal(2,1)) as pmod_decimal_2;
 ----
 1.1
 
-query R
+query L
 SELECT pmod(10.0::decimal(3,1), 3.0::decimal(2,1)) as pmod_decimal_3;
 ----
 1
 
-query R
+query L
 SELECT pmod(-10.0::decimal(3,1), 3.0::decimal(2,1)) as pmod_decimal_4;
 ----
 2

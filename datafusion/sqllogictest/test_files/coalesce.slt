@@ -106,7 +106,7 @@ select
 2 Int64
 
 # i64 and u64, cast to decimal128(20, 0)
-query RT
+query LT
 select
   coalesce(2, arrow_cast(3, 'UInt64')),
   arrow_typeof(coalesce(2, arrow_cast(3, 'UInt64')));
@@ -162,14 +162,14 @@ statement ok
 drop table t1;
 
 # Decimal128(7, 2) and int64 are coerced to common wider type Decimal128(22, 2)
-query RT
+query LT
 select
   coalesce(arrow_cast(2, 'Decimal128(7, 2)'), 0),
   arrow_typeof(coalesce(arrow_cast(2, 'Decimal128(7, 2)'), 0))
 ----
 2 Decimal128(22, 2)
 
-query RT
+query LT
 select
   coalesce(arrow_cast(2, 'Decimal256(7, 2)'), 0),
   arrow_typeof(coalesce(arrow_cast(2, 'Decimal256(7, 2)'), 0));

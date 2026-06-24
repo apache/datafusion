@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query TIIDRR
+query TIIDLL
 select
     c_name,
     c_custkey,

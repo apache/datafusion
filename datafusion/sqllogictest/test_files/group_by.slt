@@ -5587,7 +5587,7 @@ create table source as values
 statement ok
 create view t as select column1 as a, arrow_cast(column2, 'Decimal128(10, 2)') as b from source;
 
-query IRI
+query ILI
 select a, b, count(*) from t group by a, b order by a, b;
 ----
 1 123.45 2
@@ -5634,7 +5634,7 @@ physical_plan
 statement ok
 reset datafusion.execution.batch_size;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

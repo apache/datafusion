@@ -332,7 +332,7 @@ physical_plan
 05)--------DataSourceExec: partitions=1, partition_sizes=[2]
 
 # Checks equivalent rewritten form (SUM + COUNT terms) matches transformed SUM semantics.
-query RR
+query LL
 SELECT SUM(val) + 1 * COUNT(val), SUM(val) + 2 * COUNT(val) FROM tbl;
 ----
 8589934592 8589934594

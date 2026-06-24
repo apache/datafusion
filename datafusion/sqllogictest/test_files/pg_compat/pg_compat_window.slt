@@ -301,6 +301,9 @@ ORDER BY c9;
 4268716378 100 NULL 4229654142 28774375 4268716378 4268716378 4268716378 63044568 NULL
 
 
+# DataFusion and Postgres infer different numeric return types here
+# (Float64 vs NUMERIC); this record checks DataFusion's type/value output.
+skipif postgres
 query IIRIIIIII
 SELECT
   row_number() OVER () AS row_number,
@@ -689,6 +692,9 @@ ORDER BY c8;
 64517 2809 63353 10 36599 56980 10
 
 
+# DataFusion and Postgres infer different numeric return types here
+# (Float64 vs NUMERIC); this record checks DataFusion's type/value output.
+skipif postgres
 query IIIRIIIIII
 SELECT
   c9,
@@ -806,6 +812,9 @@ ORDER BY row_number;
 4268716378 100 100 7.81 781 125 -117 0 -1 -61
 
 
+# DataFusion and Postgres infer different numeric return types here
+# (Float64 vs NUMERIC); this record checks DataFusion's type/value output.
+skipif postgres
 query IIIRIIIIII
 SELECT
   c9,
@@ -923,6 +932,9 @@ ORDER BY c9;
 4268716378 1 14 -13.857142857143 -194 118 -101 0 -1 -122
 
 
+# DataFusion and Postgres infer different numeric return types here
+# (Float64 vs NUMERIC); this record checks DataFusion's type/value output.
+skipif postgres
 query IIIRIIIIII
 SELECT
   c9,

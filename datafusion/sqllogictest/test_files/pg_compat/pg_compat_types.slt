@@ -96,7 +96,7 @@ select 1.0::DOUBLE, 1.023::DOUBLE, 'NaN'::DOUBLE,'+Inf'::DOUBLE,'-Inf'::DOUBLE
 ----
 1 1.023 NaN Infinity -Infinity
 
-query RRR
+query LLL
 select 1.0::DECIMAL(5,3) as one, 2.023::DECIMAL(5,3) as two, 3.023::DECIMAL(5,2) as three
 ----
 1 2.023 3.02

@@ -23,7 +23,7 @@
 
 ## Original Query: SELECT MOD(2, 1.8);
 ## PySpark 3.5.5 Result: {'mod(2, 1.8)': Decimal('0.2'), 'typeof(mod(2, 1.8))': 'decimal(2,1)', 'typeof(2)': 'int', 'typeof(1.8)': 'decimal(2,1)'}
-query R
+query L
 SELECT MOD(2::int, 1.8::decimal(2,1));
 ----
 0.2
@@ -134,12 +134,12 @@ SELECT MOD('Infinity'::float8, 2.0::float8) as mod_inf_2;
 NaN
 
 # Decimal operations
-query R
+query L
 SELECT MOD(2.5::decimal(3,1), 1.2::decimal(2,1)) as mod_decimal_1;
 ----
 0.1
 
-query R
+query L
 SELECT MOD(10.0::decimal(3,1), 3.0::decimal(2,1)) as mod_decimal_2;
 ----
 1

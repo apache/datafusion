@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query ITRRTTTT
+query ITLLTTTT
 select
     c_custkey,
     c_name,

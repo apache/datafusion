@@ -397,6 +397,7 @@ query <type_string> <sort_mode>
   - 'P' - timestam**P**,
   - 'R' - floating-point results,
   - 'T' - **T**ext,
+  - 'L' - decima**L**,
   - "?" - any other types
 - `expected_result`: In the results section, some values are converted according to some rules:
   - floating point values are rounded to the scale of "12",

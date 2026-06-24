@@ -91,13 +91,13 @@ SELECT negative(-1.5::double);
 1.5
 
 # Test negative with decimal
-query R
+query L
 SELECT negative(123.456::decimal(10,3));
 ----
 -123.456
 
 # Test negative with negative decimal
-query R
+query L
 SELECT negative(-99.99::decimal(10,2));
 ----
 99.99
