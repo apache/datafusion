@@ -1,0 +1,150 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# ===========================================================================
+# RuntimeOptimizerExec — adaptive query execution primitive.
+#
+# DataFusion is in-process and streaming. Adaptive optimization here should
+# be in-process and streaming too. Pipeline breakers (SortExec, the build
+# phase of AggregateExec and HashJoinExec) already have a natural barrier
+# between their build and emit phases — they buffer their input and know
+# its true row count by the time downstream starts pulling. The cost of
+# that buffering is already paid; surfacing runtime stats from it to the
+# planner is essentially free.
+#
+# `RuntimeOptimizerExec` is inserted at static plan time above pipeline
+# breakers. When execution reaches its child's barrier, it reads the
+# child's true runtime stats, calls the optimizer with those stats to
+# rewrite its (statically-guessed) upper subplan, then executes the
+# rewritten subplan.
+#
+# Same primitive generalizes to partition coalescing, skew handling,
+# parallel window functions, and the rest of AQE. This SLT exercises the
+# first concrete use case that lands the foundation.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Scenario: GROUP BY on a key whose distinct cardinality the planner can't
+# predict, joined against a small dimension.
+#
+# `big` has 100,000 rows. `group_key = id % 5` so the *actual* distinct
+# cardinality is 5, but DataFusion doesn't propagate distinct_count through
+# arithmetic — column stat is Absent. After GROUP BY group_key:
+#   actual row count: 5
+#   planner estimate: Inexact, upper-bounded by input row count = 100,000
+#
+# `small` is a 100-row dimension table with Exact stats.
+#
+# JoinSelection sees `aggregated_big` ≈ 100K (Inexact) vs `small` = 100
+# (Exact), so it picks `small` as the build side. That's exactly inverted
+# from what runtime would tell us: `aggregated_big` is only 5 rows, would
+# be the 20× cheaper build side.
+# ---------------------------------------------------------------------------
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+CREATE TABLE big AS
+SELECT
+    value AS id,
+    value % 5 AS group_key,
+    1 AS payload
+FROM generate_series(0, 99999);
+
+statement ok
+CREATE TABLE small AS
+SELECT value AS id, value * 10 AS payload
+FROM generate_series(0, 99);
+
+# Sanity-check the base sizes.
+query I
+SELECT count(*) FROM big;
+----
+100000
+
+query I
+SELECT count(*) FROM small;
+----
+100
+
+# Sanity-check that aggregated_big has only 5 actual rows even though the
+# planner can't know that.
+query I
+SELECT count(*) FROM (SELECT group_key FROM big GROUP BY group_key) t;
+----
+5
+
+# ---------------------------------------------------------------------------
+# EXPLAIN — RED today. Without RuntimeOptimizerExec, JoinSelection trusts
+# the (badly-estimated) aggregated_big size and picks `small` as the build
+# side. We're penciling in the target plan that RuntimeOptimizerExec will
+# produce: the join with `aggregated_big` as the left/build child and
+# `small` as the right/probe child, wrapped in a RuntimeOptimizerExec.
+#
+# Statistics decoration is intentionally minimal; an update-mode pass once
+# RuntimeOptimizerExec renders itself will fill in exact text.
+# ---------------------------------------------------------------------------
+query TT
+EXPLAIN SELECT bg.group_key, bg.sum_payload, s.payload
+FROM (
+  SELECT group_key, SUM(payload) AS sum_payload FROM big GROUP BY group_key
+) bg
+JOIN small s ON bg.group_key = s.id;
+----
+logical_plan
+01)Projection: bg.group_key, bg.sum_payload, s.payload
+02)--Inner Join: bg.group_key = s.id
+03)----SubqueryAlias: bg
+04)------Projection: big.group_key, sum(big.payload) AS sum_payload
+05)--------Aggregate: groupBy=[[big.group_key]], aggr=[[sum(big.payload)]]
+06)----------TableScan: big projection=[group_key, payload]
+07)----SubqueryAlias: s
+08)------TableScan: small projection=[id, payload]
+physical_plan
+01)RuntimeOptimizerExec
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(group_key@0, id@0)], projection=[group_key@0, sum_payload@1, payload@3]
+03)----ProjectionExec: expr=[group_key@0 as group_key, sum(big.payload)@1 as sum_payload]
+04)------AggregateExec: mode=FinalPartitioned, gby=[group_key@0 as group_key], aggr=[sum(big.payload)]
+05)--------RepartitionExec: partitioning=Hash([group_key@0], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[sum(big.payload)]
+07)------------DataSourceExec
+08)----CoalescePartitionsExec
+09)------DataSourceExec
+
+# ---------------------------------------------------------------------------
+# Result — GREEN regardless of build-side choice (correctness is plan-
+# agnostic; only performance changes). After RuntimeOptimizerExec lands,
+# this stays green; only EXPLAIN moves.
+#
+# big rows match small ids 0..4 (the only group_keys that exist after
+# aggregation). Each group has 20000 rows of payload=1, so sum_payload=20000
+# for every group. small.payload = id * 10.
+# ---------------------------------------------------------------------------
+query III
+SELECT bg.group_key, bg.sum_payload, s.payload
+FROM (
+  SELECT group_key, SUM(payload) AS sum_payload FROM big GROUP BY group_key
+) bg
+JOIN small s ON bg.group_key = s.id
+ORDER BY bg.group_key;
+----
+0 20000 0
+1 20000 10
+2 20000 20
+3 20000 30
+4 20000 40
