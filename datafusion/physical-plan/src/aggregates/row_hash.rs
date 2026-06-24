@@ -743,7 +743,12 @@ impl Stream for GroupedHashAggregateStream {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
         loop {
-            match &self.exec_state {
+            let batch_size = self.batch_size;
+            let input_done = self.input_done;
+            let should_skip_after_output =
+                self.mode == AggregateMode::Partial && self.should_skip_aggregation();
+
+            match &mut self.exec_state {
                 ExecutionState::ReadingInput => 'reading_input: {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         // New batch to aggregate
@@ -875,17 +880,14 @@ impl Stream for GroupedHashAggregateStream {
                 ExecutionState::ProducingOutput(batch) => {
                     // slice off a part of the batch, if needed
                     let output_batch;
-                    let size = self.batch_size;
-                    (self.exec_state, output_batch) = if batch.num_rows() <= size {
+                    (self.exec_state, output_batch) = if batch.num_rows() <= batch_size {
                         (
-                            if self.input_done {
+                            if input_done {
                                 ExecutionState::Done
                             }
                             // In Partial aggregation, we also need to check
                             // if we should trigger partial skipping
-                            else if self.mode == AggregateMode::Partial
-                                && self.should_skip_aggregation()
-                            {
+                            else if should_skip_after_output {
                                 ExecutionState::SkippingAggregation
                             } else {
                                 ExecutionState::ReadingInput
@@ -894,10 +896,9 @@ impl Stream for GroupedHashAggregateStream {
                         )
                     } else {
                         // output first batch_size rows
-                        let size = self.batch_size;
-                        let num_remaining = batch.num_rows() - size;
-                        let remaining = batch.slice(size, num_remaining);
-                        let output = batch.slice(0, size);
+                        let num_remaining = batch.num_rows() - batch_size;
+                        let remaining = batch.slice(batch_size, num_remaining);
+                        let output = batch.slice(0, batch_size);
                         (ExecutionState::ProducingOutput(remaining), output)
                     };
 
@@ -913,20 +914,11 @@ impl Stream for GroupedHashAggregateStream {
                     )));
                 }
 
-                ExecutionState::ProducingPartitionedOutput(_) => {
-                    let current_state =
-                        std::mem::replace(&mut self.exec_state, ExecutionState::Done);
-                    let ExecutionState::ProducingPartitionedOutput(mut state) =
-                        current_state
-                    else {
-                        unreachable!();
-                    };
+                ExecutionState::ProducingPartitionedOutput(state) => {
                     if state.is_empty() {
-                        self.exec_state = if self.input_done {
+                        self.exec_state = if input_done {
                             ExecutionState::Done
-                        } else if self.mode == AggregateMode::Partial
-                            && self.should_skip_aggregation()
-                        {
+                        } else if should_skip_after_output {
                             ExecutionState::SkippingAggregation
                         } else {
                             ExecutionState::ReadingInput
@@ -934,9 +926,7 @@ impl Stream for GroupedHashAggregateStream {
                         continue;
                     }
 
-                    let output_batch = state.next_batch(self.batch_size);
-                    self.exec_state = ExecutionState::ProducingPartitionedOutput(state);
-
+                    let output_batch = state.next_batch(batch_size);
                     if let Some(reduction_factor) = self.reduction_factor.as_ref() {
                         reduction_factor.add_part(output_batch.num_rows());
                     }
