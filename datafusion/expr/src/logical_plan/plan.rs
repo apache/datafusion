@@ -667,8 +667,7 @@ impl LogicalPlan {
                 null_equality,
                 null_aware,
             }) => {
-                let schema =
-                    build_join_schema(left.schema(), right.schema(), &join_type)?;
+                let schema = build_join_schema(&left, &right, &join_type)?;
 
                 let new_on: Vec<_> = on
                     .into_iter()
@@ -944,7 +943,7 @@ impl LogicalPlan {
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
-                let schema = build_join_schema(left.schema(), right.schema(), join_type)?;
+                let schema = build_join_schema(&left, &right, join_type)?;
 
                 let equi_expr_count = on.len() * 2;
                 assert!(expr.len() >= equi_expr_count);
@@ -4269,7 +4268,7 @@ impl Join {
         null_equality: NullEquality,
         null_aware: bool,
     ) -> Result<Self> {
-        let join_schema = build_join_schema(left.schema(), right.schema(), &join_type)?;
+        let join_schema = build_join_schema(&left, &right, &join_type)?;
 
         Ok(Join {
             left,
@@ -4321,8 +4320,8 @@ impl Join {
             .collect();
 
         let join_schema = build_join_schema(
-            left_sch.schema(),
-            right_sch.schema(),
+            &left_sch.build()?,
+            &right_sch.build()?,
             &original_join.join_type,
         )?;
 

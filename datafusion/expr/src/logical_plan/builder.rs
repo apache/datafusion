@@ -1154,8 +1154,7 @@ impl LogicalPlanBuilder {
             .zip(right_keys)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+        let join_schema = build_join_schema(&self.plan, &right, &join_type)?;
 
         // Inner type without join condition is cross join
         if join_type != JoinType::Inner && on.is_empty() && filter.is_none() {
@@ -1652,16 +1651,22 @@ pub fn unique_field_aliases(fields: &Fields) -> Vec<Option<String>> {
         .collect()
 }
 
-fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
-    let mut table_references = schema
-        .iter()
-        .filter_map(|(qualifier, _)| qualifier)
-        .collect::<Vec<_>>();
-    table_references.dedup();
-    let table_reference = if table_references.len() == 1 {
-        table_references.pop().cloned()
+fn mark_field(child_plan: &LogicalPlan) -> (Option<TableReference>, Arc<Field>) {
+    let table_reference = if let LogicalPlan::SubqueryAlias(plan) = child_plan {
+        Some(plan.alias.clone())
     } else {
-        None
+        let mut table_references = child_plan
+            .schema()
+            .iter()
+            .filter_map(|(qualifier, _)| qualifier)
+            .collect::<Vec<_>>();
+        table_references.dedup();
+
+        if table_references.len() == 1 {
+            table_references.pop().cloned()
+        } else {
+            None
+        }
     };
 
     (
@@ -1673,8 +1678,8 @@ fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
 /// Creates a schema for a join operation.
 /// The fields from the left side are first
 pub fn build_join_schema(
-    left: &DFSchema,
-    right: &DFSchema,
+    left_plan: &LogicalPlan,
+    right_plan: &LogicalPlan,
     join_type: &JoinType,
 ) -> Result<DFSchema> {
     fn nullify_fields<'a>(
@@ -1689,6 +1694,8 @@ pub fn build_join_schema(
             .collect()
     }
 
+    let left = left_plan.schema();
+    let right = right_plan.schema();
     let right_fields = right.iter();
     let left_fields = left.iter();
 
@@ -1738,7 +1745,7 @@ pub fn build_join_schema(
         }
         JoinType::LeftMark => left_fields
             .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-            .chain(once(mark_field(right)))
+            .chain(once(mark_field(right_plan)))
             .collect(),
         JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
@@ -1748,7 +1755,7 @@ pub fn build_join_schema(
         }
         JoinType::RightMark => right_fields
             .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-            .chain(once(mark_field(left)))
+            .chain(once(mark_field(left_plan)))
             .collect(),
     };
     let func_dependencies = left.functional_dependencies().join(
@@ -2910,15 +2917,35 @@ mod tests {
             vec![(None, Arc::new(Field::new("b", DataType::Int32, false)))],
             HashMap::from([("key".to_string(), "right".to_string())]),
         )?;
+        let left_schema = Arc::new(left_schema);
+        let right_schema = Arc::new(right_schema);
 
-        let join_schema =
-            build_join_schema(&left_schema, &right_schema, &JoinType::Left)?;
+        let join_schema = build_join_schema(
+            &LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: true,
+                schema: Arc::clone(&left_schema),
+            }),
+            &LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: true,
+                schema: Arc::clone(&right_schema),
+            }),
+            &JoinType::Left,
+        )?;
         assert_eq!(
             join_schema.metadata(),
             &HashMap::from([("key".to_string(), "left".to_string())])
         );
-        let join_schema =
-            build_join_schema(&left_schema, &right_schema, &JoinType::Right)?;
+        let join_schema = build_join_schema(
+            &LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: true,
+                schema: Arc::clone(&left_schema),
+            }),
+            &LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: true,
+                schema: Arc::clone(&right_schema),
+            }),
+            &JoinType::Right,
+        )?;
         assert_eq!(
             join_schema.metadata(),
             &HashMap::from([("key".to_string(), "right".to_string())])
