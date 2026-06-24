@@ -42,7 +42,6 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::*;
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
-use arrow::record_batch::RecordBatchOptions;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
     internal_err, resources_datafusion_err,
@@ -81,7 +80,7 @@ pub(crate) enum ExecutionState {
 }
 
 type PartitionRange = (usize, Range<usize>);
-type PartitionedBatch = (RecordBatch, Vec<PartitionRange>, Vec<u32>);
+type PartitionedIndices = (PrimitiveArray<UInt32Type>, Vec<PartitionRange>, Vec<u32>);
 
 /// This encapsulates the spilling state
 struct SpillState {
@@ -892,10 +891,6 @@ impl GroupedHashAggregateStream {
             evaluate_group_by(&self.group_by, batch)?
         };
 
-        if self.group_values.len() > 1 {
-            return self.group_aggregate_partitioned_batch(batch, &group_by_values);
-        }
-
         // Only create the timer if there are actual aggregate arguments to evaluate
         let timer = match (
             self.spill_state.is_stream_merging,
@@ -923,6 +918,17 @@ impl GroupedHashAggregateStream {
         } else {
             evaluate_optional(&self.filter_expressions, batch)?
         };
+
+        if self.mode.input_mode() == AggregateInputMode::Raw
+            && !self.spill_state.is_stream_merging
+            && self.group_values.len() > 1
+        {
+            return self.group_aggregate_partitioned_batch(
+                &group_by_values,
+                &input_values,
+                &filter_values,
+            );
+        }
 
         for group_values in &group_by_values {
             let groups_start_time = Instant::now();
@@ -1000,23 +1006,18 @@ impl GroupedHashAggregateStream {
 
     fn group_aggregate_partitioned_batch(
         &mut self,
-        batch: &RecordBatch,
         group_by_values: &[Vec<ArrayRef>],
+        input_values: &[Vec<ArrayRef>],
+        filter_values: &[Option<ArrayRef>],
     ) -> Result<()> {
         assert_eq_or_internal_err!(
             group_by_values.len(),
             1,
             "partitioned aggregation requires a single grouping set"
         );
-        if self.mode.input_mode() != AggregateInputMode::Raw
-            || self.spill_state.is_stream_merging
-        {
-            return internal_err!(
-                "partitioned aggregation only supports raw input without stream merging"
-            );
-        }
         let group_values = &group_by_values[0];
 
+        // Step 1: Hash group keys and collect row indices for each target partition.
         self.hashes_buffer.clear();
         self.hashes_buffer.resize(group_values[0].len(), 0);
         create_hashes(
@@ -1024,7 +1025,6 @@ impl GroupedHashAggregateStream {
             &aggregates::AGGREGATION_HASH_SEED,
             &mut self.hashes_buffer,
         )?;
-
         for indices in &mut self.partition_indices {
             indices.clear();
         }
@@ -1034,28 +1034,30 @@ impl GroupedHashAggregateStream {
             self.partition_indices[partition].push(row as u32);
         }
 
-        let (reordered_batch, partition_ranges, reordered_indices) =
-            Self::partition_grouped_take(batch, &mut self.partition_indices)?;
+        // Step 2: Reorder only evaluated arrays instead of the full input batch.
+        let (indices_array, partition_ranges, reordered_indices) =
+            Self::partition_grouped_take(
+                group_values[0].len(),
+                &mut self.partition_indices,
+            );
+        let reordered_group_values = take_group_values(group_values, &indices_array)?;
+        let reordered_input_values = take_nested_values(input_values, &indices_array)?;
+        let reordered_filter_values =
+            take_optional_values(filter_values, &indices_array)?;
         let reordered_hashes = reordered_indices
             .iter()
             .map(|index| self.hashes_buffer[*index as usize])
             .collect::<Vec<_>>();
+
+        // Step 3: Slice each partition and update the matching group values and accumulators.
         let mut hash_offset = 0;
         for (partition, range) in partition_ranges {
-            let partition_batch = reordered_batch.slice(range.start, range.len());
-            let partition_group_by_values =
-                evaluate_group_by(&self.group_by, &partition_batch)?;
+            let partition_group_values =
+                slice_group_values(&reordered_group_values, &range);
             let partition_input_values =
-                evaluate_many(&self.aggregate_arguments, &partition_batch)?;
+                slice_nested_values(&reordered_input_values, &range);
             let partition_filter_values =
-                evaluate_optional(&self.filter_expressions, &partition_batch)?;
-
-            assert_eq_or_internal_err!(
-                partition_group_by_values.len(),
-                1,
-                "partitioned aggregation requires a single grouping set"
-            );
-            let partition_group_values = &partition_group_by_values[0];
+                slice_optional_values(&reordered_filter_values, &range);
             let partition_hashes =
                 &reordered_hashes[hash_offset..hash_offset + range.len()];
             hash_offset += range.len();
@@ -1063,7 +1065,7 @@ impl GroupedHashAggregateStream {
             let groups_start_time = Instant::now();
             let starting_num_groups = self.group_values[partition].len();
             self.group_values[partition].intern(
-                partition_group_values,
+                &partition_group_values,
                 &mut self.current_group_indices,
                 partition_hashes,
             )?;
@@ -1071,7 +1073,7 @@ impl GroupedHashAggregateStream {
             let total_num_groups = self.group_values[partition].len();
             if total_num_groups > starting_num_groups {
                 self.group_ordering.new_groups(
-                    partition_group_values,
+                    &partition_group_values,
                     group_indices,
                     total_num_groups,
                 )?;
@@ -1104,11 +1106,11 @@ impl GroupedHashAggregateStream {
     }
 
     fn partition_grouped_take(
-        batch: &RecordBatch,
+        num_rows: usize,
         indices: &mut [Vec<u32>],
-    ) -> Result<PartitionedBatch> {
+    ) -> PartitionedIndices {
         let mut partition_ranges = Vec::with_capacity(indices.len());
-        let mut reordered_indices = Vec::with_capacity(batch.num_rows());
+        let mut reordered_indices = Vec::with_capacity(num_rows);
 
         for (partition, partition_indices) in indices.iter_mut().enumerate() {
             if partition_indices.is_empty() {
@@ -1122,13 +1124,7 @@ impl GroupedHashAggregateStream {
         }
 
         let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.clone().into();
-        let columns = take_arrays(batch.columns(), &indices_array, None)?;
-        let mut options = RecordBatchOptions::new();
-        options = options.with_row_count(Some(indices_array.len()));
-        let reordered_batch =
-            RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
-
-        Ok((reordered_batch, partition_ranges, reordered_indices))
+        (indices_array, partition_ranges, reordered_indices)
     }
 
     /// Attempts to update the memory reservation. If that fails due to a
@@ -1598,6 +1594,71 @@ impl GroupedHashAggregateStream {
 
         Ok(states_batch)
     }
+}
+
+fn take_group_values(
+    group_values: &[ArrayRef],
+    indices: &PrimitiveArray<UInt32Type>,
+) -> Result<Vec<ArrayRef>> {
+    take_arrays(group_values, indices, None).map_err(Into::into)
+}
+
+fn take_nested_values(
+    values: &[Vec<ArrayRef>],
+    indices: &PrimitiveArray<UInt32Type>,
+) -> Result<Vec<Vec<ArrayRef>>> {
+    values
+        .iter()
+        .map(|values| take_arrays(values, indices, None).map_err(Into::into))
+        .collect()
+}
+
+fn take_optional_values(
+    values: &[Option<ArrayRef>],
+    indices: &PrimitiveArray<UInt32Type>,
+) -> Result<Vec<Option<ArrayRef>>> {
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_ref()
+                .map(|value| take_arrays(std::slice::from_ref(value), indices, None))
+                .transpose()
+                .map(|value| value.map(|mut value| value.remove(0)))
+                .map_err(Into::into)
+        })
+        .collect()
+}
+
+fn slice_group_values(group_values: &[ArrayRef], range: &Range<usize>) -> Vec<ArrayRef> {
+    group_values
+        .iter()
+        .map(|value| value.slice(range.start, range.len()))
+        .collect()
+}
+
+fn slice_nested_values(
+    values: &[Vec<ArrayRef>],
+    range: &Range<usize>,
+) -> Vec<Vec<ArrayRef>> {
+    values
+        .iter()
+        .map(|values| slice_group_values(values, range))
+        .collect()
+}
+
+fn slice_optional_values(
+    values: &[Option<ArrayRef>],
+    range: &Range<usize>,
+) -> Vec<Option<ArrayRef>> {
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_ref()
+                .map(|value| value.slice(range.start, range.len()))
+        })
+        .collect()
 }
 
 #[cfg(test)]
