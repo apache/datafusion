@@ -183,6 +183,7 @@ impl PredicateBoundsEvaluator<'_> {
             Expr::BinaryExpr(BinaryExpr { op, .. }) if op.returns_null_on_null() => {
                 self.is_null_if_any_child_null(expr)
             }
+            // Strict scalar functions return NULL when any argument is NULL.
             Expr::ScalarFunction(func) if func.func.is_strict() => {
                 self.is_null_if_any_child_null(expr)
             }

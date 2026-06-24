@@ -371,6 +371,9 @@ fn extract_null_rejecting_sides(
                 extract_null_rejecting_sides(pattern, left_schema, right_schema, false);
             expr_sides.union(pattern_sides)
         }
+        // Strict scalar functions are NULL-propagating: if any argument from a
+        // padded join side is NULL, the function result is NULL, and an
+        // enclosing NULL-rejecting predicate filters the row out.
         Expr::ScalarFunction(func) if func.func.is_strict() => func
             .args
             .iter()
@@ -380,8 +383,8 @@ fn extract_null_rejecting_sides(
             .fold(NullRejectingSides::default(), NullRejectingSides::union),
         // Everything else is conservative: NULL-accepting predicates such as
         // IS NULL / IS NOT TRUE / IS NOT FALSE / IS UNKNOWN must not eliminate
-        // an outer join, and functions/subqueries/accessors/literals have no
-        // uniform NULL-propagation contract here.
+        // an outer join, and non-strict functions/subqueries/accessors/literals
+        // have no uniform NULL-propagation contract here.
         _ => NullRejectingSides::default(),
     }
 }
