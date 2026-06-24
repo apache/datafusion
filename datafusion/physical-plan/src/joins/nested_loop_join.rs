@@ -1070,11 +1070,25 @@ impl FallbackCoordinator {
                 let mut left_stream = match inner.left_stream.take() {
                     Some(stream) => stream,
                     None => {
-                        let stream = spill_data
+                        // Construct the spill stream. If this ever fails,
+                        // clear the leader flag and wake waiters before
+                        // returning, so they don't block forever on a
+                        // release that the failed leader will never make.
+                        match spill_data
                             .spill_manager
-                            .read_spill_as_stream(spill_data.spill_file.clone(), None)?;
-                        inner.left_schema = Some(Arc::clone(&spill_data.schema));
-                        stream
+                            .read_spill_as_stream(spill_data.spill_file.clone(), None)
+                        {
+                            Ok(stream) => {
+                                inner.left_schema = Some(Arc::clone(&spill_data.schema));
+                                stream
+                            }
+                            Err(e) => {
+                                inner.loader_in_flight = false;
+                                drop(inner);
+                                self.notify.notify_waiters();
+                                return Err(e);
+                            }
+                        }
                     }
                 };
                 let mut reservation = match inner.reservation.take() {
