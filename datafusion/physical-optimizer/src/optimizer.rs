@@ -38,6 +38,7 @@ use crate::update_aggr_exprs::OptimizeAggregateOrder;
 use crate::hash_join_buffering::HashJoinBuffering;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use crate::pushdown_sort::PushdownSort;
+use crate::runtime_optimizer::InsertRuntimeOptimizer;
 use crate::window_topn::WindowTopN;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
@@ -247,6 +248,11 @@ impl PhysicalOptimizer {
             // given query plan; i.e. it only acts as a final
             // gatekeeping rule.
             Arc::new(SanityCheckPlan::new()),
+            // InsertRuntimeOptimizer wraps the (now-final) plan root in
+            // a RuntimeOptimizerExec. Runs last so the wrapper sits above
+            // everything else; subsequent commits use it to coordinate
+            // adaptive optimization at runtime.
+            Arc::new(InsertRuntimeOptimizer::new()),
         ];
 
         Self::with_rules(rules)

@@ -86,6 +86,7 @@ pub mod placeholder_row;
 pub mod projection;
 pub mod recursive_query;
 pub mod repartition;
+pub mod runtime_optimizer;
 pub mod scalar_subquery;
 pub mod sort_pushdown;
 pub mod sorts;
