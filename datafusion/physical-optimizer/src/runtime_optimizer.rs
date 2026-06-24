@@ -21,14 +21,16 @@
 //!    (currently `AggregateExec` and `SortExec`) in a
 //!    [`PipelineBreakerBuffer`]. The buffer is the synchronization point
 //!    where runtime stats become observable.
-//! 2. Wraps the resulting plan root in a [`RuntimeOptimizerExec`]. The
-//!    root operator coordinates: once all buffers signal ready it runs a
-//!    `Vec<RuntimeRule>` over the plan, mutates adaptive operators in
-//!    place via their typed methods, and releases the buffers.
+//! 2. Wraps the resulting plan root in a [`RuntimeOptimizerExec`], which
+//!    walks the subtree on each `poll_next` and releases ready buffers.
 //!
-//! Today both wrappers are passthrough — this rule only installs them so
-//! the structural shape is visible in EXPLAIN. Follow-up commits add the
-//! synchronization protocol and the first runtime rule.
+//! A shared [`AtomicWaker`] is constructed here and threaded into both
+//! the buffers and the wrapping RTO so buffers can wake the coordinator
+//! from inside spawned subtasks (e.g. `RepartitionExec` internals). The
+//! default is permissive release — the next commit will add a
+//! `Vec<RuntimeRule>` that runs between "all ready" and "release," able
+//! to mutate adaptive operators (`HashJoinExec::flip_sides`) or hold
+//! specific buffers.
 
 use std::sync::Arc;
 
@@ -41,6 +43,7 @@ use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::pipeline_breaker_buffer::PipelineBreakerBuffer;
 use datafusion_physical_plan::runtime_optimizer::RuntimeOptimizerExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
+use futures::task::AtomicWaker;
 
 #[derive(Default, Debug)]
 pub struct InsertRuntimeOptimizer;
@@ -66,14 +69,21 @@ impl PhysicalOptimizerRule for InsertRuntimeOptimizer {
             return Ok(plan);
         }
 
+        // Shared coordinator-wake. Every buffer in this subplan and the
+        // wrapping RTO hold a clone — buffers wake it, RTO registers on
+        // it. Per-poll cx.waker() doesn't reach across spawned-task
+        // boundaries (e.g. RepartitionExec's internals), this does.
+        let rto_waker = Arc::new(AtomicWaker::new());
+
         // Phase 1: wrap each pipeline breaker in a PipelineBreakerBuffer.
         let with_buffers = plan
             .transform_up(|node| {
                 if is_pipeline_breaker(&node)
                     && node.downcast_ref::<PipelineBreakerBuffer>().is_none()
                 {
-                    let buffered: Arc<dyn ExecutionPlan> =
-                        Arc::new(PipelineBreakerBuffer::new(node));
+                    let buffered: Arc<dyn ExecutionPlan> = Arc::new(
+                        PipelineBreakerBuffer::new(node, Arc::clone(&rto_waker)),
+                    );
                     Ok(Transformed::yes(buffered))
                 } else {
                     Ok(Transformed::no(node))
@@ -82,7 +92,7 @@ impl PhysicalOptimizerRule for InsertRuntimeOptimizer {
             .data;
 
         // Phase 2: wrap the root.
-        Ok(Arc::new(RuntimeOptimizerExec::new(with_buffers)))
+        Ok(Arc::new(RuntimeOptimizerExec::new(with_buffers, rto_waker)))
     }
 
     fn schema_check(&self) -> bool {
