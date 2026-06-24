@@ -89,8 +89,8 @@ use datafusion::physical_plan::windows::{
 };
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
-    PhysicalExpr, RangePartitioning, SendableRecordBatchStream, SplitPoint, Statistics,
-    displayable,
+    PhysicalExpr, PlanProperties, RangePartitioning, SendableRecordBatchStream,
+    SplitPoint, Statistics, displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -227,6 +227,74 @@ async fn all_types_context() -> Result<SessionContext> {
 #[test]
 fn roundtrip_empty() -> Result<()> {
     roundtrip_test(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))))
+}
+
+#[derive(Debug)]
+struct DowncastDelegatingExec {
+    inner: Arc<dyn ExecutionPlan>,
+}
+
+impl DowncastDelegatingExec {
+    fn new(inner: Arc<dyn ExecutionPlan>) -> Self {
+        Self { inner }
+    }
+}
+
+impl DisplayAs for DowncastDelegatingExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        self.inner.fmt_as(t, f)
+    }
+}
+
+impl ExecutionPlan for DowncastDelegatingExec {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        self.inner.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.inner.children()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let inner = Arc::clone(&self.inner).with_new_children(children)?;
+        Ok(Arc::new(Self::new(inner)))
+    }
+
+    fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
+        Some(self.inner.as_ref())
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.inner.execute(partition, context)
+    }
+}
+
+#[test]
+fn serialize_uses_downcast_delegate() -> Result<()> {
+    let inner: Arc<dyn ExecutionPlan> =
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(DowncastDelegatingExec::new(inner));
+    let codec = DefaultPhysicalExtensionCodec {};
+
+    let proto = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+
+    assert!(matches!(
+        proto.physical_plan_type,
+        Some(protobuf::physical_plan_node::PhysicalPlanType::Empty(_))
+    ));
+
+    Ok(())
 }
 
 #[test]
