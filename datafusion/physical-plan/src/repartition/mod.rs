@@ -81,6 +81,11 @@ use distributor_channels::{
     DistributionReceiver, DistributionSender, channels, partition_aware_channels,
 };
 
+pub(crate) const PARTITIONED_AGGREGATION_PARTITION_KEY: &str =
+    "datafusion.partitioned_aggregation.partition";
+pub(crate) const PARTITIONED_AGGREGATION_NUM_PARTITIONS_KEY: &str =
+    "datafusion.partitioned_aggregation.num_partitions";
+
 /// A batch in the repartition queue - either in memory or spilled to disk.
 ///
 /// This enum represents the two states a batch can be in during repartitioning.
@@ -151,6 +156,44 @@ enum RepartitionBatch {
 type MaybeBatch = Option<Result<RepartitionBatch>>;
 type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch>>;
 type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeBatch>>;
+
+fn partitioned_aggregation_partition(
+    batch: &RecordBatch,
+    expected_num_partitions: usize,
+) -> Result<Option<usize>> {
+    let metadata = batch.schema_ref().metadata();
+    let Some(partition) = metadata.get(PARTITIONED_AGGREGATION_PARTITION_KEY) else {
+        return Ok(None);
+    };
+    let Some(num_partitions) = metadata.get(PARTITIONED_AGGREGATION_NUM_PARTITIONS_KEY)
+    else {
+        return Ok(None);
+    };
+
+    let partition = partition.parse::<usize>().map_err(|err| {
+        DataFusionError::Internal(format!(
+            "Invalid partitioned aggregation partition metadata: {err}"
+        ))
+    })?;
+    let num_partitions = num_partitions.parse::<usize>().map_err(|err| {
+        DataFusionError::Internal(format!(
+            "Invalid partitioned aggregation partition count metadata: {err}"
+        ))
+    })?;
+
+    if num_partitions != expected_num_partitions {
+        return Ok(None);
+    }
+
+    assert_or_internal_err!(
+        partition < expected_num_partitions,
+        "Partitioned aggregation partition {} is out of range for {} partitions",
+        partition,
+        expected_num_partitions
+    );
+
+    Ok(Some(partition))
+}
 
 /// Output channel with its associated memory reservation and spill writer.
 ///
@@ -1636,6 +1679,7 @@ impl RepartitionExec {
         input_partition: usize,
         num_input_partitions: usize,
     ) -> Result<()> {
+        let num_output_partitions = partitioning.partition_count();
         let mut partitioner = match &partitioning {
             Partitioning::Hash(exprs, num_partitions) => {
                 BatchPartitioner::new_hash_partitioner(
@@ -1680,6 +1724,20 @@ impl RepartitionExec {
 
             // Handle empty batch
             if batch.num_rows() == 0 {
+                continue;
+            }
+
+            if let Partitioning::Hash(_, _) = &partitioning
+                && let Some(partition) =
+                    partitioned_aggregation_partition(&batch, num_output_partitions)?
+            {
+                let timer = metrics.send_time[partition].timer();
+                if let Some(output_channel) = output_channels.get_mut(&partition)
+                    && output_channel.send(batch).await.is_err()
+                {
+                    output_channels.remove(&partition);
+                }
+                timer.done();
                 continue;
             }
 

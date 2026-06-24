@@ -33,6 +33,9 @@ use crate::aggregates::{
     max_duplicate_ordinal,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
+use crate::repartition::{
+    PARTITIONED_AGGREGATION_NUM_PARTITIONS_KEY, PARTITIONED_AGGREGATION_PARTITION_KEY,
+};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::stream::EmptyRecordBatchStream;
@@ -110,11 +113,32 @@ impl PartitionedOutputState {
             let output = batch.slice(0, output_len);
             self.batches[partition] =
                 batch.slice(output_len, batch.num_rows() - output_len);
-            return Some(output);
+            return Some(add_partitioned_aggregation_metadata(
+                output,
+                partition,
+                num_partitions,
+            ));
         }
 
         None
     }
+}
+
+fn add_partitioned_aggregation_metadata(
+    mut batch: RecordBatch,
+    partition: usize,
+    num_partitions: usize,
+) -> RecordBatch {
+    let metadata = batch.schema_metadata_mut();
+    metadata.insert(
+        PARTITIONED_AGGREGATION_PARTITION_KEY.to_string(),
+        partition.to_string(),
+    );
+    metadata.insert(
+        PARTITIONED_AGGREGATION_NUM_PARTITIONS_KEY.to_string(),
+        num_partitions.to_string(),
+    );
+    batch
 }
 
 type PartitionRange = (usize, Range<usize>);
