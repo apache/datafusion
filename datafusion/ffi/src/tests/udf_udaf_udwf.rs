@@ -60,6 +60,10 @@ impl ScalarUDFImpl for WrappedAbs {
         self.0.return_type(arg_types)
     }
 
+    fn is_strict(&self) -> bool {
+        self.0.is_strict()
+    }
+
     fn invoke_with_args(
         &self,
         args: ScalarFunctionArgs,
