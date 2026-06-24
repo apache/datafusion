@@ -23,6 +23,7 @@ pub enum DFColumnType {
     DateTime,
     Integer,
     Float,
+    Decimal,
     Text,
     Timestamp,
     Another,
@@ -37,6 +38,7 @@ impl ColumnType for DFColumnType {
             'P' => Some(Self::Timestamp),
             'R' => Some(Self::Float),
             'T' => Some(Self::Text),
+            'L' => Some(Self::Decimal),
             _ => Some(Self::Another),
         }
     }
@@ -49,6 +51,7 @@ impl ColumnType for DFColumnType {
             Self::Timestamp => 'P',
             Self::Float => 'R',
             Self::Text => 'T',
+            Self::Decimal => 'L',
             Self::Another => '?',
         }
     }
