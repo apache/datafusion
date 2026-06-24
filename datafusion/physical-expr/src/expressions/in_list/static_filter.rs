@@ -43,7 +43,8 @@ macro_rules! handle_dictionary {
         let array = $v.as_ref();
         arrow::array::downcast_dictionary_array! {
             array => {
-                let values_contains = $self.contains(std::sync::Arc::clone(array.values()), $negated)?;
+                let values_contains =
+                    $self.contains(std::sync::Arc::clone(array.values()), $negated)?;
                 let result = arrow::compute::take(&values_contains, array.keys(), None)?;
                 return Ok(arrow::array::downcast_array(result.as_ref()))
             }

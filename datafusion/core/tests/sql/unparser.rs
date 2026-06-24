@@ -37,14 +37,19 @@
 
 use std::fs::ReadDir;
 use std::future::Future;
+use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::Result;
+use datafusion::datasource::empty::EmptyTable;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
+use datafusion_catalog::memory::MemorySchemaProvider;
+use datafusion_catalog::{CatalogProvider, MemoryCatalogProvider, SchemaProvider};
 use datafusion_common::Column;
 use datafusion_expr::Expr;
 use datafusion_sql::unparser::Unparser;
-use datafusion_sql::unparser::dialect::DefaultDialect;
+use datafusion_sql::unparser::dialect::{DefaultDialect, DuckDBDialect};
 use itertools::Itertools;
 use recursive::{set_minimum_stack_size, set_stack_allocation_size};
 
@@ -216,6 +221,126 @@ async fn sort_batches(
         df = df.sort(sort_exprs)?;
     }
     df.collect().await
+}
+
+const ISSUE_22961_QUERY: &str = r#"
+SELECT * FROM
+(
+SELECT
+        item_id,
+        order_id,
+        product_id,
+        quantity,
+        unit_price,
+        quantity * unit_price AS line_total
+    FROM
+        "warehouse"."main"."order_items"
+) oi
+JOIN (
+    SELECT
+        order_id,
+        customer_id,
+        order_date,
+        lower(STATUS) AS STATUS,
+        lower(channel) AS channel,
+        coalesce(discount_pct, 0) AS discount_pct,
+        coalesce(shipping_cost, 0) AS shipping_cost,
+        STATUS IN ('completed', 'shipped') AS is_fulfilled
+    FROM
+        "warehouse"."main"."orders"
+) o USING (order_id)
+JOIN (
+    SELECT
+        p.product_id,
+        p.category_id,
+        p.sku,
+        p.name AS product_name,
+        p.price,
+        p.cost,
+        p.weight_kg,
+        p.is_active,
+        p.stock_qty,
+        round(p.price - p.cost, 2) AS gross_margin,
+        round((p.price - p.cost) / nullif(p.price, 0), 4) AS margin_pct,
+        c.name AS category_name
+    FROM
+        "warehouse"."main"."products" p
+        LEFT JOIN "warehouse"."main"."categories" c USING (category_id)
+) p USING (product_id)
+"#;
+
+fn issue_22961_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+
+    let schema_provider = Arc::new(MemorySchemaProvider::new());
+    schema_provider.register_table(
+        "order_items".to_string(),
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+            Field::new("item_id", DataType::Int32, false),
+            Field::new("order_id", DataType::Int32, true),
+            Field::new("product_id", DataType::Int32, true),
+            Field::new("quantity", DataType::Int32, true),
+            Field::new("unit_price", DataType::Decimal128(10, 2), true),
+        ])))),
+    )?;
+    schema_provider.register_table(
+        "orders".to_string(),
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+            Field::new("order_id", DataType::Int32, false),
+            Field::new("customer_id", DataType::Int32, true),
+            Field::new("order_date", DataType::Date32, true),
+            Field::new("status", DataType::Utf8, true),
+            Field::new("channel", DataType::Utf8, true),
+            Field::new("discount_pct", DataType::Decimal128(5, 2), true),
+            Field::new("shipping_cost", DataType::Decimal128(8, 2), true),
+        ])))),
+    )?;
+    schema_provider.register_table(
+        "products".to_string(),
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+            Field::new("product_id", DataType::Int32, false),
+            Field::new("category_id", DataType::Int32, true),
+            Field::new("sku", DataType::Utf8, true),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("price", DataType::Decimal128(10, 2), true),
+            Field::new("cost", DataType::Decimal128(10, 2), true),
+            Field::new("weight_kg", DataType::Decimal128(6, 3), true),
+            Field::new("is_active", DataType::Boolean, true),
+            Field::new("stock_qty", DataType::Int32, true),
+        ])))),
+    )?;
+    schema_provider.register_table(
+        "categories".to_string(),
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+            Field::new("category_id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("parent_id", DataType::Int32, true),
+            Field::new("display_rank", DataType::Int32, true),
+        ])))),
+    )?;
+
+    let catalog = Arc::new(MemoryCatalogProvider::new());
+    catalog.register_schema("main", schema_provider)?;
+    ctx.register_catalog("warehouse", catalog);
+
+    Ok(ctx)
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_preserves_derived_table_scope() -> Result<()> {
+    let ctx = issue_22961_context()?;
+    let plan = ctx.sql(ISSUE_22961_QUERY).await?.into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert!(!sql.contains(r#""o"."__common_expr_1""#));
+    assert!(!sql.contains(r#""o"."__common_expr_2""#));
+    assert!(sql.contains(
+        r#"ON "oi"."order_id" = "o"."order_id" INNER JOIN (SELECT "p"."product_id""#
+    ));
+
+    Ok(())
 }
 
 /// The outcome of running a single roundtrip test.

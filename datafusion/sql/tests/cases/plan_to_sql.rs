@@ -2737,6 +2737,63 @@ fn test_unparse_inner_join_with_table_scan_projection() -> Result<()> {
 }
 
 #[test]
+fn test_unparse_projected_join_unwraps_right_nested_passthrough_projection() -> Result<()>
+{
+    let left_schema = Schema::new(vec![
+        Field::new("left_id", DataType::Int32, false),
+        Field::new("mid_id", DataType::Int32, false),
+    ]);
+    let mid_schema = Schema::new(vec![
+        Field::new("mid_id", DataType::Int32, false),
+        Field::new("right_id", DataType::Int32, false),
+    ]);
+    let right_schema = Schema::new(vec![
+        Field::new("right_id", DataType::Int32, false),
+        Field::new("value", DataType::Int32, false),
+    ]);
+
+    let left = table_scan(Some("left_table"), &left_schema, None)?.build()?;
+    let mid = table_scan(Some("mid_table"), &mid_schema, None)?.build()?;
+    let right = table_scan(Some("right_table"), &right_schema, None)?.build()?;
+
+    let nested_right = LogicalPlanBuilder::from(mid)
+        .join(
+            right,
+            datafusion_expr::JoinType::Inner,
+            (vec!["mid_table.right_id"], vec!["right_table.right_id"]),
+            None,
+        )?
+        .project(vec![
+            col("mid_table.mid_id"),
+            col("mid_table.right_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+
+    let plan = LogicalPlanBuilder::from(left)
+        .join(
+            nested_right,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left_table.mid_id"], vec!["mid_table.mid_id"]),
+            None,
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+
+    let sql = plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table INNER JOIN (mid_table INNER JOIN right_table ON mid_table.right_id = right_table.right_id) ON left_table.mid_id = mid_table.mid_id"#
+    );
+
+    Ok(())
+}
+
+#[test]
 fn test_unparse_left_semi_join_with_table_scan_projection() -> Result<()> {
     let schema = Schema::new(vec![
         Field::new("k", DataType::Int32, false),
