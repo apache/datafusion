@@ -71,10 +71,7 @@ pub(crate) enum ExecutionState {
     /// here and are sliced off as needed in batch_size chunks
     ProducingOutput(RecordBatch),
     /// Produces output batches from partitioned aggregation in round-robin order.
-    ProducingPartitionedOutput {
-        batches: Vec<RecordBatch>,
-        next_partition: usize,
-    },
+    ProducingPartitionedOutput(PartitionedOutputState),
     /// Produce intermediate aggregate state for each input row without
     /// aggregation.
     ///
@@ -82,6 +79,50 @@ pub(crate) enum ExecutionState {
     SkippingAggregation,
     /// All input has been consumed and all groups have been emitted
     Done,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PartitionedOutputState {
+    batches: Vec<RecordBatch>,
+    next_partition: usize,
+}
+
+impl PartitionedOutputState {
+    fn new(batches: Vec<RecordBatch>) -> Self {
+        Self {
+            batches,
+            next_partition: 0,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.batches.iter().all(|batch| batch.num_rows() == 0)
+    }
+
+    fn next_batch(&mut self, batch_size: usize) -> RecordBatch {
+        let num_partitions = self.batches.len();
+        for offset in 0..num_partitions {
+            let partition = (self.next_partition + offset) % num_partitions;
+            if self.batches[partition].num_rows() == 0 {
+                continue;
+            }
+
+            self.next_partition = (partition + 1) % num_partitions;
+            let batch = &self.batches[partition];
+            if batch.num_rows() <= batch_size {
+                let output = batch.clone();
+                self.batches[partition] = batch.slice(batch.num_rows(), 0);
+                return output;
+            }
+
+            let output = batch.slice(0, batch_size);
+            self.batches[partition] =
+                batch.slice(batch_size, batch.num_rows() - batch_size);
+            return output;
+        }
+
+        unreachable!("partitioned output must contain a non-empty batch")
+    }
 }
 
 type PartitionRange = (usize, Range<usize>);
@@ -872,17 +913,15 @@ impl Stream for GroupedHashAggregateStream {
                     )));
                 }
 
-                ExecutionState::ProducingPartitionedOutput { .. } => {
+                ExecutionState::ProducingPartitionedOutput(_) => {
                     let current_state =
                         std::mem::replace(&mut self.exec_state, ExecutionState::Done);
-                    let ExecutionState::ProducingPartitionedOutput {
-                        mut batches,
-                        mut next_partition,
-                    } = current_state
+                    let ExecutionState::ProducingPartitionedOutput(mut state) =
+                        current_state
                     else {
                         unreachable!();
                     };
-                    if batches.iter().all(|batch| batch.num_rows() == 0) {
+                    if state.is_empty() {
                         self.exec_state = if self.input_done {
                             ExecutionState::Done
                         } else if self.mode == AggregateMode::Partial
@@ -895,12 +934,8 @@ impl Stream for GroupedHashAggregateStream {
                         continue;
                     }
 
-                    let output_batch = self
-                        .next_partitioned_output_batch(&mut batches, &mut next_partition);
-                    self.exec_state = ExecutionState::ProducingPartitionedOutput {
-                        batches,
-                        next_partition,
-                    };
+                    let output_batch = state.next_batch(self.batch_size);
+                    self.exec_state = ExecutionState::ProducingPartitionedOutput(state);
 
                     if let Some(reduction_factor) = self.reduction_factor.as_ref() {
                         reduction_factor.add_part(output_batch.num_rows());
@@ -1293,35 +1328,6 @@ impl GroupedHashAggregateStream {
         Ok(Some(batch))
     }
 
-    fn next_partitioned_output_batch(
-        &self,
-        batches: &mut [RecordBatch],
-        next_partition: &mut usize,
-    ) -> RecordBatch {
-        let num_partitions = batches.len();
-        for offset in 0..num_partitions {
-            let partition = (*next_partition + offset) % num_partitions;
-            if batches[partition].num_rows() == 0 {
-                continue;
-            }
-
-            *next_partition = (partition + 1) % num_partitions;
-            let batch = &batches[partition];
-            if batch.num_rows() <= self.batch_size {
-                let output = batch.clone();
-                batches[partition] = batch.slice(batch.num_rows(), 0);
-                return output;
-            }
-
-            let output = batch.slice(0, self.batch_size);
-            batches[partition] =
-                batch.slice(self.batch_size, batch.num_rows() - self.batch_size);
-            return output;
-        }
-
-        unreachable!("partitioned output must contain a non-empty batch")
-    }
-
     fn producing_output_state(
         &mut self,
         emit_to: EmitTo,
@@ -1344,10 +1350,9 @@ impl GroupedHashAggregateStream {
         if batches.iter().all(|batch| batch.num_rows() == 0) {
             Ok(None)
         } else {
-            Ok(Some(ExecutionState::ProducingPartitionedOutput {
-                batches,
-                next_partition: 0,
-            }))
+            Ok(Some(ExecutionState::ProducingPartitionedOutput(
+                PartitionedOutputState::new(batches),
+            )))
         }
     }
 
