@@ -181,9 +181,12 @@ fn partitioned_aggregation_partition(
         ))
     })?;
 
-    if num_partitions != expected_num_partitions {
-        return Ok(None);
-    }
+    assert_or_internal_err!(
+        num_partitions == expected_num_partitions,
+        "Partitioned aggregation partition count {} does not match repartition count {}",
+        num_partitions,
+        expected_num_partitions
+    );
 
     assert_or_internal_err!(
         partition < expected_num_partitions,
