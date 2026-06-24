@@ -33,11 +33,13 @@ use crate::joins::hash_join::partitioned_hash_eval::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{DataFusionError, Result, ScalarValue, SharedResult};
+use datafusion_common::{
+    DataFusionError, NullEquality, Result, ScalarValue, SharedResult,
+};
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, lit,
+    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, IsNullExpr, lit,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
@@ -255,6 +257,12 @@ pub(crate) struct SharedBuildAccumulator {
     repartition_random_state: SeededRandomState,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
+    /// Null equality of the join. Under `NullEqualsNull` a probe-side NULL can match a
+    /// build-side NULL, so the pushed filter must keep NULL rows here too.
+    null_equality: NullEquality,
+    /// Null-aware anti join (`NOT IN`). A probe-side NULL must reach the join so its
+    /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
+    null_aware: bool,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -351,6 +359,7 @@ impl SharedBuildAccumulator {
     /// We cannot build a partial filter from some partitions - it would incorrectly eliminate
     /// valid join results. We must wait until we have complete information from ALL
     /// relevant partitions before updating the dynamic filter.
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new_from_partition_mode(
         partition_mode: PartitionMode,
         left_child: &dyn ExecutionPlan,
@@ -358,6 +367,8 @@ impl SharedBuildAccumulator {
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
+        null_equality: NullEquality,
+        null_aware: bool,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -404,6 +415,8 @@ impl SharedBuildAccumulator {
             on_right,
             repartition_random_state,
             probe_schema: right_child.schema(),
+            null_equality,
+            null_aware,
         }
     }
 
@@ -579,7 +592,8 @@ impl SharedBuildAccumulator {
                     if let Some(filter_expr) =
                         combine_membership_and_bounds(membership_expr, bounds_expr)
                     {
-                        self.dynamic_filter.update(filter_expr)?;
+                        self.dynamic_filter
+                            .update(self.preserve_probe_nulls(filter_expr))?;
                     }
                 }
                 PartitionStatus::Pending => {
@@ -685,11 +699,50 @@ impl SharedBuildAccumulator {
                     )?) as Arc<dyn PhysicalExpr>
                 };
 
-                self.dynamic_filter.update(filter_expr)?;
+                self.dynamic_filter
+                    .update(self.preserve_probe_nulls(filter_expr))?;
             }
         }
 
         Ok(())
+    }
+
+    /// Keeps probe rows with a NULL key when the join semantics need them.
+    ///
+    /// The build-side predicate drops probe rows whose key is NULL. A null-aware anti join
+    /// (`NOT IN`) needs that NULL to reach the join so three-valued logic can collapse the
+    /// result, and a null-equal join needs it to match a build-side NULL. OR-ing `key IS NULL`
+    /// keeps those rows while preserving the filter's selectivity for the rest; the join refines
+    /// whatever the widened filter lets through.
+    fn preserve_probe_nulls(
+        &self,
+        filter_expr: Arc<dyn PhysicalExpr>,
+    ) -> Arc<dyn PhysicalExpr> {
+        if self.null_equality != NullEquality::NullEqualsNull && !self.null_aware {
+            return filter_expr;
+        }
+        // Only a key that can actually be NULL needs the disjunct; a NOT NULL key never widens.
+        // Null-aware joins are single-key; null-equal joins can be multi-key, so OR every nullable
+        // key. If every key is NOT NULL the filter is left untouched, at full selectivity.
+        let any_key_is_null = self
+            .on_right
+            .iter()
+            // Widen on unresolved nullability: an extra NULL row is safe, a dropped one isn't.
+            .filter(|key| key.nullable(&self.probe_schema).unwrap_or(true))
+            .map(|key| {
+                Arc::new(IsNullExpr::new(Arc::clone(key))) as Arc<dyn PhysicalExpr>
+            })
+            .reduce(|acc, is_null| {
+                Arc::new(BinaryExpr::new(acc, Operator::Or, is_null))
+                    as Arc<dyn PhysicalExpr>
+            });
+        // Cheap null check first short-circuits before the costlier dynamic filter.
+        match any_key_is_null {
+            Some(any_key_is_null) => {
+                Arc::new(BinaryExpr::new(any_key_is_null, Operator::Or, filter_expr))
+            }
+            None => filter_expr,
+        }
     }
 }
 
@@ -722,6 +775,8 @@ pub(super) fn make_partitioned_accumulator_for_test(
         on_right: vec![],
         repartition_random_state: SeededRandomState::with_seed(1),
         probe_schema,
+        null_equality: NullEquality::NullEqualsNothing,
+        null_aware: false,
     }
 }
 
@@ -741,6 +796,7 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_physical_expr::expressions::Column;
 
     fn partitioned_state(acc: &SharedBuildAccumulator) -> (Vec<PartitionStatus>, usize) {
         let guard = acc.inner.lock();
@@ -809,5 +865,60 @@ mod tests {
         let (partitions, completed) = partitioned_state(&acc);
         assert!(matches!(partitions[0], PartitionStatus::CanceledUnknown));
         assert_eq!(completed, 1);
+    }
+
+    fn null_equal_accumulator(
+        probe_schema: Arc<Schema>,
+        on_right: Vec<PhysicalExprRef>,
+    ) -> SharedBuildAccumulator {
+        SharedBuildAccumulator {
+            inner: Mutex::new(AccumulatorState {
+                data: AccumulatedBuildData::Partitioned {
+                    partitions: vec![PartitionStatus::Pending; 1],
+                    completed_partitions: 0,
+                },
+                completion: CompletionState::Pending,
+            }),
+            completion_notify: Notify::new(),
+            dynamic_filter: Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true))),
+            on_right,
+            repartition_random_state: SeededRandomState::with_seed(1),
+            probe_schema,
+            null_equality: NullEquality::NullEqualsNull,
+            null_aware: false,
+        }
+    }
+
+    #[test]
+    fn preserve_probe_nulls_only_widens_nullable_keys() {
+        let probe_schema = Arc::new(Schema::new(vec![
+            Field::new("k_nullable", DataType::Int32, true),
+            Field::new("k_not_null", DataType::Int32, false),
+        ]));
+        let on_right: Vec<PhysicalExprRef> = vec![
+            Arc::new(Column::new("k_nullable", 0)),
+            Arc::new(Column::new("k_not_null", 1)),
+        ];
+        let acc = null_equal_accumulator(probe_schema, on_right);
+
+        // Only the nullable key earns an IS NULL disjunct; the NOT NULL key is left out.
+        let widened = acc.preserve_probe_nulls(lit(true));
+        assert_eq!(format!("{widened}").matches("IS NULL").count(), 1);
+    }
+
+    #[test]
+    fn preserve_probe_nulls_leaves_all_not_null_keys_untouched() {
+        let probe_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let on_right: Vec<PhysicalExprRef> =
+            vec![Arc::new(Column::new("a", 0)), Arc::new(Column::new("b", 1))];
+        let acc = null_equal_accumulator(probe_schema, on_right);
+
+        // Every key is NOT NULL, so there is nothing to OR in and the filter is returned as-is.
+        let filter = lit(true);
+        let result = acc.preserve_probe_nulls(Arc::clone(&filter));
+        assert_eq!(format!("{result}"), format!("{filter}"));
     }
 }
