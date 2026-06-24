@@ -727,6 +727,7 @@ impl SharedBuildAccumulator {
         let any_key_is_null = self
             .on_right
             .iter()
+            // Widen on unresolved nullability: an extra NULL row is safe, a dropped one isn't.
             .filter(|key| key.nullable(&self.probe_schema).unwrap_or(true))
             .map(|key| {
                 Arc::new(IsNullExpr::new(Arc::clone(key))) as Arc<dyn PhysicalExpr>
