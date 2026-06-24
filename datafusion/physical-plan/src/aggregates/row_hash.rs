@@ -745,8 +745,6 @@ impl Stream for GroupedHashAggregateStream {
         loop {
             let batch_size = self.batch_size;
             let input_done = self.input_done;
-            let should_skip_after_output =
-                self.mode == AggregateMode::Partial && self.should_skip_aggregation();
 
             match &mut self.exec_state {
                 ExecutionState::ReadingInput => 'reading_input: {
@@ -880,27 +878,29 @@ impl Stream for GroupedHashAggregateStream {
                 ExecutionState::ProducingOutput(batch) => {
                     // slice off a part of the batch, if needed
                     let output_batch;
-                    (self.exec_state, output_batch) = if batch.num_rows() <= batch_size {
-                        (
-                            if input_done {
-                                ExecutionState::Done
-                            }
-                            // In Partial aggregation, we also need to check
-                            // if we should trigger partial skipping
-                            else if should_skip_after_output {
-                                ExecutionState::SkippingAggregation
-                            } else {
-                                ExecutionState::ReadingInput
-                            },
-                            batch.clone(),
-                        )
+                    let next_state = if batch.num_rows() <= batch_size {
+                        output_batch = batch.clone();
+                        None
                     } else {
                         // output first batch_size rows
                         let num_remaining = batch.num_rows() - batch_size;
                         let remaining = batch.slice(batch_size, num_remaining);
-                        let output = batch.slice(0, batch_size);
-                        (ExecutionState::ProducingOutput(remaining), output)
+                        output_batch = batch.slice(0, batch_size);
+                        Some(ExecutionState::ProducingOutput(remaining))
                     };
+
+                    if let Some(next_state) = next_state {
+                        self.exec_state = next_state;
+                    } else if input_done {
+                        self.exec_state = ExecutionState::Done;
+                    }
+                    // In Partial aggregation, we also need to check
+                    // if we should trigger partial skipping
+                    else if self.should_skip_aggregation() {
+                        self.exec_state = ExecutionState::SkippingAggregation;
+                    } else {
+                        self.exec_state = ExecutionState::ReadingInput;
+                    }
 
                     if let Some(reduction_factor) = self.reduction_factor.as_ref() {
                         reduction_factor.add_part(output_batch.num_rows());
@@ -916,13 +916,13 @@ impl Stream for GroupedHashAggregateStream {
 
                 ExecutionState::ProducingPartitionedOutput(state) => {
                     if state.is_empty() {
-                        self.exec_state = if input_done {
-                            ExecutionState::Done
-                        } else if should_skip_after_output {
-                            ExecutionState::SkippingAggregation
+                        if input_done {
+                            self.exec_state = ExecutionState::Done;
+                        } else if self.should_skip_aggregation() {
+                            self.exec_state = ExecutionState::SkippingAggregation;
                         } else {
-                            ExecutionState::ReadingInput
-                        };
+                            self.exec_state = ExecutionState::ReadingInput;
+                        }
                         continue;
                     }
 
