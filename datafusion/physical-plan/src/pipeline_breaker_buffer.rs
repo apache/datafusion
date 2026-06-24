@@ -190,6 +190,17 @@ impl ExecutionPlan for PipelineBreakerBuffer {
         vec![true]
     }
 
+    /// Gated passthrough: rules only see runtime stats once the underlying
+    /// breaker is actually done (signalled by `is_ready`). Before that the
+    /// child's per-partition counts are partial / not meaningful for
+    /// adaptive decisions.
+    fn runtime_row_count(&self, partition: usize) -> Option<usize> {
+        if !self.is_ready() {
+            return None;
+        }
+        self.input.runtime_row_count(partition)
+    }
+
     fn execute(
         &self,
         partition: usize,

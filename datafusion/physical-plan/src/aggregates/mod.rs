@@ -1778,17 +1778,19 @@ impl ExecutionPlan for AggregateExec {
     /// each input partition independently knows how many partial-group
     /// rows it has produced.
     fn runtime_row_count(&self, partition: usize) -> Option<usize> {
-        let metrics = self.metrics.clone_inner();
-        let rows: usize = metrics
+        // Find the OutputRows metric registered for this partition.
+        // Returning `Some(0)` for an empty partition is correct — None
+        // means "this partition hasn't been started yet" (the metric
+        // doesn't exist).
+        self.metrics
+            .clone_inner()
             .iter()
-            .filter_map(|m| match (m.partition(), m.value()) {
+            .find_map(|m| match (m.partition(), m.value()) {
                 (Some(p), MetricValue::OutputRows(count)) if p == partition => {
                     Some(count.value())
                 }
                 _ => None,
             })
-            .sum();
-        if rows > 0 { Some(rows) } else { None }
     }
 
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {

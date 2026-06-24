@@ -280,13 +280,18 @@ impl SwapBuildSideIfInverted {
     }
 }
 
-/// Row count of a join input's subtree. Prefers runtime stats from the
-/// deepest node that reports `runtime_row_count` (typically an
-/// `AggregateExec` once its build phase has begun emitting). Falls back
-/// to plan-time `statistics()` for pure static-source subtrees (e.g. a
-/// small in-memory table behind a `CoalescePartitionsExec`).
+/// Row count of a join input's subtree. Trusts `runtime_row_count`
+/// to propagate correctly through passthrough operators (Projection,
+/// PipelineBreakerBuffer-when-ready, etc.); no recursive descent. The
+/// PipelineBreakerBuffer in the chain returns `None` until its own
+/// `is_ready`, which is the natural gate — rules only see runtime
+/// stats once the underlying breaker is actually done.
+///
+/// Falls back to plan-time `statistics()` for pure static-source
+/// subtrees (e.g. a small in-memory table behind a
+/// `CoalescePartitionsExec`).
 fn side_runtime_rows(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
-    if let Some(rows) = sum_runtime_rows_in_subtree(plan) {
+    if let Some(rows) = sum_runtime_rows_across_partitions(plan) {
         return Some(rows);
     }
     plan.statistics_with_args(&StatisticsArgs::new())
@@ -294,23 +299,13 @@ fn side_runtime_rows(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
         .and_then(|s| s.num_rows.get_value().copied())
 }
 
-fn sum_runtime_rows_in_subtree(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
+fn sum_runtime_rows_across_partitions(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
     let n = plan.output_partitioning().partition_count();
     let mut total: usize = 0;
-    let mut found_any = false;
     for p in 0..n {
-        if let Some(rows) = plan.runtime_row_count(p) {
-            total += rows;
-            found_any = true;
-        }
+        // Require every partition to report — partial sums are not
+        // meaningful for adaptive decisions.
+        total += plan.runtime_row_count(p)?;
     }
-    if found_any {
-        return Some(total);
-    }
-    for child in plan.children() {
-        if let Some(rows) = sum_runtime_rows_in_subtree(child) {
-            return Some(rows);
-        }
-    }
-    None
+    Some(total)
 }
