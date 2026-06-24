@@ -148,7 +148,17 @@ message RepartitionNode {
   oneof partition_method {
     uint64 round_robin = 2;
     HashRepartition hash = 3;
+    RangeRepartition range = 4;
   }
+}
+
+message RangeSplitPoint {
+  repeated datafusion_common.ScalarValue value = 1;
+}
+
+message RangeRepartition {
+  repeated SortExprNode sort_expr = 1;
+  repeated RangeSplitPoint split_point = 2;
 }
 
 message HashRepartition {
@@ -1181,6 +1191,7 @@ message FileScanExecConf {
 
   optional ProjectionExprs projection_exprs = 13;
   optional bool partitioned_by_file_group = 14;
+  optional Partitioning output_partitioning = 15;
 }
 
 message ParquetScanExecNode {

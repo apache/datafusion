@@ -36,7 +36,9 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue, tree_node::Transformed};
 use datafusion_expr::Operator;
-use datafusion_expr_common::casts::try_cast_literal_to_type;
+use datafusion_expr_common::casts::{
+    is_timestamp_precision_narrowing_cast, try_cast_literal_to_type,
+};
 
 use crate::PhysicalExpr;
 use crate::expressions::{BinaryExpr, CastExpr, Literal, TryCastExpr, lit};
@@ -60,13 +62,14 @@ fn try_unwrap_cast_binary(
     schema: &Schema,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     // Case 1: cast(left_expr) op literal
-    if let (Some((inner_expr, _cast_type)), Some(literal)) = (
+    if let (Some((inner_expr, cast_type)), Some(literal)) = (
         extract_cast_info(binary.left()),
         binary.right().downcast_ref::<Literal>(),
     ) && binary.op().supports_propagation()
         && let Some(unwrapped) = try_unwrap_cast_comparison(
             Arc::clone(inner_expr),
             literal.value(),
+            cast_type,
             *binary.op(),
             schema,
         )?
@@ -75,7 +78,7 @@ fn try_unwrap_cast_binary(
     }
 
     // Case 2: literal op cast(right_expr)
-    if let (Some(literal), Some((inner_expr, _cast_type))) = (
+    if let (Some(literal), Some((inner_expr, cast_type))) = (
         binary.left().downcast_ref::<Literal>(),
         extract_cast_info(binary.right()),
     ) {
@@ -85,6 +88,7 @@ fn try_unwrap_cast_binary(
             && let Some(unwrapped) = try_unwrap_cast_comparison(
                 Arc::clone(inner_expr),
                 literal.value(),
+                cast_type,
                 swapped_op,
                 schema,
             )?
@@ -118,11 +122,16 @@ fn extract_cast_info(
 fn try_unwrap_cast_comparison(
     inner_expr: Arc<dyn PhysicalExpr>,
     literal_value: &ScalarValue,
+    cast_type: &DataType,
     op: Operator,
     schema: &Schema,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     // Get the data type of the inner expression
     let inner_type = inner_expr.data_type(schema)?;
+
+    if is_timestamp_precision_narrowing_cast(&inner_type, cast_type) {
+        return Ok(None);
+    }
 
     // Try to cast the literal to the inner expression's type
     if let Some(casted_literal) = try_cast_literal_to_type(literal_value, &inner_type) {
@@ -138,7 +147,7 @@ fn try_unwrap_cast_comparison(
 mod tests {
     use super::*;
     use crate::expressions::col;
-    use arrow::datatypes::Field;
+    use arrow::datatypes::{Field, TimeUnit};
     use datafusion_common::tree_node::TreeNode;
 
     /// Check if an expression is a cast expression
@@ -546,6 +555,59 @@ mod tests {
 
         // Should NOT be transformed due to overflow
         assert!(!result.transformed);
+    }
+
+    #[test]
+    fn test_not_unwrap_timestamp_precision_narrowing() {
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        )]);
+
+        let column_expr = col("ts", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(
+            column_expr,
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            None,
+        ));
+        let literal_expr = lit(ScalarValue::TimestampMillisecond(Some(1), None));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal_expr));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+
+        assert!(!result.transformed);
+    }
+
+    #[test]
+    fn test_unwrap_timestamp_precision_widening() {
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        )]);
+
+        let column_expr = col("ts", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(
+            column_expr,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            None,
+        ));
+        let literal_expr = lit(ScalarValue::TimestampNanosecond(Some(1_000_000), None));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal_expr));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+
+        assert!(result.transformed);
+        let optimized_binary = result.data.downcast_ref::<BinaryExpr>().unwrap();
+        assert!(!is_cast_expr(optimized_binary.left()));
+        let right_literal = optimized_binary.right().downcast_ref::<Literal>().unwrap();
+        assert_eq!(
+            right_literal.value(),
+            &ScalarValue::TimestampMillisecond(Some(1), None)
+        );
     }
 
     #[test]
