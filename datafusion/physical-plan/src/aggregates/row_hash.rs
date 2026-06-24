@@ -71,7 +71,10 @@ pub(crate) enum ExecutionState {
     /// here and are sliced off as needed in batch_size chunks
     ProducingOutput(RecordBatch),
     /// Produces output batches from partitioned aggregation in round-robin order.
-    ProducingPartitionedOutput(Vec<RecordBatch>),
+    ProducingPartitionedOutput {
+        batches: Vec<RecordBatch>,
+        next_partition: usize,
+    },
     /// Produce intermediate aggregate state for each input row without
     /// aggregation.
     ///
@@ -348,9 +351,6 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Reused group key hashes in partition order.
     reordered_hashes: Vec<u64>,
-
-    /// Next partition to emit from `ProducingPartitionedOutput`.
-    next_output_partition: usize,
 
     /// Accumulators, one for each `AggregateFunctionExpr` in the query
     ///
@@ -642,7 +642,6 @@ impl GroupedHashAggregateStream {
             partition_ranges: vec![],
             reordered_indices: vec![],
             reordered_hashes: vec![],
-            next_output_partition: 0,
             exec_state,
             baseline_metrics,
             group_by_metrics,
@@ -873,11 +872,13 @@ impl Stream for GroupedHashAggregateStream {
                     )));
                 }
 
-                ExecutionState::ProducingPartitionedOutput(_) => {
+                ExecutionState::ProducingPartitionedOutput { .. } => {
                     let current_state =
                         std::mem::replace(&mut self.exec_state, ExecutionState::Done);
-                    let ExecutionState::ProducingPartitionedOutput(mut batches) =
-                        current_state
+                    let ExecutionState::ProducingPartitionedOutput {
+                        mut batches,
+                        mut next_partition,
+                    } = current_state
                     else {
                         unreachable!();
                     };
@@ -894,8 +895,12 @@ impl Stream for GroupedHashAggregateStream {
                         continue;
                     }
 
-                    let output_batch = self.next_partitioned_output_batch(&mut batches);
-                    self.exec_state = ExecutionState::ProducingPartitionedOutput(batches);
+                    let output_batch = self
+                        .next_partitioned_output_batch(&mut batches, &mut next_partition);
+                    self.exec_state = ExecutionState::ProducingPartitionedOutput {
+                        batches,
+                        next_partition,
+                    };
 
                     if let Some(reduction_factor) = self.reduction_factor.as_ref() {
                         reduction_factor.add_part(output_batch.num_rows());
@@ -1289,17 +1294,18 @@ impl GroupedHashAggregateStream {
     }
 
     fn next_partitioned_output_batch(
-        &mut self,
+        &self,
         batches: &mut [RecordBatch],
+        next_partition: &mut usize,
     ) -> RecordBatch {
         let num_partitions = batches.len();
         for offset in 0..num_partitions {
-            let partition = (self.next_output_partition + offset) % num_partitions;
+            let partition = (*next_partition + offset) % num_partitions;
             if batches[partition].num_rows() == 0 {
                 continue;
             }
 
-            self.next_output_partition = (partition + 1) % num_partitions;
+            *next_partition = (partition + 1) % num_partitions;
             let batch = &batches[partition];
             if batch.num_rows() <= self.batch_size {
                 let output = batch.clone();
@@ -1338,8 +1344,10 @@ impl GroupedHashAggregateStream {
         if batches.iter().all(|batch| batch.num_rows() == 0) {
             Ok(None)
         } else {
-            self.next_output_partition = 0;
-            Ok(Some(ExecutionState::ProducingPartitionedOutput(batches)))
+            Ok(Some(ExecutionState::ProducingPartitionedOutput {
+                batches,
+                next_partition: 0,
+            }))
         }
     }
 
