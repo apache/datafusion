@@ -9194,3 +9194,58 @@ SET datafusion.execution.target_partitions = 4;
 
 statement ok
 DROP TABLE hits_raw;
+
+# Post-aggregate clause rebasing / validation coverage for future refactors.
+# These queries intentionally cover the clause-specific diagnostics produced by
+# CheckColumnsMustReferenceAggregatePurpose in datafusion/sql/src/utils.rs.
+statement ok
+CREATE TABLE post_aggregate_clause_validation(a int, b int, c int) AS
+VALUES (1, 10, 100), (1, 20, 200), (2, 30, 400);
+
+# SELECT projection rejects non-grouped, non-aggregate input columns.
+query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function
+SELECT a, b, sum(c) FROM post_aggregate_clause_validation GROUP BY a;
+
+# HAVING rejects non-grouped, non-aggregate input columns.
+query error DataFusion error: Error during planning: Column in HAVING must be in GROUP BY or an aggregate function
+SELECT a, sum(c) FROM post_aggregate_clause_validation GROUP BY a HAVING b > 10;
+
+# QUALIFY rejects non-grouped, non-aggregate input columns while preserving
+# QUALIFY-specific aggregate-boundary diagnostics.
+query error DataFusion error: Error during planning: Column in QUALIFY must be in GROUP BY or an aggregate function
+SELECT a, sum(c) FROM post_aggregate_clause_validation GROUP BY a
+QUALIFY row_number() OVER (ORDER BY a) = 1 AND b > 10;
+
+# ORDER BY rejects non-grouped, non-aggregate input columns.
+query error DataFusion error: Error during planning: Column in ORDER BY must be in GROUP BY or an aggregate function
+SELECT a, sum(c) FROM post_aggregate_clause_validation GROUP BY a ORDER BY b;
+
+# DISTINCT ON rejects non-grouped, non-aggregate input columns.
+query error DataFusion error: Error during planning: Column in DISTINCT ON must be in GROUP BY or an aggregate function
+SELECT DISTINCT ON (b) a, sum(c) FROM post_aggregate_clause_validation GROUP BY a;
+
+# ORDER BY still accepts a top-level SELECT aggregate alias after aggregation.
+query II
+SELECT a, sum(c) AS total FROM post_aggregate_clause_validation GROUP BY a ORDER BY total, a;
+----
+1 300
+2 400
+
+# ORDER BY preserves sort direction and null ordering when remapping a SELECT aggregate alias.
+query II
+SELECT a, sum(c) AS total
+FROM post_aggregate_clause_validation GROUP BY a ORDER BY total DESC NULLS LAST, a;
+----
+2 400
+1 300
+
+# DISTINCT ON still accepts a top-level SELECT aggregate alias after aggregation.
+query II
+SELECT DISTINCT ON (total) a, sum(c) AS total
+FROM post_aggregate_clause_validation GROUP BY a ORDER BY total, a;
+----
+1 300
+2 400
+
+statement ok
+DROP TABLE post_aggregate_clause_validation;
