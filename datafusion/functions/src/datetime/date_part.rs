@@ -224,7 +224,7 @@ impl ScalarUDFImpl for DatePartFunc {
                 IntervalUnit::Week => date_part(array.as_ref(), DatePart::Week)?,
                 IntervalUnit::Day => date_part(array.as_ref(), DatePart::Day)?,
                 IntervalUnit::Hour => date_part(array.as_ref(), DatePart::Hour)?,
-                IntervalUnit::Minute => date_part(array.as_ref(), DatePart::Minute)?,
+                IntervalUnit::Minute => date_part_minute(array.as_ref())?,
                 IntervalUnit::Second => seconds_as_i32(array.as_ref(), Second)?,
                 IntervalUnit::Millisecond => seconds_as_i32(array.as_ref(), Millisecond)?,
                 IntervalUnit::Microsecond => seconds_as_i32(array.as_ref(), Microsecond)?,
@@ -394,6 +394,42 @@ fn part_normalization(part: &str) -> &str {
     part.strip_prefix(|c| c == '\'' || c == '\"')
         .and_then(|s| s.strip_suffix(|c| c == '\'' || c == '\"'))
         .unwrap_or(part)
+}
+
+fn date_part_minute(array: &dyn Array) -> Result<ArrayRef> {
+    if let Some(array) = timestamp_second_utc_minute(array)? {
+        return Ok(array);
+    }
+
+    Ok(date_part(array, DatePart::Minute)?)
+}
+
+fn timestamp_second_utc_minute(array: &dyn Array) -> Result<Option<ArrayRef>> {
+    let Timestamp(Second, timezone) = array.data_type() else {
+        return Ok(None);
+    };
+
+    if !is_utc_timezone(timezone.as_deref()) {
+        return Ok(None);
+    }
+
+    let array = as_timestamp_second_array(array)?;
+    let minutes: Int32Array = array.unary(|seconds| {
+        seconds
+            .div_euclid(60)
+            .rem_euclid(60)
+            .try_into()
+            .expect("minute is always in 0..60")
+    });
+
+    Ok(Some(Arc::new(minutes) as ArrayRef))
+}
+
+fn is_utc_timezone(timezone: Option<&str>) -> bool {
+    matches!(
+        timezone,
+        None | Some("UTC") | Some("+00:00") | Some("+0000") | Some("+00")
+    )
 }
 
 /// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
@@ -573,5 +609,46 @@ fn seconds_ns(array: &dyn Array) -> Result<ArrayRef> {
             })
             .collect();
         Ok(Arc::new(r))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::TimestampSecondArray;
+
+    use super::*;
+
+    #[test]
+    fn timestamp_second_utc_minute_fast_path_matches_arrow() -> Result<()> {
+        let input = TimestampSecondArray::from(vec![
+            Some(-3661),
+            Some(-3600),
+            Some(-60),
+            Some(-1),
+            Some(0),
+            Some(59),
+            Some(60),
+            Some(3661),
+            None,
+        ])
+        .with_timezone("UTC");
+
+        let actual = date_part_minute(&input)?;
+        let expected = date_part(&input, DatePart::Minute)?;
+
+        assert_eq!(actual.as_ref(), expected.as_ref());
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_second_non_utc_minute_falls_back() -> Result<()> {
+        let input = TimestampSecondArray::from(vec![Some(0), Some(60), None])
+            .with_timezone("+00:30");
+
+        let actual = date_part_minute(&input)?;
+        let expected = Int32Array::from(vec![Some(30), Some(31), None]);
+
+        assert_eq!(actual.as_ref(), &expected);
+        Ok(())
     }
 }
