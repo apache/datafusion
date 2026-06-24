@@ -294,9 +294,18 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             // Adjust the loser tree if necessary, returning control if needed
             if !self.loser_tree_adjusted {
                 let winner = self.loser_tree[0];
-                if let Err(e) = ready!(self.maybe_poll_stream(cx, winner)) {
-                    self.done = true;
-                    return Poll::Ready(Some(Err(e)));
+                // Fast path: the winner's cursor is still live for almost every
+                // row, so avoid the `maybe_poll_stream` call (and its `Poll`
+                // plumbing) unless the cursor is actually exhausted and needs a
+                // fresh `RecordBatch`.
+                if self.cursors[winner].is_none() {
+                    match ready!(self.maybe_poll_stream(cx, winner)) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            self.done = true;
+                            return Poll::Ready(Some(Err(e)));
+                        }
+                    }
                 }
                 self.update_loser_tree();
             }
