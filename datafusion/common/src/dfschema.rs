@@ -617,11 +617,6 @@ impl DFSchema {
         })
     }
 
-    #[deprecated(since = "47.0.0", note = "Use has_equivalent_names_and_types` instead")]
-    pub fn equivalent_names_and_types(&self, other: &Self) -> bool {
-        self.has_equivalent_names_and_types(other).is_ok()
-    }
-
     /// Returns Ok if the two schemas have the same qualified named
     /// fields with the compatible data types.
     ///
@@ -1257,13 +1252,13 @@ pub trait SchemaExt {
     /// This is a specialized version of Eq that ignores differences
     /// in nullability and metadata.
     ///
-    /// It works the same as [`DFSchema::equivalent_names_and_types`].
+    /// It works the same as [`DFSchema::has_equivalent_names_and_types`].
     fn equivalent_names_and_types(&self, other: &Self) -> bool;
 
     /// Returns nothing if the two schemas have the same qualified named
     /// fields with logically equivalent data types. Returns internal error otherwise.
     ///
-    /// Use [DFSchema]::equivalent_names_and_types for stricter semantic type
+    /// Use [DFSchema]::has_equivalent_names_and_types for stricter semantic type
     /// equivalence checking.
     ///
     /// It is only used by insert into cases.
