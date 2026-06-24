@@ -109,8 +109,22 @@ impl PhysicalOptimizerRule for InsertRuntimeOptimizer {
 }
 
 /// Returns true for operators that absorb their entire input before
-/// emitting (the canonical "pipeline breaker" definition). Start with
-/// the obvious cases; extend as more rules need other breakers.
+/// emitting any output — the canonical "pipeline breaker" definition.
+///
+/// We can't use `pipeline_behavior() == EmissionType::Final` here even
+/// though it sounds equivalent. That flag describes an operator's output
+/// emission semantics and is inherited from descendants — so `Projection`,
+/// `Repartition`, and `HashJoin` above a Final-emitting `AggregateExec`
+/// all report `Final` too. We need the *originator* of the pipeline
+/// break, not every operator downstream of one.
+///
+/// `EmissionType::Final && all children != Final` (the transition-point
+/// filter) is closer but still misses cascading breakers like
+/// `AggregateExec(FinalPartitioned)` whose children are themselves
+/// Final because of the `Partial` aggregate below.
+///
+/// So: hardcoded match against the operators we want to instrument.
+/// Extend as more rules need other breakers.
 fn is_pipeline_breaker(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.downcast_ref::<AggregateExec>().is_some()
         || plan.downcast_ref::<SortExec>().is_some()
