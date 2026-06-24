@@ -104,3 +104,33 @@ physical_plan
 
 statement ok
 drop table t;
+
+# Test quoted dotted column names with subquery column-list aliasing
+# (https://github.com/apache/datafusion/issues/22916)
+
+statement ok
+create table dotted_alias_source ("A.B" int, "C" int);
+
+statement ok
+insert into dotted_alias_source values (1, 2);
+
+query II
+select t_.x, t_.y
+from (select "A.B", "C" from dotted_alias_source) as t_(x, y);
+----
+1 2
+
+query I
+select "x.y"
+from (select "A.B" from dotted_alias_source) as t_("x.y");
+----
+1
+
+query I
+select t_."x.y"
+from (select "A.B" from dotted_alias_source) as t_("x.y");
+----
+1
+
+statement ok
+drop table dotted_alias_source;
