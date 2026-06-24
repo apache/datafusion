@@ -1348,8 +1348,8 @@ SELECT * FROM (
         (3, arrow_cast(NULL, 'List(Int64)'))
 ) AS t(id, arr);
 
-# Reproducer for the optimization gap: the unused `elem` output is duplicate-insensitive
-# below this GROUP BY, but the current plan still keeps Unnest/UnnestExec.
+# The unused non-empty literal UNNEST only duplicates rows below this GROUP BY,
+# so it can be pruned without changing the grouped ids.
 query I
 SELECT id
 FROM (
@@ -1372,9 +1372,43 @@ FROM (
 GROUP BY id;
 ----
 logical_plan
-<slt:ignore>Unnest:<slt:ignore>
+01)Aggregate: groupBy=[[unused_unnest_pruning.id]], aggr=[[]]
+02)--TableScan: unused_unnest_pruning projection=[id]
 physical_plan
-<slt:ignore>UnnestExec<slt:ignore>
+01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
+02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# DISTINCT is implemented as a duplicate-insensitive aggregate before projection
+# pruning, so the same unused non-empty literal UNNEST can be removed.
+query I
+SELECT DISTINCT id
+FROM (
+    SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+    FROM unused_unnest_pruning
+)
+ORDER BY id;
+----
+1
+2
+3
+
+query TT
+EXPLAIN SELECT DISTINCT id
+FROM (
+    SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+    FROM unused_unnest_pruning
+);
+----
+logical_plan
+01)Aggregate: groupBy=[[unused_unnest_pruning.id]], aggr=[[]]
+02)--TableScan: unused_unnest_pruning projection=[id]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
+02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Counterexample: removing UNNEST here would change cardinality.
 query I rowsort
@@ -1416,6 +1450,79 @@ FROM (
 );
 ----
 2
+
+# Empty and NULL input lists can remove rows before grouping, so this UNNEST
+# must not be pruned even though `elem` is not projected above the GROUP BY.
+query I
+SELECT id
+FROM (
+    SELECT id, UNNEST(arr) AS elem
+    FROM unused_unnest_pruning
+)
+GROUP BY id
+ORDER BY id;
+----
+1
+
+# Volatile GROUP BY expressions are evaluated once per input row, so removing a
+# row-multiplying UNNEST changes the number of groups even when elem is unused.
+query I
+SELECT COUNT(*)
+FROM (
+    SELECT 1
+    FROM (
+        SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+        FROM unused_unnest_pruning
+    )
+    GROUP BY uuid()
+);
+----
+9
+
+# Deterministic plan check for the volatile GROUP BY guard: the UNNEST remains.
+query TT
+EXPLAIN SELECT COUNT(*)
+FROM (
+    SELECT 1
+    FROM (
+        SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+        FROM unused_unnest_pruning
+    )
+    GROUP BY uuid()
+);
+----
+logical_plan
+<slt:ignore>Unnest:<slt:ignore>
+physical_plan
+<slt:ignore>UnnestExec<slt:ignore>
+
+# The volatile guard also applies when deterministic grouping columns are present.
+query I
+SELECT COUNT(*)
+FROM (
+    SELECT 1
+    FROM (
+        SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+        FROM unused_unnest_pruning
+    )
+    GROUP BY id, uuid()
+);
+----
+9
+
+# DISTINCT is duplicate-insensitive only for deterministic expressions. A volatile
+# DISTINCT expression still observes the row multiplication from UNNEST.
+query I
+SELECT COUNT(*)
+FROM (
+    SELECT DISTINCT uuid()
+    FROM (
+        SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+        FROM unused_unnest_pruning
+    )
+);
+----
+9
 
 statement ok
 DROP TABLE unused_unnest_pruning;

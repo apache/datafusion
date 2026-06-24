@@ -4670,6 +4670,14 @@ impl PartialOrd for Unnest {
 }
 
 impl Unnest {
+    /// Returns true if the input column at `input_index` is expanded by this [`Unnest`].
+    pub fn is_unnested_input_index(&self, input_index: usize) -> bool {
+        self.list_type_columns
+            .iter()
+            .any(|(idx, _)| *idx == input_index)
+            || self.struct_type_columns.contains(&input_index)
+    }
+
     pub fn try_new(
         input: Arc<LogicalPlan>,
         exec_columns: Vec<Column>,

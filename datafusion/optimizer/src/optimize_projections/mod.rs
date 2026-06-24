@@ -21,16 +21,20 @@ mod required_indices;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use arrow::array::Array;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::{
-    Column, DFSchema, HashMap, JoinType, Result, assert_eq_or_internal_err,
+    Column, DFSchema, HashMap, JoinType, Result, ScalarValue, assert_eq_or_internal_err,
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
+use datafusion_expr::logical_plan::TableScanBuilder;
+use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScanBuilder, Unnest,
-    Window, logical_plan::LogicalPlan,
+    Aggregate, Distinct, EmptyRelation, Expr, Projection, Unnest, Window,
+    logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -195,35 +199,55 @@ fn optimize_projections(
                 )));
             }
 
+            let aggregate_input = Arc::unwrap_or_clone(aggregate.input);
+            let aggregate_input = if new_aggr_expr.is_empty() {
+                let transformed_input =
+                    remove_row_preserving_unused_unnest_from_duplicate_insensitive_input(
+                        aggregate_input,
+                        &new_group_bys,
+                    )?;
+                if transformed_input.transformed {
+                    let aggregate = Aggregate::try_new(
+                        Arc::new(transformed_input.data),
+                        new_group_bys,
+                        Vec::new(),
+                    )?;
+                    return optimize_projections(
+                        LogicalPlan::Aggregate(aggregate),
+                        config,
+                        indices,
+                    );
+                }
+                transformed_input.data
+            } else {
+                aggregate_input
+            };
+
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
-            let schema = aggregate.input.schema();
+            let schema = aggregate_input.schema();
             let necessary_indices =
                 RequiredIndices::new().with_exprs(schema, all_exprs_iter);
             let necessary_exprs = necessary_indices.get_required_exprs(schema);
 
-            return optimize_projections(
-                Arc::unwrap_or_clone(aggregate.input),
-                config,
-                necessary_indices,
-            )?
-            .transform_data(|aggregate_input| {
-                // Simplify the input of the aggregation by adding a projection so
-                // that its input only contains absolutely necessary columns for
-                // the aggregate expressions. Note that necessary_indices refer to
-                // fields in `aggregate.input.schema()`.
-                add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)
-            })?
-            .map_data(|aggregate_input| {
-                // Create a new aggregate plan with the updated input and only the
-                // absolutely necessary fields:
-                Aggregate::try_new(
-                    Arc::new(aggregate_input),
-                    new_group_bys,
-                    new_aggr_expr,
-                )
-                .map(LogicalPlan::Aggregate)
-            })?
-            .transform_data(|plan| optimize_subqueries(plan, config));
+            return optimize_projections(aggregate_input, config, necessary_indices)?
+                .transform_data(|aggregate_input| {
+                    // Simplify the input of the aggregation by adding a projection so
+                    // that its input only contains absolutely necessary columns for
+                    // the aggregate expressions. Note that necessary_indices refer to
+                    // fields in `aggregate.input.schema()`.
+                    add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)
+                })?
+                .map_data(|aggregate_input| {
+                    // Create a new aggregate plan with the updated input and only the
+                    // absolutely necessary fields:
+                    Aggregate::try_new(
+                        Arc::new(aggregate_input),
+                        new_group_bys,
+                        new_aggr_expr,
+                    )
+                    .map(LogicalPlan::Aggregate)
+                })?
+                .transform_data(|plan| optimize_subqueries(plan, config));
         }
         LogicalPlan::Window(window) => {
             let input_schema = Arc::clone(window.input.schema());
@@ -466,6 +490,156 @@ fn optimize_projections(
     } else {
         Ok(transformed_plan)
     }
+}
+
+/// Remove an unused, row-preserving [`LogicalPlan::Unnest`] below a duplicate-insensitive
+/// aggregate input.
+///
+/// This is *not* a general unused-operator pruning rule. It is only correct when
+/// the parent aggregate is grouping-only (`aggr=[[]]`) and thus insensitive to
+/// duplicate input rows. In that case, removing `UNNEST` is safe if it cannot
+/// remove any input row and none of the surviving grouping expressions observe
+/// the unnested output or row multiplication.
+///
+/// For example, this plan:
+///
+/// ```text
+/// Aggregate: groupBy=[[id]], aggr=[[]]
+///   Unnest: lists[elem|depth=1] structs[]
+///     Projection: id, List([1, 2]) AS elem
+///       TableScan: t
+/// ```
+///
+/// can be rewritten to group directly on `t.id`:
+///
+/// ```text
+/// Aggregate: groupBy=[[id]], aggr=[[]]
+///   TableScan: t
+/// ```
+///
+/// because `elem` is unused, `UNNEST([1, 2])` preserves at least one row per
+/// input row, and grouping by `id` collapses the duplicate rows introduced by
+/// unnesting.
+///
+/// The rewrite is deliberately conservative. It rejects:
+///
+/// * visible aggregate expressions, such as `COUNT(*)`, because those observe
+///   row multiplication;
+/// * volatile grouping expressions, such as `uuid()` or `random()`, because row
+///   multiplication changes how many times they are evaluated;
+/// * referenced unnested output columns;
+/// * non-literal lists, empty/null lists, and recursive list unnesting, because
+///   this rule cannot prove they preserve at least one output row per input row.
+fn remove_row_preserving_unused_unnest_from_duplicate_insensitive_input(
+    input: LogicalPlan,
+    required_exprs: &[Expr],
+) -> Result<Transformed<LogicalPlan>> {
+    if required_exprs.iter().any(Expr::is_volatile) {
+        return Ok(Transformed::no(input));
+    }
+
+    match input {
+        LogicalPlan::Unnest(unnest)
+            if can_remove_unused_unnest_for_exprs(&unnest, required_exprs)? =>
+        {
+            Ok(Transformed::yes(Arc::unwrap_or_clone(unnest.input)))
+        }
+        LogicalPlan::Projection(projection) => {
+            let LogicalPlan::Unnest(unnest) = projection.input.as_ref() else {
+                return Ok(Transformed::no(LogicalPlan::Projection(projection)));
+            };
+            let required_projection_exprs = RequiredIndices::new()
+                .with_exprs(&projection.schema, required_exprs.iter())
+                .get_at_indices(&projection.expr);
+
+            if can_remove_unused_unnest_for_exprs(unnest, &required_projection_exprs)? {
+                let LogicalPlan::Unnest(unnest) = Arc::unwrap_or_clone(projection.input)
+                else {
+                    unreachable!("projection input was checked to be Unnest")
+                };
+                Projection::try_new(required_projection_exprs, unnest.input)
+                    .map(LogicalPlan::Projection)
+                    .map(Transformed::yes)
+            } else {
+                Ok(Transformed::no(LogicalPlan::Projection(projection)))
+            }
+        }
+        input => Ok(Transformed::no(input)),
+    }
+}
+
+fn can_remove_unused_unnest_for_exprs(unnest: &Unnest, exprs: &[Expr]) -> Result<bool> {
+    // This rewrite is only safe when UNNEST cannot eliminate input rows, no
+    // required expression depends on an unnested output column, and row
+    // multiplication cannot affect expression evaluation.
+    if !unnest_preserves_at_least_one_row_per_input(unnest)
+        || exprs.iter().any(Expr::is_volatile)
+    {
+        return Ok(false);
+    }
+
+    let mut columns = HashSet::new();
+    for expr in exprs {
+        expr_to_columns(expr, &mut columns)?;
+    }
+
+    for column in columns {
+        let output_index = unnest.schema.index_of_column(&column)?;
+        if unnest.is_unnested_input_index(unnest.dependency_indices[output_index]) {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+fn unnest_preserves_at_least_one_row_per_input(unnest: &Unnest) -> bool {
+    unnest.list_type_columns.iter().all(|(input_index, list)| {
+        list.depth == 1
+            && unnest_input_expr(unnest, *input_index)
+                .and_then(literal_non_empty_list)
+                .unwrap_or(false)
+    })
+}
+
+fn unnest_input_expr(unnest: &Unnest, input_index: usize) -> Option<&Expr> {
+    match unnest.input.as_ref() {
+        LogicalPlan::Projection(projection) => projection.expr.get(input_index),
+        _ => None,
+    }
+}
+
+fn literal_non_empty_list(expr: &Expr) -> Option<bool> {
+    let expr = match expr {
+        Expr::Alias(Alias { expr, .. }) => expr.as_ref(),
+        _ => expr,
+    };
+    let Expr::Literal(value, _) = expr else {
+        return None;
+    };
+
+    match value {
+        ScalarValue::List(array) => {
+            Some(has_valid_first_value(array.as_ref()) && array.value_length(0) > 0)
+        }
+        ScalarValue::LargeList(array) => {
+            Some(has_valid_first_value(array.as_ref()) && array.value_length(0) > 0)
+        }
+        ScalarValue::FixedSizeList(array) => {
+            Some(has_valid_first_value(array.as_ref()) && array.value_length() > 0)
+        }
+        ScalarValue::ListView(array) => {
+            Some(has_valid_first_value(array.as_ref()) && array.value_sizes()[0] > 0)
+        }
+        ScalarValue::LargeListView(array) => {
+            Some(has_valid_first_value(array.as_ref()) && array.value_sizes()[0] > 0)
+        }
+        _ => None,
+    }
+}
+
+fn has_valid_first_value(array: &impl Array) -> bool {
+    !array.is_empty() && array.is_valid(0)
 }
 
 /// Optimizes uncorrelated subquery plans embedded in expressions of the given
@@ -892,14 +1066,17 @@ mod tests {
         test_table_scan_with_name,
     };
     use crate::{OptimizerContext, OptimizerRule};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::ListArray;
+    use arrow::datatypes::{DataType, Field, Int64Type, Schema};
     use datafusion_common::{
-        Column, DFSchema, DFSchemaRef, JoinType, Result, TableReference,
+        Column, DFSchema, DFSchemaRef, JoinType, Result, ScalarValue, TableReference,
+        UnnestOptions,
     };
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
-        BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator, Projection,
-        UserDefinedLogicalNodeCore, WindowFunctionDefinition, binary_expr,
+        BinaryExpr, ColumnarValue, Expr, Extension, Like, LogicalPlan, Operator,
+        Projection, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, binary_expr,
         build_join_schema,
         builder::table_scan_with_filters,
         col,
@@ -929,6 +1106,94 @@ mod tests {
                 @ $expected,
             )
         }};
+    }
+
+    fn id_schema() -> Schema {
+        Schema::new(vec![Field::new("id", DataType::UInt32, false)])
+    }
+
+    fn list_literal_expr(values: Vec<Option<i64>>) -> Expr {
+        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(values)]);
+        Expr::Literal(ScalarValue::List(Arc::new(list)), None)
+    }
+
+    fn null_list_literal_expr() -> Expr {
+        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            None::<Vec<Option<i64>>>,
+        ]);
+        Expr::Literal(ScalarValue::List(Arc::new(list)), None)
+    }
+
+    fn id_list_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("id", DataType::UInt32, false),
+            Field::new_list("arr", Field::new_list_field(DataType::Int64, true), true),
+        ])
+    }
+
+    fn id_elem_unnest_plan(values: Vec<Option<i64>>) -> Result<LogicalPlanBuilder> {
+        let schema = id_schema();
+        table_scan(Some("test"), &schema, None)?
+            .project(vec![col("id"), list_literal_expr(values).alias("elem")])?
+            .unnest_column(Column::from_name("elem"))
+    }
+
+    fn id_null_elem_unnest_plan(preserve_nulls: bool) -> Result<LogicalPlanBuilder> {
+        let schema = id_schema();
+        table_scan(Some("test"), &schema, None)?
+            .project(vec![col("id"), null_list_literal_expr().alias("elem")])?
+            .unnest_column_with_options(
+                Column::from_name("elem"),
+                UnnestOptions::default().with_preserve_nulls(preserve_nulls),
+            )
+    }
+
+    fn id_arr_unnest_plan() -> Result<LogicalPlanBuilder> {
+        let schema = id_list_schema();
+        table_scan(Some("test"), &schema, None)?
+            .project(vec![col("id"), col("arr")])?
+            .unnest_column(Column::from_name("arr"))
+    }
+
+    fn group_by_id(builder: LogicalPlanBuilder) -> Result<LogicalPlan> {
+        builder
+            .aggregate(vec![col("id")], Vec::<Expr>::new())?
+            .build()
+    }
+
+    fn volatile_expr() -> Expr {
+        ScalarUDF::new_from_impl(VolatileUdf::new()).call(vec![])
+    }
+
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct VolatileUdf {
+        signature: Signature,
+    }
+
+    impl VolatileUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::nullary(Volatility::Volatile),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for VolatileUdf {
+        fn name(&self) -> &str {
+            "volatile"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Float64)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            panic!("VolatileUdf: not intended for execution")
+        }
     }
 
     #[derive(Debug, Hash, PartialEq, Eq)]
@@ -1253,6 +1518,155 @@ mod tests {
             @r"
         Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
           EmptyRelation: rows=1
+        "
+        )
+    }
+
+    #[test]
+    fn remove_unused_non_empty_literal_unnest_under_group_by() -> Result<()> {
+        let plan = group_by_id(id_elem_unnest_plan(vec![Some(1), Some(2)])?)?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.id]], aggr=[[]]
+          TableScan: test projection=[id]
+        "
+        )
+    }
+
+    #[test]
+    fn remove_unused_unnest_below_projection_under_group_by() -> Result<()> {
+        let plan = group_by_id(
+            id_elem_unnest_plan(vec![Some(1), Some(2)])?.project(vec![col("id")])?,
+        )?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.id]], aggr=[[]]
+          TableScan: test projection=[id]
+        "
+        )
+    }
+
+    #[test]
+    fn keep_referenced_unnest_under_group_by() -> Result<()> {
+        let plan = id_elem_unnest_plan(vec![Some(1), Some(2)])?
+            .aggregate(vec![col("elem")], Vec::<Expr>::new())?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[elem]], aggr=[[]]
+          Unnest: lists[elem|depth=1] structs[]
+            Projection: List([1, 2]) AS elem
+              TableScan: test projection=[]
+        "
+        )
+    }
+
+    #[test]
+    fn keep_unused_unnest_under_volatile_group_by() -> Result<()> {
+        let plan = id_elem_unnest_plan(vec![Some(1), Some(2)])?
+            .aggregate(vec![volatile_expr()], Vec::<Expr>::new())?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[volatile()]], aggr=[[]]
+          Projection:
+            Unnest: lists[elem|depth=1] structs[]
+              Projection: List([1, 2]) AS elem
+                TableScan: test projection=[]
+        "
+        )
+    }
+
+    #[test]
+    fn keep_projected_unused_unnest_under_volatile_group_by() -> Result<()> {
+        let plan = id_elem_unnest_plan(vec![Some(1), Some(2)])?
+            .project(vec![lit(1)])?
+            .aggregate(vec![volatile_expr()], Vec::<Expr>::new())?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[volatile()]], aggr=[[]]
+          Projection:
+            Unnest: lists[elem|depth=1] structs[]
+              Projection: List([1, 2]) AS elem
+                TableScan: test projection=[]
+        "
+        )
+    }
+
+    #[test]
+    fn keep_unused_unnest_under_group_by_with_visible_aggregate() -> Result<()> {
+        let plan = id_elem_unnest_plan(vec![Some(1), Some(2)])?
+            .aggregate(vec![col("id")], vec![count(lit(1))])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.id]], aggr=[[count(Int32(1))]]
+          Projection: test.id
+            Unnest: lists[elem|depth=1] structs[]
+              Projection: test.id, List([1, 2]) AS elem
+                TableScan: test projection=[id]
+        "
+        )
+    }
+
+    #[test]
+    fn keep_unused_empty_literal_unnest_under_group_by() -> Result<()> {
+        let empty_list: Vec<Option<i64>> = vec![];
+        let plan = group_by_id(id_elem_unnest_plan(empty_list)?)?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.id]], aggr=[[]]
+          Projection: test.id
+            Unnest: lists[elem|depth=1] structs[]
+              Projection: test.id, List([]) AS elem
+                TableScan: test projection=[id]
+        "
+        )
+    }
+
+    #[test]
+    fn keep_unused_null_literal_unnest_under_group_by_with_preserve_nulls_false()
+    -> Result<()> {
+        let plan = group_by_id(id_null_elem_unnest_plan(false)?)?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.id]], aggr=[[]]
+          Projection: test.id
+            Unnest: lists[elem|depth=1] structs[]
+              Projection: test.id, List() AS elem
+                TableScan: test projection=[id]
+        "
+        )
+    }
+
+    #[test]
+    fn keep_unused_non_literal_unnest_under_group_by() -> Result<()> {
+        let plan = group_by_id(id_arr_unnest_plan()?)?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.id]], aggr=[[]]
+          Projection: test.id
+            Unnest: lists[test.arr|depth=1] structs[]
+              TableScan: test projection=[id, arr]
         "
         )
     }
