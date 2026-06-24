@@ -424,7 +424,7 @@ impl protobuf::PhysicalPlanNode {
         Self: Sized,
     {
         let plan_clone = Arc::clone(&plan);
-        let plan = plan.as_ref() as &dyn Any;
+        let plan = plan.as_ref();
 
         if let Some(exec) = plan.downcast_ref::<ExplainExec>() {
             return protobuf::PhysicalPlanNode::try_from_explain_exec(exec, codec);
