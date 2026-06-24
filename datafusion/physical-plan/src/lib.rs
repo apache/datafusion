@@ -82,6 +82,7 @@ pub mod limit;
 pub mod memory;
 pub mod metrics;
 pub mod operator_statistics;
+pub mod pipeline_breaker_buffer;
 pub mod placeholder_row;
 pub mod projection;
 pub mod recursive_query;

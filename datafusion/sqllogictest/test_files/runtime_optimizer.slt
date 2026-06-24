@@ -119,12 +119,14 @@ physical_plan
 01)RuntimeOptimizerExec
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(group_key@0, id@0)], projection=[group_key@0, sum_payload@1, payload@3]
 03)----ProjectionExec: expr=[group_key@0 as group_key, sum(big.payload)@1 as sum_payload]
-04)------AggregateExec: mode=FinalPartitioned, gby=[group_key@0 as group_key], aggr=[sum(big.payload)]
-05)--------RepartitionExec: partitioning=Hash([group_key@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[sum(big.payload)]
-07)------------DataSourceExec
-08)----CoalescePartitionsExec
-09)------DataSourceExec
+04)------PipelineBreakerBuffer
+05)--------AggregateExec: mode=FinalPartitioned, gby=[group_key@0 as group_key], aggr=[sum(big.payload)]
+06)----------RepartitionExec: partitioning=Hash([group_key@0], 4), input_partitions=4
+07)------------PipelineBreakerBuffer
+08)--------------AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[sum(big.payload)]
+09)----------------DataSourceExec
+10)----CoalescePartitionsExec
+11)------DataSourceExec
 
 # ---------------------------------------------------------------------------
 # Result — GREEN regardless of build-side choice (correctness is plan-
