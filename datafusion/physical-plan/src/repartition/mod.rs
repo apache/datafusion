@@ -53,13 +53,14 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err, internal_err,
+    ColumnStatistics, DataFusionError, HashMap, SplitPoint, assert_or_internal_err,
+    internal_err,
 };
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, RangePartitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use crate::filter_pushdown::{
@@ -570,6 +571,13 @@ enum BatchPartitionerState {
         num_partitions: usize,
         next_idx: usize,
     },
+    Range {
+        /// Ordered partitioning key.
+        ordering: LexOrdering,
+        /// Boundaries between adjacent partitions.
+        split_points: Vec<SplitPoint>,
+        num_partitions: usize,
+    },
 }
 
 /// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
@@ -706,6 +714,30 @@ impl BatchPartitioner {
             timer,
         }
     }
+
+    /// Create a new [`BatchPartitioner`] for range-based repartitioning.
+    ///
+    /// # Parameters
+    /// - `ordering`: Expressions used to define the partitioning key and ordering
+    /// - `split_points`: Tuples used to define the boundaries between adjacent partitions
+    /// - `num_partitions`: Total number of output partitions
+    /// - `timer`: Metric used to record time spent during repartitioning.
+    pub fn new_range_partitioner(
+        ordering: LexOrdering,
+        split_points: Vec<SplitPoint>,
+        num_partitions: usize,
+        timer: metrics::Time,
+    ) -> Self {
+        Self {
+            state: BatchPartitionerState::Range {
+                ordering,
+                split_points,
+                num_partitions,
+            },
+            timer,
+        }
+    }
+
     /// Create a new [`BatchPartitioner`] based on the provided [`Partitioning`] scheme.
     ///
     /// This is a convenience constructor that delegates to the specialized
@@ -738,13 +770,12 @@ impl BatchPartitioner {
                     num_input_partitions,
                 ))
             }
-            Partitioning::Range(_) => {
-                // Range repartition execution is tracked in
-                // https://github.com/apache/datafusion/issues/22397
-                not_impl_err!(
-                    "Range partitioning execution is not implemented by RepartitionExec"
-                )
-            }
+            Partitioning::Range(range_repartitioning) => Ok(Self::new_range_partitioner(
+                range_repartitioning.ordering().clone(),
+                range_repartitioning.split_points().to_vec(),
+                range_repartitioning.partition_count(),
+                timer,
+            )),
             other => {
                 not_impl_err!("Unsupported repartitioning scheme {other:?}")
             }
@@ -839,7 +870,8 @@ impl BatchPartitioner {
     // return the number of output partitions
     fn num_partitions(&self) -> usize {
         match &self.state {
-            BatchPartitionerState::RoundRobin { num_partitions, .. } => *num_partitions,
+            BatchPartitionerState::RoundRobin { num_partitions, .. }
+            | BatchPartitionerState::Range { num_partitions, .. } => *num_partitions,
             BatchPartitionerState::Hash { indices, .. } => indices.len(),
         }
     }
