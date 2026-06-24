@@ -932,6 +932,7 @@ impl GroupedHashAggregateStream {
 
         if self.mode.input_mode() == AggregateInputMode::Raw
             && !self.spill_state.is_stream_merging
+            && matches!(self.group_ordering, GroupOrdering::None)
             && self.group_values.len() > 1
         {
             return self.group_aggregate_partitioned_batch(
@@ -1079,7 +1080,6 @@ impl GroupedHashAggregateStream {
             hash_offset += range.len();
 
             let groups_start_time = Instant::now();
-            let starting_num_groups = self.group_values[*partition].len();
             self.group_values[*partition].intern(
                 &partition_group_values,
                 &mut self.current_group_indices,
@@ -1087,13 +1087,6 @@ impl GroupedHashAggregateStream {
             )?;
             let group_indices = &self.current_group_indices;
             let total_num_groups = self.group_values[*partition].len();
-            if total_num_groups > starting_num_groups {
-                self.group_ordering.new_groups(
-                    &partition_group_values,
-                    group_indices,
-                    total_num_groups,
-                )?;
-            }
 
             let agg_start_time = Instant::now();
             self.group_by_metrics
