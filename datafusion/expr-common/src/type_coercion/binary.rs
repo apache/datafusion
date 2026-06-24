@@ -1452,6 +1452,37 @@ fn mathematics_numerical_coercion(
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
+    // String coercion
+    if let Some(coerced) = match (lhs_type, rhs_type) {
+        (s, Float64)
+        | (Float64, s)
+        | (Decimal32(_, _), s)
+        | (s, Decimal32(_, _))
+        | (Decimal64(_, _), s)
+        | (s, Decimal64(_, _))
+        | (Decimal128(_, _), s)
+        | (s, Decimal128(_, _))
+        | (Decimal256(_, _), s)
+        | (s, Decimal256(_, _))
+            if s.is_string() =>
+        {
+            Some(Float64)
+        }
+        (s, Float32) | (Float32, s) if s.is_string() => Some(Float32),
+        (s, Float16) | (Float16, s) if s.is_string() => Some(Float16),
+        (s, Int64) | (Int64, s) if s.is_string() => Some(Int64),
+        (s, Int32) | (Int32, s) if s.is_string() => Some(Int32),
+        (s, Int16) | (Int16, s) if s.is_string() => Some(Int16),
+        (s, Int8) | (Int8, s) if s.is_string() => Some(Int8),
+        (s, UInt64) | (UInt64, s) if s.is_string() => Some(UInt64),
+        (s, UInt32) | (UInt32, s) if s.is_string() => Some(UInt32),
+        (s, UInt16) | (UInt16, s) if s.is_string() => Some(UInt16),
+        (s, UInt8) | (UInt8, s) if s.is_string() => Some(UInt8),
+        _ => None,
+    } {
+        return Some(coerced);
+    }
+
     // Error on any non-numeric type
     if !both_numeric_or_null_and_numeric(lhs_type, rhs_type) {
         return None;
