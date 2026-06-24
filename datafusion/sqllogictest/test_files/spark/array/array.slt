@@ -50,10 +50,10 @@ SELECT array(1, NULL, 3);
 [1, NULL, 3]
 
 
-query ?
-SELECT array['hello', '', null, 'nULl', 'nULlx', 'aa"bb', 'mm\nn', 'uu,vv', 'yy zz'];
+query I
+SELECT ascii(substr(array['hello', '', null, 'nULl', 'nULlx', 'aa"bb', 'mm\nn', 'uu,vv', 'yy zz'][7], 3 ,1));
 ----
-[hello, , NULL, nULl, nULlx, aa"bb, mm\nn, uu,vv, yy zz]
+10
 
 query ?
 SELECT array(array(1,2),array(3,4));

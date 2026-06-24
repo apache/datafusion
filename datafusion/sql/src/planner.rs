@@ -55,6 +55,8 @@ pub struct ParserOptions {
     pub collect_spans: bool,
     /// Whether string types (VARCHAR, CHAR, Text, and String) are mapped to `Utf8View` during SQL planning.
     pub map_string_types_to_utf8view: bool,
+    /// Whether to use Spark-compatible string literal unescaping.
+    pub spark_string_literal_unescape: bool,
     /// Default null ordering for sorting expressions.
     pub default_null_ordering: NullOrdering,
 }
@@ -78,6 +80,7 @@ impl ParserOptions {
             map_string_types_to_utf8view: true,
             enable_options_value_normalization: false,
             collect_spans: false,
+            spark_string_literal_unescape: false,
             // By default, `nulls_max` is used to follow Postgres's behavior.
             // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
             default_null_ordering: NullOrdering::NullsMax,
@@ -124,6 +127,12 @@ impl ParserOptions {
         self
     }
 
+    /// Sets the spark_string_literal_unescape option.
+    pub fn with_spark_string_literal_unescape(mut self, value: bool) -> Self {
+        self.spark_string_literal_unescape = value;
+        self
+    }
+
     /// Sets the `enable_options_value_normalization` option.
     pub fn with_enable_options_value_normalization(mut self, value: bool) -> Self {
         self.enable_options_value_normalization = value;
@@ -159,6 +168,7 @@ impl From<&SqlParserOptions> for ParserOptions {
             enable_options_value_normalization: options
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
+            spark_string_literal_unescape: options.spark_string_literal_unescape,
             default_null_ordering: options.default_null_ordering.as_str().into(),
         }
     }
