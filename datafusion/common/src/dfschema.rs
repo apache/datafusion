@@ -641,11 +641,6 @@ impl DFSchema {
         })
     }
 
-    #[deprecated(since = "47.0.0", note = "Use has_equivalent_names_and_types` instead")]
-    pub fn equivalent_names_and_types(&self, other: &Self) -> bool {
-        self.has_equivalent_names_and_types(other).is_ok()
-    }
-
     /// Returns Ok if the two schemas have the same qualified named
     /// fields with the compatible data types.
     ///
