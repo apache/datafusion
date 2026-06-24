@@ -183,6 +183,9 @@ impl PredicateBoundsEvaluator<'_> {
             Expr::BinaryExpr(BinaryExpr { op, .. }) if op.returns_null_on_null() => {
                 self.is_null_if_any_child_null(expr)
             }
+            Expr::ScalarFunction(func) if func.func.is_strict() => {
+                self.is_null_if_any_child_null(expr)
+            }
             Expr::Alias(_)
             | Expr::Cast(_)
             | Expr::Like(_)
@@ -235,8 +238,9 @@ mod tests {
     use crate::expr::ScalarFunction;
     use crate::predicate_bounds::evaluate_bounds;
     use crate::{
-        Expr, binary_expr, col, create_udf, is_false, is_not_false, is_not_null,
-        is_not_true, is_not_unknown, is_null, is_true, is_unknown, lit, not,
+        Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, binary_expr, col,
+        create_udf, is_false, is_not_false, is_not_null, is_not_true, is_not_unknown,
+        is_null, is_true, is_unknown, lit, not,
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{DFSchema, Result, ScalarValue};
@@ -666,6 +670,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn evaluate_bounds_strict_udf_is_null_when_child_null() {
+        let col = col("col");
+        let strict_func = make_test_udf_expr("strict_test", true, vec![col.clone()]);
+        let non_strict_func =
+            make_test_udf_expr("non_strict_test", false, vec![col.clone()]);
+        let schema = DFSchema::try_from(Schema::new(vec![Field::new(
+            "col",
+            DataType::UInt8,
+            true,
+        )]))
+        .unwrap();
+
+        assert_eq!(
+            evaluate_bounds(&is_not_null(strict_func), Some(&col), &schema).unwrap(),
+            NullableInterval::FALSE,
+        );
+        assert_eq!(
+            evaluate_bounds(&is_not_null(non_strict_func), Some(&col), &schema).unwrap(),
+            NullableInterval::TRUE_OR_FALSE,
+        );
+    }
+
     fn make_scalar_func_expr() -> Expr {
         let scalar_func_impl =
             |_: &[ColumnarValue]| Ok(ColumnarValue::Scalar(ScalarValue::Null));
@@ -677,5 +704,52 @@ mod tests {
             Arc::new(scalar_func_impl),
         );
         Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(udf), vec![]))
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestUdf {
+        name: &'static str,
+        signature: Signature,
+        strict: bool,
+    }
+
+    impl TestUdf {
+        fn new(name: &'static str, strict: bool) -> Self {
+            Self {
+                name,
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::UInt8],
+                    Volatility::Immutable,
+                ),
+                strict,
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for TestUdf {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::UInt8)
+        }
+
+        fn is_strict(&self) -> bool {
+            self.strict
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
+    }
+
+    fn make_test_udf_expr(name: &'static str, strict: bool, args: Vec<Expr>) -> Expr {
+        ScalarUDF::from(TestUdf::new(name, strict)).call(args)
     }
 }

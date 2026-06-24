@@ -371,6 +371,13 @@ fn extract_null_rejecting_sides(
                 extract_null_rejecting_sides(pattern, left_schema, right_schema, false);
             expr_sides.union(pattern_sides)
         }
+        Expr::ScalarFunction(func) if func.func.is_strict() => func
+            .args
+            .iter()
+            .map(|arg| {
+                extract_null_rejecting_sides(arg, left_schema, right_schema, false)
+            })
+            .fold(NullRejectingSides::default(), NullRejectingSides::union),
         // Everything else is conservative: NULL-accepting predicates such as
         // IS NULL / IS NOT TRUE / IS NOT FALSE / IS UNKNOWN must not eliminate
         // an outer join, and functions/subqueries/accessors/literals have no
@@ -388,8 +395,10 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{
+        ColumnarValue,
         Operator::{And, Or},
-        binary_expr, cast, col, lit,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility, binary_expr,
+        cast, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
         not, try_cast,
     };
@@ -450,6 +459,57 @@ mod tests {
         }};
     }
 
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestUdf {
+        name: &'static str,
+        signature: Signature,
+        strict: bool,
+    }
+
+    impl TestUdf {
+        fn new(name: &'static str, strict: bool) -> Self {
+            Self {
+                name,
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::UInt32],
+                    Volatility::Immutable,
+                ),
+                strict,
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for TestUdf {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::UInt32)
+        }
+
+        fn is_strict(&self) -> bool {
+            self.strict
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
+    }
+
+    fn strict_udf(arg: Expr) -> Expr {
+        ScalarUDF::from(TestUdf::new("strict_test", true)).call(vec![arg])
+    }
+
+    fn non_strict_udf(arg: Expr) -> Expr {
+        ScalarUDF::from(TestUdf::new("non_strict_test", false)).call(vec![arg])
+    }
+
     #[test]
     fn eliminate_left_with_null() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -493,6 +553,98 @@ mod tests {
         assert_optimized_plan_equal!(plan, @r"
         Filter: t2.b IS NOT NULL
           Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_left_with_strict_function() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(strict_udf(col("t2.b")).gt(lit(5u32)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: strict_test(t2.b) > UInt32(5)
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn no_eliminate_left_with_non_strict_function() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(non_strict_udf(col("t2.b")).gt(lit(5u32)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: non_strict_test(t2.b) > UInt32(5)
+          Left Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_left_with_nested_strict_is_not_null() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(strict_udf(strict_udf(col("t2.b"))).is_not_null())?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: strict_test(strict_test(t2.b)) IS NOT NULL
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn no_eliminate_left_with_strict_function_is_null() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(strict_udf(col("t2.b")).is_null())?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: strict_test(t2.b) IS NULL
+          Left Join: t1.a = t2.a
             TableScan: t1
             TableScan: t2
         ")
