@@ -1191,6 +1191,7 @@ message FileScanExecConf {
 
   optional ProjectionExprs projection_exprs = 13;
   optional bool partitioned_by_file_group = 14;
+  optional Partitioning output_partitioning = 15;
 }
 
 message ParquetScanExecNode {
