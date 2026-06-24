@@ -60,6 +60,15 @@ where
                 "FixedSizeListGroupValueBuilder built with non-FixedSizeList type {other:?}"
             ),
         };
+        // `group_column_supported_type` and `make_group_column` both reject
+        // negative `list_len` upstream so this branch should be unreachable
+        // for any schema that survives the allow-list. Assert defensively
+        // to fail fast (and with a clear message) if a direct caller ever
+        // bypasses the factory with an invalid Arrow type.
+        assert!(
+            list_len >= 0,
+            "FixedSizeListGroupValueBuilder requires non-negative list size, got {list_len}"
+        );
         let child = PrimitiveGroupValueBuilder::<T, true>::new(field.data_type().clone());
         Self {
             field,
@@ -70,8 +79,14 @@ where
         }
     }
 
+    /// Lossless widening to `usize`. The constructor asserts
+    /// `list_len >= 0`, so the conversion is well-defined. We still go
+    /// through `try_from` rather than `as usize` so any future
+    /// invariant break surfaces as a panic with a clear message rather
+    /// than a silent wrap.
     fn list_len_usize(&self) -> usize {
-        self.list_len as usize
+        usize::try_from(self.list_len)
+            .expect("list_len validated >= 0 in `new`; conversion to usize cannot fail")
     }
 }
 
@@ -91,11 +106,16 @@ where
             .as_any()
             .downcast_ref::<FixedSizeListArray>()
             .expect("FixedSizeListGroupValueBuilder called with non-FixedSizeList array");
-        let rhs_sublist: ArrayRef = list_array.value(rhs_row);
+        // Use the borrowed child array + `value_offset` (same approach as
+        // `append_val` below) instead of `list_array.value(rhs_row)`,
+        // which would allocate a fresh sliced `ArrayRef` on every
+        // equality check inside grouping's hot path.
+        let child_array = list_array.values();
         let list_len = self.list_len_usize();
         let lhs_base = lhs_row * list_len;
+        let rhs_base = list_array.value_offset(rhs_row) as usize;
         for j in 0..list_len {
-            if !self.child.equal_to(lhs_base + j, &rhs_sublist, j) {
+            if !self.child.equal_to(lhs_base + j, child_array, rhs_base + j) {
                 return false;
             }
         }
@@ -415,6 +435,41 @@ mod tests {
         assert_eq!(out.len(), 3);
         let values = out.values().as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(values.values(), &[1, 2, 3, 4, 5, 6]);
+    }
+
+    /// `FixedSizeList` carries its size as `i32`; the enum lets callers
+    /// construct a negative size programmatically even though Arrow
+    /// considers it invalid. Both the supported-type allow-list and the
+    /// dispatcher must reject such a type so the cast inside the
+    /// builder cannot wrap to a huge `usize` and trigger panics / OOM.
+    #[test]
+    fn negative_list_size_is_rejected_by_allow_list_and_dispatcher() {
+        use crate::aggregates::group_values::multi_group_by::{
+            group_column_supported_type, make_group_column,
+        };
+        use arrow::datatypes::Field;
+
+        let invalid = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            -1,
+        );
+
+        assert!(
+            !group_column_supported_type(&invalid),
+            "allow-list must reject FixedSizeList(_, -1)"
+        );
+
+        let field = Field::new("col", invalid, true);
+        let result = make_group_column(&field);
+        let err = match result {
+            Ok(_) => panic!("dispatcher must reject FixedSizeList with negative size"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("negative size") && msg.contains("-1"),
+            "error should mention the invalid negative size, got: {msg}"
+        );
     }
 
     #[test]
