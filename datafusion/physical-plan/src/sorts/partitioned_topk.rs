@@ -24,7 +24,7 @@
 //! ```
 //!
 //! Instead of sorting the entire dataset, this operator maintains a
-//! [`TopK`] heap per partition (reusing the existing TopK implementation)
+//! [`TopK`](crate::topk::TopK) heap per partition (reusing the existing TopK implementation)
 //! and emits only the top-K rows per partition in sorted order
 //! `(partition_keys, order_keys)`.
 
@@ -90,7 +90,7 @@ use crate::{
 /// ```
 ///
 /// Instead of sorting the entire dataset, this operator reads unsorted input,
-/// maintains a [`TopK`] heap per distinct partition key, and emits only the
+/// maintains a [`TopK`](crate::topk::TopK) heap per distinct partition key, and emits only the
 /// top-K rows per partition in sorted order `(partition_keys, order_keys)`.
 ///
 /// Cost: O(N log K) time instead of O(N log N), and O(K × P × row_size)
