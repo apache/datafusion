@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{GroupValues, SkipHashGroupByState};
 use arrow::array::{Array, ArrayRef};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -31,6 +31,7 @@ pub struct GroupValuesBytesView {
     map: ArrowBytesViewMap<usize>,
     /// The total number of groups so far (used to assign group_index)
     num_groups: usize,
+    skip_hash_group_by: Option<SkipHashGroupByState>,
 }
 
 impl GroupValuesBytesView {
@@ -38,6 +39,7 @@ impl GroupValuesBytesView {
         Self {
             map: ArrowBytesViewMap::new(output_type),
             num_groups: 0,
+            skip_hash_group_by: None,
         }
     }
 }
@@ -50,6 +52,10 @@ impl GroupValues for GroupValuesBytesView {
         _hashes_buffer: &[u64],
     ) -> datafusion_common::Result<()> {
         assert_eq!(cols.len(), 1);
+        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
+            skip_hash_group_by.intern(cols, groups);
+            return Ok(());
+        }
 
         // look up / add entries in the table
         let arr = &cols[0];
@@ -76,18 +82,28 @@ impl GroupValues for GroupValuesBytesView {
     }
 
     fn size(&self) -> usize {
-        self.map.size() + size_of::<Self>()
+        self.skip_hash_group_by
+            .as_ref()
+            .map(|skip_hash_group_by| skip_hash_group_by.size())
+            .unwrap_or_else(|| self.map.size() + size_of::<Self>())
     }
 
     fn is_empty(&self) -> bool {
-        self.num_groups == 0
+        self.len() == 0
     }
 
     fn len(&self) -> usize {
-        self.num_groups
+        self.skip_hash_group_by
+            .as_ref()
+            .map(|skip_hash_group_by| skip_hash_group_by.len())
+            .unwrap_or(self.num_groups)
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
+        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
+            return skip_hash_group_by.emit(emit_to);
+        }
+
         // Reset the map to default, and convert it into a single array
         let map_contents = self.map.take().into_state();
 
@@ -123,7 +139,16 @@ impl GroupValues for GroupValuesBytesView {
         Ok(vec![group_values])
     }
 
+    fn skip_hash_group_by(&mut self) {
+        self.map.take();
+        self.num_groups = 0;
+        self.skip_hash_group_by = Some(SkipHashGroupByState::default());
+    }
+
     fn clear_shrink(&mut self, _num_rows: usize) {
+        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
+            skip_hash_group_by.clear_shrink();
+        }
         // in theory we could potentially avoid this reallocation and clear the
         // contents of the maps, but for now we just reset the map from the beginning
         self.map.take();

@@ -858,30 +858,23 @@ impl Stream for GroupedHashAggregateStream {
                 ExecutionState::SkippingAggregation => {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         Some(Ok(batch)) => {
-                            let _timer = elapsed_compute.timer();
+                            let timer = elapsed_compute.timer();
                             if let Some(probe) = self.skip_aggregation_probe.as_mut() {
                                 probe.record_skipped(&batch);
                             }
-                            let states = self.transform_to_states(&batch)?;
-                            return Poll::Ready(Some(Ok(
-                                states.record_output(&self.baseline_metrics)
-                            )));
+                            self.group_aggregate_batch(&batch)?;
+                            if let Some(new_state) =
+                                self.producing_output_state(EmitTo::All, false)?
+                            {
+                                self.exec_state = new_state;
+                            }
+                            timer.done();
                         }
                         Some(Err(e)) => {
                             // inner had error, return to caller
                             return Poll::Ready(Some(Err(e)));
                         }
                         None => {
-                            // inner is done, switching to `Done` state
-                            // Sanity check: when switching from SkippingAggregation to Done,
-                            // all groups should have already been emitted
-                            if !self.group_values[0].is_empty() {
-                                return Poll::Ready(Some(internal_err!(
-                                    "Switching from SkippingAggregation to Done with {} groups still in hash table. \
-                                    This is a bug - all groups should have been emitted before skip aggregation started.",
-                                    self.group_values[0].len()
-                                )));
-                            }
                             // Release the input pipeline's resources.
                             let input_schema = self.input.schema();
                             self.input =
@@ -1701,7 +1694,11 @@ impl GroupedHashAggregateStream {
         if let Some(probe) = self.skip_aggregation_probe.as_mut()
             && probe.should_skip()
         {
-            return self.producing_output_state(EmitTo::All, false);
+            let output_state = self.producing_output_state(EmitTo::All, false);
+            for group_values in &mut self.group_values {
+                group_values.skip_hash_group_by();
+            }
+            return output_state;
         };
 
         Ok(None)
@@ -1715,34 +1712,6 @@ impl GroupedHashAggregateStream {
         self.skip_aggregation_probe
             .as_ref()
             .is_some_and(|probe| probe.should_skip())
-    }
-
-    /// Transforms input batch to intermediate aggregate state, without grouping it
-    fn transform_to_states(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let mut group_values = evaluate_group_by(&self.group_by, batch)?;
-        let input_values = evaluate_many(&self.aggregate_arguments, batch)?;
-        let filter_values = evaluate_optional(&self.filter_expressions, batch)?;
-
-        assert_eq_or_internal_err!(
-            group_values.len(),
-            1,
-            "group_values expected to have single element"
-        );
-        let mut output = group_values.swap_remove(0);
-
-        let iter = self.accumulators[0]
-            .iter()
-            .zip(input_values.iter())
-            .zip(filter_values.iter());
-
-        for ((acc, values), opt_filter) in iter {
-            let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
-            output.extend(acc.convert_to_state(values, opt_filter)?);
-        }
-
-        let states_batch = RecordBatch::try_new(self.schema(), output)?;
-
-        Ok(states_batch)
     }
 }
 

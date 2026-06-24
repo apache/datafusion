@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{GroupValues, SkipHashGroupByState};
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
@@ -116,6 +116,7 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     values: Vec<T::Native>,
     /// The random state used to generate hashes
     random_state: RandomState,
+    skip_hash_group_by: Option<SkipHashGroupByState>,
 }
 
 impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
@@ -127,6 +128,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             values: Vec::with_capacity(128),
             null_group: None,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
+            skip_hash_group_by: None,
         }
     }
 }
@@ -142,6 +144,10 @@ where
         _hashes_buffer: &[u64],
     ) -> Result<()> {
         assert_eq!(cols.len(), 1);
+        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
+            skip_hash_group_by.intern(cols, groups);
+            return Ok(());
+        }
         groups.clear();
 
         for v in cols[0].as_primitive::<T>() {
@@ -183,18 +189,31 @@ where
     }
 
     fn size(&self) -> usize {
+        if let Some(skip_hash_group_by) = &self.skip_hash_group_by {
+            return skip_hash_group_by.size();
+        }
         self.map.capacity() * size_of::<(usize, u64)>() + self.values.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.skip_hash_group_by
+            .as_ref()
+            .map(|skip_hash_group_by| skip_hash_group_by.is_empty())
+            .unwrap_or_else(|| self.values.is_empty())
     }
 
     fn len(&self) -> usize {
-        self.values.len()
+        self.skip_hash_group_by
+            .as_ref()
+            .map(|skip_hash_group_by| skip_hash_group_by.len())
+            .unwrap_or_else(|| self.values.len())
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
+            return skip_hash_group_by.emit(emit_to);
+        }
+
         fn build_primitive<T: ArrowPrimitiveType>(
             values: Vec<T::Native>,
             null_idx: Option<usize>,
@@ -244,7 +263,17 @@ where
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
+    fn skip_hash_group_by(&mut self) {
+        self.map.clear();
+        self.values.clear();
+        self.null_group = None;
+        self.skip_hash_group_by = Some(SkipHashGroupByState::default());
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
+        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
+            skip_hash_group_by.clear_shrink();
+        }
         self.values.clear();
         self.values.shrink_to(num_rows);
         self.map.clear();

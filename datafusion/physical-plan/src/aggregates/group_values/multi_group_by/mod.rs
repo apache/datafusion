@@ -24,11 +24,11 @@ pub mod primitive;
 
 use std::mem::{self, size_of};
 
-use crate::aggregates::group_values::GroupValues;
 use crate::aggregates::group_values::multi_group_by::{
     boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
     bytes_view::ByteViewGroupValueBuilder, primitive::PrimitiveGroupValueBuilder,
 };
+use crate::aggregates::group_values::{GroupValues, SkipHashGroupByState};
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::compute::cast;
 use arrow::datatypes::{
@@ -215,6 +215,8 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
 
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
+
+    skip_hash_group_by: Option<SkipHashGroupByState>,
 }
 
 /// Buffers to store intermediate results in `vectorized_append`
@@ -277,6 +279,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             map_size: 0,
             group_values,
             hashes_buffer: Default::default(),
+            skip_hash_group_by: None,
         })
     }
 
@@ -1076,6 +1079,11 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         groups: &mut Vec<usize>,
         hashes_buffer: &[u64],
     ) -> Result<()> {
+        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
+            skip_hash_group_by.intern(cols, groups);
+            return Ok(());
+        }
+
         // `try_new` and the reset points in `emit` / `clear_shrink` keep
         // `self.group_values` populated with one builder per schema field,
         // so no lazy initialization is needed here.
@@ -1087,6 +1095,9 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     }
 
     fn size(&self) -> usize {
+        if let Some(skip_hash_group_by) = &self.skip_hash_group_by {
+            return skip_hash_group_by.size();
+        }
         let group_values_size: usize = self.group_values.iter().map(|v| v.size()).sum();
         group_values_size + self.map_size + self.hashes_buffer.allocated_size()
     }
@@ -1096,6 +1107,9 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     }
 
     fn len(&self) -> usize {
+        if let Some(skip_hash_group_by) = &self.skip_hash_group_by {
+            return skip_hash_group_by.len();
+        }
         if self.group_values.is_empty() {
             return 0;
         }
@@ -1104,6 +1118,10 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
+            return skip_hash_group_by.emit(emit_to);
+        }
+
         let mut output = match emit_to {
             EmitTo::All => {
                 // Replace the column builders with a fresh set so the
@@ -1211,7 +1229,18 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         Ok(output)
     }
 
+    fn skip_hash_group_by(&mut self) {
+        self.group_values.clear();
+        self.map.clear();
+        self.map_size = 0;
+        self.group_index_lists.clear();
+        self.skip_hash_group_by = Some(SkipHashGroupByState::default());
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
+        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
+            skip_hash_group_by.clear_shrink();
+        }
         // Reset to a fresh column-builder vector. The schema was validated
         // in `try_new`, so rebuilding cannot fail unless something else
         // mutated the schema out-of-band — surface that as a panic since

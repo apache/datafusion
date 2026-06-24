@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{GroupValues, SkipHashGroupByState};
 use arrow::array::{
     Array, ArrayRef, ListArray, PrimitiveArray, RunArray, StructArray,
     downcast_run_end_index,
@@ -72,6 +72,8 @@ pub struct GroupValuesRows {
 
     /// reused buffer to store rows
     rows_buffer: Rows,
+
+    skip_hash_group_by: Option<SkipHashGroupByState>,
 }
 
 impl GroupValuesRows {
@@ -101,6 +103,7 @@ impl GroupValuesRows {
             map_size: 0,
             group_values: None,
             rows_buffer,
+            skip_hash_group_by: None,
         })
     }
 }
@@ -112,8 +115,13 @@ impl GroupValues for GroupValuesRows {
         groups: &mut Vec<usize>,
         hashes_buffer: &[u64],
     ) -> Result<()> {
-        // Normalize -0.0 → +0.0 so RowConverter (IEEE 754 totalOrder) and
-        // primitive hashing both group ±0 together. No-op for non-float
+        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
+            skip_hash_group_by.intern(cols, groups);
+            return Ok(());
+        }
+
+        // Normalize -0.0 -> +0.0 so RowConverter (IEEE 754 totalOrder) and
+        // primitive hashing both group +/-0 together. No-op for non-float
         // columns.
         let normalized_cols: Vec<ArrayRef> =
             cols.iter().map(normalize_float_zero).collect();
@@ -175,6 +183,9 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn size(&self) -> usize {
+        if let Some(skip_hash_group_by) = &self.skip_hash_group_by {
+            return skip_hash_group_by.size();
+        }
         let group_values_size = self.group_values.as_ref().map(|v| v.size()).unwrap_or(0);
         self.row_converter.size()
             + group_values_size
@@ -187,6 +198,9 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn len(&self) -> usize {
+        if let Some(skip_hash_group_by) = &self.skip_hash_group_by {
+            return skip_hash_group_by.len();
+        }
         self.group_values
             .as_ref()
             .map(|group_values| group_values.num_rows())
@@ -194,6 +208,10 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
+            return skip_hash_group_by.emit(emit_to);
+        }
+
         let mut group_values = self
             .group_values
             .take()
@@ -244,7 +262,17 @@ impl GroupValues for GroupValuesRows {
         Ok(output)
     }
 
+    fn skip_hash_group_by(&mut self) {
+        self.map.clear();
+        self.map_size = 0;
+        self.group_values = None;
+        self.skip_hash_group_by = Some(SkipHashGroupByState::default());
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
+        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
+            skip_hash_group_by.clear_shrink();
+        }
         self.group_values = self.group_values.take().map(|mut rows| {
             rows.clear();
             rows
