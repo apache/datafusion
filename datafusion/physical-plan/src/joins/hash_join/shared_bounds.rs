@@ -711,13 +711,18 @@ impl SharedBuildAccumulator {
         if !self.null_aware {
             return filter_expr;
         }
-        // A null-aware anti join is validated to a single probe key.
+        debug_assert_eq!(
+            self.on_right.len(),
+            1,
+            "null_aware anti join must have exactly one probe key"
+        );
         let probe_key_is_null: Arc<dyn PhysicalExpr> =
             Arc::new(IsNullExpr::new(Arc::clone(&self.on_right[0])));
+        // Cheap null check first short-circuits before the costlier dynamic filter.
         Arc::new(BinaryExpr::new(
-            filter_expr,
-            Operator::Or,
             probe_key_is_null,
+            Operator::Or,
+            filter_expr,
         ))
     }
 }
