@@ -80,7 +80,7 @@ pub(crate) enum ExecutionState {
 }
 
 type PartitionRange = (usize, Range<usize>);
-type PartitionedIndices = (PrimitiveArray<UInt32Type>, Vec<PartitionRange>, Vec<u32>);
+type PartitionedIndices = (Vec<PartitionRange>, Vec<u32>);
 
 /// This encapsulates the spilling state
 struct SpillState {
@@ -1035,19 +1035,19 @@ impl GroupedHashAggregateStream {
         }
 
         // Step 2: Reorder only evaluated arrays instead of the full input batch.
-        let (indices_array, partition_ranges, reordered_indices) =
-            Self::partition_grouped_take(
-                group_values[0].len(),
-                &mut self.partition_indices,
-            );
-        let reordered_group_values = take_group_values(group_values, &indices_array)?;
-        let reordered_input_values = take_nested_values(input_values, &indices_array)?;
-        let reordered_filter_values =
-            take_optional_values(filter_values, &indices_array)?;
+        let (partition_ranges, reordered_indices) = Self::partition_grouped_take(
+            group_values[0].len(),
+            &mut self.partition_indices,
+        );
         let reordered_hashes = reordered_indices
             .iter()
             .map(|index| self.hashes_buffer[*index as usize])
             .collect::<Vec<_>>();
+        let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.into();
+        let reordered_group_values = take_group_values(group_values, &indices_array)?;
+        let reordered_input_values = take_nested_values(input_values, &indices_array)?;
+        let reordered_filter_values =
+            take_optional_values(filter_values, &indices_array)?;
 
         // Step 3: Slice each partition and update the matching group values and accumulators.
         let mut hash_offset = 0;
@@ -1123,8 +1123,7 @@ impl GroupedHashAggregateStream {
             partition_indices.clear();
         }
 
-        let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.clone().into();
-        (indices_array, partition_ranges, reordered_indices)
+        (partition_ranges, reordered_indices)
     }
 
     /// Attempts to update the memory reservation. If that fails due to a
