@@ -527,8 +527,7 @@ impl GroupedHashAggregateStream {
             merging_aggregate_arguments,
             merging_group_by: PhysicalGroupBy::new_single(merging_group_by_expr),
             peak_mem_used: MetricBuilder::new(&agg.metrics)
-                .with_category(MetricCategory::Bytes)
-                .gauge("peak_mem_used", partition),
+                .peak_memory_usage("peak_mem_used", partition),
             spill_manager,
         };
 

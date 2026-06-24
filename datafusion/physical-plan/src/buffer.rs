@@ -194,8 +194,7 @@ impl ExecutionPlan for BufferExec {
         let curr_mem_out = Arc::clone(&curr_mem_in);
         let mut max_mem_in = 0;
         let max_mem = MetricBuilder::new(&self.metrics)
-            .with_category(MetricCategory::Bytes)
-            .gauge("max_mem_used", partition);
+            .peak_memory_usage("max_mem_used", partition);
 
         let curr_queued_in = Arc::new(AtomicUsize::new(0));
         let curr_queued_out = Arc::clone(&curr_queued_in);

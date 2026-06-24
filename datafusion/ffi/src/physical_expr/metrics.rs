@@ -147,6 +147,10 @@ pub enum FFI_MetricValue {
         name: SString,
         gauge: u64,
     },
+    PeakMemoryUsage {
+        name: SString,
+        gauge: u64,
+    },
     Time {
         name: SString,
         time_ns: u64,
@@ -425,6 +429,10 @@ impl From<&MetricValue> for FFI_MetricValue {
                 name: SString::from(name.as_ref()),
                 gauge: gauge.value() as u64,
             },
+            MetricValue::PeakMemoryUsage { name, gauge } => Self::PeakMemoryUsage {
+                name: SString::from(name.as_ref()),
+                gauge: gauge.value() as u64,
+            },
             MetricValue::Time { name, time } => Self::Time {
                 name: SString::from(name.as_ref()),
                 time_ns: time.value() as u64,
@@ -478,6 +486,10 @@ impl From<FFI_MetricValue> for MetricValue {
                 count: count_from_value(count),
             },
             FFI_MetricValue::Gauge { name, gauge } => Self::Gauge {
+                name: Cow::Owned(name.into()),
+                gauge: gauge_from_value(gauge),
+            },
+            FFI_MetricValue::PeakMemoryUsage { name, gauge } => Self::PeakMemoryUsage {
                 name: Cow::Owned(name.into()),
                 gauge: gauge_from_value(gauge),
             },
@@ -622,6 +634,13 @@ mod tests {
         assert_value_roundtrip(MetricValue::Gauge {
             name: Cow::Borrowed("custom_gauge"),
             gauge,
+        });
+
+        let peak_memory = Gauge::new();
+        peak_memory.add(44);
+        assert_value_roundtrip(MetricValue::PeakMemoryUsage {
+            name: Cow::Borrowed("peak_mem_used"),
+            gauge: peak_memory,
         });
 
         let time = Time::new();
