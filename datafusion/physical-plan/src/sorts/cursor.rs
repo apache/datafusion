@@ -44,6 +44,14 @@ pub trait CursorValues {
 
     /// Returns comparison of `l[l_idx]` and `r[r_idx]`
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering;
+
+    /// Notifies the values that the owning [`Cursor`] moved to `offset` (always
+    /// `< len()`), so caching implementations can refresh the value(s) read by
+    /// the hot comparisons. Default no-op (e.g. byte/row cursors don't benefit).
+    #[inline]
+    fn set_offset(&mut self, offset: usize) {
+        let _ = offset;
+    }
 }
 
 /// A comparable cursor, used by sort operations
@@ -89,14 +97,22 @@ impl<T: CursorValues> Cursor<T> {
     }
 
     /// Returns true if there are no more rows in this cursor
+    #[inline]
     pub fn is_finished(&self) -> bool {
         self.offset == self.values.len()
     }
 
     /// Advance the cursor, returning the previous row index
+    #[inline]
     pub fn advance(&mut self) -> usize {
         let t = self.offset;
         self.offset += 1;
+        // Refresh the cache for the new position. The guard keeps `set_offset`
+        // in bounds; a finished cursor's stale cache is never read (it is taken
+        // before the next comparison).
+        if self.offset < self.values.len() {
+            self.values.set_offset(self.offset);
+        }
         t
     }
 
@@ -112,6 +128,7 @@ impl<T: CursorValues> Cursor<T> {
 }
 
 impl<T: CursorValues> PartialEq for Cursor<T> {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         T::eq(&self.values, self.offset, &other.values, other.offset)
     }
@@ -142,6 +159,7 @@ impl<T: CursorValues> PartialOrd for Cursor<T> {
 }
 
 impl<T: CursorValues> Ord for Cursor<T> {
+    #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         T::compare(&self.values, self.offset, &other.values, other.offset)
     }
@@ -180,10 +198,14 @@ impl RowValues {
 }
 
 impl CursorValues for RowValues {
+    #[inline]
     fn len(&self) -> usize {
         self.rows.num_rows()
     }
 
+    // No inline hint on purpose: for the heavyweight `Rows` byte comparison the
+    // compiler's own choice wins — both `#[inline]` and `#[inline(never)]`
+    // measurably regress the multi-column merge path.
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
         l.rows.row(l_idx) == r.rows.row(r_idx)
     }
@@ -209,29 +231,74 @@ impl<T: ArrowPrimitiveType> CursorArray for PrimitiveArray<T> {
     type Values = PrimitiveValues<T::Native>;
 
     fn values(&self) -> Self::Values {
-        PrimitiveValues(self.values().clone())
+        PrimitiveValues::new(self.values().clone())
     }
 }
 
+/// [`CursorValues`] for a primitive column.
+///
+/// Caches the value at the current (and previous) offset, refreshed once per
+/// [`Cursor::advance`] via [`CursorValues::set_offset`], so the hot loser-tree
+/// comparisons read a cached field instead of indexing the buffer each time.
 #[derive(Debug)]
-pub struct PrimitiveValues<T: ArrowNativeTypeOp>(ScalarBuffer<T>);
+pub struct PrimitiveValues<T: ArrowNativeTypeOp> {
+    values: ScalarBuffer<T>,
+    /// Cached `values[offset]`.
+    current: T,
+    /// Cached `values[offset - 1]` (read by `eq_to_previous`, only past offset 0).
+    previous: T,
+    /// Current offset; used only to `debug_assert!` the cache is read in sync.
+    offset: usize,
+}
+
+impl<T: ArrowNativeTypeOp> PrimitiveValues<T> {
+    fn new(values: ScalarBuffer<T>) -> Self {
+        // Non-empty in practice; `unwrap_or_default` just avoids a panic.
+        let first = values.first().copied().unwrap_or_default();
+        Self {
+            values,
+            current: first,
+            previous: first,
+            offset: 0,
+        }
+    }
+}
 
 impl<T: ArrowNativeTypeOp> CursorValues for PrimitiveValues<T> {
+    #[inline(always)]
     fn len(&self) -> usize {
-        self.0.len()
+        self.values.len()
     }
 
+    #[inline(always)]
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
-        l.0[l_idx].is_eq(r.0[r_idx])
+        // Arbitrary indices (cross-batch comparison), so index directly.
+        l.values[l_idx].is_eq(r.values[r_idx])
     }
 
+    #[inline(always)]
     fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
         assert!(idx > 0);
-        cursor.0[idx].is_eq(cursor.0[idx - 1])
+        debug_assert_eq!(idx, cursor.offset);
+        cursor.current.is_eq(cursor.previous)
     }
 
+    #[inline(always)]
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
-        l.0[l_idx].compare(r.0[r_idx])
+        debug_assert_eq!(l_idx, l.offset);
+        debug_assert_eq!(r_idx, r.offset);
+        l.current.compare(r.current)
+    }
+
+    #[inline(always)]
+    fn set_offset(&mut self, offset: usize) {
+        // The caller (`Cursor::advance`) guarantees `offset < len`; inlined, that
+        // guard dominates the index below so its bounds check is elided — the
+        // length is checked once per row, not per comparison. The old `current`
+        // is `values[offset - 1]`, so it becomes `previous`.
+        self.previous = self.current;
+        self.current = self.values[offset];
+        self.offset = offset;
     }
 }
 
@@ -241,6 +308,7 @@ pub struct ByteArrayValues<T: OffsetSizeTrait> {
 }
 
 impl<T: OffsetSizeTrait> ByteArrayValues<T> {
+    #[inline]
     fn value(&self, idx: usize) -> &[u8] {
         assert!(idx < self.len());
         // Safety: offsets are valid and checked bounds above
@@ -253,19 +321,23 @@ impl<T: OffsetSizeTrait> ByteArrayValues<T> {
 }
 
 impl<T: OffsetSizeTrait> CursorValues for ByteArrayValues<T> {
+    #[inline]
     fn len(&self) -> usize {
         self.offsets.len() - 1
     }
 
+    #[inline]
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
         l.value(l_idx) == r.value(r_idx)
     }
 
+    #[inline]
     fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
         assert!(idx > 0);
         cursor.value(idx) == cursor.value(idx - 1)
     }
 
+    #[inline]
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
         l.value(l_idx).cmp(r.value(r_idx))
     }
@@ -394,16 +466,19 @@ impl<T: CursorValues> ArrayValues<T> {
         }
     }
 
+    #[inline(always)]
     fn is_null(&self, idx: usize) -> bool {
         (idx < self.null_threshold) == self.options.nulls_first
     }
 }
 
 impl<T: CursorValues> CursorValues for ArrayValues<T> {
+    #[inline(always)]
     fn len(&self) -> usize {
         self.values.len()
     }
 
+    #[inline(always)]
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => true,
@@ -412,15 +487,19 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
         }
     }
 
+    #[inline(always)]
     fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
         assert!(idx > 0);
         match (cursor.is_null(idx), cursor.is_null(idx - 1)) {
             (true, true) => true,
-            (false, false) => T::eq(&cursor.values, idx, &cursor.values, idx - 1),
+            // Delegate to inner `eq_to_previous` so a caching cursor can answer
+            // without indexing.
+            (false, false) => T::eq_to_previous(&cursor.values, idx),
             _ => false,
         }
     }
 
+    #[inline(always)]
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => Ordering::Equal,
@@ -437,6 +516,12 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
                 false => T::compare(&l.values, l_idx, &r.values, r_idx),
             },
         }
+    }
+
+    #[inline(always)]
+    fn set_offset(&mut self, offset: usize) {
+        // Forward to the wrapped values (e.g. caching `PrimitiveValues`).
+        self.values.set_offset(offset);
     }
 }
 
@@ -463,7 +548,7 @@ mod tests {
         let reservation = consumer.register(&memory_pool);
 
         let values = ArrayValues {
-            values: PrimitiveValues(values),
+            values: PrimitiveValues::new(values),
             null_threshold,
             options,
             _reservation: reservation,

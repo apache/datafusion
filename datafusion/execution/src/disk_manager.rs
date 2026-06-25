@@ -149,46 +149,6 @@ impl Debug for DiskManagerMode {
     }
 }
 
-/// Configuration for temporary disk access
-#[deprecated(since = "48.0.0", note = "Use DiskManagerBuilder instead")]
-#[derive(Debug, Clone, Default)]
-#[allow(clippy::allow_attributes)]
-#[allow(deprecated)]
-pub enum DiskManagerConfig {
-    /// Use the provided [DiskManager] instance
-    Existing(Arc<DiskManager>),
-
-    /// Create a new [DiskManager] that creates temporary files within
-    /// a temporary directory chosen by the OS
-    #[default]
-    NewOs,
-
-    /// Create a new [DiskManager] that creates temporary files within
-    /// the specified directories
-    NewSpecified(Vec<PathBuf>),
-
-    /// Disable disk manager, attempts to create temporary files will error
-    Disabled,
-}
-
-#[expect(deprecated)]
-impl DiskManagerConfig {
-    /// Create temporary files in a temporary directory chosen by the OS
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Create temporary files using the provided disk manager
-    pub fn new_existing(existing: Arc<DiskManager>) -> Self {
-        Self::Existing(existing)
-    }
-
-    /// Create temporary files in the specified directories
-    pub fn new_specified(paths: Vec<PathBuf>) -> Self {
-        Self::NewSpecified(paths)
-    }
-}
-
 /// Manages files generated during query execution, e.g. spill files generated
 /// while processing dataset larger than available memory.
 pub struct DiskManager {
@@ -233,44 +193,6 @@ impl DiskManager {
     /// Creates a builder for [DiskManager]
     pub fn builder() -> DiskManagerBuilder {
         DiskManagerBuilder::default()
-    }
-
-    /// Create a DiskManager given the configuration
-    #[expect(deprecated)]
-    #[deprecated(since = "48.0.0", note = "Use DiskManager::builder() instead")]
-    pub fn try_new(config: DiskManagerConfig) -> Result<Arc<Self>> {
-        match config {
-            DiskManagerConfig::Existing(manager) => Ok(manager),
-            DiskManagerConfig::NewOs => Ok(Arc::new(Self {
-                local_dirs: Mutex::new(Some(vec![])),
-                max_temp_directory_size: AtomicU64::new(DEFAULT_MAX_TEMP_DIRECTORY_SIZE),
-                used_disk_space: Arc::new(AtomicU64::new(0)),
-                active_files_count: Arc::new(AtomicUsize::new(0)),
-                factory: None,
-            })),
-            DiskManagerConfig::NewSpecified(conf_dirs) => {
-                let local_dirs = create_local_dirs(&conf_dirs)?;
-                debug!(
-                    "Created local dirs {local_dirs:?} as DataFusion working directory"
-                );
-                Ok(Arc::new(Self {
-                    local_dirs: Mutex::new(Some(local_dirs)),
-                    max_temp_directory_size: AtomicU64::new(
-                        DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
-                    ),
-                    used_disk_space: Arc::new(AtomicU64::new(0)),
-                    active_files_count: Arc::new(AtomicUsize::new(0)),
-                    factory: None,
-                }))
-            }
-            DiskManagerConfig::Disabled => Ok(Arc::new(Self {
-                local_dirs: Mutex::new(None),
-                max_temp_directory_size: AtomicU64::new(DEFAULT_MAX_TEMP_DIRECTORY_SIZE),
-                used_disk_space: Arc::new(AtomicU64::new(0)),
-                active_files_count: Arc::new(AtomicUsize::new(0)),
-                factory: None,
-            })),
-        }
     }
 
     /// Atomically set the max temp directory size at runtime.
