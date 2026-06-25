@@ -33,11 +33,12 @@
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use arrow::array::RecordBatch;
 use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_execution::TaskContext;
 use futures::{Stream, StreamExt};
 use log::info;
@@ -51,14 +52,28 @@ use crate::{
     SendableRecordBatchStream,
 };
 
-/// A runtime adaptive-execution rule. RTO fires `evaluate` once per
-/// stage completion, passing the just-completed stage number so rules
-/// can scope their work to operators whose inputs are at that stage
-/// (e.g. a HashJoinExec whose children are both StageBoundaryBuffers
-/// with `stage == completed_stage`).
+/// A runtime adaptive-execution rule. Shape is identical to
+/// `datafusion_physical_optimizer::PhysicalOptimizerRule::optimize` —
+/// the trait lives in `physical-plan` rather than reusing the upstream
+/// trait directly only because `physical-plan` cannot depend on
+/// `physical-optimizer` (the dependency runs the other way). The dual
+/// shape is the migration story: any static `PhysicalOptimizerRule`
+/// can be made runtime-aware by reading state from
+/// `StageBoundaryBuffer`s in the plan tree it receives, and a future
+/// upstream unification of the two traits requires no change to call
+/// sites.
+///
+/// RTO invokes `optimize` exactly once per stage-completion event with
+/// its current plan; the returned plan replaces RTO's plan. Rules
+/// identify the just-completed stage by walking the plan and finding
+/// `StageBoundaryBuffer`s where `is_ready() && !streaming_started()`.
 pub trait RuntimeRule: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &str;
-    fn evaluate(&self, plan: &Arc<dyn ExecutionPlan>, completed_stage: usize);
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
 }
 
 #[derive(Debug)]
@@ -134,6 +149,7 @@ impl ExecutionPlan for RuntimeOptimizerExec {
             child,
             plan: Arc::clone(&self.input),
             rules: self.rules.clone(),
+            context: Arc::clone(&context),
         };
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
@@ -165,6 +181,10 @@ struct CoordinatorStream {
     child: SendableRecordBatchStream,
     plan: Arc<dyn ExecutionPlan>,
     rules: Vec<Arc<dyn RuntimeRule>>,
+    /// Captured at execute() time; threaded into RuntimeRule::optimize so
+    /// rules see the session config (target_partitions, etc.) the same
+    /// way static `PhysicalOptimizerRule`s do.
+    context: Arc<TaskContext>,
 }
 
 impl Stream for CoordinatorStream {
@@ -190,9 +210,15 @@ impl Stream for CoordinatorStream {
                 boundaries.len(),
                 this.rules.len(),
             );
+            let config = this.context.session_config().options();
+            let mut current_plan = Arc::clone(&this.plan);
             for rule in &this.rules {
-                rule.evaluate(&this.plan, stage);
+                current_plan = match rule.optimize(Arc::clone(&current_plan), config) {
+                    Ok(p) => p,
+                    Err(e) => return Poll::Ready(Some(Err(e))),
+                };
             }
+            this.plan = current_plan;
             for buffer in &boundaries {
                 buffer
                     .downcast_ref::<StageBoundaryBuffer>()
@@ -248,30 +274,21 @@ fn collect_boundaries_by_stage(
 // ---------------------------------------------------------------------------
 // SwapBuildSideIfInverted — first concrete RuntimeRule.
 //
-// When a HashJoinExec's current build side (the LEFT child under
-// `mode=CollectLeft`) ends up larger at runtime than the probe side,
-// the static planner made the wrong choice — it picked build based on
-// (Inexact) estimates. The fix is `HashJoinExec::flip_sides()`, which
-// isn't implemented yet; for now this rule only logs intent so we can
-// verify the detection logic end-to-end.
+// When a HashJoinExec's current build side ends up larger at runtime
+// than the probe side, the static planner made the wrong choice — it
+// picked build based on (Inexact) estimates. This rule walks the plan
+// looking for joins whose children are `StageBoundaryBuffer`s in the
+// just-completed state (`is_ready && !streaming_started`); if l > r,
+// it logs intent. The actual `HashJoinExec::swap_inputs` call lands in
+// the next commit (#14).
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
-pub struct SwapBuildSideIfInverted {
-    fired: AtomicBool,
-}
+#[derive(Default, Debug)]
+pub struct SwapBuildSideIfInverted;
 
 impl SwapBuildSideIfInverted {
     pub fn new() -> Self {
-        Self {
-            fired: AtomicBool::new(false),
-        }
-    }
-}
-
-impl Default for SwapBuildSideIfInverted {
-    fn default() -> Self {
-        Self::new()
+        Self
     }
 }
 
@@ -280,55 +297,60 @@ impl RuntimeRule for SwapBuildSideIfInverted {
         "SwapBuildSideIfInverted"
     }
 
-    fn evaluate(&self, plan: &Arc<dyn ExecutionPlan>, completed_stage: usize) {
-        if self.fired.load(Ordering::Relaxed) {
-            return;
-        }
-        self.walk_for_swap(plan, completed_stage);
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        plan.transform_up(|node| {
+            let Some(join) = node.downcast_ref::<HashJoinExec>() else {
+                return Ok(Transformed::no(node));
+            };
+            if just_completed_stage_of_join(join).is_none() {
+                return Ok(Transformed::no(node));
+            }
+            let children = join.children();
+            // Current HashJoinExec: LEFT child is the build side under
+            // `mode=CollectLeft`.
+            let left = side_runtime_rows(children[0]);
+            let right = side_runtime_rows(children[1]);
+            if let (Some(l), Some(r)) = (left, right)
+                && l > r
+            {
+                info!(
+                    "SwapBuildSideIfInverted: would flip HashJoinExec — \
+                     current build (left) = {l} rows, probe (right) = {r} \
+                     rows. swap_inputs() wiring lands in the next commit; \
+                     logging intent only."
+                );
+            }
+            Ok(Transformed::no(node))
+        })
+        .map(|t| t.data)
     }
 }
 
-impl SwapBuildSideIfInverted {
-    fn walk_for_swap(&self, plan: &Arc<dyn ExecutionPlan>, completed_stage: usize) {
-        if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
-            let children = join.children();
-            // Only act on joins whose inputs are at the just-completed
-            // stage; nested joins higher up wait for their own stage.
-            let both_at_completed_stage = children.len() == 2
-                && [&children[0], &children[1]].iter().all(|c| {
-                    c.downcast_ref::<StageBoundaryBuffer>()
-                        .is_some_and(|b| b.stage() == completed_stage)
-                });
-            if both_at_completed_stage {
-                // Current HashJoinExec: LEFT child is the build side
-                // under `mode=CollectLeft`.
-                let left = side_runtime_rows(children[0]);
-                let right = side_runtime_rows(children[1]);
-                if let (Some(l), Some(r)) = (left, right)
-                    && l > r
-                    && self
-                        .fired
-                        .compare_exchange(
-                            false,
-                            true,
-                            Ordering::AcqRel,
-                            Ordering::Relaxed,
-                        )
-                        .is_ok()
-                {
-                    info!(
-                        "SwapBuildSideIfInverted: would flip HashJoinExec — \
-                         current build (left) = {l} rows, probe (right) = {r} \
-                         rows. flip_sides() not yet implemented; logging \
-                         intent only."
-                    );
-                }
-            }
-            return;
-        }
-        for child in plan.children() {
-            self.walk_for_swap(child, completed_stage);
-        }
+/// Returns `Some(stage)` if `join`'s two children are both
+/// `StageBoundaryBuffer`s at the same stage in the just-completed state
+/// (`is_ready && !streaming_started`). Otherwise `None`.
+fn just_completed_stage_of_join(join: &HashJoinExec) -> Option<usize> {
+    let children = join.children();
+    if children.len() != 2 {
+        return None;
+    }
+    let left = children[0].downcast_ref::<StageBoundaryBuffer>()?;
+    let right = children[1].downcast_ref::<StageBoundaryBuffer>()?;
+    if left.stage() != right.stage() {
+        return None;
+    }
+    if left.is_ready()
+        && !left.streaming_started()
+        && right.is_ready()
+        && !right.streaming_started()
+    {
+        Some(left.stage())
+    } else {
+        None
     }
 }
 
