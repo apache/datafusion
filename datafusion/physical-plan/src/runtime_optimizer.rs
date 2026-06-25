@@ -43,7 +43,8 @@ use datafusion_execution::TaskContext;
 use futures::{Stream, StreamExt};
 use log::info;
 
-use crate::joins::HashJoinExec;
+use crate::coalesce_partitions::CoalescePartitionsExec;
+use crate::joins::{HashJoinExec, PartitionMode};
 use crate::stage_boundary_buffer::StageBoundaryBuffer;
 use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
@@ -136,20 +137,20 @@ impl ExecutionPlan for RuntimeOptimizerExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let child = self.input.execute(partition, Arc::clone(&context))?;
-        // Side-channel drive every StageBoundaryBuffer in the subtree.
-        // Buffers don't pull from their inputs until primed, so without
-        // this the consumers above them would sit Pending forever (a
-        // HashJoin in CollectLeft mode never polls its probe side until
-        // build completes — but build itself is gated behind a buffer).
-        // prime() is idempotent across partitions.
+        // Prime drains side-channel; do NOT execute self.input yet.
+        // buffer.prime() calls buffer.input.execute() (the subtree below
+        // the boundary) but leaves the boundary's consumer-side rx
+        // untouched, so HashJoin (or a possibly-replanned new HashJoin)
+        // can take it later when CoordinatorStream lazily executes
+        // self.plan after the first stage completes.
         prime_all_buffers(&self.input, &context)?;
         let schema = self.schema();
         let stream = CoordinatorStream {
-            child,
+            child: None,
             plan: Arc::clone(&self.input),
             rules: self.rules.clone(),
             context: Arc::clone(&context),
+            partition,
         };
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
@@ -178,13 +179,20 @@ fn register_consumer_waker_on_buffers(plan: &Arc<dyn ExecutionPlan>, waker: &Wak
 }
 
 struct CoordinatorStream {
-    child: SendableRecordBatchStream,
+    /// Lazily created. `None` until every stage has been processed (rules
+    /// fired, boundaries released). Then `self.plan.execute(...)` is called
+    /// — at which point all `StageBoundaryBuffer` rxs are still available
+    /// (prime() left them untouched), so a possibly-replanned join can
+    /// take them.
+    child: Option<SendableRecordBatchStream>,
     plan: Arc<dyn ExecutionPlan>,
     rules: Vec<Arc<dyn RuntimeRule>>,
     /// Captured at execute() time; threaded into RuntimeRule::optimize so
     /// rules see the session config (target_partitions, etc.) the same
-    /// way static `PhysicalOptimizerRule`s do.
+    /// way static `PhysicalOptimizerRule`s do, and used to lazily execute
+    /// the final plan.
     context: Arc<TaskContext>,
+    partition: usize,
 }
 
 impl Stream for CoordinatorStream {
@@ -233,8 +241,33 @@ impl Stream for CoordinatorStream {
             );
         }
 
-        this.child.poll_next_unpin(cx)
+        // Lazily execute the plan once all stages have been processed.
+        // While any boundary is still gated, defer execution so the
+        // post-replan plan can take the consumer-side rxs intact.
+        if this.child.is_none() {
+            if any_buffer_pending(&this.plan) {
+                return Poll::Pending;
+            }
+            match this.plan.execute(this.partition, Arc::clone(&this.context)) {
+                Ok(stream) => this.child = Some(stream),
+                Err(e) => return Poll::Ready(Some(Err(e))),
+            }
+        }
+
+        this.child.as_mut().unwrap().poll_next_unpin(cx)
     }
+}
+
+/// True if any `StageBoundaryBuffer` in the subtree has not yet started
+/// streaming. RTO uses this to gate lazy execution of `self.plan` until
+/// all stages have been processed (rules run, boundaries released).
+fn any_buffer_pending(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    if let Some(buffer) = plan.downcast_ref::<StageBoundaryBuffer>()
+        && !buffer.streaming_started()
+    {
+        return true;
+    }
+    plan.children().iter().any(|c| any_buffer_pending(c))
 }
 
 /// Walks the plan tree, groups every `StageBoundaryBuffer` by stage,
@@ -310,24 +343,59 @@ impl RuntimeRule for SwapBuildSideIfInverted {
                 return Ok(Transformed::no(node));
             }
             let children = join.children();
-            // Current HashJoinExec: LEFT child is the build side under
-            // `mode=CollectLeft`.
+            // Current HashJoinExec: LEFT child is the build side.
             let left = side_runtime_rows(children[0]);
             let right = side_runtime_rows(children[1]);
-            if let (Some(l), Some(r)) = (left, right)
-                && l > r
-            {
-                info!(
-                    "SwapBuildSideIfInverted: would flip HashJoinExec — \
-                     current build (left) = {l} rows, probe (right) = {r} \
-                     rows. swap_inputs() wiring lands in the next commit; \
-                     logging intent only."
-                );
+            let (Some(l), Some(r)) = (left, right) else {
+                return Ok(Transformed::no(node));
+            };
+            if l <= r {
+                return Ok(Transformed::no(node));
             }
-            Ok(Transformed::no(node))
+            info!(
+                "SwapBuildSideIfInverted: flipping HashJoinExec — current \
+                 build (left) = {l} rows, probe (right) = {r} rows. \
+                 Calling swap_inputs to make the smaller side the new build."
+            );
+            let mode = *join.partition_mode();
+            let swapped = join.swap_inputs(mode)?;
+            let swapped = ensure_collect_left_single_partition(swapped)?;
+            Ok(Transformed::yes(swapped))
         })
         .map(|t| t.data)
     }
+}
+
+/// Ensures the (possibly already-coalesced) plan satisfies HashJoin's
+/// CollectLeft invariant: under `PartitionMode::CollectLeft`, the left
+/// child must report exactly one output partition. After
+/// `swap_inputs`, the new left side is whatever used to be on the
+/// right — frequently multi-partition (e.g. behind a RepartitionExec).
+/// Wrap it in `CoalescePartitionsExec` when needed.
+///
+/// `swap_inputs` may also have wrapped the result in a
+/// `ProjectionExec` to preserve output column order; in that case the
+/// HashJoinExec is one level down. We walk through that.
+fn ensure_collect_left_single_partition(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    plan.transform_up(|node| {
+        let Some(join) = node.downcast_ref::<HashJoinExec>() else {
+            return Ok(Transformed::no(node));
+        };
+        if *join.partition_mode() != PartitionMode::CollectLeft {
+            return Ok(Transformed::no(node));
+        }
+        let children = join.children();
+        if children[0].output_partitioning().partition_count() == 1 {
+            return Ok(Transformed::no(node));
+        }
+        let coalesced: Arc<dyn ExecutionPlan> =
+            Arc::new(CoalescePartitionsExec::new(Arc::clone(children[0])));
+        let new_children = vec![coalesced, Arc::clone(children[1])];
+        Ok(Transformed::yes(node.with_new_children(new_children)?))
+    })
+    .map(|t| t.data)
 }
 
 /// Returns `Some(stage)` if `join`'s two children are both

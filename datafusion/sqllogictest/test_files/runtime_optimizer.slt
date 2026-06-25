@@ -94,11 +94,23 @@ SELECT count(*) FROM (SELECT group_key FROM big GROUP BY group_key) t;
 # (RuntimeOptimizerExec at root; StageBoundaryBuffer on each HashJoin
 # input). JoinSelection picked `small` as build statically because
 # aggregated_big's row-count estimate (Inexact, ~100K) overstates the
-# actual (5). RuntimeOptimizerExec detects this inversion at runtime and
-# would call `HashJoinExec::flip_sides()` to swap — but flip_sides isn't
-# implemented yet, so for now the rule only logs intent. EXPLAIN stays
-# the static plan; the swap is verified via log output and (later) via
-# metrics.
+# actual (5).
+#
+# At runtime, RuntimeOptimizerExec detects this inversion and calls
+# `HashJoinExec::swap_inputs` — the join below executes with build and
+# probe swapped, putting the 5-row side on build. EXPLAIN stays the
+# static plan; the runtime swap is observable via RUST_LOG=info, which
+# emits the following ordered log lines:
+#
+#   RTO: stage 0 ready (2 boundaries); firing 1 rule(s) before release
+#   SwapBuildSideIfInverted: flipping HashJoinExec — current build
+#     (left) = 100 rows, probe (right) = 5 rows. Calling swap_inputs ...
+#   RTO: stage 0 released; downstream consumers can now drain the
+#     buffered data
+#
+# That ordering proves the rule fires before the boundaries release —
+# so neither side of the join has been consumed by HashJoin when the
+# swap decision is made.
 # ---------------------------------------------------------------------------
 query TT
 EXPLAIN SELECT bg.group_key, bg.sum_payload, s.payload
