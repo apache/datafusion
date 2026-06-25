@@ -233,6 +233,9 @@ where
     /// NOTE null_index is the logical index in the final array, not the index
     /// in the buffer
     null: Option<(V, usize)>,
+    /// Number of distinct values already emitted via [`Self::emit`].
+    /// Acts as a cursor into `offsets` and `buffer`.
+    emitted: usize,
 }
 
 /// The size, in number of entries, of the initial hash table
@@ -253,6 +256,7 @@ where
             random_state: RandomState::default(),
             hashes_buffer: vec![],
             null: None,
+            emitted: 0,
         }
     }
 
@@ -476,6 +480,75 @@ where
         }
     }
 
+    /// Emits the next `n` distinct values as an Arrow array.
+    ///
+    /// The builder is frozen into an immutable `Buffer` (zero-copy) and the
+    /// emitted window is sliced from it directly (zero-copy). Only the
+    /// surviving bytes are copied back into a fresh builder, so the insertion
+    /// path is unchanged.
+    ///
+    /// Panics if `n` exceeds the number of not-yet-emitted values.
+    pub fn emit(&mut self, n: usize) -> ArrayRef {
+        let total = self.offsets.len() - 1;
+        let remaining = total - self.emitted;
+        assert!(n <= remaining, "emit({n}): only {remaining} values remain");
+
+        let cursor = self.emitted;
+        let start = self.offsets[cursor].as_usize();
+        let end = self.offsets[cursor + n].as_usize();
+
+        // Build emitted offsets before compacting self.offsets.
+        let base = self.offsets[cursor];
+        let offsets: Vec<O> = self.offsets[cursor..=cursor + n]
+            .iter()
+            .map(|&o| O::usize_as(o.as_usize() - base.as_usize()))
+            .collect();
+        // SAFETY: monotonically increasing, derived from correctly constructed offsets.
+        let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
+
+        // Compact surviving offsets and reset cursor.
+        let surviving: Vec<O> = self.offsets[cursor + n..]
+            .iter()
+            .map(|&o| O::usize_as(o.as_usize() - end))
+            .collect();
+        self.offsets = surviving;
+        self.emitted = 0;
+
+        // Freeze the builder (zero-copy: MutableBuffer → Arc<Bytes> via finish()).
+        // slice(start) is a zero-copy Arc clone; the array reads only [0, end-start)
+        // bytes because the offsets bound it, so the extra trailing bytes are harmless.
+        let frozen = self.buffer.finish();
+        let values = frozen.slice(start);
+
+        // Copy only the surviving bytes into the fresh builder.
+        self.buffer.append_slice(&frozen[end..]);
+
+        let nulls = self.null.and_then(|(_, null_idx)| {
+            if null_idx >= cursor && null_idx < cursor + n {
+                Some(single_null_buffer(n, null_idx - cursor))
+            } else {
+                None
+            }
+        });
+        self.null = self.null.and_then(|(payload, null_idx)| {
+            if null_idx >= cursor + n {
+                Some((payload, null_idx - (cursor + n)))
+            } else {
+                None
+            }
+        });
+
+        match self.output_type {
+            OutputType::Binary => Arc::new(unsafe {
+                GenericBinaryArray::new_unchecked(offsets, values, nulls)
+            }),
+            OutputType::Utf8 => Arc::new(unsafe {
+                GenericStringArray::new_unchecked(offsets, values, nulls)
+            }),
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        }
+    }
+
     /// Converts this set into a `StringArray`, `LargeStringArray`,
     /// `BinaryArray`, or `LargeBinaryArray` containing each distinct value
     /// that was inserted. This is done without copying the values.
@@ -492,6 +565,7 @@ where
             random_state: _,
             hashes_buffer: _,
             null,
+            emitted: _,
         } = self;
 
         // Only make a `NullBuffer` if there was a null value
@@ -523,6 +597,26 @@ where
                 })
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        }
+    }
+
+    /// Removes entries whose payload is less than `n` from the hash table and
+    /// subtracts `n` from every remaining payload. Emitted values are evicted
+    pub fn drain_emitted(&mut self, n: usize)
+    where
+        V: std::ops::Sub<Output = V> + PartialOrd + From<usize>,
+    {
+        let threshold = V::from(n);
+        self.map.retain(|entry| entry.payload >= threshold);
+        for entry in self.map.iter_mut() {
+            entry.payload = entry.payload - threshold;
+        }
+        match &mut self.null {
+            Some((payload, _)) if *payload >= threshold => {
+                *payload = *payload - threshold;
+            }
+            Some(_) => self.null = None, // null was in the emitted window
+            None => {}
         }
     }
 
