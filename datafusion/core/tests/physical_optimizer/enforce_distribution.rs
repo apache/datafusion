@@ -1048,12 +1048,12 @@ fn join_after_agg_alias() -> Result<()> {
         @r"
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a1@0, a2@0)]
       AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]
-        RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10
+        RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10, max_aggr_partition_factor=4
           AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]
             RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
       AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[]
-        RepartitionExec: partitioning=Hash([a2@0], 10), input_partitions=10
+        RepartitionExec: partitioning=Hash([a2@0], 10), input_partitions=10, max_aggr_partition_factor=4
           AggregateExec: mode=Partial, gby=[a@0 as a2], aggr=[]
             RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet

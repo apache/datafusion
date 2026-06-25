@@ -756,15 +756,29 @@ fn add_hash_on_top(
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.prefer_existing_sort`).
         let partitioning = dist.create_partitioning(n_target);
-        let repartition =
-            RepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
-                .with_preserve_order();
+        let max_aggr_partition_factor = hash_aggregate_partition_factor(&input.plan);
+        let repartition = RepartitionExec::try_new_with_max_aggr_partition_factor(
+            Arc::clone(&input.plan),
+            partitioning,
+            max_aggr_partition_factor,
+        )?
+        .with_preserve_order();
         let plan = Arc::new(repartition) as _;
 
         return Ok(DistributionContext::new(plan, true, vec![input]));
     }
 
     Ok(input)
+}
+
+fn hash_aggregate_partition_factor(input: &Arc<dyn ExecutionPlan>) -> usize {
+    const DEFAULT_HASH_AGGREGATE_PARTITION_FACTOR: usize = 4;
+
+    input
+        .downcast_ref::<AggregateExec>()
+        .filter(|aggregate| aggregate.mode() == &AggregateMode::Partial)
+        .map(|_| DEFAULT_HASH_AGGREGATE_PARTITION_FACTOR)
+        .unwrap_or(1)
 }
 
 /// Adds a [`SortPreservingMergeExec`] or a [`CoalescePartitionsExec`] operator
