@@ -120,6 +120,11 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
         Ok(vec![group_values])
     }
 
+    fn release_interning_state(&mut self) {
+        // No hash map to clear — this implementation uses ArrowBytesMap which
+        // is rebuilt on each emit. Nothing to release.
+    }
+
     fn clear_shrink(&mut self, _num_rows: usize) {
         // in theory we could potentially avoid this reallocation and clear the
         // contents of the maps, but for now we just reset the map from the beginning

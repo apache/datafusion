@@ -1214,6 +1214,23 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         Ok(output)
     }
 
+    fn release_interning_state(&mut self) {
+        // Clear the hash map — no more intern() calls are expected.
+        // This makes emit(EmitTo::First(n)) skip the expensive retain/reindex
+        // that was profiled as the hot path in terminal output.
+        self.map.clear();
+        self.map_size = 0;
+        self.hashes_buffer.clear();
+        self.hashes_buffer.shrink_to(0);
+
+        // Such structures are only used in `non-streaming` case
+        if !STREAMING {
+            self.group_index_lists.clear();
+            self.emit_group_index_list_buffer.clear();
+            self.vectorized_operation_buffers.clear();
+        }
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         // Reset to a fresh column-builder vector. The schema was validated
         // in `try_new`, so rebuilding cannot fail unless something else

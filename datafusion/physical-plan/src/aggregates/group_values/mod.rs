@@ -111,6 +111,16 @@ pub trait GroupValues: Send {
     /// Emits the group values
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
+    /// Release internal state used for interning (hash maps, row buffers, etc.)
+    /// but keep the accumulated group values intact.
+    ///
+    /// This should be called once when transitioning from the building phase to
+    /// the outputting phase. After this call, no more `intern` calls are
+    /// expected, and `emit(EmitTo::First(n))` can skip the expensive hash map
+    /// maintenance (retain / reindex) that was only needed to support future
+    /// `intern` calls.
+    fn release_interning_state(&mut self);
+
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, num_rows: usize);
 }

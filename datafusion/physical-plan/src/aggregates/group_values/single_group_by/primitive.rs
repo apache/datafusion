@@ -239,6 +239,12 @@ where
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
+    fn release_interning_state(&mut self) {
+        // Clear the hash map — no more intern() calls are expected.
+        // This makes emit(EmitTo::First(n)) skip the expensive retain/reindex.
+        self.map.clear();
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         self.values.clear();
         self.values.shrink_to(num_rows);

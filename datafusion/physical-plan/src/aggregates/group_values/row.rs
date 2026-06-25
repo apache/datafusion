@@ -254,6 +254,14 @@ impl GroupValues for GroupValuesRows {
         Ok(output)
     }
 
+    fn release_interning_state(&mut self) {
+        // Clear the hash map and row buffers — no more intern() calls expected.
+        self.map.clear();
+        self.map_size = 0;
+        self.hashes_buffer.clear();
+        self.hashes_buffer.shrink_to(0);
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         self.group_values = self.group_values.take().map(|mut rows| {
             rows.clear();

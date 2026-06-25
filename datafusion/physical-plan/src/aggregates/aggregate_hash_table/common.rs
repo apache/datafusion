@@ -207,6 +207,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         };
 
         state.batch_group_indices = Vec::new();
+        // Release hash map and interning buffers that are no longer needed
+        // during terminal output. This prevents emit(EmitTo::First(n)) from
+        // doing expensive retain/reindex work on every output batch.
+        state.group_values.release_interning_state();
         self.state = AggregateHashTableState::Outputting(state);
     }
 }

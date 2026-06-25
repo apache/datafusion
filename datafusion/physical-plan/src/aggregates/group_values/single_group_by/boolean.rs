@@ -145,6 +145,10 @@ impl GroupValues for GroupValuesBoolean {
         Ok(vec![Arc::new(BooleanArray::new(values, nulls)) as _])
     }
 
+    fn release_interning_state(&mut self) {
+        // No hash map — only three optional group indices. Nothing to release.
+    }
+
     fn clear_shrink(&mut self, _num_rows: usize) {
         self.false_group = None;
         self.true_group = None;
