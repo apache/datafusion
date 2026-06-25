@@ -132,16 +132,16 @@ fn compact_list<O: OffsetSizeTrait>(
     let values = list_array.values();
     // Use logical nulls so element types without a validity buffer
     // (e.g. NullArray) are still treated as null.
-    let values_null_count = values.logical_null_count();
-
-    // Fast path: no nulls in values, return input unchanged
+    let Some(values_nulls) = values.logical_nulls() else {
+        // Fast path: no validity buffer, no nulls to remove
+        return Ok(Arc::new(list_array.clone()));
+    };
+    let values_null_count = values_nulls.null_count();
     if values_null_count == 0 {
+        // Fast path: validity buffer present but no nulls set
         return Ok(Arc::new(list_array.clone()));
     }
 
-    let values_nulls = values
-        .logical_nulls()
-        .expect("non-zero logical_null_count implies logical_nulls is Some");
     let list_nulls = list_array.nulls();
     let list_offsets = list_array.offsets();
     let original_data = values.to_data();

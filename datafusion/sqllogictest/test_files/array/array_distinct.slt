@@ -173,6 +173,17 @@ select array_compact([make_array(1, 2), NULL, make_array(3, 4)]);
 ----
 [[1, 2], [3, 4]]
 
+# nested array of all-null inner lists: outer elements are non-null, kept as-is
+query ?
+select array_compact(make_array(make_array(NULL, NULL, NULL), make_array(NULL, NULL)));
+----
+[[NULL, NULL, NULL], [NULL, NULL]]
+
+query ?
+select array_compact(make_array(make_array(NULL, NULL, NULL), make_array(NULL, NULL, NULL)));
+----
+[[NULL, NULL, NULL], [NULL, NULL, NULL]]
+
 # LargeList
 query ?
 select array_compact(arrow_cast([1, NULL, 2, NULL, 3], 'LargeList(Int64)'));
