@@ -642,7 +642,7 @@ pub struct JoinData {
     pub join_on: JoinOn,
 }
 
-pub fn try_pushdown_through_join(
+pub(crate) fn try_pushdown_through_join(
     projection: &ProjectionExec,
     join_left: &Arc<dyn ExecutionPlan>,
     join_right: &Arc<dyn ExecutionPlan>,
