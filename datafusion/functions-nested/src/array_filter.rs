@@ -252,14 +252,11 @@ fn filter_list_values<O: OffsetSizeTrait>(
     offsets: &OffsetBuffer<O>,
 ) -> Result<(ArrayRef, OffsetBuffer<O>)> {
     let num_sublists = offsets.len().saturating_sub(1);
-    let mut new_offsets = Vec::<O>::with_capacity(num_sublists + 1);
-    new_offsets.push(O::zero());
-
     let has_nulls = predicate.null_count() > 0;
-    for i in 0..num_sublists {
+    let new_offsets = OffsetBuffer::<O>::from_lengths((0..num_sublists).map(|i| {
         let start = offsets[i].as_usize();
         let end = offsets[i + 1].as_usize();
-        let count = if has_nulls {
+        if has_nulls {
             (start..end)
                 .filter(|&j| predicate.is_valid(j) && predicate.value(j))
                 .count()
@@ -268,11 +265,8 @@ fn filter_list_values<O: OffsetSizeTrait>(
                 .values()
                 .slice(start, end - start)
                 .count_set_bits()
-        };
-        new_offsets.push(new_offsets[i] + O::usize_as(count));
-    }
-
-    let new_offsets = OffsetBuffer::new(new_offsets.into());
+        }
+    }));
 
     if new_offsets.last() == offsets.last() {
         return Ok((Arc::clone(values), offsets.clone()));

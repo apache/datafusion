@@ -465,7 +465,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     };
     let original_data = list_array.values().to_data();
     // Build up the offsets for the final output array
-    let mut offsets = Vec::<OffsetSize>::with_capacity(arr_n.len() + 1);
+    let mut offsets = Vec::<OffsetSize>::with_capacity(list_array.len() + 1);
     offsets.push(OffsetSize::zero());
 
     let mut mutable = MutableArrayData::with_capacities(

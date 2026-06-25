@@ -391,7 +391,8 @@ fn general_replace<O: OffsetSizeTrait>(
     arr_n: &[Option<i64>],
 ) -> Result<ArrayRef> {
     // Build up the offsets for the final output array
-    let mut offsets: Vec<O> = vec![O::usize_as(0)];
+    let mut offsets: Vec<O> = Vec::with_capacity(list_array.len() + 1);
+    offsets.push(O::usize_as(0));
     let values = list_array.values();
     let original_data = values.to_data();
     let to_data = to_array.to_data();
