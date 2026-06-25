@@ -649,54 +649,64 @@ pub fn try_pushdown_through_join(
     join_on: JoinOnRef,
     schema: &SchemaRef,
     filter: Option<&JoinFilter>,
+    column_indices: &[ColumnIndex],
 ) -> Result<Option<JoinData>> {
     // Convert projected expressions to columns. We can not proceed if this is not possible.
     let Some(projection_as_columns) = physical_to_column_exprs(projection.expr()) else {
         return Ok(None);
     };
 
-    let (far_right_left_col_ind, far_left_right_col_ind) =
-        join_table_borders(join_left.schema().fields().len(), &projection_as_columns);
+    if projection_as_columns.len() >= schema.fields().len() {
+        return Ok(None);
+    }
+    let mut left_proj: Vec<(Column, String)> = Vec::new();
+    let mut right_proj: Vec<(Column, String)> = Vec::new();
+    let mut seen_right = false;
+    for (col, alias) in &projection_as_columns {
+        let origin = &column_indices[col.index()];
+        match origin.side {
+            // Keep the "left block before right block" contiguity the current
+            // pushdown supports; a left column after a right one is "mixed".
+            JoinSide::Left => {
+                if seen_right {
+                    return Ok(None);
+                }
+                left_proj.push((Column::new(col.name(), origin.index), alias.clone()));
+            }
+            JoinSide::Right => {
+                seen_right = true;
+                right_proj.push((Column::new(col.name(), origin.index), alias.clone()));
+            }
+            // Synthetic column (e.g. mark): belongs to neither child.
+            // Phase 2 declines; Phase 3 keeps it at the join output instead.
+            JoinSide::None => return Ok(None),
+        }
+    }
 
-    if !join_allows_pushdown(
-        &projection_as_columns,
-        schema,
-        far_right_left_col_ind,
-        far_left_right_col_ind,
-    ) {
+    // Parity: neither side fully dropped.
+    if left_proj.is_empty() || right_proj.is_empty() {
         return Ok(None);
     }
 
+    // `left_proj` / `right_proj` carry *child* indices (from `column_indices`),
+    // so the shared `update_join_*` helpers must use a 0 column-index offset for
+    // both sides (the offset bridges child -> join-output index, which is the
+    // identity here).
     let new_filter = if let Some(filter) = filter {
-        match update_join_filter(
-            &projection_as_columns[0..=far_right_left_col_ind as _],
-            &projection_as_columns[far_left_right_col_ind as _..],
-            filter,
-            join_left.schema().fields().len(),
-        ) {
-            Some(updated_filter) => Some(updated_filter),
+        match update_join_filter(&left_proj, &right_proj, filter, 0) {
+            Some(updated) => Some(updated),
             None => return Ok(None),
         }
     } else {
         None
     };
 
-    let Some(new_on) = update_join_on(
-        &projection_as_columns[0..=far_right_left_col_ind as _],
-        &projection_as_columns[far_left_right_col_ind as _..],
-        join_on,
-        join_left.schema().fields().len(),
-    ) else {
+    let Some(new_on) = update_join_on(&left_proj, &right_proj, join_on, 0) else {
         return Ok(None);
     };
 
-    let (new_left, new_right) = new_join_children(
-        &projection_as_columns,
-        far_right_left_col_ind,
-        far_left_right_col_ind,
-        join_left,
-        join_right,
-    )?;
+    let (new_left, new_right) =
+        new_join_children_from_groups(&left_proj, &right_proj, join_left, join_right)?;
 
     Ok(Some(JoinData {
         projected_left_child: new_left,
@@ -880,6 +890,34 @@ pub fn new_join_children(
     Ok((new_left, new_right))
 }
 
+/// Build the projected left and right children from side-grouped projection
+/// columns whose indices are already *child*-relative (e.g. derived from a
+/// join's `ColumnIndex`). Unlike [`new_join_children`], this does not infer
+/// child ownership from output position, so it is safe for join schemas whose
+/// output is not a plain `left ++ right` (used by the schema-aware
+/// `try_pushdown_through_join`).
+fn new_join_children_from_groups(
+    left_proj: &[(Column, String)],
+    right_proj: &[(Column, String)],
+    left_child: &Arc<dyn ExecutionPlan>,
+    right_child: &Arc<dyn ExecutionPlan>,
+) -> Result<(ProjectionExec, ProjectionExec)> {
+    let build = |cols: &[(Column, String)], child: &Arc<dyn ExecutionPlan>| {
+        ProjectionExec::try_new(
+            cols.iter().map(|(col, alias)| ProjectionExpr {
+                expr: Arc::new(Column::new(col.name(), col.index())) as _,
+                alias: alias.clone(),
+            }),
+            Arc::clone(child),
+        )
+    };
+
+    Ok((
+        build(left_proj, left_child)?,
+        build(right_proj, right_child)?,
+    ))
+}
+
 /// Checks three conditions for pushing a projection down through a join:
 /// - Projection must narrow the join output schema.
 /// - Columns coming from left/right tables must be collected at the left/right
@@ -946,14 +984,10 @@ pub fn update_join_on(
         .map(|(left, right)| (left, right))
         .unzip();
 
-    let new_left_columns = new_columns_for_join_on(&left_idx, proj_left_exprs, 0);
-    let new_right_columns =
-        new_columns_for_join_on(&right_idx, proj_right_exprs, left_field_size);
-
-    match (new_left_columns, new_right_columns) {
-        (Some(left), Some(right)) => Some(left.into_iter().zip(right).collect()),
-        _ => None,
-    }
+    let new_left = new_columns_for_join_on(&left_idx, proj_left_exprs, 0)?;
+    let new_right =
+        new_columns_for_join_on(&right_idx, proj_right_exprs, left_field_size)?;
+    Some(new_left.into_iter().zip(new_right).collect())
 }
 
 /// Tries to update the column indices of a [`JoinFilter`] as if the input of
