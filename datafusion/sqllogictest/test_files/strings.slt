@@ -91,6 +91,27 @@ P1e1
 P1m1e1
 e1
 
+# SIMILAR TO with `%` wildcard (zero or more characters)
+query T rowsort
+SELECT s FROM test WHERE s SIMILAR TO 'p1%';
+----
+p1
+p1e1
+p1m1e1
+
+# SIMILAR TO with `_` wildcard (exactly one character)
+query T rowsort
+SELECT s FROM test WHERE s SIMILAR TO 'p_';
+----
+p1
+p2
+
+# SIMILAR TO requires full-string match (no implicit substring)
+query T rowsort
+SELECT s FROM test WHERE s SIMILAR TO 'p1';
+----
+p1
+
 # NOT LIKE
 query T rowsort
 SELECT s FROM test WHERE s NOT LIKE 'p1%';

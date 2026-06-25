@@ -1099,6 +1099,20 @@ pub fn binary(
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
 }
 
+fn sql_similar_to_regex(pattern: &str) -> String {
+    let mut result = String::with_capacity(pattern.len() + 6);
+    result.push_str("^(?:");
+    for ch in pattern.chars() {
+        match ch {
+            '%' => result.push_str(".*"),
+            '_' => result.push('.'),
+            c => result.push(c),
+        }
+    }
+    result.push_str(")$");
+    result
+}
+
 /// Create a similar to expression
 pub fn similar_to(
     negated: bool,
@@ -1112,7 +1126,39 @@ pub fn similar_to(
         (true, false) => Operator::RegexNotMatch,
         (true, true) => Operator::RegexNotIMatch,
     };
-    Ok(Arc::new(BinaryExpr::new(expr, binary_op, pattern)))
+
+    let translated_pattern = match pattern.downcast_ref::<crate::expressions::Literal>() {
+        Some(literal) => match literal.value() {
+            ScalarValue::Utf8(Some(s)) => Arc::new(crate::expressions::Literal::new(
+                ScalarValue::Utf8(Some(sql_similar_to_regex(s.as_str()))),
+            )) as Arc<dyn PhysicalExpr>,
+            ScalarValue::LargeUtf8(Some(s)) => Arc::new(crate::expressions::Literal::new(
+                ScalarValue::LargeUtf8(Some(sql_similar_to_regex(s.as_str()))),
+            )) as Arc<dyn PhysicalExpr>,
+            ScalarValue::Utf8View(Some(s)) => Arc::new(crate::expressions::Literal::new(
+                ScalarValue::Utf8View(Some(sql_similar_to_regex(s.as_str()))),
+            )) as Arc<dyn PhysicalExpr>,
+            ScalarValue::Utf8(None)
+            | ScalarValue::LargeUtf8(None)
+            | ScalarValue::Utf8View(None) => pattern,
+            other => {
+                return not_impl_err!(
+                    "SIMILAR TO with a non-string literal pattern is not supported: {other:?}"
+                );
+            }
+        },
+        None => {
+            return not_impl_err!(
+                "SIMILAR TO with a non-literal pattern is not yet supported"
+            );
+        }
+    };
+
+    Ok(Arc::new(BinaryExpr::new(
+        expr,
+        binary_op,
+        translated_pattern,
+    )))
 }
 
 #[cfg(test)]
@@ -4800,25 +4846,17 @@ mod tests {
         Ok(())
     }
 
-    /// Test helper for SIMILAR TO binary operation
     fn apply_similar_to(
         schema: &SchemaRef,
         va: Vec<&str>,
-        vb: Vec<&str>,
+        pattern: &str,
         negated: bool,
         case_insensitive: bool,
         expected: &BooleanArray,
     ) -> Result<()> {
         let a = StringArray::from(va);
-        let b = StringArray::from(vb);
-        let op = similar_to(
-            negated,
-            case_insensitive,
-            col("a", schema)?,
-            col("b", schema)?,
-        )?;
-        let batch =
-            RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a), Arc::new(b)])?;
+        let op = similar_to(negated, case_insensitive, col("a", schema)?, lit(pattern))?;
+        let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a)])?;
         let result = op
             .evaluate(&batch)?
             .into_array(batch.num_rows())
@@ -4830,32 +4868,86 @@ mod tests {
 
     #[test]
     fn test_similar_to() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Utf8, false),
-            Field::new("b", DataType::Utf8, false),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
 
+        // `%` matches any sequence; case-sensitive
         let expected = [Some(true), Some(false)].iter().collect();
-        // case-sensitive
         apply_similar_to(
             &schema,
             vec!["hello world", "Hello World"],
-            vec!["hello.*", "hello.*"],
+            "hello%",
             false,
             false,
             &expected,
         )
         .unwrap();
-        // case-insensitive
+
+        // `%` matches any sequence; case-insensitive
+        let expected = [Some(true), Some(false)].iter().collect();
         apply_similar_to(
             &schema,
             vec!["hello world", "bye"],
-            vec!["hello.*", "hello.*"],
+            "hello%",
             false,
             true,
             &expected,
         )
         .unwrap();
+
+        // `_` matches exactly one character
+        let expected = [Some(true), Some(false), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["x", "xy", ""], "_", false, false, &expected)
+            .unwrap();
+
+        // Match must cover the entire string (no implicit substring match)
+        let expected = [Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["abc", "a"], "a", false, false, &expected)
+            .unwrap();
+
+        // Regex metacharacters pass through unchanged
+        let expected = [Some(true), Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["a", "b", "c"], "a|b", false, false, &expected)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_similar_to_non_literal_pattern_errors() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+        let err = similar_to(
+            false,
+            false,
+            col("a", &schema).unwrap(),
+            col("b", &schema).unwrap(),
+        )
+        .expect_err("non-literal pattern should error");
+        assert!(
+            err.to_string().contains("non-literal pattern"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn test_similar_to_null_pattern() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let a = StringArray::from(vec!["hello"]);
+        let op = similar_to(
+            false,
+            false,
+            col("a", &schema).unwrap(),
+            lit(ScalarValue::Utf8(None)),
+        )
+        .unwrap();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(a)]).unwrap();
+        let result = op
+            .evaluate(&batch)
+            .unwrap()
+            .into_array(batch.num_rows())
+            .unwrap();
+        let expected: BooleanArray = [None].iter().collect();
+        assert_eq!(result.as_ref(), &expected);
     }
 
     pub fn binary_expr(
