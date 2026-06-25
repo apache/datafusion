@@ -164,8 +164,13 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         check_default_invariants(self, check)
     }
 
-    /// Specifies the data distribution requirements for all the
-    /// children for this `ExecutionPlan`, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
+    /// Specifies the data distribution requirements for all the children for
+    /// this `ExecutionPlan`.
+    ///
+    /// By default, each child has [`Distribution::UnspecifiedDistribution`].
+    /// Multi-input operators that use [`Distribution::KeyPartitioned`] must
+    /// use [`Partitioning::co_partitioned_with`] to verify that satisfied
+    /// children can be paired by partition index.
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution; self.children().len()]
     }
