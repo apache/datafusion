@@ -45,16 +45,9 @@ pub trait CursorValues {
     /// Returns comparison of `l[l_idx]` and `r[r_idx]`
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering;
 
-    /// Notifies the values that the owning [`Cursor`] has moved to `offset`,
-    /// which is guaranteed to be `< len()`.
-    ///
-    /// Implementations may use this to cache the value(s) at the current
-    /// position so that the (hot) loser-tree comparisons — which always compare
-    /// values at the cursors' *current* offsets — can avoid repeatedly indexing
-    /// (and bounds-checking) the underlying buffer. The default is a no-op for
-    /// implementations that do not benefit from caching (e.g. variable-length
-    /// byte / row cursors, whose comparison cost is dominated by the byte
-    /// comparison itself rather than the index).
+    /// Notifies the values that the owning [`Cursor`] moved to `offset` (always
+    /// `< len()`), so caching implementations can refresh the value(s) read by
+    /// the hot comparisons. Default no-op (e.g. byte/row cursors don't benefit).
     #[inline]
     fn set_offset(&mut self, offset: usize) {
         let _ = offset;
@@ -114,10 +107,9 @@ impl<T: CursorValues> Cursor<T> {
     pub fn advance(&mut self) -> usize {
         let t = self.offset;
         self.offset += 1;
-        // Keep any cached current value in sync with the new position. Guard on
-        // `is_finished` so implementations never have to index out of bounds:
-        // when the cursor is exhausted the cache is left stale, but a finished
-        // cursor is taken (set to `None`) before it is compared again.
+        // Refresh the cache for the new position. The guard keeps `set_offset`
+        // in bounds; a finished cursor's stale cache is never read (it is taken
+        // before the next comparison).
         if self.offset < self.values.len() {
             self.values.set_offset(self.offset);
         }
@@ -211,13 +203,9 @@ impl CursorValues for RowValues {
         self.rows.num_rows()
     }
 
-    // NOTE: `eq`/`eq_to_previous`/`compare` are deliberately NOT `#[inline]`.
-    // The `Rows` byte-wise comparison is comparatively heavyweight (it
-    // materializes `Row` views and compares variable-length byte slices), and
-    // forcing it into the already-large `update_loser_tree`/`poll_next` hot loop
-    // regresses the multi-column merge path. Leaving it as an out-of-line call
-    // keeps that loop compact. (The lightweight primitive/byte cursors below DO
-    // benefit from inlining.)
+    // No inline hint on purpose: for the heavyweight `Rows` byte comparison the
+    // compiler's own choice wins — both `#[inline]` and `#[inline(never)]`
+    // measurably regress the multi-column merge path.
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
         l.rows.row(l_idx) == r.rows.row(r_idx)
     }
@@ -249,30 +237,23 @@ impl<T: ArrowPrimitiveType> CursorArray for PrimitiveArray<T> {
 
 /// [`CursorValues`] for a primitive column.
 ///
-/// The value at the cursor's current offset — and the one immediately before it
-/// — are cached in [`Self::set_offset`] (called once per [`Cursor::advance`]).
-/// The hot loser-tree comparisons (`compare`/`eq_to_previous`), which always
-/// operate at the cursor's *current* position, then read these cached fields
-/// instead of indexing (and bounds-checking) the buffer on every comparison.
+/// Caches the value at the current (and previous) offset, refreshed once per
+/// [`Cursor::advance`] via [`CursorValues::set_offset`], so the hot loser-tree
+/// comparisons read a cached field instead of indexing the buffer each time.
 #[derive(Debug)]
 pub struct PrimitiveValues<T: ArrowNativeTypeOp> {
     values: ScalarBuffer<T>,
-    /// Cached value at the current offset (`values[offset]`).
+    /// Cached `values[offset]`.
     current: T,
-    /// Cached value at the previous offset (`values[offset - 1]`); meaningful
-    /// once the cursor has advanced past offset 0 (the only case in which
-    /// `eq_to_previous` reads it).
+    /// Cached `values[offset - 1]` (read by `eq_to_previous`, only past offset 0).
     previous: T,
-    /// The current offset. Kept solely to `debug_assert!` that the cache is read
-    /// at the position the caller claims, guarding the invariant the cache
-    /// relies on; it is not used to index the buffer.
+    /// Current offset; used only to `debug_assert!` the cache is read in sync.
     offset: usize,
 }
 
 impl<T: ArrowNativeTypeOp> PrimitiveValues<T> {
     fn new(values: ScalarBuffer<T>) -> Self {
-        // Cursors are only built over non-empty batches; the `unwrap_or_default`
-        // merely avoids a panic for the (unreachable) empty case.
+        // Non-empty in practice; `unwrap_or_default` just avoids a panic.
         let first = values.first().copied().unwrap_or_default();
         Self {
             values,
@@ -291,8 +272,7 @@ impl<T: ArrowNativeTypeOp> CursorValues for PrimitiveValues<T> {
 
     #[inline(always)]
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
-        // Arbitrary indices (used when comparing across batch boundaries), so
-        // this path indexes the buffer directly rather than using the cache.
+        // Arbitrary indices (cross-batch comparison), so index directly.
         l.values[l_idx].is_eq(r.values[r_idx])
     }
 
@@ -312,13 +292,10 @@ impl<T: ArrowNativeTypeOp> CursorValues for PrimitiveValues<T> {
 
     #[inline(always)]
     fn set_offset(&mut self, offset: usize) {
-        // `offset < len` is guaranteed by the caller (`Cursor::advance`), which
-        // performs that exact comparison immediately before calling this. With
-        // this method inlined, the bounds check on `self.values[offset]` is
-        // dominated by — and identical to — that comparison, so the optimizer
-        // elides it: the length is checked once per advanced row, not on every
-        // (per-comparison) buffer access. The old `current` holds
-        // `values[offset - 1]`, so it becomes `previous`.
+        // The caller (`Cursor::advance`) guarantees `offset < len`; inlined, that
+        // guard dominates the index below so its bounds check is elided — the
+        // length is checked once per row, not per comparison. The old `current`
+        // is `values[offset - 1]`, so it becomes `previous`.
         self.previous = self.current;
         self.current = self.values[offset];
         self.offset = offset;
@@ -515,9 +492,8 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
         assert!(idx > 0);
         match (cursor.is_null(idx), cursor.is_null(idx - 1)) {
             (true, true) => true,
-            // Delegate to the inner `eq_to_previous` (rather than `eq` at
-            // `idx`/`idx - 1`) so cursors that cache their current/previous
-            // value can answer without indexing.
+            // Delegate to inner `eq_to_previous` so a caching cursor can answer
+            // without indexing.
             (false, false) => T::eq_to_previous(&cursor.values, idx),
             _ => false,
         }
@@ -544,8 +520,7 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
 
     #[inline(always)]
     fn set_offset(&mut self, offset: usize) {
-        // Forward to the wrapped values so a caching inner cursor (e.g.
-        // `PrimitiveValues`) can refresh its cached current/previous value.
+        // Forward to the wrapped values (e.g. caching `PrimitiveValues`).
         self.values.set_offset(offset);
     }
 }
