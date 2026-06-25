@@ -47,8 +47,6 @@ pub trait SpillWriter: std::io::Write + Send {
 }
 
 /// Factory for creating spill files.
-pub trait TempFileFactory:
-    Send + Sync + std::panic::UnwindSafe + std::panic::RefUnwindSafe
-{
+pub trait TempFileFactory: Send + Sync {
     fn create_temp_file(&self, description: &str) -> Result<Arc<dyn SpillFile>>;
 }
