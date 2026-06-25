@@ -88,6 +88,16 @@ select make_array(NULL), make_array(NULL, NULL, NULL), make_array(make_array(NUL
 ----
 [NULL] [NULL, NULL, NULL] [[NULL, NULL], [NULL, NULL]]
 
+# make_array with null-array parameter preserves input rows and list-null value
+query I?I
+select id, make_array(n), array_length(make_array(n))
+from (values (1, NULL), (2, NULL), (3, NULL)) as t(id, n)
+order by id;
+----
+1 [NULL] 1
+2 [NULL] 1
+3 [NULL] 1
+
 # make_array with 1 columns
 query ???
 select make_array(a), make_array(d), make_array(e) from values;

@@ -110,28 +110,53 @@ impl ScalarUDFImpl for SparkArray {
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
 pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    let mut data_type = DataType::Null;
-    for arg in arrays {
-        let arg_data_type = arg.data_type();
-        if !arg_data_type.equals_datatype(&DataType::Null) {
-            data_type = arg_data_type.clone();
-            break;
-        }
+    // Zero arguments are the only case that should build a scalar empty list.
+    if arrays.is_empty() {
+        let array = new_null_array(&DataType::Null, 0);
+        Ok(Arc::new(
+            SingleRowListArrayBuilder::new(array)
+                .with_field_name(Some(ARRAY_FIELD_DEFAULT_NAME.to_string()))
+                .build_list_array(),
+        ))
+    } else {
+        // All-null inputs still need to flow through `array_array()` so rows
+        // are built per input row instead of collapsing to one value.
+        let data_type = arrays
+            .iter()
+            .find_map(|arg| {
+                let arg_type = arg.data_type();
+                (!arg_type.is_null()).then_some(arg_type)
+            })
+            .unwrap_or(&DataType::Null);
+        array_array::<i32>(arrays, data_type.clone(), ARRAY_FIELD_DEFAULT_NAME)
     }
+}
 
-    match data_type {
-        // Either an empty array or all nulls:
-        DataType::Null => {
-            let length = arrays.iter().map(|a| a.len()).sum();
-            // By default Int32
-            let array = new_null_array(&DataType::Null, length);
-            Ok(Arc::new(
-                SingleRowListArrayBuilder::new(array)
-                    .with_nullable(true)
-                    .with_field_name(Some(ARRAY_FIELD_DEFAULT_NAME.to_string()))
-                    .build_list_array(),
-            ))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{ListArray, NullArray};
+    use arrow::datatypes::DataType;
+
+    #[test]
+    fn spark_array_inner_all_null_arrays_preserves_row_count_and_width() {
+        let inputs = vec![
+            Arc::new(NullArray::new(3)) as ArrayRef,
+            Arc::new(NullArray::new(3)) as ArrayRef,
+        ];
+
+        let result = make_array_inner(&inputs).unwrap();
+        let list = result.as_any().downcast_ref::<ListArray>().unwrap();
+
+        assert_eq!(list.len(), 3);
+        assert_eq!(list.value_type(), DataType::Null);
+        assert_eq!(list.values().len(), 6);
+
+        for row in 0..list.len() {
+            assert_eq!(list.value_length(row), 2);
+            let values = list.value(row);
+            assert_eq!(values.len(), 2);
+            assert_eq!(values.logical_null_count(), 2);
         }
-        _ => array_array::<i32>(arrays, data_type, ARRAY_FIELD_DEFAULT_NAME),
     }
 }
