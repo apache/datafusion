@@ -87,3 +87,7 @@ harness = false
 [[bench]]
 name = "unions_to_filter"
 harness = false
+
+[[bench]]
+name = "query_fusion"
+harness = false
