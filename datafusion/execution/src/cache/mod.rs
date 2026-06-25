@@ -16,12 +16,9 @@
 // under the License.
 
 pub mod cache_manager;
-mod file_statistics_cache;
 pub mod lru_queue;
 
 pub mod default_cache;
-mod file_metadata_cache;
-mod list_files_cache;
 
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::instant::Instant;

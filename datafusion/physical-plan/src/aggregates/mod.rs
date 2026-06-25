@@ -72,9 +72,9 @@ use itertools::Itertools;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
+mod aggregate_hash_table;
 pub mod group_values;
 mod hash_aggregate;
-mod hash_table;
 mod no_grouping;
 pub mod order;
 mod row_hash;
