@@ -43,7 +43,7 @@ pub mod output_requirements;
 pub mod projection_pushdown;
 pub use datafusion_pruning as pruning;
 pub mod hash_join_buffering;
-pub mod insert_stage_boundaries_at_breakers;
+pub mod insert_hash_join_boundaries;
 pub mod pushdown_sort;
 pub mod runtime_optimizer;
 pub mod sanity_checker;
