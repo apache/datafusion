@@ -19,9 +19,10 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetBufferBuilder,
-    OffsetSizeTrait, make_array,
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetSizeTrait,
+    make_array,
 };
+use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeList, List, Null};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
@@ -145,7 +146,8 @@ fn compact_list<O: OffsetSizeTrait>(
     let list_offsets = list_array.offsets();
     let original_data = values.to_data();
     let capacity = original_data.len() - values_null_count;
-    let mut offsets = OffsetBufferBuilder::<O>::new(list_array.len());
+    let mut offsets = Vec::<O>::with_capacity(list_array.len() + 1);
+    offsets.push(O::zero());
     let mut mutable = MutableArrayData::with_capacities(
         vec![&original_data],
         false,
@@ -154,7 +156,7 @@ fn compact_list<O: OffsetSizeTrait>(
 
     for row_index in 0..list_array.len() {
         if list_nulls.is_some_and(|n| n.is_null(row_index)) {
-            offsets.push_length(0);
+            offsets.push(offsets[row_index]);
             continue;
         }
 
@@ -183,13 +185,13 @@ fn compact_list<O: OffsetSizeTrait>(
             mutable.extend(0, bs, end);
         }
 
-        offsets.push_length(kept);
+        offsets.push(offsets[row_index] + O::usize_as(kept));
     }
 
     let new_values = make_array(mutable.freeze());
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::clone(field),
-        offsets.finish(),
+        OffsetBuffer::new(offsets.into()),
         new_values,
         list_nulls.cloned(),
     )?))
