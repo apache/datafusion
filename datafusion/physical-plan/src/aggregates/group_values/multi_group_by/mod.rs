@@ -954,7 +954,8 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Timestamp(_, _)
             | DataType::Utf8View
             | DataType::BinaryView
-            | DataType::Boolean
+            | DataType::Boolean // TODO
+                                // || DataType::Dictionary(_, _)
     )
 }
 
