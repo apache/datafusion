@@ -52,10 +52,11 @@ use datafusion_execution::TaskContext;
 use futures::task::AtomicWaker;
 use futures::{Stream, StreamExt};
 
+use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    SendableRecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 
 #[derive(Debug)]
@@ -199,6 +200,15 @@ impl ExecutionPlan for PipelineBreakerBuffer {
             return None;
         }
         self.input.runtime_row_count(partition)
+    }
+
+    /// Passthrough: the buffer doesn't change row counts or column stats.
+    /// Without this override, the default impl at execution_plan.rs:528
+    /// returns Statistics::new_unknown — so wrapping any subtree in a
+    /// buffer would blackhole the static stats `side_runtime_rows`
+    /// falls back to when runtime stats aren't yet available.
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        args.compute_child_statistics(&self.input, args.partition())
     }
 
     fn execute(
