@@ -1,0 +1,94 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# This file is part of the implementation of the datafusion-spark function library.
+# For more information, please see:
+#   https://github.com/apache/datafusion/issues/15914
+
+# Tests for Spark-compatible isnan function.
+# Spark semantics differ from DataFusion's built-in isnan:
+#   Spark returns false for NULL inputs; DataFusion returns NULL.
+#
+# Example: SELECT isnan(NULL::DOUBLE)
+#   Spark:      returns false
+#   DataFusion: returns NULL
+
+# Scalar input: float64
+query BBBBB
+SELECT isnan(1.0::DOUBLE), isnan('NaN'::DOUBLE), isnan('inf'::DOUBLE), isnan(0.0::DOUBLE), isnan(-1.0::DOUBLE);
+----
+false true false false false
+
+# Scalar input: float64 NULL returns false (Spark behaviour, not NULL)
+query B
+SELECT isnan(NULL::DOUBLE);
+----
+false
+
+# Scalar input: float32
+query BBBBB
+SELECT isnan(1.0::FLOAT), isnan('NaN'::FLOAT), isnan('inf'::FLOAT), isnan(0.0::FLOAT), isnan(-1.0::FLOAT);
+----
+false true false false false
+
+# Scalar input: float32 NULL returns false
+query B
+SELECT isnan(NULL::FLOAT);
+----
+false
+
+# Array input: float64 — NULL produces false, not NULL
+query B
+SELECT isnan(a) FROM (VALUES (1.0::DOUBLE), ('NaN'::DOUBLE), (NULL::DOUBLE), ('inf'::DOUBLE), (0.0::DOUBLE)) AS t(a);
+----
+false
+true
+false
+false
+false
+
+# Array input: float32
+query B
+SELECT isnan(a) FROM (VALUES (1.0::FLOAT), ('NaN'::FLOAT), (NULL::FLOAT), ('inf'::FLOAT), (0.0::FLOAT)) AS t(a);
+----
+false
+true
+false
+false
+false
+
+# Spark's isnan accepts any numeric type by implicitly casting to double, so
+# integers, bigints, and decimals all return false (they can never be NaN).
+# This test guards against the signature being accidentally narrowed in a way
+# that would diverge from Spark.
+query BBBB
+SELECT
+  isnan(1) AS int_lit,
+  isnan(CAST(1 AS BIGINT)) AS bigint,
+  isnan(CAST(1 AS DECIMAL(10, 2))) AS dec,
+  isnan(CAST(NULL AS INT)) AS null_int;
+----
+false false false false
+
+# Untyped NULL literal: relies on DataFusion accepting Null as castable to a
+# float type to satisfy the Exact(Float32)/Exact(Float64) signature (the first
+# OneOf variant wins, so currently Float32). Without that, planning would fail
+# and we'd diverge from Spark, which returns false here.
+query B
+SELECT isnan(NULL);
+----
+false
