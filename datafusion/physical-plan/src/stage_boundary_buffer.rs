@@ -51,6 +51,7 @@
 
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
@@ -114,6 +115,11 @@ pub struct StageBoundaryBuffer {
     /// Handles to spawned drain tasks. Auto-abort on Drop via
     /// `SpawnedTask::Drop`, so query cancellation cleans up cleanly.
     drain_tasks: Arc<Mutex<Vec<SpawnedTask<()>>>>,
+    /// Per-partition running row count, incremented by the drain task
+    /// as each batch flows through. The buffer materializes the input,
+    /// so by the time `is_ready` flips, this is the true post-input
+    /// cardinality — no static-stat fallback needed.
+    row_counts: Arc<Vec<AtomicUsize>>,
 }
 
 #[derive(Debug)]
@@ -141,6 +147,8 @@ impl StageBoundaryBuffer {
                 (Some(tx), Some(rx))
             })
             .unzip();
+        let row_counts =
+            Arc::new((0..num_partitions).map(|_| AtomicUsize::new(0)).collect());
         Self {
             input,
             cache,
@@ -156,6 +164,7 @@ impl StageBoundaryBuffer {
             txs: Arc::new(Mutex::new(txs)),
             rxs: Arc::new(Mutex::new(rxs)),
             drain_tasks: Arc::new(Mutex::new(Vec::new())),
+            row_counts,
         }
     }
 
@@ -188,8 +197,9 @@ impl StageBoundaryBuffer {
             let stream = self.input.execute(partition, Arc::clone(ctx))?;
             let state = Arc::clone(&self.state);
             let rto_waker = Arc::clone(&self.rto_waker);
+            let row_counts = Arc::clone(&self.row_counts);
             tasks.push(SpawnedTask::spawn(drain_partition(
-                partition, stream, tx, state, rto_waker,
+                partition, stream, tx, state, rto_waker, row_counts,
             )));
         }
         Ok(())
@@ -228,13 +238,21 @@ async fn drain_partition(
     tx: mpsc::UnboundedSender<Result<RecordBatch>>,
     state: Arc<Mutex<BufferState>>,
     rto_waker: Arc<AtomicWaker>,
+    row_counts: Arc<Vec<AtomicUsize>>,
 ) {
     while let Some(item) = stream.next().await {
         // tx.send returning Err means the consumer dropped its receiver
         // (query cancelled while we were mid-drain). Stop pulling.
+        let rows = match &item {
+            Ok(batch) => batch.num_rows(),
+            Err(_) => 0,
+        };
         let is_err = item.is_err();
         if tx.send(item).is_err() {
             break;
+        }
+        if rows > 0 {
+            row_counts[partition].fetch_add(rows, Ordering::Relaxed);
         }
         if is_err {
             break;
@@ -255,7 +273,6 @@ async fn drain_partition(
         // reach the top-of-plan task. The shared AtomicWaker bridges.
         rto_waker.wake();
     }
-    let _ = partition; // reserved for future per-partition diagnostics
 }
 
 impl Drop for StageBoundaryBuffer {
@@ -306,22 +323,27 @@ impl ExecutionPlan for StageBoundaryBuffer {
         vec![true]
     }
 
-    /// Gated passthrough: rules only see runtime stats once every drain
-    /// task has reached EOF (signalled by `is_ready`). Before that the
-    /// child's per-partition counts are partial / not meaningful for
-    /// adaptive decisions.
+    /// Authoritative runtime cardinality: the drain task counts rows as
+    /// it materializes them, so once `is_ready` flips, this is the true
+    /// post-input count for `partition` (no static-stat fallback needed).
+    /// Returns `None` before `is_ready` — partial counts are not safe
+    /// to drive adaptive decisions with.
     fn runtime_row_count(&self, partition: usize) -> Option<usize> {
         if !self.is_ready() {
             return None;
         }
-        self.input.runtime_row_count(partition)
+        self.row_counts
+            .get(partition)
+            .map(|c| c.load(Ordering::Relaxed))
     }
 
     /// Passthrough: the buffer doesn't change row counts or column stats.
     /// Without this override, the default impl at execution_plan.rs:528
-    /// returns Statistics::new_unknown — so wrapping any subtree in a
-    /// buffer would blackhole the static stats `side_runtime_rows`
-    /// falls back to when runtime stats aren't yet available.
+    /// returns Statistics::new_unknown — wrapping any subtree in a
+    /// buffer would blackhole stats for any optimizer rule that asks.
+    /// (Runtime cardinality is also exposed via `runtime_row_count` as
+    /// the drain counts rows; this method is for other static rules
+    /// that inspect plan-time statistics.)
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         args.compute_child_statistics(&self.input, args.partition())
     }

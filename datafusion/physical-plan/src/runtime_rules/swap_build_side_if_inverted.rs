@@ -38,7 +38,6 @@ use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::joins::{HashJoinExec, PartitionMode};
 use crate::runtime_optimizer::RuntimeRule;
 use crate::stage_boundary_buffer::StageBoundaryBuffer;
-use crate::statistics::StatisticsArgs;
 use crate::{ExecutionPlan, ExecutionPlanProperties};
 
 #[derive(Default, Debug)]
@@ -147,31 +146,19 @@ fn just_completed_stage_of_join(join: &HashJoinExec) -> Option<usize> {
     }
 }
 
-/// Row count of a join input's subtree. Trusts `runtime_row_count` to
-/// propagate correctly through passthrough operators (Projection,
-/// StageBoundaryBuffer-when-ready, etc.); no recursive descent. The
-/// StageBoundaryBuffer in the chain returns `None` until its own
-/// `is_ready`, which is the natural gate — rules only see runtime
-/// stats once the underlying breaker is actually done.
+/// Total runtime row count across all output partitions of a
+/// HashJoin input. The input is always a `StageBoundaryBuffer`
+/// (`InsertHashJoinBoundaries` inserts one above each side), and the
+/// buffer materializes its input — so once `is_ready` flips,
+/// `runtime_row_count(p)` returns the true post-input cardinality.
+/// No static-stat fallback needed.
 ///
-/// Falls back to plan-time `statistics()` for pure static-source
-/// subtrees (e.g. a small in-memory table behind a
-/// `CoalescePartitionsExec`).
+/// Returns `None` if any partition's count is unavailable, which the
+/// rule treats as "don't try to decide yet."
 fn side_runtime_rows(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
-    if let Some(rows) = sum_runtime_rows_across_partitions(plan) {
-        return Some(rows);
-    }
-    plan.statistics_with_args(&StatisticsArgs::new())
-        .ok()
-        .and_then(|s| s.num_rows.get_value().copied())
-}
-
-fn sum_runtime_rows_across_partitions(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
     let n = plan.output_partitioning().partition_count();
     let mut total: usize = 0;
     for p in 0..n {
-        // Require every partition to report — partial sums are not
-        // meaningful for adaptive decisions.
         total += plan.runtime_row_count(p)?;
     }
     Some(total)
