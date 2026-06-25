@@ -29,9 +29,8 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::runtime_optimizer::{
-    RuntimeOptimizerExec, RuntimeRule, SwapBuildSideIfInverted,
-};
+use datafusion_physical_plan::runtime_optimizer::{RuntimeOptimizerExec, RuntimeRule};
+use datafusion_physical_plan::runtime_rules::SwapBuildSideIfInverted;
 
 #[derive(Default, Debug)]
 pub struct InsertRuntimeOptimizer;

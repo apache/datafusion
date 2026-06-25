@@ -87,6 +87,7 @@ pub mod projection;
 pub mod recursive_query;
 pub mod repartition;
 pub mod runtime_optimizer;
+pub mod runtime_rules;
 pub mod scalar_subquery;
 pub mod sort_pushdown;
 pub mod sorts;
