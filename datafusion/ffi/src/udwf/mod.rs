@@ -22,13 +22,17 @@ use std::sync::Arc;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow_schema::{Field, FieldRef};
-use datafusion_common::{Result, ffi_err};
-use datafusion_expr::function::WindowUDFFieldArgs;
+use datafusion_common::{Result, ToDFSchema, ffi_err};
+use datafusion_expr::function::{WindowFunctionSimplification, WindowUDFFieldArgs};
+use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
-    LimitEffect, PartitionEvaluator, Signature, WindowUDF, WindowUDFImpl,
+    Documentation, Expr, LimitEffect, PartitionEvaluator, ReversedUDWF, Signature,
+    WindowUDF, WindowUDFImpl,
 };
 use datafusion_physical_expr::PhysicalExpr;
+use expression_args::{FFI_ExpressionArgs, OwnedExpressionArgs};
 use partition_evaluator::FFI_PartitionEvaluator;
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
@@ -37,17 +41,20 @@ use partition_evaluator_args::{
 use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
 
+mod expression_args;
 mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
 
 use crate::arrow_wrappers::WrappedSchema;
+use crate::physical_expr::FFI_PhysicalExpr;
 use crate::util::{
     FFI_Option, FFI_Result, rvec_wrapped_to_vec_datatype, rvec_wrapped_to_vec_fieldref,
     vec_datatype_to_rvec_wrapped, vec_fieldref_to_rvec_wrapped,
 };
 use crate::volatility::FFI_Volatility;
 use crate::{df_result, sresult, sresult_return};
+use prost::Message;
 
 /// A stable struct for sharing a [`WindowUDF`] across FFI boundaries.
 #[repr(C)]
@@ -74,16 +81,36 @@ pub struct FFI_WindowUDF {
         display_name: SString,
     ) -> FFI_Result<WrappedSchema>,
 
-    /// Performs type coercion. To simply this interface, all UDFs are treated as having
-    /// user defined signatures, which will in turn call coerce_types to be called. This
-    /// call should be transparent to most users as the internal function performs the
-    /// appropriate calls on the underlying [`WindowUDF`]
+    /// Pointer lifetime is tied to the inner Arc; null = None
+    pub documentation: unsafe extern "C" fn(udwf: &Self) -> *const Documentation,
+
+    /// Returns expressions in the same order as input_exprs
+    pub expressions: unsafe extern "C" fn(
+        udwf: &Self,
+        args: FFI_ExpressionArgs,
+    ) -> SVec<FFI_PhysicalExpr>,
+
+    /// Serializes WindowFunction via DefaultLogicalExtensionCodec;
+    /// returns None variant if no simplification; only called when has_simplify=true
+    pub simplify: unsafe extern "C" fn(
+        udwf: &Self,
+        window_function: SVec<u8>,
+        schema: WrappedSchema,
+    ) -> FFI_Result<FFI_Option<SVec<u8>>>,
+
+    /// Returns FFI_ReversedUDWF enum; Reversed variant contains a cloned FFI_WindowUDF
+    pub reverse_expr: unsafe extern "C" fn(udwf: &Self) -> FFI_ReversedUDWF,
+
     pub coerce_types: unsafe extern "C" fn(
         udf: &Self,
         arg_types: SVec<WrappedSchema>,
     ) -> FFI_Result<SVec<WrappedSchema>>,
 
     pub sort_options: FFI_Option<FFI_SortOptions>,
+
+    pub has_simplify: bool,
+
+    pub logical_codec: crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec,
 
     /// Used to create a clone on the provider of the udf. This should
     /// only need to be called by the receiver of the udf.
@@ -155,6 +182,102 @@ unsafe extern "C" fn field_fn_wrapper(
     }
 }
 
+unsafe extern "C" fn documentation_fn_wrapper(
+    udwf: &FFI_WindowUDF,
+) -> *const Documentation {
+    unsafe {
+        let inner = udwf.inner();
+        match inner.documentation() {
+            Some(doc) => doc as *const Documentation,
+            None => std::ptr::null(),
+        }
+    }
+}
+
+unsafe extern "C" fn expressions_fn_wrapper(
+    udwf: &FFI_WindowUDF,
+    args: FFI_ExpressionArgs,
+) -> SVec<FFI_PhysicalExpr> {
+    unsafe {
+        let inner = udwf.inner();
+        let args = match OwnedExpressionArgs::try_from(args) {
+            Ok(args) => args,
+            Err(_) => return SVec::new(),
+        };
+        let expressions = inner.expressions((&args).into());
+        expressions
+            .into_iter()
+            .map(FFI_PhysicalExpr::from)
+            .collect()
+    }
+}
+
+unsafe extern "C" fn simplify_fn_wrapper(
+    udwf: &FFI_WindowUDF,
+    window_function_bytes: SVec<u8>,
+    schema: WrappedSchema,
+) -> FFI_Result<FFI_Option<SVec<u8>>> {
+    unsafe {
+        let inner = udwf.inner();
+
+        // 1. Deserialize bytes to Expr using Default codec
+        let protobuf =
+            sresult_return!(datafusion_proto::protobuf::LogicalExprNode::decode(
+                window_function_bytes.as_ref()
+            ));
+        let mut ctx = datafusion_execution::TaskContext::default();
+        // Register the wrapped UDWF so it can be resolved during deserialization
+        sresult_return!(ctx.register_udwf(Arc::clone(inner)));
+        let codec = datafusion_proto::logical_plan::DefaultLogicalExtensionCodec {};
+        let expr =
+            sresult_return!(datafusion_proto::logical_plan::from_proto::parse_expr(
+                &protobuf, &ctx, &codec
+            ));
+
+        // 2. Extract WindowFunction from Expr
+        let window_function = match expr {
+            Expr::WindowFunction(wf) => wf,
+            _ => return FFI_Result::Err("Expected WindowFunction Expr".into()),
+        };
+
+        // 3. Create dummy SimplifyContext
+        let schema_ref: SchemaRef = schema.into();
+        let df_schema = sresult_return!(schema_ref.to_dfschema_ref());
+        let info = SimplifyContext::builder().with_schema(df_schema).build();
+
+        // 4. Call inner.simplify()
+        match inner.simplify() {
+            Some(simplify_fn) => {
+                let simplified_expr =
+                    sresult_return!(simplify_fn(*window_function, &info));
+                let protobuf = sresult_return!(
+                    datafusion_proto::logical_plan::to_proto::serialize_expr(
+                        &simplified_expr,
+                        &codec
+                    )
+                );
+                let mut buffer = Vec::new();
+                sresult_return!(Message::encode(&protobuf, &mut buffer));
+                FFI_Result::Ok(FFI_Option::Some(buffer.into_iter().collect()))
+            }
+            None => FFI_Result::Ok(FFI_Option::None),
+        }
+    }
+}
+
+unsafe extern "C" fn reverse_expr_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_ReversedUDWF {
+    unsafe {
+        let inner = udwf.inner();
+        match inner.reverse_expr() {
+            ReversedUDWF::Identical => FFI_ReversedUDWF::Identical,
+            ReversedUDWF::NotSupported => FFI_ReversedUDWF::NotSupported,
+            ReversedUDWF::Reversed(udf) => {
+                FFI_ReversedUDWF::Reversed(Box::new(udf.into()))
+            }
+        }
+    }
+}
+
 unsafe extern "C" fn coerce_types_fn_wrapper(
     udwf: &FFI_WindowUDF,
     arg_types: SVec<WrappedSchema>,
@@ -205,8 +328,14 @@ unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
             volatility: udwf.volatility.clone(),
             partition_evaluator: partition_evaluator_fn_wrapper,
             sort_options: udwf.sort_options.clone(),
+            has_simplify: udwf.has_simplify,
+            logical_codec: udwf.logical_codec.clone(),
             coerce_types: coerce_types_fn_wrapper,
             field: field_fn_wrapper,
+            documentation: documentation_fn_wrapper,
+            expressions: expressions_fn_wrapper,
+            simplify: simplify_fn_wrapper,
+            reverse_expr: reverse_expr_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -221,8 +350,11 @@ impl Clone for FFI_WindowUDF {
     }
 }
 
-impl From<Arc<WindowUDF>> for FFI_WindowUDF {
-    fn from(udf: Arc<WindowUDF>) -> Self {
+impl FFI_WindowUDF {
+    pub fn new_with_ffi_codec(
+        udf: Arc<WindowUDF>,
+        logical_codec: crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec,
+    ) -> Self {
         if let Some(udwf) = udf.inner().downcast_ref::<ForeignWindowUDF>() {
             return udwf.udf.clone();
         }
@@ -231,6 +363,7 @@ impl From<Arc<WindowUDF>> for FFI_WindowUDF {
         let aliases = udf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let volatility = udf.signature().volatility.into();
         let sort_options = udf.sort_options().map(|v| (&v).into()).into();
+        let has_simplify = udf.inner().simplify().is_some();
 
         let private_data = Box::new(WindowUDFPrivateData { udf });
 
@@ -240,13 +373,40 @@ impl From<Arc<WindowUDF>> for FFI_WindowUDF {
             volatility,
             partition_evaluator: partition_evaluator_fn_wrapper,
             sort_options,
+            has_simplify,
+            logical_codec,
             coerce_types: coerce_types_fn_wrapper,
             field: field_fn_wrapper,
+            documentation: documentation_fn_wrapper,
+            expressions: expressions_fn_wrapper,
+            simplify: simplify_fn_wrapper,
+            reverse_expr: reverse_expr_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
         }
+    }
+}
+
+impl From<Arc<WindowUDF>> for FFI_WindowUDF {
+    fn from(udf: Arc<WindowUDF>) -> Self {
+        struct DummyProvider;
+        impl datafusion_execution::TaskContextProvider for DummyProvider {
+            fn task_ctx(&self) -> Arc<datafusion_execution::TaskContext> {
+                Arc::new(datafusion_execution::TaskContext::default())
+            }
+        }
+        let ctx: Arc<dyn datafusion_execution::TaskContextProvider> =
+            Arc::new(DummyProvider);
+        let task_ctx_provider = crate::execution::FFI_TaskContextProvider::from(&ctx);
+        let logical_codec =
+            crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec::new(
+                Arc::new(datafusion_proto::logical_plan::DefaultLogicalExtensionCodec {}),
+                None,
+                task_ctx_provider,
+            );
+        Self::new_with_ffi_codec(udf, logical_codec)
     }
 }
 
@@ -358,6 +518,89 @@ impl WindowUDFImpl for ForeignWindowUDF {
         }
     }
 
+    fn documentation(&self) -> Option<&Documentation> {
+        unsafe {
+            let ptr = (self.udf.documentation)(&self.udf);
+            ptr.as_ref()
+        }
+    }
+
+    fn expressions(
+        &self,
+        expr_args: datafusion_expr::function::ExpressionArgs,
+    ) -> Vec<Arc<dyn PhysicalExpr>> {
+        unsafe {
+            let fallback = expr_args.input_exprs().to_vec();
+            let args = match FFI_ExpressionArgs::try_from(expr_args) {
+                Ok(args) => args,
+                Err(_) => return fallback,
+            };
+            (self.udf.expressions)(&self.udf, args)
+                .into_iter()
+                .map(|e| Arc::<dyn PhysicalExpr>::from(&e))
+                .collect()
+        }
+    }
+
+    fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        if !self.udf.has_simplify {
+            return None;
+        }
+
+        let udf = self.udf.clone();
+        Some(Box::new(move |wf, info| {
+            let codec_arc: Arc<
+                dyn datafusion_proto::logical_plan::LogicalExtensionCodec,
+            > = (&udf.logical_codec).into();
+
+            // To serialize the window function
+            let expr = Expr::WindowFunction(Box::new(wf));
+            let protobuf = datafusion_proto::logical_plan::to_proto::serialize_expr(
+                &expr,
+                codec_arc.as_ref(),
+            )
+            .map_err(|e| datafusion_common::DataFusionError::Plan(e.to_string()))?;
+
+            let mut buffer = Vec::new();
+            Message::encode(&protobuf, &mut buffer)
+                .map_err(|e| datafusion_common::DataFusionError::Plan(e.to_string()))?;
+
+            let schema_ref: SchemaRef = Arc::new(info.schema().as_arrow().clone());
+            let schema = WrappedSchema::from(schema_ref);
+
+            // Call the FFI function
+            let result =
+                unsafe { (udf.simplify)(&udf, buffer.into_iter().collect(), schema) };
+
+            let result: Option<SVec<u8>> = crate::df_result!(result)?.into();
+
+            match result {
+                Some(bytes) => {
+                    let protobuf = datafusion_proto::protobuf::LogicalExprNode::decode(
+                        bytes.as_slice(),
+                    )
+                    .map_err(|e| {
+                        datafusion_common::DataFusionError::Plan(e.to_string())
+                    })?;
+                    let ctx: Arc<datafusion_execution::TaskContext> =
+                        (&udf.logical_codec.task_ctx_provider).try_into()?;
+                    let simplified_expr =
+                        datafusion_proto::logical_plan::from_proto::parse_expr(
+                            &protobuf,
+                            ctx.as_ref(),
+                            codec_arc.as_ref(),
+                        )?;
+                    Ok(simplified_expr)
+                }
+                None => Ok(expr),
+            }
+        }))
+    }
+
+    fn reverse_expr(&self) -> ReversedUDWF {
+        unsafe { (self.udf.reverse_expr)(&self.udf).into() }
+    }
+
     fn sort_options(&self) -> Option<SortOptions> {
         let options: Option<&FFI_SortOptions> = self.udf.sort_options.as_ref();
         options.map(|s| s.into())
@@ -393,16 +636,42 @@ impl From<&FFI_SortOptions> for SortOptions {
     }
 }
 
+#[repr(C, u8)]
+#[derive(Debug, Clone)]
+pub enum FFI_ReversedUDWF {
+    Identical,
+    NotSupported,
+    Reversed(Box<FFI_WindowUDF>),
+}
+
+impl From<FFI_ReversedUDWF> for ReversedUDWF {
+    fn from(value: FFI_ReversedUDWF) -> Self {
+        match value {
+            FFI_ReversedUDWF::Identical => ReversedUDWF::Identical,
+            FFI_ReversedUDWF::NotSupported => ReversedUDWF::NotSupported,
+            FFI_ReversedUDWF::Reversed(ffi_udf) => {
+                let udf_impl: Arc<dyn WindowUDFImpl> = (&*ffi_udf).into();
+                ReversedUDWF::Reversed(Arc::new(WindowUDF::new_from_shared_impl(
+                    udf_impl,
+                )))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[cfg(feature = "integration-tests")]
 mod tests {
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, create_array};
+    use arrow_schema::FieldRef;
     use datafusion::functions_window::lead_lag::{WindowShift, lag_udwf};
     use datafusion::logical_expr::expr::Sort;
     use datafusion::logical_expr::{ExprFunctionExt, WindowUDF, WindowUDFImpl, col};
     use datafusion::prelude::SessionContext;
+    use datafusion_expr::function::WindowUDFFieldArgs;
+    use datafusion_expr::{PartitionEvaluator, Signature};
 
     use crate::tests::create_record_batch;
     use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
@@ -479,6 +748,336 @@ mod tests {
         ffi_udwf.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).into();
         assert!(foreign_udwf.is::<ForeignWindowUDF>());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_udwf_documentation() -> datafusion_common::Result<()> {
+        use datafusion_expr::{
+            DocSection, Documentation, Volatility, function::PartitionEvaluatorArgs,
+        };
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        struct MockUDWFWithDoc {
+            signature: Signature,
+            doc: Documentation,
+        }
+
+        impl WindowUDFImpl for MockUDWFWithDoc {
+            fn name(&self) -> &str {
+                "mock_doc"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn partition_evaluator(
+                &self,
+                _: PartitionEvaluatorArgs,
+            ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+                unimplemented!()
+            }
+            fn field(
+                &self,
+                _: WindowUDFFieldArgs,
+            ) -> datafusion_common::Result<FieldRef> {
+                unimplemented!()
+            }
+            fn documentation(&self) -> Option<&Documentation> {
+                Some(&self.doc)
+            }
+        }
+
+        let doc = Documentation::builder(DocSection::default(), "description", "syntax")
+            .build();
+        let original_udwf = Arc::new(WindowUDF::from(MockUDWFWithDoc {
+            signature: Signature::any(0, Volatility::Immutable),
+            doc: doc.clone(),
+        }));
+
+        let mut ffi_udwf = FFI_WindowUDF::from(Arc::clone(&original_udwf));
+        ffi_udwf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).into();
+        assert_eq!(foreign_udwf.documentation(), Some(&doc));
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_udwf_expressions() -> datafusion_common::Result<()> {
+        use arrow::datatypes::DataType;
+        use datafusion_expr::{
+            Volatility,
+            function::{ExpressionArgs, PartitionEvaluatorArgs},
+        };
+        use datafusion_physical_expr::PhysicalExpr;
+        use datafusion_physical_expr::expressions::col;
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        struct MockUDWFWithExprs {
+            signature: Signature,
+        }
+
+        impl WindowUDFImpl for MockUDWFWithExprs {
+            fn name(&self) -> &str {
+                "mock_exprs"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn partition_evaluator(
+                &self,
+                _: PartitionEvaluatorArgs,
+            ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+                unimplemented!()
+            }
+            fn field(
+                &self,
+                _: WindowUDFFieldArgs,
+            ) -> datafusion_common::Result<FieldRef> {
+                unimplemented!()
+            }
+            fn expressions(&self, args: ExpressionArgs) -> Vec<Arc<dyn PhysicalExpr>> {
+                args.input_exprs().iter().rev().cloned().collect()
+            }
+        }
+
+        let original_udwf = Arc::new(WindowUDF::from(MockUDWFWithExprs {
+            signature: Signature::any(0, Volatility::Immutable),
+        }));
+
+        let schema = arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("a", DataType::Int32, true),
+            arrow::datatypes::Field::new("b", DataType::Int32, true),
+        ]);
+        let expr_a = col("a", &schema)?;
+        let expr_b = col("b", &schema)?;
+        let fields = vec![
+            Arc::new(arrow::datatypes::Field::new("a", DataType::Int32, true)),
+            Arc::new(arrow::datatypes::Field::new("b", DataType::Int32, true)),
+        ];
+
+        let mut ffi_udwf = FFI_WindowUDF::from(Arc::clone(&original_udwf));
+        ffi_udwf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).into();
+
+        let input_exprs = [expr_a, expr_b];
+        let args = ExpressionArgs::new(&input_exprs, &fields);
+        let result = foreign_udwf.expressions(args);
+        assert_eq!(result.len(), 2);
+        assert_eq!(format!("{}", result[0]), "b@1");
+        assert_eq!(format!("{}", result[1]), "a@0");
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_udwf_simplify() -> datafusion_common::Result<()> {
+        use datafusion_expr::{
+            Volatility,
+            function::{PartitionEvaluatorArgs, WindowFunctionSimplification},
+            lit,
+        };
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        struct MockUDWFSimplify {
+            signature: Signature,
+        }
+
+        impl WindowUDFImpl for MockUDWFSimplify {
+            fn name(&self) -> &str {
+                "mock_simplify"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn partition_evaluator(
+                &self,
+                _: PartitionEvaluatorArgs,
+            ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+                unimplemented!()
+            }
+            fn field(
+                &self,
+                _: WindowUDFFieldArgs,
+            ) -> datafusion_common::Result<FieldRef> {
+                unimplemented!()
+            }
+            fn simplify(&self) -> Option<WindowFunctionSimplification> {
+                Some(Box::new(|_, _| Ok(lit(1))))
+            }
+        }
+
+        let original_udwf = Arc::new(WindowUDF::from(MockUDWFSimplify {
+            signature: Signature::any(0, Volatility::Immutable),
+        }));
+
+        let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+        let codec = crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec::new(
+            Arc::new(datafusion_proto::logical_plan::DefaultLogicalExtensionCodec {}),
+            None,
+            task_ctx_provider,
+        );
+        let mut ffi_udwf =
+            FFI_WindowUDF::new_with_ffi_codec(Arc::clone(&original_udwf), codec);
+        ffi_udwf.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).into();
+        let simplify_fn = foreign_udwf.simplify().unwrap();
+
+        let wf = datafusion_expr::expr::WindowFunction {
+            fun: datafusion_expr::WindowFunctionDefinition::WindowUDF(original_udwf),
+            params: datafusion_expr::expr::WindowFunctionParams {
+                args: vec![],
+                partition_by: vec![],
+                order_by: vec![],
+                window_frame: datafusion_expr::WindowFrame::new(None),
+                filter: None,
+                null_treatment: None,
+                distinct: false,
+            },
+        };
+
+        let schema = arrow::datatypes::Schema::empty();
+        let df_schema = datafusion_common::DFSchema::try_from(schema).unwrap();
+        let info = datafusion_expr::simplify::SimplifyContext::builder()
+            .with_schema(Arc::new(df_schema))
+            .build();
+
+        let simplified_expr = simplify_fn(wf, &info).unwrap();
+        assert_eq!(simplified_expr, lit(1));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_udwf_reverse_expr() -> datafusion_common::Result<()> {
+        use datafusion_expr::{
+            ReversedUDWF, Volatility, function::PartitionEvaluatorArgs,
+        };
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        struct MockUDWFReverse {
+            signature: Signature,
+        }
+
+        impl WindowUDFImpl for MockUDWFReverse {
+            fn name(&self) -> &str {
+                "mock_reverse"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn partition_evaluator(
+                &self,
+                _: PartitionEvaluatorArgs,
+            ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+                unimplemented!()
+            }
+            fn field(
+                &self,
+                _: WindowUDFFieldArgs,
+            ) -> datafusion_common::Result<FieldRef> {
+                unimplemented!()
+            }
+            fn reverse_expr(&self) -> ReversedUDWF {
+                ReversedUDWF::Identical
+            }
+        }
+
+        let original_udwf = Arc::new(WindowUDF::from(MockUDWFReverse {
+            signature: Signature::any(0, Volatility::Immutable),
+        }));
+
+        let mut ffi_udwf = FFI_WindowUDF::from(Arc::clone(&original_udwf));
+        ffi_udwf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).into();
+        assert!(matches!(
+            foreign_udwf.reverse_expr(),
+            ReversedUDWF::Identical
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_udwf_reverse_expr_recursive() -> datafusion_common::Result<()> {
+        use datafusion_expr::{
+            ReversedUDWF, Volatility, function::PartitionEvaluatorArgs,
+        };
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        struct MockUDWFRecursive {
+            signature: Signature,
+            reversed: Arc<WindowUDF>,
+        }
+
+        impl WindowUDFImpl for MockUDWFRecursive {
+            fn name(&self) -> &str {
+                "mock_recursive"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn partition_evaluator(
+                &self,
+                _: PartitionEvaluatorArgs,
+            ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+                unimplemented!()
+            }
+            fn field(
+                &self,
+                _: WindowUDFFieldArgs,
+            ) -> datafusion_common::Result<FieldRef> {
+                unimplemented!()
+            }
+            fn reverse_expr(&self) -> ReversedUDWF {
+                ReversedUDWF::Reversed(Arc::clone(&self.reversed))
+            }
+        }
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        struct MockUDWFSimple {
+            signature: Signature,
+        }
+        impl WindowUDFImpl for MockUDWFSimple {
+            fn name(&self) -> &str {
+                "mock_simple"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn partition_evaluator(
+                &self,
+                _: PartitionEvaluatorArgs,
+            ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+                unimplemented!()
+            }
+            fn field(
+                &self,
+                _: WindowUDFFieldArgs,
+            ) -> datafusion_common::Result<FieldRef> {
+                unimplemented!()
+            }
+        }
+
+        let reversed = Arc::new(WindowUDF::from(MockUDWFSimple {
+            signature: Signature::any(0, Volatility::Immutable),
+        }));
+        let original_udwf = Arc::new(WindowUDF::from(MockUDWFRecursive {
+            signature: Signature::any(0, Volatility::Immutable),
+            reversed: Arc::clone(&reversed),
+        }));
+
+        // Forced foreign path
+        let mut ffi_udwf = FFI_WindowUDF::from(Arc::clone(&original_udwf));
+        ffi_udwf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).into();
+
+        let result = foreign_udwf.reverse_expr();
+        if let ReversedUDWF::Reversed(res_udf) = result {
+            assert_eq!(res_udf.name(), "mock_simple");
+        } else {
+            panic!("Expected Reversed variant");
+        }
 
         Ok(())
     }
