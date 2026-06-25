@@ -22,20 +22,21 @@
 //! similar) and mutate adaptive operators in place (e.g.
 //! `HashJoinExec::flip_sides`).
 //!
-//! Buffers notify us via a shared [`AtomicWaker`] (`rto_waker`) that we
-//! register on each `poll_next` — `cx.waker()` is task-local and won't
-//! cross a spawned-subtask boundary like `RepartitionExec`'s internals,
-//! but `AtomicWaker.wake()` does.
+//! Each buffer owns its own AtomicWaker; RTO walks the subtree per poll
+//! and registers the consumer-task waker on each. Drain tasks wake on
+//! their own buffer's waker, which then wakes the consumer. Per-buffer
+//! wakers decouple buffer insertion from RTO insertion at planning time:
+//! `InsertStageBoundariesAtBreakers` and `InsertRuntimeOptimizer` are
+//! independent optimizer rules.
 
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 
 use arrow::array::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use futures::task::AtomicWaker;
 use futures::{Stream, StreamExt};
 use log::info;
 
@@ -63,26 +64,18 @@ pub trait RuntimeRule: Send + Sync + std::fmt::Debug {
 pub struct RuntimeOptimizerExec {
     input: Arc<dyn ExecutionPlan>,
     cache: Arc<PlanProperties>,
-    /// Shared with every `StageBoundaryBuffer` in this subplan.
-    /// Buffers wake this AtomicWaker when `is_ready` flips; we register
-    /// the current task's waker on it during each `poll_next` so a
-    /// wake-up from inside a spawned subtask reaches the actual
-    /// top-of-plan task.
-    rto_waker: Arc<AtomicWaker>,
     rules: Vec<Arc<dyn RuntimeRule>>,
 }
 
 impl RuntimeOptimizerExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        rto_waker: Arc<AtomicWaker>,
         rules: Vec<Arc<dyn RuntimeRule>>,
     ) -> Self {
         let cache = Arc::clone(input.properties());
         Self {
             input,
             cache,
-            rto_waker,
             rules,
         }
     }
@@ -117,7 +110,6 @@ impl ExecutionPlan for RuntimeOptimizerExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             children.swap_remove(0),
-            Arc::clone(&self.rto_waker),
             self.rules.clone(),
         )))
     }
@@ -143,7 +135,6 @@ impl ExecutionPlan for RuntimeOptimizerExec {
         let stream = CoordinatorStream {
             child,
             plan: Arc::clone(&self.input),
-            rto_waker: Arc::clone(&self.rto_waker),
             rules: self.rules.clone(),
         };
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
@@ -163,10 +154,18 @@ fn prime_all_buffers(
     Ok(())
 }
 
+fn register_consumer_waker_on_buffers(plan: &Arc<dyn ExecutionPlan>, waker: &Waker) {
+    if let Some(buffer) = plan.downcast_ref::<StageBoundaryBuffer>() {
+        buffer.register_consumer_waker(waker);
+    }
+    for child in plan.children() {
+        register_consumer_waker_on_buffers(child, waker);
+    }
+}
+
 struct CoordinatorStream {
     child: SendableRecordBatchStream,
     plan: Arc<dyn ExecutionPlan>,
-    rto_waker: Arc<AtomicWaker>,
     rules: Vec<Arc<dyn RuntimeRule>>,
 }
 
@@ -178,9 +177,11 @@ impl Stream for CoordinatorStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let this = self.as_mut().get_mut();
-        // Register before walking so a buffer flipping is_ready *after*
-        // we walked but *before* we return Pending still wakes us.
-        this.rto_waker.register(cx.waker());
+        // Register before walking for release/rules so a buffer flipping
+        // is_ready *after* we walked but *before* we return Pending still
+        // wakes us. Per-buffer wakers: walk the subtree and register on
+        // each — cheap downcast per node.
+        register_consumer_waker_on_buffers(&this.plan, cx.waker());
 
         // Phase 1: set the permissive default — every ready buffer is
         // proposed for release.

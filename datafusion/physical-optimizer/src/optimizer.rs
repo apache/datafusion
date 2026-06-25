@@ -36,6 +36,7 @@ use crate::topk_repartition::TopKRepartition;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
 use crate::hash_join_buffering::HashJoinBuffering;
+use crate::insert_stage_boundaries_at_breakers::InsertStageBoundariesAtBreakers;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use crate::pushdown_sort::PushdownSort;
 use crate::runtime_optimizer::InsertRuntimeOptimizer;
@@ -248,10 +249,16 @@ impl PhysicalOptimizer {
             // given query plan; i.e. it only acts as a final
             // gatekeeping rule.
             Arc::new(SanityCheckPlan::new()),
-            // InsertRuntimeOptimizer wraps the (now-final) plan root in
-            // a RuntimeOptimizerExec. Runs last so the wrapper sits above
-            // everything else; subsequent commits use it to coordinate
-            // adaptive optimization at runtime.
+            // Adaptive-execution infrastructure. Two rules, in order:
+            //   1. InsertStageBoundariesAtBreakers — wraps each pipeline
+            //      breaker in a StageBoundaryBuffer, the synchronization
+            //      point where runtime stats become observable.
+            //   2. InsertRuntimeOptimizer — wraps the plan root in a
+            //      RuntimeOptimizerExec that walks the subtree at runtime
+            //      to release ready buffers and run RuntimeRules.
+            // Split so future adaptive rules can add their own targeted
+            // boundary-insertion rules without touching the RTO wrapper.
+            Arc::new(InsertStageBoundariesAtBreakers::new()),
             Arc::new(InsertRuntimeOptimizer::new()),
         ];
 

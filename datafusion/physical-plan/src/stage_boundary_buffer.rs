@@ -86,9 +86,13 @@ pub struct StageBoundaryBuffer {
     /// stage runs first; once released, its consumers (next stage up)
     /// can prime. Used by EXPLAIN, logs, and (eventually) RTO ordering.
     stage: usize,
-    /// Shared with `RuntimeOptimizerExec`. Buffer wakes this whenever
-    /// `is_ready` flips so the coordinator (which may live above a
-    /// task-spawning operator like `RepartitionExec`) gets re-polled.
+    /// Each buffer owns its own AtomicWaker rather than sharing one
+    /// across the subtree. RTO registers the consumer-task waker on
+    /// this per poll cycle (cheap walk); the drain task wakes here
+    /// once `is_ready` flips. Per-buffer wakers decouple the buffer
+    /// from RTO at planning time — `InsertStageBoundariesAtBreakers`
+    /// and `InsertRuntimeOptimizer` no longer have to coordinate to
+    /// share a single waker.
     rto_waker: Arc<AtomicWaker>,
     /// Gate flags + drain progress + consumer-side wakers.
     state: Arc<Mutex<BufferState>>,
@@ -122,11 +126,7 @@ struct BufferState {
 }
 
 impl StageBoundaryBuffer {
-    pub fn new(
-        input: Arc<dyn ExecutionPlan>,
-        stage: usize,
-        rto_waker: Arc<AtomicWaker>,
-    ) -> Self {
+    pub fn new(input: Arc<dyn ExecutionPlan>, stage: usize) -> Self {
         let num_partitions = input.output_partitioning().partition_count();
         let cache = Arc::clone(input.properties());
         let (txs, rxs): (Vec<_>, Vec<_>) = (0..num_partitions)
@@ -139,7 +139,7 @@ impl StageBoundaryBuffer {
             input,
             cache,
             stage,
-            rto_waker,
+            rto_waker: Arc::new(AtomicWaker::new()),
             state: Arc::new(Mutex::new(BufferState {
                 drained_count: 0,
                 is_ready: false,
@@ -156,6 +156,13 @@ impl StageBoundaryBuffer {
 
     pub fn stage(&self) -> usize {
         self.stage
+    }
+
+    /// Register a waker to be woken when this buffer's drain reaches EOF
+    /// (i.e. `is_ready` flips). RTO calls this per `poll_next` for each
+    /// buffer in its subtree, threading its own consumer waker through.
+    pub fn register_consumer_waker(&self, waker: &Waker) {
+        self.rto_waker.register(waker);
     }
 
     /// Spawn drain tasks for every input partition. Each task pulls
@@ -295,11 +302,10 @@ impl ExecutionPlan for StageBoundaryBuffer {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self::new(
-            children.swap_remove(0),
-            self.stage,
-            Arc::clone(&self.rto_waker),
-        )))
+        // Fresh waker is fine: with_new_children is called at planning
+        // time before RTO registers anything, so there's nothing to
+        // preserve.
+        Ok(Arc::new(Self::new(children.swap_remove(0), self.stage)))
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

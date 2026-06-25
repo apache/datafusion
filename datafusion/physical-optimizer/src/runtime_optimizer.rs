@@ -15,34 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`InsertRuntimeOptimizer`] does two things in one pass:
-//!
-//! 1. Walks the plan tree, wrapping every pipeline-breaking operator
-//!    (currently `AggregateExec` and `SortExec`) in a
-//!    [`StageBoundaryBuffer`]. The boundary is the synchronization point
-//!    where runtime stats become observable.
-//! 2. Wraps the resulting plan root in a [`RuntimeOptimizerExec`], which
-//!    walks the subtree on each `poll_next` and releases ready buffers.
-//!
-//! A shared [`AtomicWaker`] is constructed here and threaded into both
-//! the boundaries and the wrapping RTO so boundaries can wake the
-//! coordinator from inside spawned subtasks (e.g. `RepartitionExec`
-//! internals).
+//! [`InsertRuntimeOptimizer`] wraps the (now-final) plan root in a
+//! [`RuntimeOptimizerExec`] with the default set of runtime rules. It
+//! does nothing else — buffer insertion happens in a separate, targeted
+//! rule (today: [`InsertStageBoundariesAtBreakers`]). The split lets
+//! future adaptive optimizations (partition coalescing, skew handling)
+//! introduce their own targeted insertion rules without touching the
+//! RTO-wrapping logic.
 
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::runtime_optimizer::{
     RuntimeOptimizerExec, RuntimeRule, SwapBuildSideIfInverted,
 };
-use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::stage_boundary_buffer::StageBoundaryBuffer;
-use futures::task::AtomicWaker;
 
 #[derive(Default, Debug)]
 pub struct InsertRuntimeOptimizer;
@@ -67,64 +56,12 @@ impl PhysicalOptimizerRule for InsertRuntimeOptimizer {
         if plan.downcast_ref::<RuntimeOptimizerExec>().is_some() {
             return Ok(plan);
         }
-
-        // Shared coordinator-wake. Every buffer in this subplan and the
-        // wrapping RTO hold a clone — buffers wake it, RTO registers on
-        // it. Per-poll cx.waker() doesn't reach across spawned-task
-        // boundaries (e.g. RepartitionExec's internals), this does.
-        let rto_waker = Arc::new(AtomicWaker::new());
-
-        // Phase 1: wrap each pipeline breaker in a StageBoundaryBuffer.
-        // Stage numbering is uniform (0) for now; the next commit assigns
-        // real bottom-up stage numbers.
-        let with_buffers = plan
-            .transform_up(|node| {
-                if is_pipeline_breaker(&node)
-                    && node.downcast_ref::<StageBoundaryBuffer>().is_none()
-                {
-                    let buffered: Arc<dyn ExecutionPlan> = Arc::new(
-                        StageBoundaryBuffer::new(node, 0, Arc::clone(&rto_waker)),
-                    );
-                    Ok(Transformed::yes(buffered))
-                } else {
-                    Ok(Transformed::no(node))
-                }
-            })?
-            .data;
-
-        // Phase 2: wrap the root with the default rule set.
         let rules: Vec<Arc<dyn RuntimeRule>> =
             vec![Arc::new(SwapBuildSideIfInverted::new())];
-        Ok(Arc::new(RuntimeOptimizerExec::new(
-            with_buffers,
-            rto_waker,
-            rules,
-        )))
+        Ok(Arc::new(RuntimeOptimizerExec::new(plan, rules)))
     }
 
     fn schema_check(&self) -> bool {
         true
     }
-}
-
-/// Returns true for operators that absorb their entire input before
-/// emitting any output — the canonical "pipeline breaker" definition.
-///
-/// We can't use `pipeline_behavior() == EmissionType::Final` here even
-/// though it sounds equivalent. That flag describes an operator's output
-/// emission semantics and is inherited from descendants — so `Projection`,
-/// `Repartition`, and `HashJoin` above a Final-emitting `AggregateExec`
-/// all report `Final` too. We need the *originator* of the pipeline
-/// break, not every operator downstream of one.
-///
-/// `EmissionType::Final && all children != Final` (the transition-point
-/// filter) is closer but still misses cascading breakers like
-/// `AggregateExec(FinalPartitioned)` whose children are themselves
-/// Final because of the `Partial` aggregate below.
-///
-/// So: hardcoded match against the operators we want to instrument.
-/// Extend as more rules need other breakers.
-fn is_pipeline_breaker(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.downcast_ref::<AggregateExec>().is_some()
-        || plan.downcast_ref::<SortExec>().is_some()
 }
