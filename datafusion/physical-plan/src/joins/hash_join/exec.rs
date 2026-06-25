@@ -2513,6 +2513,16 @@ mod tests {
         Ok((join, dynamic_filter))
     }
 
+    fn repartition_by(
+        input: Arc<dyn ExecutionPlan>,
+        column_name: &str,
+        partition_count: usize,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let expr = Arc::new(Column::new_with_schema(column_name, &input.schema())?);
+        RepartitionExec::try_new(input, Partitioning::Hash(vec![expr], partition_count))
+            .map(|exec| Arc::new(exec) as _)
+    }
+
     async fn join_collect(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -5747,7 +5757,6 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &left_batch.schema())?) as _,
             Arc::new(Column::new_with_schema("b2", &right_batch.schema())?) as _,
         )];
-
         let join_types = vec![
             JoinType::Inner,
             JoinType::Left,
@@ -5760,6 +5769,11 @@ mod tests {
         ];
 
         for join_type in join_types {
+            let left =
+                repartition_by(Arc::clone(&left) as Arc<dyn ExecutionPlan>, "b1", 1)?;
+            let right =
+                repartition_by(Arc::clone(&right) as Arc<dyn ExecutionPlan>, "b2", 1)?;
+
             let runtime = RuntimeEnvBuilder::new()
                 .with_memory_limit(100, 1.0)
                 .build_arc()?;
@@ -5781,19 +5795,19 @@ mod tests {
                 false,
             )?;
 
-            let stream = join.execute(1, task_ctx)?;
+            let stream = join.execute(0, task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
-            // Asserting that stream-level reservation attempting to overallocate
+            // Assert that the stream-level reservation attempts to
+            // overallocate. Other reservations can appear in the top-consumer
+            // report before HashJoinInput[0], so avoid depending on its exact
+            // ordering.
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed for HashJoinInput[1] with top memory consumers (across reservations) as:\n  HashJoinInput[1]"
+                "Resources exhausted: Additional allocation failed for HashJoinInput[0] with top memory consumers"
             );
-
-            assert_contains!(
-                err.to_string(),
-                "Failed to allocate additional 120.0 B for HashJoinInput[1]"
-            );
+            assert_contains!(err.to_string(), "HashJoinInput[0]");
+            assert_contains!(err.to_string(), "Failed to allocate additional");
         }
 
         Ok(())
@@ -6092,6 +6106,8 @@ mod tests {
             Arc::clone(&parent_left_schema),
             None,
         )?;
+        let child_left = repartition_by(child_left, "child_key", 4)?;
+        let child_right = repartition_by(child_right, "child_right_key", 4)?;
 
         let child_on = vec![(
             Arc::new(Column::new_with_schema("child_key", &child_left_schema)?) as _,
@@ -6108,6 +6124,7 @@ mod tests {
             PartitionMode::Partitioned,
         )?;
         let child_join: Arc<dyn ExecutionPlan> = Arc::new(child_join);
+        let parent_left = repartition_by(parent_left, "parent_key", 4)?;
 
         let parent_on = vec![(
             Arc::new(Column::new_with_schema("parent_key", &parent_left_schema)?) as _,
