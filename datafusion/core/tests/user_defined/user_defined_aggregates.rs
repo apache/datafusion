@@ -47,7 +47,7 @@ use datafusion::{
         AccumulatorFactoryFunction, AggregateUDF, Signature, TypeSignature, Volatility,
     },
     physical_plan::Accumulator,
-    prelude::SessionContext,
+    prelude::{SessionConfig, SessionContext},
     scalar::ScalarValue,
 };
 use datafusion_common::{assert_contains, exec_datafusion_err};
@@ -107,40 +107,23 @@ async fn test_udaf() {
 async fn test_zero_argument_udaf() {
     let TestContext { mut ctx, .. } = TestContext::new();
     NullaryAccumulator::register(&mut ctx, "window_start");
+    let [simple, filtered, grouped] = collect_zero_argument_udaf_results(&ctx).await;
 
-    let actual = execute(&ctx, "SELECT window_start() from t").await.unwrap();
-
-    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    insta::assert_snapshot!(simple, @r"
     +----------------+
     | window_start() |
     +----------------+
     | 7              |
     +----------------+
     ");
-
-    let actual = execute(
-        &ctx,
-        "SELECT window_start() FILTER (WHERE value < 0.0) FROM t",
-    )
-    .await
-    .unwrap();
-
-    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    insta::assert_snapshot!(filtered, @r"
     +----------------------------------------------------+
     | window_start() FILTER (WHERE t.value < Float64(0)) |
     +----------------------------------------------------+
     |                                                    |
     +----------------------------------------------------+
     ");
-
-    let actual = execute(
-        &ctx,
-        "SELECT value, window_start() FROM t GROUP BY value ORDER BY value",
-    )
-    .await
-    .unwrap();
-
-    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    insta::assert_snapshot!(grouped, @r"
     +-------+----------------+
     | value | window_start() |
     +-------+----------------+
@@ -150,6 +133,62 @@ async fn test_zero_argument_udaf() {
     | 5.0   | 7              |
     +-------+----------------+
     ");
+}
+
+#[tokio::test]
+async fn test_zero_argument_udaf_without_migration_aggregate() {
+    let config = SessionConfig::new()
+        .set_bool("datafusion.execution.enable_migration_aggregate", false);
+    let TestContext { mut ctx, .. } = TestContext::new_with_config(config);
+    NullaryAccumulator::register(&mut ctx, "window_start");
+    let [simple, filtered, grouped] = collect_zero_argument_udaf_results(&ctx).await;
+
+    insta::assert_snapshot!(simple, @r"
+    +----------------+
+    | window_start() |
+    +----------------+
+    | 7              |
+    +----------------+
+    ");
+    insta::assert_snapshot!(filtered, @r"
+    +----------------------------------------------------+
+    | window_start() FILTER (WHERE t.value < Float64(0)) |
+    +----------------------------------------------------+
+    |                                                    |
+    +----------------------------------------------------+
+    ");
+    insta::assert_snapshot!(grouped, @r"
+    +-------+----------------+
+    | value | window_start() |
+    +-------+----------------+
+    | 1.0   | 7              |
+    | 2.0   | 7              |
+    | 3.0   | 7              |
+    | 5.0   | 7              |
+    +-------+----------------+
+    ");
+}
+
+async fn collect_zero_argument_udaf_results(ctx: &SessionContext) -> [String; 3] {
+    let simple = execute(ctx, "SELECT window_start() from t").await.unwrap();
+    let filtered = execute(
+        ctx,
+        "SELECT window_start() FILTER (WHERE value < 0.0) FROM t",
+    )
+    .await
+    .unwrap();
+    let grouped = execute(
+        ctx,
+        "SELECT value, window_start() FROM t GROUP BY value ORDER BY value",
+    )
+    .await
+    .unwrap();
+
+    [
+        batches_to_string(&simple),
+        batches_to_string(&filtered),
+        batches_to_string(&grouped),
+    ]
 }
 
 /// User defined aggregate used as a window function
@@ -538,6 +577,18 @@ impl TestContext {
     }
 
     fn new_with_test_state(test_state: Arc<TestState>) -> Self {
+        Self::new_with_config_and_test_state(SessionConfig::new(), test_state)
+    }
+
+    fn new_with_config(config: SessionConfig) -> Self {
+        let test_state = Arc::new(TestState::new());
+        Self::new_with_config_and_test_state(config, test_state)
+    }
+
+    fn new_with_config_and_test_state(
+        config: SessionConfig,
+        test_state: Arc<TestState>,
+    ) -> Self {
         let value = Float64Array::from(vec![3.0, 2.0, 1.0, 5.0, 5.0]);
         let time = TimestampNanosecondArray::from(vec![3000, 2000, 4000, 5000, 5000]);
 
@@ -547,7 +598,7 @@ impl TestContext {
         ])
         .unwrap();
 
-        let mut ctx = SessionContext::new();
+        let mut ctx = SessionContext::new_with_config(config);
 
         ctx.register_batch("t", batch).unwrap();
 
