@@ -268,6 +268,22 @@ physical_plan
 07)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)----------WorkTableExec: name=t
 
+# recursive CTE with a quoted, case-sensitive column-list alias: `"N"` must be
+# preserved (not lowercased) so the recursive self-reference resolves it
+query I rowsort
+WITH RECURSIVE t("N") AS (
+    SELECT 1
+    UNION ALL
+    SELECT "N" + 1 FROM t WHERE "N" < 5
+)
+SELECT "N" FROM t
+----
+1
+2
+3
+4
+5
+
 # simple deduplicating recursive CTE works
 query I
 WITH RECURSIVE nodes AS (
