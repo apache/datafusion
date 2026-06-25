@@ -683,8 +683,8 @@ mod tests {
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryConsumer, MemoryPool,
     };
-    use datafusion_execution::runtime_env::RuntimeEnv;
-    use datafusion_physical_expr::expressions::Column;
+    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+    use datafusion_physical_expr::expressions::{Column, col};
     use datafusion_physical_expr_common::metrics::{
         ExecutionPlanMetricsSet, SpillMetrics,
     };
@@ -877,7 +877,6 @@ mod tests {
 
         Ok(())
     }
-
     #[test]
     fn spill_merge_fan_in_is_unlimited_by_default() {
         assert_eq!(effective_spill_merge_fan_in(0), usize::MAX);
@@ -888,5 +887,57 @@ mod tests {
         assert_eq!(effective_spill_merge_fan_in(1), 2);
         assert_eq!(effective_spill_merge_fan_in(2), 2);
         assert_eq!(effective_spill_merge_fan_in(8), 8);
+    }
+
+    #[test]
+    fn spill_merge_phase_respects_configured_fan_in() -> datafusion_common::Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_max_spill_merge_fan_in(2)
+            .build_arc()?;
+        let spill_manager = SpillManager::new(
+            Arc::clone(&runtime),
+            SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            Arc::clone(&schema),
+        );
+        let sorted_spill_files = (0..4)
+            .map(|idx| {
+                Ok(SortedSpillFile {
+                    file: runtime
+                        .disk_manager
+                        .create_tmp_file(&format!("spill fan-in test {idx}"))?,
+                    max_record_batch_memory: 1,
+                })
+            })
+            .collect::<datafusion_common::Result<Vec<_>>>()?;
+        let expr = LexOrdering::new([PhysicalSortExpr::new_default(col("a", &schema)?)])
+            .unwrap();
+        let reservation =
+            MemoryConsumer::new("spill_merge_phase_respects_configured_fan_in")
+                .register(&runtime.memory_pool);
+        let metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let mut builder = MultiLevelMergeBuilder::new(
+            spill_manager,
+            schema,
+            sorted_spill_files,
+            vec![],
+            expr,
+            metrics,
+            1024,
+            reservation,
+            None,
+            false,
+        );
+        let mut merge_reservation = MemoryConsumer::new("spill_merge_fan_in_phase")
+            .register(&runtime.memory_pool);
+
+        let (spills, buffer_len) =
+            builder.get_sorted_spill_files_to_merge(1, 2, &mut merge_reservation)?;
+
+        assert_eq!(spills.len(), 2);
+        assert_eq!(buffer_len, 1);
+        assert_eq!(builder.sorted_spill_files.len(), 2);
+
+        Ok(())
     }
 }
