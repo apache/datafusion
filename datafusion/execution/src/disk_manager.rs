@@ -492,13 +492,10 @@ impl SpillFile for RefCountedTempFile {
                 > {
                     match open_result {
                         Ok(file) => Box::pin(
-                            // Use a 1MB read buffer. The default 8KB causes excessive async
+                            // Use a 128KB read buffer. The default 8KB causes excessive async
                             // poll overhead when reading multi-MB spill files back into memory.
-                            tokio_util::io::ReaderStream::with_capacity(
-                                file,
-                                1024 * 1024,
-                            )
-                            .map(|r| r.map_err(DataFusionError::IoError)),
+                            tokio_util::io::ReaderStream::with_capacity(file, 128 * 1024)
+                                .map(|r| r.map_err(DataFusionError::IoError)),
                         ),
                         Err(e) => Box::pin(futures::stream::once(async move { Err(e) })),
                     }
