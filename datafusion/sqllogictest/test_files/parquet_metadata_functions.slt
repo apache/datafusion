@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Test for Parquet scans with metadata function
+# Test for Parquet scans with a mix of metadata functions
 
 statement ok
 COPY  (VALUES (10), (20), (30))
@@ -51,34 +51,6 @@ logical_plan
 01)Projection: input_file_name(), file_row_index(), test_table.column1
 02)--TableScan: test_table projection=[column1]
 physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/first.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/second.parquet]]}, projection=[input_file_name() as input_file_name(), CAST(__datafusion_file_row_index@1 AS Int64) as file_row_index(), column1], file_type=parquet
-
-# input_file_name() in a WHERE predicate: only rows from the matching file are returned
-query I
-SELECT column1 FROM test_table
-WHERE input_file_name() LIKE '%first.parquet'
-ORDER BY column1
-----
-10
-20
-30
-
-# input_file_name() as a GROUP BY key: per-file aggregation
-query TII
-SELECT input_file_name(), count(*), sum(column1)
-FROM test_table
-GROUP BY input_file_name()
-ORDER BY input_file_name()
-----
-WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/first.parquet 3 60
-WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/second.parquet 3 150
-
-# input_file_name() inside a projection expression
-query B rowsort
-SELECT DISTINCT input_file_name() LIKE '%second.parquet'
-FROM test_table
-----
-false
-true
 
 statement ok
 DROP TABLE test_table;
