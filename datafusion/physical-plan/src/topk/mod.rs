@@ -2065,9 +2065,21 @@ mod tests {
     /// partitioned by `pk` with order `val ASC`. Helper for the
     /// `PartitionedTopK` tests below.
     fn build_partitioned_topk(k: usize) -> Result<(Arc<Schema>, PartitionedTopK)> {
+        build_partitioned_topk_with_opts(k, SortOptions::default(), false)
+    }
+
+    /// Variant of [`build_partitioned_topk`] that lets the test pick the
+    /// `val` column's `SortOptions` (direction, null ordering) and
+    /// nullability. Used by tests that exercise the shared encoder
+    /// across `ASC`/`DESC` and `NULLS FIRST/LAST` paths.
+    fn build_partitioned_topk_with_opts(
+        k: usize,
+        val_sort_options: SortOptions,
+        val_nullable: bool,
+    ) -> Result<(Arc<Schema>, PartitionedTopK)> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("pk", DataType::Int32, false),
-            Field::new("val", DataType::Int32, false),
+            Field::new("val", DataType::Int32, val_nullable),
         ]));
 
         let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
@@ -2077,7 +2089,7 @@ mod tests {
         };
         let val_sort_expr = PhysicalSortExpr {
             expr: col("val", schema.as_ref())?,
-            options: SortOptions::default(),
+            options: val_sort_options,
         };
 
         let partition_sort_fields = build_sort_fields(&[pk_sort_expr], &schema)?;
@@ -2101,6 +2113,22 @@ mod tests {
         schema: &Arc<Schema>,
         pks: Vec<i32>,
         vals: Vec<i32>,
+    ) -> Result<RecordBatch> {
+        Ok(RecordBatch::try_new(
+            Arc::clone(schema),
+            vec![
+                Arc::new(Int32Array::from(pks)),
+                Arc::new(Int32Array::from(vals)),
+            ],
+        )?)
+    }
+
+    /// Variant of [`pk_val_batch`] that accepts nullable `val`s. Used by
+    /// tests that exercise null-ordering through the shared encoder.
+    fn nullable_pk_val_batch(
+        schema: &Arc<Schema>,
+        pks: Vec<i32>,
+        vals: Vec<Option<i32>>,
     ) -> Result<RecordBatch> {
         Ok(RecordBatch::try_new(
             Arc::clone(schema),
@@ -2207,6 +2235,141 @@ mod tests {
                 "| 1  | 1   |",
                 "| 2  | 4   |",
                 "| 3  | 7   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// `ORDER BY val DESC` exercises the shared encoder's sort-direction
+    /// handling: the row converter must flip the sort sign for `val` so
+    /// that larger values compare smaller in row-encoded form. Each
+    /// partition should keep its top-K *largest* values.
+    #[tokio::test]
+    async fn test_partitioned_topk_desc_ordering() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_with_opts(
+            2,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+            false,
+        )?;
+
+        // pk=1 vals: 10, 5, 8, 12 → top-2 DESC = [12, 10]
+        // pk=2 vals: 20, 15, 25   → top-2 DESC = [25, 20]
+        let batch = pk_val_batch(
+            &schema,
+            vec![1, 2, 1, 2, 1, 1, 2],
+            vec![10, 20, 5, 15, 8, 12, 25],
+        )?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 12  |",
+                "| 1  | 10  |",
+                "| 2  | 25  |",
+                "| 2  | 20  |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// NULL sort values exercise the shared encoder's null-ordering
+    /// handling. With `ASC NULLS LAST`, NULLs sort *after* every
+    /// non-NULL value, so a partition whose only non-NULL value beats
+    /// a NULL must evict the NULL when `K = 1`. A partition that holds
+    /// only NULLs must still emit them.
+    #[tokio::test]
+    async fn test_partitioned_topk_nulls_last_ordering() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_with_opts(
+            1,
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            true,
+        )?;
+
+        // pk=1 vals: NULL, 7, NULL → top-1 ASC NULLS LAST = [7]
+        // pk=2 vals: NULL          → top-1                 = [NULL]
+        // pk=3 vals: NULL, 4, 2    → top-1                 = [2]
+        let batch = nullable_pk_val_batch(
+            &schema,
+            vec![1, 2, 1, 1, 3, 3, 3],
+            vec![None, None, Some(7), None, None, Some(4), Some(2)],
+        )?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 7   |",
+                "| 2  |     |",
+                "| 3  | 2   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// `ASC NULLS FIRST` (the `SortOptions::default()`) sorts NULLs
+    /// *before* every non-NULL value, so under `fetch = K` a partition's
+    /// NULLs are kept preferentially over larger non-NULL values.
+    #[tokio::test]
+    async fn test_partitioned_topk_nulls_first_ordering() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_with_opts(
+            2,
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+            true,
+        )?;
+
+        // pk=1 vals: NULL, 5, NULL, 8 → top-2 ASC NULLS FIRST = [NULL, NULL]
+        // pk=2 vals: 7, NULL          → top-2                  = [NULL, 7]
+        // pk=3 vals: 3, 1             → top-2                  = [1, 3]
+        let batch = nullable_pk_val_batch(
+            &schema,
+            vec![1, 2, 1, 3, 1, 2, 1, 3],
+            vec![
+                None,
+                Some(7),
+                Some(5),
+                Some(3),
+                None,
+                None,
+                Some(8),
+                Some(1),
+            ],
+        )?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  |     |",
+                "| 1  |     |",
+                "| 2  |     |",
+                "| 2  | 7   |",
+                "| 3  | 1   |",
+                "| 3  | 3   |",
                 "+----+-----+",
             ],
             &results
