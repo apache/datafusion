@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Coordinator wrapper at the root of the plan. On every poll, it walks
-//! its subtree to release any [`StageBoundaryBuffer`] whose `is_ready`
-//! flag has flipped, then runs each registered [`RuntimeRule`] over the
-//! plan. Rules observe runtime stats (via `runtime_row_count` and
-//! similar) and mutate adaptive operators in place (e.g.
-//! `HashJoinExec::flip_sides`).
+//! Coordinator wrapper at the root of the plan. On every poll it walks
+//! its subtree to find the lowest stage whose [`StageBoundaryBuffer`]s
+//! are all ready but haven't started streaming yet — the "just completed"
+//! stage. When that exists, it fires each registered [`RuntimeRule`]
+//! exactly once for that stage, then releases the stage's boundaries.
+//! Stage K+1's boundaries can't fill until stage K is released, so
+//! stages naturally serialize without an explicit veto mechanism.
 //!
 //! Each buffer owns its own AtomicWaker; RTO walks the subtree per poll
 //! and registers the consumer-task waker on each. Drain tasks wake on
@@ -29,6 +30,7 @@
 //! `InsertStageBoundariesAtBreakers` and `InsertRuntimeOptimizer` are
 //! independent optimizer rules.
 
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,15 +51,14 @@ use crate::{
     SendableRecordBatchStream,
 };
 
-/// A runtime adaptive-execution rule that may inspect the plan tree and
-/// mutate adaptive operators in place. Rules are called from
-/// [`RuntimeOptimizerExec`] on every poll, *after* ready buffers have
-/// been released. They are expected to be cheap and idempotent (track
-/// their own "already fired" state if they should only run once per
-/// query).
+/// A runtime adaptive-execution rule. RTO fires `evaluate` once per
+/// stage completion, passing the just-completed stage number so rules
+/// can scope their work to operators whose inputs are at that stage
+/// (e.g. a HashJoinExec whose children are both StageBoundaryBuffers
+/// with `stage == completed_stage`).
 pub trait RuntimeRule: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &str;
-    fn evaluate(&self, plan: &Arc<dyn ExecutionPlan>);
+    fn evaluate(&self, plan: &Arc<dyn ExecutionPlan>, completed_stage: usize);
 }
 
 #[derive(Debug)]
@@ -68,10 +69,7 @@ pub struct RuntimeOptimizerExec {
 }
 
 impl RuntimeOptimizerExec {
-    pub fn new(
-        input: Arc<dyn ExecutionPlan>,
-        rules: Vec<Arc<dyn RuntimeRule>>,
-    ) -> Self {
+    pub fn new(input: Arc<dyn ExecutionPlan>, rules: Vec<Arc<dyn RuntimeRule>>) -> Self {
         let cache = Arc::clone(input.properties());
         Self {
             input,
@@ -177,47 +175,73 @@ impl Stream for CoordinatorStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let this = self.as_mut().get_mut();
-        // Register before walking for release/rules so a buffer flipping
-        // is_ready *after* we walked but *before* we return Pending still
-        // wakes us. Per-buffer wakers: walk the subtree and register on
-        // each — cheap downcast per node.
+        // Register before walking so a buffer flipping is_ready *after*
+        // we walked but *before* we return Pending still wakes us.
         register_consumer_waker_on_buffers(&this.plan, cx.waker());
 
-        // Phase 1: set the permissive default — every ready buffer is
-        // proposed for release.
-        propose_release_for_ready_buffers(&this.plan);
-
-        // Phase 2: rules may veto specific buffers (set
-        // streaming_enabled=false) or mutate adaptive operators.
-        for rule in &this.rules {
-            rule.evaluate(&this.plan);
+        // Find the lowest stage whose boundaries are all ready and none
+        // released — the "just completed" stage. Rules fire once for
+        // that stage, then we release. Higher stages wait their turn
+        // naturally because they can't drain until lower stages release.
+        if let Some((stage, boundaries)) = find_just_completed_stage(&this.plan) {
+            info!(
+                "RTO: stage {stage} ready ({} boundaries); firing {} rule(s) \
+                 before release",
+                boundaries.len(),
+                this.rules.len(),
+            );
+            for rule in &this.rules {
+                rule.evaluate(&this.plan, stage);
+            }
+            for buffer in &boundaries {
+                buffer
+                    .downcast_ref::<StageBoundaryBuffer>()
+                    .expect(
+                        "find_just_completed_stage only returns StageBoundaryBuffer Arcs",
+                    )
+                    .start_streaming();
+            }
+            info!(
+                "RTO: stage {stage} released; downstream consumers can now \
+                 drain the buffered data"
+            );
         }
-
-        // Phase 3: commit — actually start streaming on any buffer that
-        // is still enabled.
-        start_streaming_on_enabled_buffers(&this.plan);
 
         this.child.poll_next_unpin(cx)
     }
 }
 
-fn propose_release_for_ready_buffers(plan: &Arc<dyn ExecutionPlan>) {
-    if let Some(buffer) = plan.downcast_ref::<StageBoundaryBuffer>() {
-        buffer.set_streaming_enabled(buffer.is_ready());
-    }
-    for child in plan.children() {
-        propose_release_for_ready_buffers(child);
-    }
+/// Walks the plan tree, groups every `StageBoundaryBuffer` by stage,
+/// and returns the lowest stage where every boundary is ready and none
+/// has started streaming yet. Returns `None` if no such stage exists
+/// (either nothing is ready, or every ready stage has already fired).
+fn find_just_completed_stage(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Option<(usize, Vec<Arc<dyn ExecutionPlan>>)> {
+    let mut by_stage: BTreeMap<usize, Vec<Arc<dyn ExecutionPlan>>> = BTreeMap::new();
+    collect_boundaries_by_stage(plan, &mut by_stage);
+    by_stage.into_iter().find(|(_, bufs)| {
+        bufs.iter().all(|b| {
+            let buffer = b.downcast_ref::<StageBoundaryBuffer>().expect(
+                "find_just_completed_stage only inserts StageBoundaryBuffer Arcs",
+            );
+            buffer.is_ready() && !buffer.streaming_started()
+        })
+    })
 }
 
-fn start_streaming_on_enabled_buffers(plan: &Arc<dyn ExecutionPlan>) {
-    if let Some(buffer) = plan.downcast_ref::<StageBoundaryBuffer>()
-        && buffer.streaming_enabled()
-    {
-        buffer.start_streaming();
+fn collect_boundaries_by_stage(
+    plan: &Arc<dyn ExecutionPlan>,
+    out: &mut BTreeMap<usize, Vec<Arc<dyn ExecutionPlan>>>,
+) {
+    if let Some(buffer) = plan.downcast_ref::<StageBoundaryBuffer>() {
+        out.entry(buffer.stage())
+            .or_default()
+            .push(Arc::clone(plan));
+        return;
     }
     for child in plan.children() {
-        start_streaming_on_enabled_buffers(child);
+        collect_boundaries_by_stage(child, out);
     }
 }
 
@@ -256,19 +280,26 @@ impl RuntimeRule for SwapBuildSideIfInverted {
         "SwapBuildSideIfInverted"
     }
 
-    fn evaluate(&self, plan: &Arc<dyn ExecutionPlan>) {
+    fn evaluate(&self, plan: &Arc<dyn ExecutionPlan>, completed_stage: usize) {
         if self.fired.load(Ordering::Relaxed) {
             return;
         }
-        self.walk_for_swap(plan);
+        self.walk_for_swap(plan, completed_stage);
     }
 }
 
 impl SwapBuildSideIfInverted {
-    fn walk_for_swap(&self, plan: &Arc<dyn ExecutionPlan>) {
+    fn walk_for_swap(&self, plan: &Arc<dyn ExecutionPlan>, completed_stage: usize) {
         if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
             let children = join.children();
-            if children.len() == 2 {
+            // Only act on joins whose inputs are at the just-completed
+            // stage; nested joins higher up wait for their own stage.
+            let both_at_completed_stage = children.len() == 2
+                && [&children[0], &children[1]].iter().all(|c| {
+                    c.downcast_ref::<StageBoundaryBuffer>()
+                        .is_some_and(|b| b.stage() == completed_stage)
+                });
+            if both_at_completed_stage {
                 // Current HashJoinExec: LEFT child is the build side
                 // under `mode=CollectLeft`.
                 let left = side_runtime_rows(children[0]);
@@ -296,7 +327,7 @@ impl SwapBuildSideIfInverted {
             return;
         }
         for child in plan.children() {
-            self.walk_for_swap(child);
+            self.walk_for_swap(child, completed_stage);
         }
     }
 }

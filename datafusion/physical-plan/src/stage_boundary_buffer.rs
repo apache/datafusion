@@ -31,15 +31,13 @@
 //!   per-partition receiver wrapped in a gated stream. Never touches
 //!   `input.execute`; that's prime's job.
 //!
-//! Three flags govern release:
+//! Two flags govern release:
 //! - `is_ready` (mechanical): set automatically when every drain task
 //!   has hit EOF. Runtime stats from the input become derivable.
-//! - `streaming_enabled` (rule-controlled proposal): reset each poll
-//!   cycle by RTO — set to `is_ready` as the permissive default. Rules
-//!   can flip it to false to veto release. No side effects.
 //! - `streaming_started` (actual emission control): only RTO flips this,
-//!   via `start_streaming()`. Once true, the gated consumer streams
-//!   start forwarding from their receivers.
+//!   via `start_streaming()`, and only as part of releasing a whole
+//!   stage. Once true, the gated consumer streams start forwarding from
+//!   their receivers.
 //!
 //! Coordination uses a shared [`AtomicWaker`] (`rto_waker`) populated at
 //! plan time by RTO. The buffer wakes it when `is_ready` flips; the
@@ -71,10 +69,20 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
-// TODO(spill): the per-partition channels below currently hold the full
-// materialized input in memory. A follow-up will swap each channel for a
-// spillable buffer (writing to disk under MemoryPool pressure) so that
-// large stage boundaries don't OOM. OomGuard is the safety net until then.
+// TODO(spill-or-stream): the per-partition channels below currently hold
+// the full materialized input in memory. Inserting a StageBoundaryBuffer
+// turns a streaming subtree into a pipeline breaker — that's the cost of
+// getting runtime stats. A follow-up will give each boundary TWO escape
+// hatches under MemoryPool pressure:
+//   1. Spill: page batches to disk and keep buffering. Stats remain
+//      reliable; the swap decision still happens.
+//   2. Stream-through (`has_overflowed`): give up on materialization,
+//      release the boundary immediately so downstream consumers stream
+//      just like they would have before this rule existed. The flip
+//      rule sees `has_overflowed() == true` and skips its decision —
+//      we lose the adaptive optimization but the query still runs and
+//      we haven't made things worse than the pre-AQE baseline.
+// OomGuard catches genuine OOM in the meantime.
 type PartitionTxs = Vec<Option<mpsc::UnboundedSender<Result<RecordBatch>>>>;
 type PartitionRxs = Vec<Option<mpsc::UnboundedReceiver<Result<RecordBatch>>>>;
 
@@ -114,11 +122,9 @@ struct BufferState {
     /// `drained_count == num_partitions`, `is_ready` flips.
     drained_count: usize,
     is_ready: bool,
-    /// Rule-controllable proposal. Reset by RTO each poll cycle: set to
-    /// `is_ready` as the permissive default, then rules may flip it
-    /// to false to veto.
-    streaming_enabled: bool,
-    /// Actual emission control. Only RTO flips this via `start_streaming`.
+    /// Emission control. Only RTO flips this via `start_streaming`,
+    /// and only as part of releasing the entire stage this boundary
+    /// belongs to.
     streaming_started: bool,
     num_partitions: usize,
     /// Wakers stashed by consumer streams while gated on `streaming_started`.
@@ -143,7 +149,6 @@ impl StageBoundaryBuffer {
             state: Arc::new(Mutex::new(BufferState {
                 drained_count: 0,
                 is_ready: false,
-                streaming_enabled: false,
                 streaming_started: false,
                 num_partitions,
                 wakers: HashMap::new(),
@@ -193,17 +198,6 @@ impl StageBoundaryBuffer {
     /// True once every drain task has reached EOF.
     pub fn is_ready(&self) -> bool {
         self.state.lock().unwrap().is_ready
-    }
-
-    /// Rule-controllable proposal flag. RTO resets this to `is_ready` at
-    /// the start of each poll cycle as the permissive default; rules may
-    /// then flip it to false to veto release this cycle. No side effects.
-    pub fn streaming_enabled(&self) -> bool {
-        self.state.lock().unwrap().streaming_enabled
-    }
-
-    pub fn set_streaming_enabled(&self, enabled: bool) {
-        self.state.lock().unwrap().streaming_enabled = enabled;
     }
 
     /// True once `start_streaming` has been called.
