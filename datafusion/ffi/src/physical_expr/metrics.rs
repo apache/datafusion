@@ -128,6 +128,9 @@ pub struct FFI_RatioMetrics {
 }
 
 /// FFI-stable mirror of [`MetricValue`].
+///
+/// This is part of the stable ABI and must not be reordered. New variants must be
+/// appended at the end.
 #[repr(C, u8)]
 #[derive(Debug, Clone)]
 pub enum FFI_MetricValue {
@@ -144,10 +147,6 @@ pub enum FFI_MetricValue {
         count: u64,
     },
     Gauge {
-        name: SString,
-        gauge: u64,
-    },
-    PeakMemoryUsage {
         name: SString,
         gauge: u64,
     },
@@ -173,6 +172,10 @@ pub enum FFI_MetricValue {
         name: SString,
         display: SString,
         as_usize_value: u64,
+    },
+    PeakMemoryUsage {
+        name: SString,
+        gauge: u64,
     },
 }
 
