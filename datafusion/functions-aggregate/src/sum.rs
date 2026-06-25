@@ -398,11 +398,6 @@ impl AggregateUDFImpl for Sum {
         if lit_type == DataType::Null {
             return Ok(None);
         }
-        // Skip the rewrite for interval: it requires `lit * COUNT(arg)`, but
-        // there is no generic Interval×Int64 multiplication kernel.
-        if matches!(lit_type, DataType::Interval(_)) {
-            return Ok(None);
-        }
 
         // Build up SUM(arg)
         let mut sum_agg = agg_function.clone();

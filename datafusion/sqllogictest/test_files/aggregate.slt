@@ -6627,9 +6627,7 @@ SELECT sum(DISTINCT v) FROM (VALUES
 ----
 3 days
 
-# Regression: SUM(col + interval_lit) must NOT be rewritten to
-# SUM(col) + lit * COUNT(col) by simplify_expr_op_literal — there is no
-# Interval×Int64 multiplication kernel. Without the guard, this query fails.
+# SUM(col + interval_lit) — exercises the simplify_expr_op_literal path.
 query ?
 SELECT sum(v + interval '1 day') FROM (VALUES
   (interval '1 day'),
