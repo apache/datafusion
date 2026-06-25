@@ -15,44 +15,54 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Stage-boundary buffer between an input subtree and its consumer.
-//! Holds the input's first batch per partition so that runtime stats
-//! become observable to the coordinator
-//! ([`crate::runtime_optimizer::RuntimeOptimizerExec`]) before downstream
-//! consumers see any data. Each boundary carries a `stage` number assigned
-//! by the optimizer at insertion time so RTO and EXPLAIN can talk about
-//! stages explicitly.
+//! Stage-boundary buffer between an input subtree and its consumer. The
+//! boundary IS a pipeline breaker: it drains its input fully via tasks
+//! spawned by [`StageBoundaryBuffer::prime`], stages the result, and
+//! releases to the consumer only when
+//! [`crate::runtime_optimizer::RuntimeOptimizerExec`] (RTO) decides.
+//! Each boundary carries a `stage` number assigned by the optimizer at
+//! insertion time so RTO and EXPLAIN can talk about stages explicitly.
 //!
-//! Three flags govern behavior:
-//! - `is_ready` (mechanical): set automatically when every input partition
-//!   has produced its first poll result. Runtime stats from the breaker
-//!   become derivable.
-//! - `streaming_enabled` (rule-controlled proposal): reset each poll cycle
-//!   by RTO — set to `is_ready` as the permissive default. Rules can
-//!   flip it back to `false` to veto release. No side effects.
+//! Lifecycle, separating fill from drain:
+//! - `prime(ctx)` (called by RTO): spawns one drain task per input
+//!   partition; each pulls until EOF, ferrying batches through an
+//!   unbounded mpsc per partition. Idempotent.
+//! - `execute(p, _)` (called by the consumer): hands back the
+//!   per-partition receiver wrapped in a gated stream. Never touches
+//!   `input.execute`; that's prime's job.
+//!
+//! Three flags govern release:
+//! - `is_ready` (mechanical): set automatically when every drain task
+//!   has hit EOF. Runtime stats from the input become derivable.
+//! - `streaming_enabled` (rule-controlled proposal): reset each poll
+//!   cycle by RTO — set to `is_ready` as the permissive default. Rules
+//!   can flip it to false to veto release. No side effects.
 //! - `streaming_started` (actual emission control): only RTO flips this,
-//!   via `start_streaming()`, which also wakes per-partition wakers.
-//!   Once true, partition streams emit their held batches and continue
-//!   forwarding.
+//!   via `start_streaming()`. Once true, the gated consumer streams
+//!   start forwarding from their receivers.
 //!
 //! Coordination uses a shared [`AtomicWaker`] (`rto_waker`) populated at
-//! plan time by [`crate::runtime_optimizer::RuntimeOptimizerExec`]. The
-//! buffer wakes it when `is_ready` flips; the coordinator is registered
-//! on it via its own `poll_next`. We use this side-channel rather than
-//! `cx.waker()` because the latter is task-local — inside a spawned task
-//! (e.g. one of `RepartitionExec`'s internals) it never reaches the
-//! top-of-plan task.
+//! plan time by RTO. The buffer wakes it when `is_ready` flips; the
+//! coordinator is registered on it via its own `poll_next`. Side-channel
+//! instead of `cx.waker()` because the latter is task-local — inside a
+//! spawned task (e.g. one of `RepartitionExec`'s internals) it never
+//! reaches the top-of-plan task.
+//!
+//! Memory: every primed buffer holds its full input until release.
+//! Spill is a follow-up; OomGuard catches genuine OOM in the meantime.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 use arrow::array::RecordBatch;
 use datafusion_common::Result;
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use futures::task::AtomicWaker;
 use futures::{Stream, StreamExt};
+use tokio::sync::mpsc;
 
 use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
@@ -61,11 +71,17 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
+// TODO(spill): the per-partition channels below currently hold the full
+// materialized input in memory. A follow-up will swap each channel for a
+// spillable buffer (writing to disk under MemoryPool pressure) so that
+// large stage boundaries don't OOM. OomGuard is the safety net until then.
+type PartitionTxs = Vec<Option<mpsc::UnboundedSender<Result<RecordBatch>>>>;
+type PartitionRxs = Vec<Option<mpsc::UnboundedReceiver<Result<RecordBatch>>>>;
+
 #[derive(Debug)]
 pub struct StageBoundaryBuffer {
     input: Arc<dyn ExecutionPlan>,
     cache: Arc<PlanProperties>,
-    state: Arc<Mutex<BufferState>>,
     /// Stage number assigned by the inserting optimizer rule. Lowest
     /// stage runs first; once released, its consumers (next stage up)
     /// can prime. Used by EXPLAIN, logs, and (eventually) RTO ordering.
@@ -73,31 +89,35 @@ pub struct StageBoundaryBuffer {
     /// Shared with `RuntimeOptimizerExec`. Buffer wakes this whenever
     /// `is_ready` flips so the coordinator (which may live above a
     /// task-spawning operator like `RepartitionExec`) gets re-polled.
-    /// Per-partition `cx.waker()` alone is insufficient — it's the
-    /// local task's waker, which doesn't propagate across the spawned
-    /// task boundary that `RepartitionExec` introduces.
     rto_waker: Arc<AtomicWaker>,
+    /// Gate flags + drain progress + consumer-side wakers.
+    state: Arc<Mutex<BufferState>>,
+    /// Per-partition sender. Moved out (`Option::take`) into the drain
+    /// task at `prime()`. Independent from `rxs` because `prime` and
+    /// `execute` arrive in unspecified order.
+    txs: Arc<Mutex<PartitionTxs>>,
+    /// Per-partition receiver. Moved out into the consumer stream at
+    /// `execute()`.
+    rxs: Arc<Mutex<PartitionRxs>>,
+    /// Handles to spawned drain tasks. Auto-abort on Drop via
+    /// `SpawnedTask::Drop`, so query cancellation cleans up cleanly.
+    drain_tasks: Arc<Mutex<Vec<SpawnedTask<()>>>>,
 }
 
 #[derive(Debug)]
 struct BufferState {
-    /// First batch per input partition. Absent for partitions whose input
-    /// terminated empty.
-    held: HashMap<usize, RecordBatch>,
-    /// Partitions whose first poll has completed (with or without a batch).
-    seen: HashSet<usize>,
+    /// Partitions whose drain task reached EOF (success or error). When
+    /// `drained_count == num_partitions`, `is_ready` flips.
+    drained_count: usize,
     is_ready: bool,
-    /// Rule-controllable proposal. Reset by RTO each poll cycle: set
-    /// to `is_ready` as the permissive default, then rules may flip it
+    /// Rule-controllable proposal. Reset by RTO each poll cycle: set to
+    /// `is_ready` as the permissive default, then rules may flip it
     /// to false to veto.
     streaming_enabled: bool,
     /// Actual emission control. Only RTO flips this via `start_streaming`.
-    /// Per-partition streams check this; while false, they hold their
-    /// first batch and return Pending.
     streaming_started: bool,
     num_partitions: usize,
-    /// Wakers stashed by per-partition streams while awaiting
-    /// `streaming_started`.
+    /// Wakers stashed by consumer streams while gated on `streaming_started`.
     wakers: HashMap<usize, Waker>,
 }
 
@@ -109,20 +129,28 @@ impl StageBoundaryBuffer {
     ) -> Self {
         let num_partitions = input.output_partitioning().partition_count();
         let cache = Arc::clone(input.properties());
+        let (txs, rxs): (Vec<_>, Vec<_>) = (0..num_partitions)
+            .map(|_| {
+                let (tx, rx) = mpsc::unbounded_channel();
+                (Some(tx), Some(rx))
+            })
+            .unzip();
         Self {
             input,
             cache,
+            stage,
+            rto_waker,
             state: Arc::new(Mutex::new(BufferState {
-                held: HashMap::new(),
-                seen: HashSet::new(),
+                drained_count: 0,
                 is_ready: false,
                 streaming_enabled: false,
                 streaming_started: false,
                 num_partitions,
                 wakers: HashMap::new(),
             })),
-            stage,
-            rto_waker,
+            txs: Arc::new(Mutex::new(txs)),
+            rxs: Arc::new(Mutex::new(rxs)),
+            drain_tasks: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -130,7 +158,32 @@ impl StageBoundaryBuffer {
         self.stage
     }
 
-    /// True once every input partition has produced its first poll result.
+    /// Spawn drain tasks for every input partition. Each task pulls
+    /// `input.execute(p, ctx)` to EOF, ferrying batches and errors
+    /// through the per-partition channel; once EOF is reached, marks
+    /// the partition drained and wakes RTO if this was the last one.
+    /// Idempotent. Only RTO should call this.
+    pub fn prime(&self, ctx: &Arc<TaskContext>) -> Result<()> {
+        let mut tasks = self.drain_tasks.lock().unwrap();
+        if !tasks.is_empty() {
+            return Ok(());
+        }
+        let mut txs = self.txs.lock().unwrap();
+        for (partition, slot) in txs.iter_mut().enumerate() {
+            let Some(tx) = slot.take() else {
+                continue;
+            };
+            let stream = self.input.execute(partition, Arc::clone(ctx))?;
+            let state = Arc::clone(&self.state);
+            let rto_waker = Arc::clone(&self.rto_waker);
+            tasks.push(SpawnedTask::spawn(drain_partition(
+                partition, stream, tx, state, rto_waker,
+            )));
+        }
+        Ok(())
+    }
+
+    /// True once every drain task has reached EOF.
     pub fn is_ready(&self) -> bool {
         self.state.lock().unwrap().is_ready
     }
@@ -146,14 +199,13 @@ impl StageBoundaryBuffer {
         self.state.lock().unwrap().streaming_enabled = enabled;
     }
 
-    /// True once `start_streaming` has been called. After this, per-
-    /// partition streams emit their held batches and resume forwarding.
+    /// True once `start_streaming` has been called.
     pub fn streaming_started(&self) -> bool {
         self.state.lock().unwrap().streaming_started
     }
 
     /// Start actual emission: flips `streaming_started` and wakes all
-    /// per-partition wakers. Idempotent. Only RTO should call this.
+    /// per-partition consumer wakers. Idempotent. Only RTO should call this.
     pub fn start_streaming(&self) {
         let wakers = {
             let mut state = self.state.lock().unwrap();
@@ -165,6 +217,53 @@ impl StageBoundaryBuffer {
         };
         for w in wakers {
             w.wake();
+        }
+    }
+}
+
+async fn drain_partition(
+    partition: usize,
+    mut stream: SendableRecordBatchStream,
+    tx: mpsc::UnboundedSender<Result<RecordBatch>>,
+    state: Arc<Mutex<BufferState>>,
+    rto_waker: Arc<AtomicWaker>,
+) {
+    while let Some(item) = stream.next().await {
+        // tx.send returning Err means the consumer dropped its receiver
+        // (query cancelled while we were mid-drain). Stop pulling.
+        let is_err = item.is_err();
+        if tx.send(item).is_err() {
+            break;
+        }
+        if is_err {
+            break;
+        }
+    }
+    let became_ready = {
+        let mut state = state.lock().unwrap();
+        state.drained_count += 1;
+        if state.drained_count == state.num_partitions && !state.is_ready {
+            state.is_ready = true;
+            true
+        } else {
+            false
+        }
+    };
+    if became_ready {
+        // cx.waker() inside this spawned task is task-local and won't
+        // reach the top-of-plan task. The shared AtomicWaker bridges.
+        rto_waker.wake();
+    }
+    let _ = partition; // reserved for future per-partition diagnostics
+}
+
+impl Drop for StageBoundaryBuffer {
+    fn drop(&mut self) {
+        // SpawnedTask aborts on Drop. Clearing the Vec triggers that
+        // for every drain task. Safe to ignore poisoned lock — at Drop
+        // time we just want to release resources.
+        if let Ok(mut tasks) = self.drain_tasks.lock() {
+            tasks.clear();
         }
     }
 }
@@ -207,8 +306,8 @@ impl ExecutionPlan for StageBoundaryBuffer {
         vec![true]
     }
 
-    /// Gated passthrough: rules only see runtime stats once the underlying
-    /// breaker is actually done (signalled by `is_ready`). Before that the
+    /// Gated passthrough: rules only see runtime stats once every drain
+    /// task has reached EOF (signalled by `is_ready`). Before that the
     /// child's per-partition counts are partial / not meaningful for
     /// adaptive decisions.
     fn runtime_row_count(&self, partition: usize) -> Option<usize> {
@@ -230,44 +329,39 @@ impl ExecutionPlan for StageBoundaryBuffer {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, context)?;
-        let schema = self.schema();
-        let stream = BufferStream {
-            phase: Phase::NeedFirstBatch,
-            input,
+        // Take ownership of this partition's receiver. prime() owns the
+        // sender side; we just gate-and-forward here.
+        let rx = self
+            .rxs
+            .lock()
+            .unwrap()
+            .get_mut(partition)
+            .and_then(|slot| slot.take())
+            .ok_or_else(|| {
+                datafusion_common::DataFusionError::Internal(format!(
+                    "StageBoundaryBuffer::execute called twice (or partition \
+                     {partition} out of range)"
+                ))
+            })?;
+        let stream = ConsumerStream {
             partition,
+            rx,
             state: Arc::clone(&self.state),
-            rto_waker: Arc::clone(&self.rto_waker),
         };
+        let schema = self.schema();
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 }
 
-#[derive(Debug)]
-enum Phase {
-    /// Haven't yet pulled the first batch from this input partition.
-    NeedFirstBatch,
-    /// First batch absorbed (or input was empty). Holding until RTO calls
-    /// `start_streaming`.
-    WaitForStreaming,
-    /// `streaming_started` is set; emit our held batch (if any) then
-    /// transition to streaming.
-    EmitHeld,
-    /// Pass through input batches as they arrive.
-    Streaming,
-}
-
-struct BufferStream {
-    phase: Phase,
-    input: SendableRecordBatchStream,
+struct ConsumerStream {
     partition: usize,
-    rto_waker: Arc<AtomicWaker>,
+    rx: mpsc::UnboundedReceiver<Result<RecordBatch>>,
     state: Arc<Mutex<BufferState>>,
 }
 
-impl Stream for BufferStream {
+impl Stream for ConsumerStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -275,65 +369,14 @@ impl Stream for BufferStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let this = self.as_mut().get_mut();
-        loop {
-            match this.phase {
-                Phase::NeedFirstBatch => {
-                    let next = match this.input.poll_next_unpin(cx) {
-                        Poll::Ready(x) => x,
-                        Poll::Pending => return Poll::Pending,
-                    };
-                    let became_ready = {
-                        let mut state = this.state.lock().unwrap();
-                        state.seen.insert(this.partition);
-                        match next {
-                            Some(Ok(batch)) => {
-                                state.held.insert(this.partition, batch);
-                            }
-                            Some(Err(e)) => {
-                                return Poll::Ready(Some(Err(e)));
-                            }
-                            None => { /* empty partition; nothing to hold */ }
-                        }
-                        if state.seen.len() == state.num_partitions && !state.is_ready {
-                            state.is_ready = true;
-                            true
-                        } else {
-                            false
-                        }
-                    };
-                    if became_ready {
-                        // Wake the coordinator. `cx.waker()` alone is
-                        // task-local — if we're inside a spawned task
-                        // (e.g. one of RepartitionExec's internals), it
-                        // never reaches RTO. The shared AtomicWaker is
-                        // populated by RTO on each of its own polls and
-                        // wakes the actual top-of-plan task.
-                        this.rto_waker.wake();
-                    }
-                    this.phase = Phase::WaitForStreaming;
-                }
-                Phase::WaitForStreaming => {
-                    let mut state = this.state.lock().unwrap();
-                    if state.streaming_started {
-                        drop(state);
-                        this.phase = Phase::EmitHeld;
-                        continue;
-                    }
-                    state.wakers.insert(this.partition, cx.waker().clone());
-                    return Poll::Pending;
-                }
-                Phase::EmitHeld => {
-                    let held = this.state.lock().unwrap().held.remove(&this.partition);
-                    this.phase = Phase::Streaming;
-                    if let Some(batch) = held {
-                        return Poll::Ready(Some(Ok(batch)));
-                    }
-                    // Empty-partition case: fall through to streaming.
-                }
-                Phase::Streaming => {
-                    return this.input.poll_next_unpin(cx);
-                }
+        // Gate: don't emit anything until RTO releases the boundary.
+        {
+            let mut state = this.state.lock().unwrap();
+            if !state.streaming_started {
+                state.wakers.insert(this.partition, cx.waker().clone());
+                return Poll::Pending;
             }
         }
+        this.rx.poll_recv(cx)
     }
 }

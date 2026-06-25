@@ -131,7 +131,14 @@ impl ExecutionPlan for RuntimeOptimizerExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let child = self.input.execute(partition, context)?;
+        let child = self.input.execute(partition, Arc::clone(&context))?;
+        // Side-channel drive every StageBoundaryBuffer in the subtree.
+        // Buffers don't pull from their inputs until primed, so without
+        // this the consumers above them would sit Pending forever (a
+        // HashJoin in CollectLeft mode never polls its probe side until
+        // build completes — but build itself is gated behind a buffer).
+        // prime() is idempotent across partitions.
+        prime_all_buffers(&self.input, &context)?;
         let schema = self.schema();
         let stream = CoordinatorStream {
             child,
@@ -141,6 +148,19 @@ impl ExecutionPlan for RuntimeOptimizerExec {
         };
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
+}
+
+fn prime_all_buffers(
+    plan: &Arc<dyn ExecutionPlan>,
+    ctx: &Arc<TaskContext>,
+) -> Result<()> {
+    if let Some(buffer) = plan.downcast_ref::<StageBoundaryBuffer>() {
+        buffer.prime(ctx)?;
+    }
+    for child in plan.children() {
+        prime_all_buffers(child, ctx)?;
+    }
+    Ok(())
 }
 
 struct CoordinatorStream {
