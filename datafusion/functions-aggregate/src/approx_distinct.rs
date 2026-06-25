@@ -24,10 +24,11 @@ use arrow::array::{
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Field, FieldRef, Int32Type,
-    Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt32Type, UInt64Type,
+    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+    Field, FieldRef, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt32Type,
+    UInt64Type,
 };
 use datafusion_common::ScalarValue;
 use datafusion_common::hash_utils::create_hashes;
@@ -758,6 +759,12 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 Box::new(NumericHLLAccumulator::<TimestampNanosecondType>::new())
             }
+            DataType::Decimal128(_, _) => {
+                Box::new(NumericHLLAccumulator::<Decimal128Type>::new())
+            }
+            DataType::Decimal256(_, _) => {
+                Box::new(NumericHLLAccumulator::<Decimal256Type>::new())
+            }
             DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
@@ -818,6 +825,8 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
             | DataType::Timestamp(TimeUnit::Millisecond, _)
             | DataType::Timestamp(TimeUnit::Microsecond, _)
             | DataType::Timestamp(TimeUnit::Nanosecond, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
@@ -834,7 +843,10 @@ mod tests {
     #[cfg(not(feature = "force_hash_collisions"))]
     mod real_hash_test {
         use super::*;
-        use arrow::array::{AsArray, Int64Array, StringViewArray};
+        use arrow::array::{
+            AsArray, Decimal128Array, Decimal256Array, Int64Array, StringViewArray,
+        };
+        use arrow::datatypes::i256;
         use std::sync::Arc;
         // A string longer than the 12-byte inline limit
         const LONG: &str = "this string is definitely longer than twelve bytes";
@@ -844,6 +856,96 @@ mod tests {
                 ScalarValue::UInt64(Some(v)) => v,
                 other => panic!("unexpected evaluate result: {other:?}"),
             }
+        }
+
+        fn assert_count_numerical_acc_and_group_acc<T>(array: ArrayRef, expected: u64)
+        where
+            T: ArrowPrimitiveType + Debug,
+            T::Native: Hash,
+        {
+            assert!(
+                is_hll_groups_type(array.data_type()),
+                "{} should be groups-capable",
+                array.data_type()
+            );
+
+            let mut acc = NumericHLLAccumulator::<T>::new();
+            acc.update_batch(&[Arc::clone(&array)]).unwrap();
+            let per_group_count = match acc.evaluate().unwrap() {
+                ScalarValue::UInt64(Some(v)) => v,
+                other => panic!("unexpected evaluate result: {other:?}"),
+            };
+
+            let group_indices = vec![0usize; array.len()];
+            let mut acc = HllGroupsAccumulator::new();
+            acc.update_batch(std::slice::from_ref(&array), &group_indices, None, 1)
+                .unwrap();
+            let groups_count = acc
+                .evaluate(EmitTo::All)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .value(0);
+
+            assert_eq!(
+                per_group_count,
+                groups_count,
+                "paths disagree for {}",
+                array.data_type()
+            );
+            assert_eq!(
+                per_group_count,
+                expected,
+                "wrong count for {}",
+                array.data_type()
+            );
+        }
+
+        #[test]
+        fn decimal_support_numerical_acc_and_group_acc() {
+            let decimal_128: ArrayRef = Arc::new(
+                Decimal128Array::from(vec![
+                    1i128,
+                    2,
+                    2,
+                    3,
+                    3,
+                    3,
+                    0,
+                    0,
+                    1_234_567_890,
+                    9_999_999_999,
+                    9_999_999_999,
+                ])
+                .with_precision_and_scale(38, 2)
+                .unwrap(),
+            );
+            assert_count_numerical_acc_and_group_acc::<Decimal128Type>(decimal_128, 6);
+
+            let big_256_a =
+                i256::from_string("123456789012345678901234567890123456").unwrap();
+            let big_256_b =
+                i256::from_string("987654321098765432109876543210987654").unwrap();
+
+            let decimal_256: ArrayRef = Arc::new(
+                Decimal256Array::from(vec![
+                    i256::from_i128(1),
+                    i256::from_i128(2),
+                    i256::from_i128(2),
+                    i256::from_i128(3),
+                    i256::from_i128(3),
+                    i256::from_i128(3),
+                    i256::from_i128(0),
+                    i256::from_i128(0),
+                    big_256_a,
+                    big_256_b,
+                    big_256_b,
+                ])
+                .with_precision_and_scale(40, 2)
+                .unwrap(),
+            );
+            assert_count_numerical_acc_and_group_acc::<Decimal256Type>(decimal_256, 6);
         }
 
         /// `approx_distinct(v) FILTER (WHERE nullable_bool)` — a NULL filter row
