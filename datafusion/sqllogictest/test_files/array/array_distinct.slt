@@ -137,6 +137,12 @@ select array_compact(arrow_cast([NULL, NULL, NULL], 'List(Int64)'));
 ----
 []
 
+# all nulls with untyped NULLs (List(Null) inner values are a NullArray)
+query ?
+select array_compact(make_array(NULL, NULL, NULL));
+----
+[]
+
 # empty array
 query ?
 select array_compact([]);

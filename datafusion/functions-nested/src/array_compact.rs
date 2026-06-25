@@ -19,10 +19,9 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetSizeTrait,
-    make_array,
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetBufferBuilder,
+    OffsetSizeTrait, make_array,
 };
-use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeList, List, Null};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
@@ -130,16 +129,23 @@ fn compact_list<O: OffsetSizeTrait>(
     field: &Arc<arrow::datatypes::Field>,
 ) -> Result<ArrayRef> {
     let values = list_array.values();
+    // Use logical nulls so element types without a validity buffer
+    // (e.g. NullArray) are still treated as null.
+    let values_null_count = values.logical_null_count();
 
     // Fast path: no nulls in values, return input unchanged
-    if values.null_count() == 0 {
+    if values_null_count == 0 {
         return Ok(Arc::new(list_array.clone()));
     }
 
+    let values_nulls = values
+        .logical_nulls()
+        .expect("non-zero logical_null_count implies logical_nulls is Some");
+    let list_nulls = list_array.nulls();
+    let list_offsets = list_array.offsets();
     let original_data = values.to_data();
-    let capacity = original_data.len() - values.null_count();
-    let mut offsets = Vec::<O>::with_capacity(list_array.len() + 1);
-    offsets.push(O::zero());
+    let capacity = original_data.len() - values_null_count;
+    let mut offsets = OffsetBufferBuilder::<O>::new(list_array.len());
     let mut mutable = MutableArrayData::with_capacities(
         vec![&original_data],
         false,
@@ -147,25 +153,25 @@ fn compact_list<O: OffsetSizeTrait>(
     );
 
     for row_index in 0..list_array.len() {
-        if list_array.nulls().is_some_and(|n| n.is_null(row_index)) {
-            offsets.push(offsets[row_index]);
+        if list_nulls.is_some_and(|n| n.is_null(row_index)) {
+            offsets.push_length(0);
             continue;
         }
 
-        let start = list_array.offsets()[row_index].as_usize();
-        let end = list_array.offsets()[row_index + 1].as_usize();
-        let mut copied = 0usize;
+        let start = list_offsets[row_index].as_usize();
+        let end = list_offsets[row_index + 1].as_usize();
+        let row_null_count = values_nulls.slice(start, end - start).null_count();
+        let kept = (end - start) - row_null_count;
 
         // Batch consecutive non-null elements into single extend() calls
         // to reduce per-element overhead. For [1, 2, NULL, 3, 4] this
         // produces 2 extend calls (0..2, 3..5) instead of 4 individual ones.
         let mut batch_start: Option<usize> = None;
         for i in start..end {
-            if values.is_null(i) {
+            if values_nulls.is_null(i) {
                 // Null breaks the current batch — flush it
                 if let Some(bs) = batch_start {
                     mutable.extend(0, bs, i);
-                    copied += i - bs;
                     batch_start = None;
                 }
             } else if batch_start.is_none() {
@@ -175,17 +181,16 @@ fn compact_list<O: OffsetSizeTrait>(
         // Flush any remaining batch after the loop
         if let Some(bs) = batch_start {
             mutable.extend(0, bs, end);
-            copied += end - bs;
         }
 
-        offsets.push(offsets[row_index] + O::usize_as(copied));
+        offsets.push_length(kept);
     }
 
     let new_values = make_array(mutable.freeze());
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::clone(field),
-        OffsetBuffer::new(offsets.into()),
+        offsets.finish(),
         new_values,
-        list_array.nulls().cloned(),
+        list_nulls.cloned(),
     )?))
 }
