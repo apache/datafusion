@@ -40,6 +40,7 @@ use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
+use datafusion_physical_expr_adapter::rewrite::rewrite_input_file_name_in_projection;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
@@ -794,6 +795,9 @@ impl ParquetMorselizer {
                 .map(|p| replace_columns_with_literals(p, &literal_columns))
                 .transpose()?;
         }
+
+        // Replace any `input_file_name()` UDFs in the projection with a literal for this file.
+        projection = rewrite_input_file_name_in_projection(projection, &file_name)?;
 
         let predicate_creation_errors = MetricBuilder::new(&self.metrics)
             .with_category(MetricCategory::Rows)
@@ -3280,8 +3284,12 @@ mod test {
     /// (e.g. `row_number`) plumbed through `TableSchema`/`ParquetOpener`.
     mod virtual_columns {
         use super::*;
-        use arrow::array::{Array, Int64Array};
+        use arrow::array::{Array, Int64Array, StringArray};
         use arrow::datatypes::FieldRef;
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::ScalarUDF;
+        use datafusion_functions::core::input_file_name::InputFileNameFunc;
+        use datafusion_physical_expr::{ScalarFunctionExpr, projection::ProjectionExpr};
         use parquet::arrow::RowNumber;
 
         /// Build a parquet `row_number` virtual column field. Spark's
@@ -3293,6 +3301,16 @@ mod test {
                 Field::new(name, DataType::Int64, nullable)
                     .with_extension_type(RowNumber),
             )
+        }
+
+        fn input_file_name_expr() -> Arc<dyn PhysicalExpr> {
+            Arc::new(ScalarFunctionExpr::new(
+                "input_file_name",
+                Arc::new(ScalarUDF::from(InputFileNameFunc::new())),
+                vec![],
+                Arc::new(Field::new("input_file_name", DataType::Utf8, true)),
+                Arc::new(ConfigOptions::default()),
+            ))
         }
 
         /// Collect every `Int64` value from the given column in every batch
@@ -3412,6 +3430,44 @@ mod test {
             let stream = open_file(&morselizer, file).await.unwrap();
             let row_numbers = collect_int64_values(stream, 0).await;
             assert_eq!(row_numbers, vec![0, 1, 2, 3]);
+        }
+
+        #[tokio::test]
+        async fn test_input_file_name_projection() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let path = "dir/input_file_name.parquet";
+            let (file_schema, data_size) = write_grouped_file(&store, path, 1, 3).await;
+
+            let projection = ProjectionExprs::new([
+                ProjectionExpr::new(Arc::new(Column::new("value", 0)), "value"),
+                ProjectionExpr::new(input_file_name_expr(), "file_name"),
+            ]);
+
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(file_schema)
+                .with_projection(projection)
+                .build();
+
+            let file =
+                PartitionedFile::new(path.to_string(), u64::try_from(data_size).unwrap());
+            let mut stream = open_file(&morselizer, file).await.unwrap();
+            let batch = stream.next().await.unwrap().unwrap();
+            assert!(stream.next().await.is_none());
+
+            assert_eq!(batch.num_columns(), 2);
+            assert_eq!(batch.schema().field(0).name(), "value");
+            assert_eq!(batch.schema().field(1).name(), "file_name");
+
+            let file_names = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("file_name column should be Utf8");
+            assert_eq!(file_names.len(), 3);
+            for i in 0..file_names.len() {
+                assert_eq!(file_names.value(i), path);
+            }
         }
 
         #[tokio::test]
