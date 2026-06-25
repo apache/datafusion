@@ -182,7 +182,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 acc + state.group_values.size()
                     + state.batch_group_indices.allocated_size()
             }
-            AggregateHashTableState::OutputtingMaterialized(output) => {
+            AggregateHashTableState::OutputtingMaterializedFinal(output) => {
                 output.memory_size()
             }
             AggregateHashTableState::Done => 0,
@@ -300,18 +300,25 @@ pub(super) struct AggregateHashTableBuffer {
 }
 
 pub(super) enum AggregateHashTableState {
+    /// Accumulating input rows into group keys and aggregate state.
     Building(AggregateHashTableBuffer),
+    /// Emitting results directly from group keys and aggregate state.
     Outputting(AggregateHashTableBuffer),
-    OutputtingMaterialized(MaterializedOutput),
+    /// Emitting slices from final aggregate output that was already evaluated.
+    OutputtingMaterializedFinal(MaterializedFinalOutput),
     Done,
 }
 
-pub(super) struct MaterializedOutput {
+/// Fully evaluated final aggregate output and the next row offset to emit.
+///
+/// Final aggregate evaluation consumes accumulator state, so final output is
+/// materialized once and then sliced to honor `batch_size` across output polls.
+pub(super) struct MaterializedFinalOutput {
     batch: RecordBatch,
     offset: usize,
 }
 
-impl MaterializedOutput {
+impl MaterializedFinalOutput {
     pub(super) fn new(batch: RecordBatch) -> Self {
         Self { batch, offset: 0 }
     }
@@ -480,13 +487,13 @@ impl AggregateHashTableState {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::Int32Array;
+    use arrow::array::{Array, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
 
     #[test]
-    fn materialized_output_slices_batches_until_exhausted() -> Result<()> {
+    fn materialized_final_output_slices_batches_until_exhausted() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "group_col",
             DataType::Int32,
@@ -496,14 +503,23 @@ mod tests {
             schema,
             vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
         )?;
-        let mut output = MaterializedOutput::new(batch);
+        let mut output = MaterializedFinalOutput::new(batch);
 
-        assert_eq!(output.next_batch(2).unwrap().num_rows(), 2);
-        assert_eq!(output.next_batch(2).unwrap().num_rows(), 2);
-        assert_eq!(output.next_batch(2).unwrap().num_rows(), 1);
+        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![1, 2]);
+        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![3, 4]);
+        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![5]);
         assert!(output.next_batch(2).is_none());
         assert!(output.is_exhausted());
 
         Ok(())
+    }
+
+    fn int32_values(batch: &RecordBatch, column: usize) -> Vec<i32> {
+        let array = batch
+            .column(column)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        (0..array.len()).map(|idx| array.value(idx)).collect()
     }
 }
