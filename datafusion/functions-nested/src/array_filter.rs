@@ -20,7 +20,7 @@
 use arrow::{
     array::{
         Array, ArrayRef, AsArray, BooleanArray, LargeListArray, ListArray,
-        OffsetBufferBuilder, OffsetSizeTrait, new_empty_array,
+        OffsetSizeTrait, new_empty_array,
     },
     buffer::{OffsetBuffer, ScalarBuffer},
     compute::{filter as arrow_filter, take_arrays},
@@ -252,7 +252,8 @@ fn filter_list_values<O: OffsetSizeTrait>(
     offsets: &OffsetBuffer<O>,
 ) -> Result<(ArrayRef, OffsetBuffer<O>)> {
     let num_sublists = offsets.len().saturating_sub(1);
-    let mut builder = OffsetBufferBuilder::<O>::new(num_sublists);
+    let mut new_offsets = Vec::<O>::with_capacity(num_sublists + 1);
+    new_offsets.push(O::zero());
 
     let has_nulls = predicate.null_count() > 0;
     for i in 0..num_sublists {
@@ -268,10 +269,10 @@ fn filter_list_values<O: OffsetSizeTrait>(
                 .slice(start, end - start)
                 .count_set_bits()
         };
-        builder.push_length(count);
+        new_offsets.push(new_offsets[i] + O::usize_as(count));
     }
 
-    let new_offsets = builder.finish();
+    let new_offsets = OffsetBuffer::new(new_offsets.into());
 
     if new_offsets.last() == offsets.last() {
         return Ok((Arc::clone(values), offsets.clone()));

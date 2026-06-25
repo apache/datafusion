@@ -19,7 +19,7 @@
 
 use arrow::array::{
     Array, ArrayRef, AsArray, Capacities, GenericListArray, MutableArrayData,
-    NullBufferBuilder, OffsetBufferBuilder, OffsetSizeTrait, Scalar, new_null_array,
+    NullBufferBuilder, OffsetSizeTrait, Scalar, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
@@ -538,7 +538,8 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
         capacity,
     );
 
-    let mut offsets = OffsetBufferBuilder::<O>::new(list_array.len());
+    let mut offsets = Vec::<O>::with_capacity(list_array.len() + 1);
+    offsets.push(O::zero());
 
     // Single bulk comparison over the visible values only.
     let match_bitmap = arrow_ord::cmp::not_distinct(&visible_values, needle)?;
@@ -551,7 +552,7 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
         let row_len = end - start;
 
         if list_array.is_null(row_index) {
-            offsets.push_length(0);
+            offsets.push(offsets[row_index]);
             continue;
         }
 
@@ -563,7 +564,7 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
             .peekable();
         if match_positions.peek().is_none() {
             mutable.extend(0, start, end);
-            offsets.push_length(row_len);
+            offsets.push(offsets[row_index] + O::usize_as(row_len));
             continue;
         }
 
@@ -586,14 +587,14 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
             mutable.extend(0, start + prev_end, end);
         }
 
-        offsets.push_length(row_len);
+        offsets.push(offsets[row_index] + O::usize_as(row_len));
     }
 
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(list_array.value_type(), true)),
-        offsets.finish(),
+        OffsetBuffer::new(offsets.into()),
         arrow::array::make_array(data),
         list_array.nulls().cloned(),
     )?))
