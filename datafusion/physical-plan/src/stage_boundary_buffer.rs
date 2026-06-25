@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Synchronization wrapper above a pipeline-breaking operator. Holds the
-//! breaker's first batch per partition so that runtime stats become
-//! observable to the coordinator
+//! Stage-boundary buffer between an input subtree and its consumer.
+//! Holds the input's first batch per partition so that runtime stats
+//! become observable to the coordinator
 //! ([`crate::runtime_optimizer::RuntimeOptimizerExec`]) before downstream
-//! consumers see any data.
+//! consumers see any data. Each boundary carries a `stage` number assigned
+//! by the optimizer at insertion time so RTO and EXPLAIN can talk about
+//! stages explicitly.
 //!
 //! Three flags govern behavior:
 //! - `is_ready` (mechanical): set automatically when every input partition
@@ -60,10 +62,14 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct PipelineBreakerBuffer {
+pub struct StageBoundaryBuffer {
     input: Arc<dyn ExecutionPlan>,
     cache: Arc<PlanProperties>,
     state: Arc<Mutex<BufferState>>,
+    /// Stage number assigned by the inserting optimizer rule. Lowest
+    /// stage runs first; once released, its consumers (next stage up)
+    /// can prime. Used by EXPLAIN, logs, and (eventually) RTO ordering.
+    stage: usize,
     /// Shared with `RuntimeOptimizerExec`. Buffer wakes this whenever
     /// `is_ready` flips so the coordinator (which may live above a
     /// task-spawning operator like `RepartitionExec`) gets re-polled.
@@ -95,8 +101,12 @@ struct BufferState {
     wakers: HashMap<usize, Waker>,
 }
 
-impl PipelineBreakerBuffer {
-    pub fn new(input: Arc<dyn ExecutionPlan>, rto_waker: Arc<AtomicWaker>) -> Self {
+impl StageBoundaryBuffer {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        stage: usize,
+        rto_waker: Arc<AtomicWaker>,
+    ) -> Self {
         let num_partitions = input.output_partitioning().partition_count();
         let cache = Arc::clone(input.properties());
         Self {
@@ -111,8 +121,13 @@ impl PipelineBreakerBuffer {
                 num_partitions,
                 wakers: HashMap::new(),
             })),
+            stage,
             rto_waker,
         }
+    }
+
+    pub fn stage(&self) -> usize {
+        self.stage
     }
 
     /// True once every input partition has produced its first poll result.
@@ -154,19 +169,19 @@ impl PipelineBreakerBuffer {
     }
 }
 
-impl DisplayAs for PipelineBreakerBuffer {
+impl DisplayAs for StageBoundaryBuffer {
     fn fmt_as(
         &self,
         _t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        write!(f, "PipelineBreakerBuffer")
+        write!(f, "StageBoundaryBuffer: stage={}", self.stage)
     }
 }
 
-impl ExecutionPlan for PipelineBreakerBuffer {
+impl ExecutionPlan for StageBoundaryBuffer {
     fn name(&self) -> &'static str {
-        "PipelineBreakerBuffer"
+        "StageBoundaryBuffer"
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -183,6 +198,7 @@ impl ExecutionPlan for PipelineBreakerBuffer {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             children.swap_remove(0),
+            self.stage,
             Arc::clone(&self.rto_waker),
         )))
     }

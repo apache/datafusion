@@ -16,7 +16,7 @@
 // under the License.
 
 //! Coordinator wrapper at the root of the plan. On every poll, it walks
-//! its subtree to release any [`PipelineBreakerBuffer`] whose `is_ready`
+//! its subtree to release any [`StageBoundaryBuffer`] whose `is_ready`
 //! flag has flipped, then runs each registered [`RuntimeRule`] over the
 //! plan. Rules observe runtime stats (via `runtime_row_count` and
 //! similar) and mutate adaptive operators in place (e.g.
@@ -40,7 +40,7 @@ use futures::{Stream, StreamExt};
 use log::info;
 
 use crate::joins::HashJoinExec;
-use crate::pipeline_breaker_buffer::PipelineBreakerBuffer;
+use crate::stage_boundary_buffer::StageBoundaryBuffer;
 use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
@@ -63,7 +63,7 @@ pub trait RuntimeRule: Send + Sync + std::fmt::Debug {
 pub struct RuntimeOptimizerExec {
     input: Arc<dyn ExecutionPlan>,
     cache: Arc<PlanProperties>,
-    /// Shared with every `PipelineBreakerBuffer` in this subplan.
+    /// Shared with every `StageBoundaryBuffer` in this subplan.
     /// Buffers wake this AtomicWaker when `is_ready` flips; we register
     /// the current task's waker on it during each `poll_next` so a
     /// wake-up from inside a spawned subtask reaches the actual
@@ -181,7 +181,7 @@ impl Stream for CoordinatorStream {
 }
 
 fn propose_release_for_ready_buffers(plan: &Arc<dyn ExecutionPlan>) {
-    if let Some(buffer) = plan.downcast_ref::<PipelineBreakerBuffer>() {
+    if let Some(buffer) = plan.downcast_ref::<StageBoundaryBuffer>() {
         buffer.set_streaming_enabled(buffer.is_ready());
     }
     for child in plan.children() {
@@ -190,7 +190,7 @@ fn propose_release_for_ready_buffers(plan: &Arc<dyn ExecutionPlan>) {
 }
 
 fn start_streaming_on_enabled_buffers(plan: &Arc<dyn ExecutionPlan>) {
-    if let Some(buffer) = plan.downcast_ref::<PipelineBreakerBuffer>()
+    if let Some(buffer) = plan.downcast_ref::<StageBoundaryBuffer>()
         && buffer.streaming_enabled()
     {
         buffer.start_streaming();
@@ -282,8 +282,8 @@ impl SwapBuildSideIfInverted {
 
 /// Row count of a join input's subtree. Trusts `runtime_row_count`
 /// to propagate correctly through passthrough operators (Projection,
-/// PipelineBreakerBuffer-when-ready, etc.); no recursive descent. The
-/// PipelineBreakerBuffer in the chain returns `None` until its own
+/// StageBoundaryBuffer-when-ready, etc.); no recursive descent. The
+/// StageBoundaryBuffer in the chain returns `None` until its own
 /// `is_ready`, which is the natural gate — rules only see runtime
 /// stats once the underlying breaker is actually done.
 ///

@@ -19,18 +19,15 @@
 //!
 //! 1. Walks the plan tree, wrapping every pipeline-breaking operator
 //!    (currently `AggregateExec` and `SortExec`) in a
-//!    [`PipelineBreakerBuffer`]. The buffer is the synchronization point
+//!    [`StageBoundaryBuffer`]. The boundary is the synchronization point
 //!    where runtime stats become observable.
 //! 2. Wraps the resulting plan root in a [`RuntimeOptimizerExec`], which
 //!    walks the subtree on each `poll_next` and releases ready buffers.
 //!
 //! A shared [`AtomicWaker`] is constructed here and threaded into both
-//! the buffers and the wrapping RTO so buffers can wake the coordinator
-//! from inside spawned subtasks (e.g. `RepartitionExec` internals). The
-//! default is permissive release — the next commit will add a
-//! `Vec<RuntimeRule>` that runs between "all ready" and "release," able
-//! to mutate adaptive operators (`HashJoinExec::flip_sides`) or hold
-//! specific buffers.
+//! the boundaries and the wrapping RTO so boundaries can wake the
+//! coordinator from inside spawned subtasks (e.g. `RepartitionExec`
+//! internals).
 
 use std::sync::Arc;
 
@@ -40,11 +37,11 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::AggregateExec;
-use datafusion_physical_plan::pipeline_breaker_buffer::PipelineBreakerBuffer;
 use datafusion_physical_plan::runtime_optimizer::{
     RuntimeOptimizerExec, RuntimeRule, SwapBuildSideIfInverted,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::stage_boundary_buffer::StageBoundaryBuffer;
 use futures::task::AtomicWaker;
 
 #[derive(Default, Debug)]
@@ -77,14 +74,16 @@ impl PhysicalOptimizerRule for InsertRuntimeOptimizer {
         // boundaries (e.g. RepartitionExec's internals), this does.
         let rto_waker = Arc::new(AtomicWaker::new());
 
-        // Phase 1: wrap each pipeline breaker in a PipelineBreakerBuffer.
+        // Phase 1: wrap each pipeline breaker in a StageBoundaryBuffer.
+        // Stage numbering is uniform (0) for now; the next commit assigns
+        // real bottom-up stage numbers.
         let with_buffers = plan
             .transform_up(|node| {
                 if is_pipeline_breaker(&node)
-                    && node.downcast_ref::<PipelineBreakerBuffer>().is_none()
+                    && node.downcast_ref::<StageBoundaryBuffer>().is_none()
                 {
                     let buffered: Arc<dyn ExecutionPlan> = Arc::new(
-                        PipelineBreakerBuffer::new(node, Arc::clone(&rto_waker)),
+                        StageBoundaryBuffer::new(node, 0, Arc::clone(&rto_waker)),
                     );
                     Ok(Transformed::yes(buffered))
                 } else {

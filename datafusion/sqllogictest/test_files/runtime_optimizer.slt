@@ -91,7 +91,7 @@ SELECT count(*) FROM (SELECT group_key FROM big GROUP BY group_key) t;
 
 # ---------------------------------------------------------------------------
 # EXPLAIN — shows the *static* plan with AQE primitives wrapped in
-# (RuntimeOptimizerExec at root; PipelineBreakerBuffer above each
+# (RuntimeOptimizerExec at root; StageBoundaryBuffer above each
 # pipeline breaker). JoinSelection picked `small` as build statically
 # because aggregated_big's row-count estimate (Inexact, ~100K) overstates
 # the actual (5). RuntimeOptimizerExec detects this inversion at runtime
@@ -122,10 +122,10 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 05)----ProjectionExec: expr=[group_key@0 as group_key, sum(big.payload)@1 as sum_payload]
-06)------PipelineBreakerBuffer
+06)------StageBoundaryBuffer: stage=0
 07)--------AggregateExec: mode=FinalPartitioned, gby=[group_key@0 as group_key], aggr=[sum(big.payload)]
 08)----------RepartitionExec: partitioning=Hash([group_key@0], 4), input_partitions=4
-09)------------PipelineBreakerBuffer
+09)------------StageBoundaryBuffer: stage=0
 10)--------------AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[sum(big.payload)]
 11)----------------DataSourceExec: partitions=4, partition_sizes=[4, 3, 3, 3]
 
