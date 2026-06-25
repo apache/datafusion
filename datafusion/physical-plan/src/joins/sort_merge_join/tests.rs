@@ -4231,6 +4231,8 @@ async fn filter_buffer_pending_loses_inner_rows() -> Result<()> {
         reservation,
         spill_manager,
         runtime_env,
+        None,
+        None,
     )?;
 
     let batches = collect_stream(stream).await?;
@@ -4330,6 +4332,8 @@ async fn no_filter_boundary_pending_loses_outer_rows() -> Result<()> {
         reservation,
         spill_manager,
         runtime_env,
+        None,
+        None,
     )?;
 
     let batches = collect_stream(stream).await?;
@@ -4542,6 +4546,8 @@ async fn filtered_boundary_pending_outer_rows() -> Result<()> {
         reservation,
         spill_manager,
         runtime_env,
+        None,
+        None,
     )?;
 
     let batches = collect_stream(stream).await?;
@@ -4816,6 +4822,8 @@ async fn spill_filtered_boundary_loses_outer_rows() -> Result<()> {
             reservation,
             spill_manager,
             Arc::clone(&runtime),
+            None,
+            None,
         )?;
 
         let batches = collect_stream(stream).await?;

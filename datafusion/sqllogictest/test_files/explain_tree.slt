@@ -1176,12 +1176,18 @@ physical_plan
 09)│          c1@0 ASC         ││          c1@0 ASC         │
 10)└─────────────┬─────────────┘└─────────────┬─────────────┘
 11)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-12)│       DataSourceExec      ││       DataSourceExec      │
+12)│         FilterExec        ││         FilterExec        │
 13)│    --------------------   ││    --------------------   │
-14)│        bytes: 5932        ││        bytes: 5932        │
-15)│       format: memory      ││       format: memory      │
-16)│          rows: 1          ││          rows: 1          │
-17)└───────────────────────────┘└───────────────────────────┘
+14)│         predicate:        ││         predicate:        │
+15)│  DynamicFilter [ empty ]  ││  DynamicFilter [ empty ]  │
+16)└─────────────┬─────────────┘└─────────────┬─────────────┘
+17)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+18)│       DataSourceExec      ││       DataSourceExec      │
+19)│    --------------------   ││    --------------------   │
+20)│        bytes: 5932        ││        bytes: 5932        │
+21)│       format: memory      ││       format: memory      │
+22)│          rows: 1          ││          rows: 1          │
+23)└───────────────────────────┘└───────────────────────────┘
 
 statement ok
 set datafusion.optimizer.prefer_hash_join = true;

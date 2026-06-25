@@ -2814,11 +2814,13 @@ logical_plan
 physical_plan
 01)SortMergeJoinExec: join_type=Inner, on=[(c1@0, c1@0)]
 02)--SortExec: expr=[c1@0 ASC], preserve_partitioning=[true]
-03)----RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=1
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)--SortExec: expr=[c1@0 ASC], preserve_partitioning=[true]
-06)----RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=1
-07)------DataSourceExec: partitions=1, partition_sizes=[1]
+03)----FilterExec: DynamicFilter [ empty ]
+04)------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=1
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)--SortExec: expr=[c1@0 ASC], preserve_partitioning=[true]
+07)----FilterExec: DynamicFilter [ empty ]
+08)------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=1
+09)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # sort_merge_join_on_date32 inner sort merge join on data type (Date32)
 query DDRTDDRT rowsort

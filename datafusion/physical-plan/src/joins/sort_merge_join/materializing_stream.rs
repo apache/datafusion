@@ -37,6 +37,7 @@ use crate::joins::sort_merge_join::filter::{
     get_filter_columns, needs_deferred_filtering,
 };
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
+use crate::joins::sort_merge_join::shared_bounds::SharedSortMergeBoundsAccumulator;
 use crate::joins::utils::{JoinFilter, JoinKeyComparator};
 use crate::metrics::RecordOutput;
 use crate::spill::spill_manager::SpillManager;
@@ -50,7 +51,9 @@ use arrow::compute::{
 };
 use arrow::datatypes::SchemaRef;
 use datafusion_common::cast::as_uint64_array;
-use datafusion_common::{JoinType, NullEquality, Result, exec_err, internal_err};
+use datafusion_common::{
+    JoinType, NullEquality, Result, ScalarValue, exec_err, internal_err,
+};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -153,6 +156,26 @@ impl StreamedBatch {
             num_output_rows: 0,
             buffered_batch_idx: None,
         }
+    }
+
+    /// Returns the first join key value in this batch
+    fn first_join_key(&self) -> Option<ScalarValue> {
+        if self.batch.num_rows() == 0 {
+            return None;
+        }
+        self.join_arrays
+            .first()
+            .and_then(|arr| ScalarValue::try_from_array(arr, 0).ok())
+    }
+
+    /// Returns the last join key value in this batch
+    fn last_join_key(&self) -> Option<ScalarValue> {
+        if self.batch.num_rows() == 0 {
+            return None;
+        }
+        self.join_arrays.first().and_then(|arr| {
+            ScalarValue::try_from_array(arr, self.batch.num_rows() - 1).ok()
+        })
     }
 
     /// Number of unfrozen output pairs in this streamed batch
@@ -293,6 +316,26 @@ impl BufferedBatch {
             num_rows,
         }
     }
+
+    /// Returns the first join key value in this batch
+    fn first_join_key(&self) -> Option<ScalarValue> {
+        if self.num_rows == 0 {
+            return None;
+        }
+        self.join_arrays
+            .first()
+            .and_then(|arr| ScalarValue::try_from_array(arr, 0).ok())
+    }
+
+    /// Returns the last join key value in this batch
+    fn last_join_key(&self) -> Option<ScalarValue> {
+        if self.num_rows == 0 {
+            return None;
+        }
+        self.join_arrays
+            .first()
+            .and_then(|arr| ScalarValue::try_from_array(arr, self.num_rows - 1).ok())
+    }
 }
 
 // TODO: Spill join arrays (https://github.com/apache/datafusion/pull/17429)
@@ -384,6 +427,19 @@ pub(super) struct MaterializingSortMergeJoinStream {
     pub spill_stream: Option<SendableRecordBatchStream>,
     /// Tracks the number of batches currently spilled
     pub spilled_batch_count: usize,
+
+    // ========================================================================
+    // DYNAMIC FILTER FIELDS:
+    // These fields manage dynamic filter pushdown.
+    // ========================================================================
+    /// Dynamic filter for the streamed side, advanced from the buffered side's
+    /// head values.
+    pub streamed_dynamic_filter: Option<Arc<SharedSortMergeBoundsAccumulator>>,
+    /// Dynamic filter for the buffered side, advanced from the streamed side's
+    /// head values.
+    pub buffered_dynamic_filter: Option<Arc<SharedSortMergeBoundsAccumulator>>,
+    /// Partition ID of this stream
+    pub partition_id: usize,
 
     // ========================================================================
     // CACHED COMPARATORS:
@@ -827,6 +883,9 @@ impl MaterializingSortMergeJoinStream {
         reservation: MemoryReservation,
         spill_manager: SpillManager,
         runtime_env: Arc<RuntimeEnv>,
+        streamed_dynamic_filter: Option<Arc<SharedSortMergeBoundsAccumulator>>,
+        buffered_dynamic_filter: Option<Arc<SharedSortMergeBoundsAccumulator>>,
+        partition_id: usize,
     ) -> Result<Self> {
         let streamed_schema = streamed.schema();
         let buffered_schema = buffered.schema();
@@ -872,6 +931,9 @@ impl MaterializingSortMergeJoinStream {
             spill_manager,
             spill_stream: None,
             spilled_batch_count: 0,
+            streamed_dynamic_filter,
+            buffered_dynamic_filter,
+            partition_id,
             streamed_buffered_cmp: None,
             buffered_equality_cmp: None,
             streamed_batch_counter: AtomicUsize::new(0),
@@ -1035,6 +1097,12 @@ impl MaterializingSortMergeJoinStream {
                         self.streamed_state = StreamedState::Ready;
                         return Poll::Ready(Some(Ok(())));
                     } else {
+                        // Report last join key before pulling next batch
+                        if let Some(accumulator) = &self.buffered_dynamic_filter
+                            && let Some(key) = self.streamed_batch.last_join_key()
+                        {
+                            accumulator.report_head(self.partition_id, key)?;
+                        }
                         self.streamed_state = StreamedState::Polling;
                     }
                 }
@@ -1055,6 +1123,9 @@ impl MaterializingSortMergeJoinStream {
                             self.streamed =
                                 Box::pin(EmptyRecordBatchStream::new(streamed_schema));
                             self.streamed_state = StreamedState::Exhausted;
+                            if let Some(accumulator) = &self.buffered_dynamic_filter {
+                                accumulator.mark_exhausted(self.partition_id)?;
+                            }
                         }
                         Poll::Ready(Some(batch)) => {
                             if batch.num_rows() > 0 {
@@ -1063,6 +1134,16 @@ impl MaterializingSortMergeJoinStream {
                                 self.join_metrics.input_rows().add(batch.num_rows());
                                 self.streamed_batch =
                                     StreamedBatch::new(batch, &self.on_streamed);
+
+                                // Report first join key to the buffered side's
+                                // dynamic filter
+                                if let Some(accumulator) = &self.buffered_dynamic_filter
+                                    && let Some(key) =
+                                        self.streamed_batch.first_join_key()
+                                {
+                                    accumulator.report_head(self.partition_id, key)?;
+                                }
+
                                 self.rebuild_streamed_buffered_cmp()?;
                                 // Every incoming streaming batch should have its unique id
                                 // Check `JoinedRecordBatches.self.streamed_batch_counter` documentation
@@ -1202,6 +1283,9 @@ impl MaterializingSortMergeJoinStream {
                         self.buffered =
                             Box::pin(EmptyRecordBatchStream::new(buffered_schema));
                         self.buffered_state = BufferedState::Exhausted;
+                        if let Some(accumulator) = &self.streamed_dynamic_filter {
+                            accumulator.mark_exhausted(self.partition_id)?;
+                        }
                         return Poll::Ready(None);
                     }
                     Poll::Ready(Some(batch)) => {
@@ -1211,6 +1295,14 @@ impl MaterializingSortMergeJoinStream {
                         if batch.num_rows() > 0 {
                             let buffered_batch =
                                 BufferedBatch::new(batch, 0..1, &self.on_buffered);
+
+                            // Report first join key to the streamed side's
+                            // dynamic filter
+                            if let Some(accumulator) = &self.streamed_dynamic_filter
+                                && let Some(key) = buffered_batch.first_join_key()
+                            {
+                                accumulator.report_head(self.partition_id, key)?;
+                            }
 
                             self.allocate_reservation(buffered_batch)?;
                             self.streamed_buffered_cmp = None;
@@ -1239,6 +1331,14 @@ impl MaterializingSortMergeJoinStream {
                             }
                         }
                     } else {
+                        // Report last join key before pulling next batch
+                        if let Some(accumulator) = &self.streamed_dynamic_filter
+                            && let Some(key) =
+                                self.buffered_data.tail_batch().last_join_key()
+                        {
+                            accumulator.report_head(self.partition_id, key)?;
+                        }
+
                         match self.buffered.poll_next_unpin(cx)? {
                             Poll::Pending => {
                                 return Poll::Pending;
@@ -1250,6 +1350,9 @@ impl MaterializingSortMergeJoinStream {
                                     buffered_schema,
                                 ));
                                 self.buffered_state = BufferedState::Ready;
+                                if let Some(accumulator) = &self.streamed_dynamic_filter {
+                                    accumulator.mark_exhausted(self.partition_id)?;
+                                }
                             }
                             Poll::Ready(Some(batch)) => {
                                 // Polling batches coming concurrently as multiple partitions
@@ -1261,6 +1364,17 @@ impl MaterializingSortMergeJoinStream {
                                         0..0,
                                         &self.on_buffered,
                                     );
+
+                                    // Report first join key to the streamed side's
+                                    // dynamic filter
+                                    if let Some(accumulator) =
+                                        &self.streamed_dynamic_filter
+                                        && let Some(key) = buffered_batch.first_join_key()
+                                    {
+                                        accumulator
+                                            .report_head(self.partition_id, key)?;
+                                    }
+
                                     self.allocate_reservation(buffered_batch)?;
                                     self.buffered_equality_cmp = None;
                                 }
