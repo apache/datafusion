@@ -870,6 +870,13 @@ impl HashJoinExec {
             return false;
         }
 
+        // A null-aware anti join emits a build-side NULL only when the probe is truly empty. The
+        // pushed filter can empty the probe by pruning every row, which would surface that NULL
+        // wrongly. A NOT NULL build key cannot produce such a NULL, so the filter stays there.
+        if self.null_aware && self.on[0].0.nullable(&self.left.schema()).unwrap_or(true) {
+            return false;
+        }
+
         // `preserve_file_partitions` can report Hash partitioning for Hive-style
         // file groups, but those partitions are not actually hash-distributed.
         // Partitioned dynamic filters rely on hash routing, so disable them in
