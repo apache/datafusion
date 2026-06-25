@@ -4220,24 +4220,6 @@ fn roundtrip_file_scan_config(scan_config: FileScanConfig) -> Result<FileScanCon
 }
 
 #[test]
-fn roundtrip_parquet_exec_partitioned_by_file_group() -> Result<()> {
-    let file_schema =
-        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
-    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
-    let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-                "/path/to/file.parquet".to_string(),
-                1024,
-            )])])
-            .with_partitioned_by_file_group(true)
-            .build();
-
-    assert!(roundtrip_file_scan_config(scan_config)?.partitioned_by_file_group);
-    Ok(())
-}
-
-#[test]
 fn roundtrip_parquet_exec_output_partitioning() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));

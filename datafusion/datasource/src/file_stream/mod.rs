@@ -1630,6 +1630,16 @@ mod tests {
                     DataType::Int32,
                     false,
                 )])));
+            // Declaring an output partitioning marks the scan as pre-grouped, which
+            // keeps each stream's files local (disables shared work stealing).
+            let output_partitioning = self.partitioned_by_file_group.then(|| {
+                datafusion_physical_expr::Partitioning::Hash(
+                    vec![Arc::new(
+                        datafusion_physical_expr::expressions::Column::new("i", 0),
+                    )],
+                    file_groups.len(),
+                )
+            });
             FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 Arc::new(MockSource::new(table_schema)),
@@ -1637,7 +1647,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_limit(self.limit)
             .with_preserve_order(self.preserve_order)
-            .with_partitioned_by_file_group(self.partitioned_by_file_group)
+            .with_output_partitioning(output_partitioning)
             .build()
         }
     }

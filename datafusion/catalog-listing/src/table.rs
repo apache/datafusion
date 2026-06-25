@@ -30,7 +30,9 @@ use datafusion_common::{
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::file_scan_config::{
+    FileScanConfig, FileScanConfigBuilder, hash_partitioning_from_partition_fields,
+};
 use datafusion_datasource::file_sink_config::{FileOutputMode, FileSinkConfig};
 #[expect(deprecated)]
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
@@ -623,6 +625,15 @@ impl TableProvider for ListingTable {
                 );
             }
             Some(output_partitioning)
+        } else if partitioned_by_file_group {
+            // Files are grouped by partition column values: declare Hash
+            // partitioning on those columns so the optimizer can skip hash
+            // repartitioning for aggregates and joins on the partition columns.
+            hash_partitioning_from_partition_fields(
+                &self.table_schema,
+                &table_partition_cols.clone().into(),
+                partitioned_file_lists.len(),
+            )
         } else {
             None
         };
@@ -645,7 +656,6 @@ impl TableProvider for ListingTable {
             .with_output_ordering(output_ordering)
             .with_output_partitioning(output_partitioning)
             .with_expr_adapter(self.expr_adapter_factory.clone())
-            .with_partitioned_by_file_group(partitioned_by_file_group)
             .build();
 
         // create the execution plan
