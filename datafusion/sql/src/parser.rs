@@ -504,19 +504,6 @@ fn token_starts_query(tok: &Token) -> bool {
 }
 
 impl<'a> DFParser<'a> {
-    #[deprecated(since = "46.0.0", note = "DFParserBuilder")]
-    pub fn new(sql: &'a str) -> Result<Self, DataFusionError> {
-        DFParserBuilder::new(sql).build()
-    }
-
-    #[deprecated(since = "46.0.0", note = "DFParserBuilder")]
-    pub fn new_with_dialect(
-        sql: &'a str,
-        dialect: &'a dyn Dialect,
-    ) -> Result<Self, DataFusionError> {
-        DFParserBuilder::new(sql).with_dialect(dialect).build()
-    }
-
     /// Parse a sql string into one or [`Statement`]s using the
     /// [`GenericDialect`].
     pub fn parse_sql(sql: &'a str) -> Result<VecDeque<Statement>, DataFusionError> {
