@@ -19,9 +19,12 @@
 //! its subtree to find the lowest stage whose [`StageBoundaryBuffer`]s
 //! are all ready but haven't started streaming yet — the "just completed"
 //! stage. When that exists, it fires each registered [`RuntimeRule`]
-//! exactly once for that stage, then releases the stage's boundaries.
-//! Stage K+1's boundaries can't fill until stage K is released, so
-//! stages naturally serialize without an explicit veto mechanism.
+//! exactly once for that stage, releases the stage's boundaries, then
+//! primes the next stage's boundaries against the (possibly replanned)
+//! plan. Stage 0 is primed at execute() time; stages 1+ are primed
+//! lazily after their predecessor releases — that's what lets a replan
+//! at stage K rebuild stage-(K+1)'s input subtree and have the drain
+//! task run against the new subtree.
 //!
 //! Each buffer owns its own AtomicWaker; RTO walks the subtree per poll
 //! and registers the consumer-task waker on each. Drain tasks wake on
@@ -137,13 +140,17 @@ impl ExecutionPlan for RuntimeOptimizerExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // Prime drains side-channel; do NOT execute self.input yet.
-        // buffer.prime() calls buffer.input.execute() (the subtree below
-        // the boundary) but leaves the boundary's consumer-side rx
-        // untouched, so HashJoin (or a possibly-replanned new HashJoin)
-        // can take it later when CoordinatorStream lazily executes
-        // self.plan after the first stage completes.
-        prime_all_buffers(&self.input, &context)?;
+        // Prime stage 0 only. Higher stages are primed lazily by
+        // CoordinatorStream after their predecessor releases — that's
+        // what lets a replan that rebuilds stage-K's input subtree
+        // (e.g. swapping a nested HashJoin) take effect: the freshly
+        // built boundaries on the new plan are primed *after* replan,
+        // so the drain task runs against the post-replan subtree.
+        // buffer.prime() touches buffer.input.execute() (the subtree
+        // below the boundary) but leaves the boundary's consumer-side
+        // rx untouched, so HashJoin can take it later via the lazy
+        // execute in CoordinatorStream.
+        prime_buffers_at_stage(&self.input, 0, &context)?;
         let schema = self.schema();
         let stream = CoordinatorStream {
             child: None,
@@ -156,15 +163,23 @@ impl ExecutionPlan for RuntimeOptimizerExec {
     }
 }
 
-fn prime_all_buffers(
+/// Walks the subtree and primes every `StageBoundaryBuffer` whose
+/// `stage()` matches `stage`. Other boundaries are skipped — they're
+/// either already running (lower stage) or waiting their turn (higher
+/// stage). `buffer.prime()` is idempotent, so calling it on an already
+/// primed boundary is harmless.
+fn prime_buffers_at_stage(
     plan: &Arc<dyn ExecutionPlan>,
+    stage: usize,
     ctx: &Arc<TaskContext>,
 ) -> Result<()> {
-    if let Some(buffer) = plan.downcast_ref::<StageBoundaryBuffer>() {
+    if let Some(buffer) = plan.downcast_ref::<StageBoundaryBuffer>()
+        && buffer.stage() == stage
+    {
         buffer.prime(ctx)?;
     }
     for child in plan.children() {
-        prime_all_buffers(child, ctx)?;
+        prime_buffers_at_stage(child, stage, ctx)?;
     }
     Ok(())
 }
@@ -180,10 +195,12 @@ fn register_consumer_waker_on_buffers(plan: &Arc<dyn ExecutionPlan>, waker: &Wak
 
 struct CoordinatorStream {
     /// Lazily created. `None` until every stage has been processed (rules
-    /// fired, boundaries released). Then `self.plan.execute(...)` is called
-    /// — at which point all `StageBoundaryBuffer` rxs are still available
-    /// (prime() left them untouched), so a possibly-replanned join can
-    /// take them.
+    /// fired, boundaries released, next stage primed) and no boundary
+    /// remains gated. Then `self.plan.execute(...)` is called — all
+    /// `StageBoundaryBuffer` rxs are still available at that point
+    /// because stage-N's drain task only starts after stage-(N-1)
+    /// releases (lazy priming), so no operator above a boundary has
+    /// been executed before replan.
     child: Option<SendableRecordBatchStream>,
     plan: Arc<dyn ExecutionPlan>,
     rules: Vec<Arc<dyn RuntimeRule>>,
@@ -239,6 +256,15 @@ impl Stream for CoordinatorStream {
                 "RTO: stage {stage} released; downstream consumers can now \
                  drain the buffered data"
             );
+            // Prime the next stage in the (possibly replanned) plan now
+            // that stage K's data is flowing. Any boundaries rebuilt by
+            // the rule's transform_up are fresh — they get their drain
+            // tasks here, against the post-replan subtree.
+            if let Err(e) =
+                prime_buffers_at_stage(&this.plan, stage + 1, &this.context)
+            {
+                return Poll::Ready(Some(Err(e)));
+            }
         }
 
         // Lazily execute the plan once all stages have been processed.
