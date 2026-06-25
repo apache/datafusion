@@ -99,9 +99,9 @@ impl StdinUtils {
         format!("{}:///{object_name}", Self::SCHEME)
     }
 
-    /// Returns the object store backing the `stdin://` scheme, reading and
-    /// buffering standard input on first use and reusing that buffer for any
-    /// subsequent `stdin://` table created in the same session.
+    /// Returns the object store backing the `stdin://` scheme, buffering all of
+    /// standard input when the store is first constructed and reusing that
+    /// buffer for any subsequent `stdin://` table created in the same session.
     ///
     /// stdin is a one-shot stream: it can only be read once. The object store
     /// registry keys by scheme/authority, so every `stdin://` URL maps to the
@@ -268,15 +268,26 @@ mod tests {
         // stdin can only be read once, so a second `stdin://` table must reuse
         // the store buffered by the first instead of re-reading (now-empty)
         // stdin and overwriting it.
+        //
+        // The very first read happens inside `get_or_create` -> `object_store`,
+        // which consumes the real process stdin and so cannot be driven from a
+        // unit test. Seed the registry with the store that first read would have
+        // produced (as the first `CREATE EXTERNAL TABLE` does), then drive the
+        // lookup through `get_or_create` and assert it hands back that exact
+        // store rather than rebuilding it.
         let url = Url::parse("stdin:///stdin.csv").unwrap();
-        let store =
-            StdinUtils::in_memory_object_store(&url, b"a\n1\n2\n".to_vec()).await?;
+        let path = ObjectStorePath::from_url_path(url.path())?;
+        let buffered: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        buffered.put(&path, b"a\n1\n2\n".to_vec().into()).await?;
 
         let ctx = SessionContext::new();
-        ctx.register_object_store(&url, store);
+        ctx.register_object_store(&url, Arc::clone(&buffered));
 
         let reused = StdinUtils::get_or_create(&ctx.state(), &url).await?;
-        let path = ObjectStorePath::from_url_path(url.path())?;
+        assert!(
+            Arc::ptr_eq(&buffered, &reused),
+            "get_or_create must reuse the registered stdin store, not rebuild it"
+        );
         let bytes = reused.get(&path).await?.bytes().await?;
         assert_eq!(bytes.as_ref(), b"a\n1\n2\n");
         Ok(())

@@ -26,6 +26,7 @@ use datafusion_physical_expr::{
     expressions::{Column, Literal},
     projection::{ProjectionExpr, ProjectionExprs},
 };
+use datafusion_physical_expr_adapter::rewrite::rewrite_input_file_name_in_projection;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 
@@ -69,6 +70,7 @@ impl ProjectionOpener {
 impl FileOpener for ProjectionOpener {
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let partition_values = partitioned_file.partition_values.clone();
+
         // Modify any references to partition columns in the projection expressions
         // and substitute them with literal values from PartitionedFile.partition_values
         let projection = if self.partition_columns.is_empty() {
@@ -80,6 +82,11 @@ impl FileOpener for ProjectionOpener {
                 partition_values,
             )
         };
+        // Replace `input_file_name()` with a per-file literal if present.
+        let projection = rewrite_input_file_name_in_projection(
+            projection,
+            partitioned_file.object_meta.location.as_ref(),
+        )?;
         let projector = projection.make_projector(&self.input_schema)?;
 
         let inner = self.inner.open(partitioned_file)?;
@@ -287,14 +294,30 @@ impl SplitProjection {
 mod test {
     use std::sync::Arc;
 
-    use arrow::array::AsArray;
-    use arrow::datatypes::{DataType, SchemaRef};
-    use datafusion_common::{DFSchema, ScalarValue, record_batch};
-    use datafusion_expr::{Expr, col, execution_props::ExecutionProps};
-    use datafusion_physical_expr::{create_physical_exprs, projection::ProjectionExpr};
+    use arrow::array::{AsArray, RecordBatch};
+    use arrow::datatypes::{DataType, Field, SchemaRef};
+    use datafusion_common::{DFSchema, ScalarValue, config::ConfigOptions, record_batch};
+    use datafusion_expr::{Expr, ScalarUDF, col, execution_props::ExecutionProps};
+    use datafusion_functions::core::input_file_name::InputFileNameFunc;
+    use datafusion_physical_expr::{
+        ScalarFunctionExpr, create_physical_exprs, projection::ProjectionExpr,
+    };
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use futures::{FutureExt, StreamExt};
     use itertools::Itertools;
 
     use super::*;
+
+    struct StaticBatchOpener {
+        batch: RecordBatch,
+    }
+
+    impl FileOpener for StaticBatchOpener {
+        fn open(&self, _partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
+            let batch = self.batch.clone();
+            Ok(async move { Ok(futures::stream::iter([Ok(batch)]).boxed()) }.boxed())
+        }
+    }
 
     fn create_projection_exprs<'a>(
         exprs: impl IntoIterator<Item = &'a Expr>,
@@ -309,6 +332,68 @@ mod test {
             .map(|(i, e)| ProjectionExpr::new(Arc::clone(&e), format!("col{i}")))
             .collect_vec();
         ProjectionExprs::from(projection_exprs)
+    }
+
+    fn input_file_name_expr() -> Arc<dyn PhysicalExpr> {
+        Arc::new(ScalarFunctionExpr::new(
+            "input_file_name",
+            Arc::new(ScalarUDF::from(InputFileNameFunc::new())),
+            vec![],
+            Arc::new(Field::new("input_file_name", DataType::Utf8, true)),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
+    #[tokio::test]
+    async fn test_projection_opener_rewrites_input_file_name_with_partitions() {
+        let file_schema = Schema::new(vec![Field::new("value", DataType::Int32, false)]);
+        let projection = ProjectionExprs::new([
+            ProjectionExpr::new(Arc::new(Column::new("value", 0)), "value"),
+            ProjectionExpr::new(Arc::new(Column::new("part", 1)), "part"),
+            ProjectionExpr::new(input_file_name_expr(), "file_name"),
+        ]);
+        let split = SplitProjection::new(&file_schema, &projection);
+        let input_batch =
+            record_batch!(("value", Int32, vec![10, 20])).expect("input batch");
+
+        let opener = ProjectionOpener::try_new(
+            split,
+            Arc::new(StaticBatchOpener { batch: input_batch }),
+            &file_schema,
+        )
+        .expect("projection opener");
+
+        let mut file = PartitionedFile::new("part=west/data.csv", 100);
+        file.partition_values = vec![ScalarValue::from("west")];
+        let mut stream = opener
+            .open(file)
+            .expect("open projection")
+            .await
+            .expect("inner stream");
+        let batch = stream
+            .next()
+            .await
+            .expect("one projected batch")
+            .expect("projected batch");
+        assert!(stream.next().await.is_none());
+
+        assert_eq!(batch.schema().field(0).name(), "value");
+        assert_eq!(batch.schema().field(1).name(), "part");
+        assert_eq!(batch.schema().field(2).name(), "file_name");
+
+        let values = batch
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int32Type>();
+        assert_eq!(values.value(0), 10);
+        assert_eq!(values.value(1), 20);
+
+        let parts = batch.column(1).as_string::<i32>();
+        assert_eq!(parts.value(0), "west");
+        assert_eq!(parts.value(1), "west");
+
+        let file_names = batch.column(2).as_string::<i32>();
+        assert_eq!(file_names.value(0), "part=west/data.csv");
+        assert_eq!(file_names.value(1), "part=west/data.csv");
     }
 
     #[test]

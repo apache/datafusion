@@ -229,6 +229,23 @@ impl JoinLeftData {
         &self.batch
     }
 
+    /// Returns `true` if the build side physically contains rows.
+    ///
+    /// This is distinct from [`Self::has_matchable_build_rows`]: a build side
+    /// can hold rows while its hash map is empty (see that method).
+    pub(super) fn has_build_rows(&self) -> bool {
+        self.batch().num_rows() > 0
+    }
+
+    /// Returns `true` if the build-side hash map has any matchable entries.
+    ///
+    /// Under [`NullEquality::NullEqualsNothing`] build rows whose join key is
+    /// NULL are omitted from the map, so this can be `false` even when
+    /// [`Self::has_build_rows`] is `true`.
+    pub(super) fn has_matchable_build_rows(&self) -> bool {
+        !self.map().is_empty()
+    }
+
     /// returns a reference to the build side expressions values
     pub(super) fn values(&self) -> &[ArrayRef] {
         &self.values
