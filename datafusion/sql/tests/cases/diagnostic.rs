@@ -503,7 +503,6 @@ fn test_syntax_error() -> Result<()> {
     }
 }
 
-
 #[test]
 fn test_eq_null_warning_in_where() -> Result<()> {
     let query = "SELECT * FROM person WHERE /*cmp*/first_name = /*null*/NULL/*null+cmp*/";
