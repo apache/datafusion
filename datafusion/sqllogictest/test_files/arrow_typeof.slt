@@ -104,6 +104,18 @@ SELECT arrow_cast('1', arrow_cast('Utf8', 'Utf8'))
 query error DataFusion error: Execution error: Unsupported type 'unknown'\. Must be a supported arrow type name such as 'Int32' or 'Timestamp\(ns\)'\. Error unknown token: unknown
 SELECT arrow_cast('1', 'unknown')
 
+query error Invalid Arrow type combination: Time32 only supports Second and Millisecond, got Microsecond
+SELECT arrow_cast(0, 'Time32(Microsecond)') + 1
+
+query error Invalid Arrow type combination: Time32 only supports Second and Millisecond, got Nanosecond
+SELECT arrow_cast(0, 'Time32(Nanosecond)') + 1
+
+query error Invalid Arrow type combination: Time64 only supports Microsecond and Nanosecond, got Second
+SELECT arrow_cast(0, 'Time64(Second)') + 1
+
+query error Invalid Arrow type combination: Time64 only supports Microsecond and Nanosecond, got Millisecond
+SELECT arrow_cast(0, 'Time64(Millisecond)') + 1
+
 # Round Trip tests:
 query TTTTTTTTTTTTTTTTTTTTTTTTT
 SELECT
