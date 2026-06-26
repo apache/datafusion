@@ -481,14 +481,11 @@ where
     }
 
     /// Emits the next `n` distinct values as an Arrow array.
-    ///
-    /// The builder is frozen into an immutable `Buffer` (zero-copy) and the
-    /// emitted window is sliced from it directly (zero-copy). Only the
-    /// surviving bytes are copied back into a fresh builder, so the insertion
-    /// path is unchanged.
-    ///
     /// Panics if `n` exceeds the number of not-yet-emitted values.
-    pub fn emit(&mut self, n: usize) -> ArrayRef {
+    pub fn emit(&mut self, n: usize) -> ArrayRef
+    where
+        V: std::ops::Sub<Output = V> + PartialOrd + From<usize>,
+    {
         let total = self.offsets.len() - 1;
         let remaining = total - self.emitted;
         assert!(n <= remaining, "emit({n}): only {remaining} values remain");
@@ -514,16 +511,12 @@ where
         self.offsets = surviving;
         self.emitted = 0;
 
-        // Freeze the builder (zero-copy: MutableBuffer → Arc<Bytes> via finish()).
-        // slice(start) is a zero-copy Arc clone; the array reads only [0, end-start)
-        // bytes because the offsets bound it, so the extra trailing bytes are harmless.
         let frozen = self.buffer.finish();
         let values = frozen.slice(start);
 
         // Copy only the surviving bytes into the fresh builder.
         self.buffer.append_slice(&frozen[end..]);
 
-        // Rebase non-inline offsets: buffer now starts at what was `end`.
         // Only surviving entries (offset >= end) need rebasing; emitted entries
         // (offset < end) are removed by drain_emitted and must not be touched.
         if end > 0 {
@@ -549,6 +542,8 @@ where
                 None
             }
         });
+
+        self.drain_emitted(n);
 
         match self.output_type {
             OutputType::Binary => Arc::new(unsafe {
@@ -612,9 +607,8 @@ where
         }
     }
 
-    /// Removes entries whose payload is less than `n` from the hash table and
-    /// subtracts `n` from every remaining payload. Emitted values are evicted
-    pub fn drain_emitted(&mut self, n: usize)
+    #[inline]
+    fn drain_emitted(&mut self, n: usize)
     where
         V: std::ops::Sub<Output = V> + PartialOrd + From<usize>,
     {

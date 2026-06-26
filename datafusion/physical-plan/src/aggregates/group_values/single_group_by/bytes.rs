@@ -93,7 +93,6 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
             EmitTo::First(n) => {
                 let n = n.min(self.num_groups);
                 let group_values = self.map.emit(n);
-                self.map.drain_emitted(n);
                 self.num_groups -= n;
                 group_values
             }
