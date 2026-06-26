@@ -2444,6 +2444,7 @@ DROP TABLE sq_count_orders;
 # prefer_hash_join = false and multiple partitions, the planner routed the
 # null-aware anti join to SortMergeJoin (which is not null-aware) and returned
 # wrong results; null-aware anti joins must use the CollectLeft HashJoin.
+
 statement ok
 set datafusion.optimizer.prefer_hash_join = false;
 
@@ -2460,6 +2461,21 @@ CREATE TABLE nia_right_no_null(y INT) AS VALUES (2), (4);
 query I
 SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null) ORDER BY x;
 ----
+
+# The null-aware anti join must be planned as a CollectLeft HashJoinExec even with
+# prefer_hash_join = false: SortMergeJoinExec is not null-aware and must not be used.
+query TT
+EXPLAIN SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null);
+----
+logical_plan
+01)LeftAnti Join: nia_left.x = __correlated_sq_1.y
+02)--TableScan: nia_left projection=[x]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: nia_right_with_null projection=[y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(x@0, y@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Subquery has no NULL -> NOT IN behaves like a normal anti join.
 query I
@@ -2478,4 +2494,4 @@ statement ok
 DROP TABLE nia_right_no_null;
 
 statement ok
-set datafusion.optimizer.prefer_hash_join = true;
+reset datafusion.optimizer.prefer_hash_join;
