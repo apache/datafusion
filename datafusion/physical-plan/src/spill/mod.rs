@@ -30,7 +30,7 @@ pub use spill_manager::SpillManager;
 
 use std::fs::File;
 use std::io::BufReader;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -243,35 +243,6 @@ impl RecordBatchStream for SpillReaderStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
-}
-
-/// Spill the `RecordBatch` to disk as smaller batches
-/// split by `batch_size_rows`
-#[deprecated(
-    since = "46.0.0",
-    note = "This method is deprecated. Use `SpillManager::spill_record_batch_by_size` instead."
-)]
-#[expect(clippy::needless_pass_by_value)]
-pub fn spill_record_batch_by_size(
-    batch: &RecordBatch,
-    path: PathBuf,
-    schema: SchemaRef,
-    batch_size_rows: usize,
-) -> Result<()> {
-    let mut offset = 0;
-    let total_rows = batch.num_rows();
-    let mut writer =
-        IPCStreamWriter::new(&path, schema.as_ref(), SpillCompression::Uncompressed)?;
-
-    while offset < total_rows {
-        let length = std::cmp::min(total_rows - offset, batch_size_rows);
-        let batch = batch.slice(offset, length);
-        offset += batch.num_rows();
-        writer.write(&batch)?;
-    }
-    writer.finish()?;
-
-    Ok(())
 }
 
 /// Write in Arrow IPC Stream format to a file.

@@ -45,7 +45,7 @@ fn from_env() {
         // for valid testing
         env::set_var(env_key, "4096");
         let config = ConfigOptions::from_env().unwrap();
-        assert_eq!(config.execution.batch_size, 4096);
+        assert_eq!(config.execution.batch_size.get(), 4096);
 
         // for invalid testing
         env::set_var(env_key, "abc");
@@ -57,6 +57,6 @@ fn from_env() {
 
         env::remove_var(env_key);
         let config = ConfigOptions::from_env().unwrap();
-        assert_eq!(config.execution.batch_size, 8192); // set to its default value
+        assert_eq!(config.execution.batch_size.get(), 8192); // set to its default value
     }
 }
