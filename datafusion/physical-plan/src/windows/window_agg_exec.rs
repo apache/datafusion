@@ -42,9 +42,13 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
+use datafusion_common::utils::memory::{
+    RecordBatchMemoryCounter, get_record_batch_memory_size,
+};
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
 };
@@ -265,6 +269,8 @@ impl ExecutionPlan for WindowAggExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let reservation = MemoryConsumer::new(format!("WindowAggStream[{partition}]"))
+            .register(context.memory_pool());
         let input = self.input.execute(partition, context)?;
         let stream = Box::pin(WindowAggStream::new(
             Arc::clone(&self.schema),
@@ -273,6 +279,7 @@ impl ExecutionPlan for WindowAggExec {
             BaselineMetrics::new(&self.metrics, partition),
             self.partition_by_sort_keys()?,
             self.ordered_partition_by_indices.clone(),
+            reservation,
         )?);
         Ok(stream)
     }
@@ -327,6 +334,15 @@ pub struct WindowAggStream {
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
     ordered_partition_by_indices: Vec<usize>,
+    /// Tracks the memory reserved for the buffered input batches (and the
+    /// transient concatenation copy during the final compute) against the
+    /// task's memory pool, so the operator fails with `ResourcesExhausted`
+    /// under memory pressure instead of being OOM-killed.
+    reservation: MemoryReservation,
+    /// Counts the unique buffers across the buffered batches so shared buffers
+    /// (e.g. zero-copy slices from an upstream Sort/Repartition) are reserved
+    /// once rather than once per batch.
+    memory_counter: RecordBatchMemoryCounter,
 }
 
 impl WindowAggStream {
@@ -338,6 +354,7 @@ impl WindowAggStream {
         baseline_metrics: BaselineMetrics,
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
         ordered_partition_by_indices: Vec<usize>,
+        reservation: MemoryReservation,
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.
         assert_eq_or_internal_err!(
@@ -354,6 +371,8 @@ impl WindowAggStream {
             baseline_metrics,
             partition_by_sort_keys,
             ordered_partition_by_indices,
+            reservation,
+            memory_counter: RecordBatchMemoryCounter::new(),
         })
     }
 
@@ -361,10 +380,15 @@ impl WindowAggStream {
         // record compute time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
+        // `concat_batches` produces a fresh contiguous copy of all buffered
+        // input (it does not share buffers with `self.batches`), so reserve its
+        // size to reflect the transient ~2x peak during the final compute.
         let batch = concat_batches(&self.input.schema(), &self.batches)?;
         if batch.num_rows() == 0 {
             return Ok(None);
         }
+        self.reservation
+            .try_grow(get_record_batch_memory_size(&batch))?;
 
         let partition_by_sort_keys = self
             .ordered_partition_by_indices
@@ -428,6 +452,12 @@ impl WindowAggStream {
         loop {
             return Poll::Ready(Some(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
+                    // Reserve only the memory of buffers not already counted, so
+                    // batches sharing buffers are not double-counted.
+                    let additional = self.memory_counter.count_batch(&batch);
+                    if let Err(e) = self.reservation.try_grow(additional) {
+                        return Poll::Ready(Some(Err(e)));
+                    }
                     self.batches.push(batch);
                     continue;
                 }
@@ -498,6 +528,60 @@ mod tests {
             window.cardinality_effect(),
             CardinalityEffect::Equal
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_agg_exec_errors_when_memory_exhausted() -> Result<()> {
+        use crate::common::collect;
+        use arrow::array::{ArrayRef, Int64Array};
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let a: ArrayRef = Arc::new(Int64Array::from((0..1024).collect::<Vec<i64>>()));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![a])?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+
+        let args = vec![crate::expressions::col("a", &schema)?];
+        let window_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count(a)".to_string(),
+            &args,
+            &[],
+            &[],
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+        let window = Arc::new(WindowAggExec::try_new(vec![window_expr], input, true)?);
+
+        // A tiny memory pool: buffering the input must fail with
+        // ResourcesExhausted attributed to this operator's consumer rather than
+        // being silently OOM-killed.
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(100, 1.0)
+            .build_arc()?;
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+
+        let err = collect(window.execute(0, task_ctx)?)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Resources exhausted"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.contains("WindowAggStream"),
+            "error should name the consumer: {err}"
+        );
         Ok(())
     }
 }
