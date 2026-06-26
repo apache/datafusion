@@ -85,7 +85,7 @@ impl TreeNode for Expr {
             | Expr::Placeholder(_)
             | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-                (left, right).apply_ref_elements(f)
+                (left.as_ref(), right.as_ref()).apply_ref_elements(f)
             }
             Expr::Like(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
@@ -173,11 +173,13 @@ impl TreeNode for Expr {
             }) => expr.map_elements(f)?.update_data(|be| {
                 Expr::InSubquery(InSubquery::new(be, subquery, negated))
             }),
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => (left, right)
-                .map_elements(f)?
-                .update_data(|(new_left, new_right)| {
-                    Expr::BinaryExpr(BinaryExpr::new(new_left, op, new_right))
-                }),
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                (left.into_inner(), right.into_inner())
+                    .map_elements(f)?
+                    .update_data(|(new_left, new_right)| {
+                        Expr::BinaryExpr(BinaryExpr::new(new_left, op, new_right))
+                    })
+            }
             Expr::Like(Like {
                 negated,
                 expr,

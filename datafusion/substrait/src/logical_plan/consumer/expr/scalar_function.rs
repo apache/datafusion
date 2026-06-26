@@ -180,11 +180,11 @@ fn arg_list_to_binary_op_tree_inner(
     let right_take = take_len - left_take;
     let left = arg_list_to_binary_op_tree_inner(op, args, left_take)?;
     let right = arg_list_to_binary_op_tree_inner(op, args, right_take)?;
-    Ok(Expr::BinaryExpr(BinaryExpr {
-        left: Box::new(left),
+    Ok(Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
         op,
-        right: Box::new(right),
-    }))
+        Box::new(right),
+    )))
 }
 
 /// Build [`Expr`] from its name and required inputs.

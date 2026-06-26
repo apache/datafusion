@@ -456,8 +456,8 @@ fn remove_join_expressions(expr: Expr, join_keys: &JoinKeySet) -> Option<Expr> {
         }
         // Fix for issue#78 join predicates from inside of OR expr also pulled up properly.
         Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == Operator::And => {
-            let l = remove_join_expressions(*left, join_keys);
-            let r = remove_join_expressions(*right, join_keys);
+            let l = remove_join_expressions(*left.into_inner(), join_keys);
+            let r = remove_join_expressions(*right.into_inner(), join_keys);
             match (l, r) {
                 (Some(ll), Some(rr)) => Some(Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(ll),
@@ -470,8 +470,8 @@ fn remove_join_expressions(expr: Expr, join_keys: &JoinKeySet) -> Option<Expr> {
             }
         }
         Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == Operator::Or => {
-            let l = remove_join_expressions(*left, join_keys);
-            let r = remove_join_expressions(*right, join_keys);
+            let l = remove_join_expressions(*left.into_inner(), join_keys);
+            let r = remove_join_expressions(*right.into_inner(), join_keys);
             match (l, r) {
                 (Some(ll), Some(rr)) => Some(Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(ll),
