@@ -299,7 +299,6 @@ impl<K: CacheKey, V: CacheValue> Cache<K, V> for DefaultCache<K, V> {
 mod tests {
     use std::sync::Arc;
 
-    use crate::cache::TableScopedPath;
     use crate::cache::cache_manager::{
         CachedFileList, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, meta_heap_bytes,
     };
@@ -311,6 +310,7 @@ mod tests {
     use crate::cache::default_cache::TimeProvider;
     use crate::cache::{Cache, CacheEntryInfo};
     use crate::cache::{CacheKey, CacheValue};
+    use crate::cache::{FileStatisticsCacheKey, SchemaFingerprint, TableScopedPath};
     use arrow::array::{Int32Array, ListArray, RecordBatch};
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -827,13 +827,14 @@ mod tests {
             false,
         )]);
 
-        let path = TableScopedPath {
+        let key_1 = FileStatisticsCacheKey {
             path: meta.location.clone(),
             table: None,
+            schema: SchemaFingerprint::from_schema(&schema),
         };
 
         // Cache miss
-        assert!(cache.get(&path).is_none());
+        assert!(cache.get(&key_1).is_none());
 
         // Put a value
         let cached_value = CachedFileMetadata::new(
@@ -841,10 +842,10 @@ mod tests {
             Arc::new(Statistics::new_unknown(&schema)),
             None,
         );
-        cache.put(&path, cached_value);
+        cache.put(&key_1, cached_value);
 
         // Cache hit
-        let result = cache.get(&path);
+        let result = cache.get(&key_1);
         assert!(result.is_some());
 
         let cached = result.unwrap();
@@ -853,12 +854,13 @@ mod tests {
         // File size changed - validation should fail
         let meta2 = create_test_meta("test", 2048);
 
-        let path_2 = TableScopedPath {
+        let key_2 = FileStatisticsCacheKey {
             path: meta2.location.clone(),
             table: None,
+            schema: SchemaFingerprint::from_schema(&schema),
         };
 
-        let cached = cache.get(&path_2).unwrap();
+        let cached = cache.get(&key_2).unwrap();
         assert!(!cached.is_valid_for(&meta2));
 
         // Update with new value
@@ -867,18 +869,19 @@ mod tests {
             Arc::new(Statistics::new_unknown(&schema)),
             None,
         );
-        cache.put(&path_2, cached_value2);
+        cache.put(&key_2, cached_value2);
 
         // Test list_entries
         let entries = cache.list_entries();
         assert_eq!(entries.len(), 1);
 
-        let path_3 = TableScopedPath {
+        let key_3 = FileStatisticsCacheKey {
             path: Path::from("test"),
             table: None,
+            schema: SchemaFingerprint::from_schema(&schema),
         };
 
-        let entry = entries.get(&path_3).unwrap();
+        let entry = entries.get(&key_3).unwrap();
         assert_eq!(entry.value.meta.size, 2048); // Should be updated value
     }
 

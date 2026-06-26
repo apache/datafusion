@@ -193,16 +193,7 @@ impl SchemaFingerprint {
 
 impl DFHeapSize for SchemaFingerprint {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        // `(String, DataType, bool)` has no `DFHeapSize` impl (only 2-tuples do),
-        // so account for each column by hand. `bool` carries no heap.
-        self.0.capacity() * size_of::<(String, DataType, bool)>()
-            + self
-                .0
-                .iter()
-                .map(|(name, data_type, _)| {
-                    name.heap_size(ctx) + data_type.heap_size(ctx)
-                })
-                .sum::<usize>()
+        self.0.heap_size(ctx)
     }
 }
 
