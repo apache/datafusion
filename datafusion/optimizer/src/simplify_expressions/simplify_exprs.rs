@@ -402,6 +402,29 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fails with: Cannot cast string '2013-07-01' to value of UInt16 type"]
+    fn test_simplify_filter_cast_string_literal_to_uint16() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("event_date", DataType::UInt16, false)]);
+        let scan = table_scan(Some("test"), &schema, None)?
+            .build()
+            .expect("building scan");
+        let plan = LogicalPlanBuilder::from(scan)
+            .filter(col("event_date").gt_eq(Expr::Cast(Cast::new(
+                Box::new(lit("2013-07-01")),
+                DataType::UInt16,
+            ))))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Filter: test.event_date >= CAST(Utf8("2013-07-01") AS UInt16)
+          TableScan: test
+        "#
+        )
+    }
+
+    #[test]
     fn test_simplify_optimized_plan_with_or() -> Result<()> {
         let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
