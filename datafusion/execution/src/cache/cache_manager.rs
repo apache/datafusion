@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::cache::default_cache::DefaultCache;
-pub use crate::cache::{Cache, CacheValue, TableScopedPath};
+pub use crate::cache::{
+    Cache, CacheValue, FileStatisticsCacheKey, SchemaFingerprint, TableScopedPath,
+};
 use datafusion_common::HashMap;
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::{Result, Statistics};
@@ -54,7 +56,7 @@ pub const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
 /// 3. If invalid or missing, compute new value and call `put(path, new_value)`
 ///
 /// See [`crate::runtime_env::RuntimeEnv`] for more details
-pub type FileStatisticsCache = dyn Cache<TableScopedPath, CachedFileMetadata>;
+pub type FileStatisticsCache = dyn Cache<FileStatisticsCacheKey, CachedFileMetadata>;
 
 /// A cache for storing the [`ObjectMeta`]s that result from listing a path.
 ///
@@ -305,7 +307,7 @@ impl CacheManager {
                     Some(Arc::clone(fsc))
                 }
                 None if config.file_statistics_cache_limit > 0 => Some(Arc::new(
-                    DefaultCache::<TableScopedPath, CachedFileMetadata>::new(
+                    DefaultCache::<FileStatisticsCacheKey, CachedFileMetadata>::new(
                         config.file_statistics_cache_limit,
                     )
                     .with_name("DefaultFileStatisticsCache"),

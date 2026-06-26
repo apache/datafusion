@@ -268,21 +268,6 @@ impl ListingTable {
         self
     }
 
-    fn statistics_cache(
-        &self,
-        has_table_reference: bool,
-    ) -> Option<&Arc<FileStatisticsCache>> {
-        let shared_cache = self.collected_statistics.as_ref()?;
-        if has_table_reference || self.schema_source == SchemaSource::Inferred {
-            Some(shared_cache)
-        } else {
-            // Anonymous specified-schema reads can use the same file path with
-            // different logical schemas. File statistics are schema-dependent,
-            // so avoid reusing stats computed for a different read schema.
-            None
-        }
-    }
-
     /// Specify the SQL definition for this table, if any
     pub fn with_definition(mut self, definition: Option<String>) -> Self {
         self.definition = definition;
@@ -990,17 +975,24 @@ impl ListingTable {
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
-        use datafusion_execution::cache::cache_manager::CachedFileMetadata;
+        use datafusion_execution::cache::cache_manager::{
+            CachedFileMetadata, FileStatisticsCacheKey, SchemaFingerprint,
+        };
 
-        let path = TableScopedPath {
+        let key = FileStatisticsCacheKey {
             table: part_file.table_reference.clone(),
             path: part_file.object_meta.location.clone(),
+            // Statistics are computed against `file_schema`, so key on it: reads
+            // of the same path under a different schema get their own entry
+            // rather than reusing incompatible column statistics.
+            schema: SchemaFingerprint::from_schema(&self.file_schema),
         };
         let meta = &part_file.object_meta;
 
-        // Check cache first - if we have valid cached statistics and ordering
-        if let Some(cache) = self.statistics_cache(path.table.is_some())
-            && let Some(cached) = cache.get(&path)
+        // Check cache first - the schema is part of the key, so a hit is already
+        // schema-compatible; `is_valid_for` only confirms the file is unchanged.
+        if let Some(cache) = &self.collected_statistics
+            && let Some(cached) = cache.get(&key)
             && cached.is_valid_for(meta)
         {
             // Return cached statistics and ordering
@@ -1017,9 +1009,9 @@ impl ListingTable {
         let statistics = Arc::new(file_meta.statistics);
 
         // Store in cache
-        if let Some(cache) = self.statistics_cache(path.table.is_some()) {
+        if let Some(cache) = &self.collected_statistics {
             cache.put(
-                &path,
+                &key,
                 CachedFileMetadata::new(
                     meta.clone(),
                     Arc::clone(&statistics),

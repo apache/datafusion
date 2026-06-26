@@ -255,7 +255,29 @@ async fn anonymous_parquet_stats_cache_with_explicit_wider_schema() {
     let stats = plan.statistics_with_args(&StatisticsArgs::new()).unwrap();
     assert_eq!(stats.column_statistics.len(), 2);
     assert_eq!(stats.column_statistics[1].null_count, Precision::Exact(1));
-    assert_eq!(cache.len(), 1);
+
+    // #23072: the cache now keys on file_schema, so the wider read no longer
+    // bypasses the cache (as in #22950) — it lands in its own entry and
+    // coexists with the inferred one. Was `1` under the bypass.
+    assert_eq!(cache.len(), 2);
+
+    // Repeat the wider read: same path + same file_schema -> reuse (no new
+    // entry) and a cache hit. Under #22950's bypass this read could never reuse.
+    ctx.read_parquet(
+        &parquet_path,
+        ParquetReadOptions::default().schema(&wider_schema),
+    )
+    .await
+    .unwrap()
+    .create_physical_plan()
+    .await
+    .unwrap();
+    assert_eq!(cache.len(), 2);
+    let hits: usize = cache.list_entries().values().map(|e| e.hits).sum();
+    assert_eq!(
+        hits, 1,
+        "expected a cache hit on the repeat read, got {hits}"
+    );
 }
 
 #[tokio::test]

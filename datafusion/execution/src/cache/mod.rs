@@ -20,6 +20,7 @@ pub mod lru_queue;
 
 pub mod default_cache;
 
+use datafusion_common::arrow::datatypes::{DataType, Schema};
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::instant::Instant;
 use datafusion_common::{HashMap, TableReference};
@@ -163,5 +164,126 @@ impl Display for TableScopedPath {
         } else {
             write!(f, "{}", self.path)
         }
+    }
+}
+
+/// A fingerprint of the `file_schema` used to compute a file's statistics.
+///
+/// Captures exactly the attributes that determine the layout and meaning of
+/// `Statistics::column_statistics`: each column's name, data type and
+/// nullability, in order. It deliberately excludes field/schema metadata, which
+/// cannot affect statistics — including it would needlessly fragment the cache.
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct SchemaFingerprint(Vec<(String, DataType, bool)>);
+
+impl SchemaFingerprint {
+    /// Builds a fingerprint from the `file_schema` used to compute statistics
+    /// (the schema of the columns physically read, not the full table schema —
+    /// partition columns and their statistics are handled separately).
+    pub fn from_schema(file_schema: &Schema) -> Self {
+        Self(
+            file_schema
+                .fields()
+                .iter()
+                .map(|f| (f.name().clone(), f.data_type().clone(), f.is_nullable()))
+                .collect(),
+        )
+    }
+}
+
+impl DFHeapSize for SchemaFingerprint {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        // `(String, DataType, bool)` has no `DFHeapSize` impl (only 2-tuples do),
+        // so account for each column by hand. `bool` carries no heap.
+        self.0.capacity() * size_of::<(String, DataType, bool)>()
+            + self
+                .0
+                .iter()
+                .map(|(name, data_type, _)| {
+                    name.heap_size(ctx) + data_type.heap_size(ctx)
+                })
+                .sum::<usize>()
+    }
+}
+
+/// Cache key for the file-statistics cache.
+///
+/// Like [`TableScopedPath`] it is scoped by table and path, but it additionally
+/// carries a [`SchemaFingerprint`]. File statistics are computed against a
+/// specific `file_schema`, so the same path read under different schemas must
+/// not share an entry; the fingerprint keeps those entries distinct while a
+/// repeated read of the same schema still reuses its entry.
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct FileStatisticsCacheKey {
+    pub table: Option<TableReference>,
+    pub path: Path,
+    pub schema: SchemaFingerprint,
+}
+
+impl DFHeapSize for FileStatisticsCacheKey {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.path.as_ref().heap_size(ctx)
+            + self.table.heap_size(ctx)
+            + self.schema.heap_size(ctx)
+    }
+}
+
+impl CacheKey for FileStatisticsCacheKey {
+    fn size(&self) -> usize {
+        DFHeapSize::heap_size(self, &mut DFHeapSizeCtx::default())
+    }
+
+    fn table_ref(&self) -> Option<&TableReference> {
+        self.table.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod schema_fingerprint_tests {
+    use super::*;
+    use datafusion_common::arrow::datatypes::Field;
+
+    fn fp(fields: Vec<Field>) -> SchemaFingerprint {
+        SchemaFingerprint::from_schema(&Schema::new(fields))
+    }
+
+    /// `from_schema` must capture nullability and field order — the two
+    /// attributes most easily dropped by a wrong implementation.
+    #[test]
+    fn fingerprint_captures_nullability_and_order() {
+        assert_ne!(
+            fp(vec![Field::new("id", DataType::Int64, false)]),
+            fp(vec![Field::new("id", DataType::Int64, true)]),
+            "nullability must affect the fingerprint",
+        );
+
+        let ab = fp(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let ba = fp(vec![
+            Field::new("b", DataType::Utf8, true),
+            Field::new("a", DataType::Int64, false),
+        ]);
+        assert_ne!(ab, ba, "field order must affect the fingerprint");
+    }
+
+    /// Metadata must NOT affect the fingerprint: it cannot change column
+    /// statistics, so including it would needlessly fragment the cache.
+    #[test]
+    fn fingerprint_ignores_metadata() {
+        let plain = fp(vec![Field::new("id", DataType::Int64, false)]);
+
+        let field_md = SchemaFingerprint::from_schema(&Schema::new(vec![
+            Field::new("id", DataType::Int64, false)
+                .with_metadata([("note".to_string(), "x".to_string())].into()),
+        ]));
+        assert_eq!(plain, field_md, "field metadata must be ignored");
+
+        let schema_md = SchemaFingerprint::from_schema(
+            &Schema::new(vec![Field::new("id", DataType::Int64, false)])
+                .with_metadata([("k".to_string(), "v".to_string())].into()),
+        );
+        assert_eq!(plain, schema_md, "schema metadata must be ignored");
     }
 }
