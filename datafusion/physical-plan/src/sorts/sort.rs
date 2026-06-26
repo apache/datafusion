@@ -476,8 +476,7 @@ impl ExternalSorter {
         // reserved again for the next spill.
         self.merge_reservation.free();
 
-        // Do not coalesce on the spill path: it is already memory-constrained,
-        // and merging into fewer/larger runs raises per-run peak memory.
+        // No coalescing on the spill path: it raises per-run peak memory.
         let mut sorted_stream =
             self.in_mem_sort_stream(self.metrics.baseline.intermediate(), false)?;
         // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
@@ -586,10 +585,8 @@ impl ExternalSorter {
     ///
     ///   in_mem_batches
     /// ```
-    /// `coalesce_runs` enables merging the buffered batches into a small number
-    /// of larger sorted runs to reduce merge fan-in (a throughput optimization).
-    /// It is disabled on the spill path, which already runs under memory
-    /// pressure and must keep per-run peak memory low.
+    /// `coalesce_runs` merges buffered batches into fewer, larger sorted runs to
+    /// reduce merge fan-in. Disabled on the spill path to keep peak memory low.
     fn in_mem_sort_stream(
         &mut self,
         metrics: BaselineMetrics,
@@ -630,22 +627,11 @@ impl ExternalSorter {
             return self.sort_batch_stream(batch, &metrics, reservation);
         }
 
-        // Take the buffered batches. For single-column sorts, coalesce them into
-        // a small number of larger runs (each bounded by
-        // `sort_in_place_threshold_bytes`) before sorting and merging. This
-        // drastically reduces the merge fan-in (e.g. from hundreds/thousands of
-        // tiny one-batch runs down to a handful). For cheap single-key
-        // comparisons the per-stream cursor/merge overhead dominates, so fewer,
-        // larger sorted runs are substantially faster (benchmarks show 1.4x-7x).
-        //
-        // Multi-column sorts are intentionally left as one run per batch: their
-        // comparisons are expensive enough that the row-format streaming merge
-        // of many small sorted runs beats sorting a few large runs with the
-        // lexicographic comparator (which would otherwise regress those cases).
-        //
-        // Each run is bounded by `sort_in_place_threshold_bytes`, the same limit
-        // the in-place concat path above already deems safe to materialize, so
-        // this does not raise the peak memory contract.
+        // For single-column sorts, coalesce the buffered batches into fewer,
+        // larger runs to cut the merge fan-in (where the cheap per-key compare is
+        // dominated by per-stream cursor/merge overhead). Multi-column sorts are
+        // left as one run per batch: the row-format merge of many small runs
+        // beats sorting a few large runs with the lexicographic comparator.
         let batches = std::mem::take(&mut self.in_mem_batches);
         let runs = if coalesce_runs && self.expr.len() == 1 {
             self.coalesce_in_mem_batches_into_runs(batches)?
@@ -676,16 +662,10 @@ impl ExternalSorter {
             .build()
     }
 
-    /// Greedily concatenates `batches` into a smaller number of larger runs,
-    /// each bounded by `sort_in_place_threshold_bytes`, to reduce merge fan-in.
-    ///
-    /// Adjacent batches are grouped until adding the next batch would exceed the
-    /// threshold, at which point the group is concatenated into a single run.
-    /// `self.reservation` is resized to match the coalesced runs' footprint so
-    /// the per-run reservation splits performed by the caller remain exact.
-    ///
-    /// Used only for the sort-then-merge path; the caller decides when coalescing
-    /// is beneficial (currently: single-column sorts).
+    /// Concatenates `batches` into fewer, larger runs, each bounded by
+    /// `sort_in_place_threshold_bytes`, to reduce merge fan-in. `self.reservation`
+    /// is resized to the coalesced footprint so the caller's per-run splits stay
+    /// exact.
     fn coalesce_in_mem_batches_into_runs(
         &mut self,
         batches: Vec<RecordBatch>,
@@ -695,8 +675,7 @@ impl ExternalSorter {
         let mut group: Vec<RecordBatch> = Vec::new();
         let mut group_bytes = 0usize;
 
-        // Concatenate a finished group into a single run, avoiding a copy when
-        // the group holds a single batch.
+        // Flush a group into a run, skipping the copy for a single-batch group.
         let flush = |group: &mut Vec<RecordBatch>,
                      runs: &mut Vec<RecordBatch>,
                      schema: &SchemaRef|
@@ -723,9 +702,7 @@ impl ExternalSorter {
         }
         flush(&mut group, &mut runs, &self.schema)?;
 
-        // Concatenation may produce a slightly different memory footprint than
-        // the sum of the original batches, so realign the reservation with the
-        // coalesced runs before the caller splits it per run.
+        // Realign the reservation: concatenation may shift the footprint slightly.
         let total: usize = runs
             .iter()
             .map(get_reserved_bytes_for_record_batch)
@@ -1730,13 +1707,9 @@ mod tests {
         Ok(())
     }
 
-    /// Exercises the single-column "sort then merge" path with run coalescing
-    /// (the `coalesce_in_mem_batches_into_runs` optimization): many small input
-    /// batches whose total size exceeds a deliberately tiny in-place threshold,
-    /// with ample memory so no spilling occurs. Verifies the output is a correct
-    /// total order (matching a reference sort) including NULL handling, so the
-    /// coalescing + multi-run merge produces exactly the same result as a plain
-    /// sort.
+    /// Single-column run coalescing: many small batches above a tiny in-place
+    /// threshold (with ample memory, so no spill) must still produce a correct
+    /// total order, including NULLs.
     #[tokio::test]
     async fn test_in_mem_sort_coalesced_runs() -> Result<()> {
         // Tiny in-place threshold forces the sort-then-merge path and, for a
