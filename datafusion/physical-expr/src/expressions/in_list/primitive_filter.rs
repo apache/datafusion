@@ -29,12 +29,19 @@ use std::hash::{Hash, Hasher};
 use super::result::build_in_list_result;
 use super::static_filter::{StaticFilter, handle_dictionary};
 
+/// Storage for the bits used by [`BitmapFilter`].
+///
+/// `BitmapFilter` represents an `IN` list with one bit for each possible
+/// value, so membership checks become direct bit tests. This trait lets the
+/// same filter code use different storage sizes for different integer widths.
 pub(super) trait BitmapStorage: Send + Sync {
     fn new_zeroed() -> Self;
     fn set_bit(&mut self, index: usize);
     fn get_bit(&self, index: usize) -> bool;
 }
 
+// `UInt8` has 256 possible values, 0 through 255. One bit per value takes
+// 256 bits, which fits in four `u64` words.
 impl BitmapStorage for [u64; 4] {
     #[inline]
     fn new_zeroed() -> Self {
@@ -50,6 +57,9 @@ impl BitmapStorage for [u64; 4] {
     }
 }
 
+// `UInt16` has 65,536 possible values. One bit per value takes 65,536 bits,
+// which is 1,024 `u64` words, or 8 KiB. Box the array so the filter stores a
+// pointer instead of carrying an 8 KiB array inline.
 impl BitmapStorage for Box<[u64; 1024]> {
     #[inline]
     fn new_zeroed() -> Self {
@@ -65,24 +75,34 @@ impl BitmapStorage for Box<[u64; 1024]> {
     }
 }
 
+/// Arrow primitive types supported by [`BitmapFilter`].
+///
+/// Arrow already defines the Rust value type as `T::Native`. This trait only
+/// supplies the bitmap storage size for the two integer domains that are small
+/// enough to represent with one bit per possible value.
 pub(super) trait BitmapFilterType:
     ArrowPrimitiveType + Send + Sync + 'static
 {
     type Storage: BitmapStorage;
 }
 
+/// `UInt8` has 256 possible values, so four `u64` words cover the full domain.
 impl BitmapFilterType for UInt8Type {
     type Storage = [u64; 4];
 }
 
+/// `UInt16` has 65,536 possible values, so 1,024 `u64` words cover the full
+/// domain.
 impl BitmapFilterType for UInt16Type {
     type Storage = Box<[u64; 1024]>;
 }
 
-/// Bitmap filter for O(1) set membership via single bit test.
+/// `IN` filter backed by one bit per possible value.
 ///
-/// Small integer domains can store membership in a fixed-size bitmap instead
-/// of using a hash table.
+/// Building the filter scans the non-null values in the IN-list and turns on
+/// the bit selected by each value. Evaluating input values checks the same bit
+/// position. Null handling and `NOT IN` inversion are handled by
+/// `build_in_list_result`.
 pub(super) struct BitmapFilter<T: BitmapFilterType> {
     null_count: usize,
     bits: T::Storage,
