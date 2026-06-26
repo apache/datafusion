@@ -1115,6 +1115,74 @@ pub fn similar_to(
     Ok(Arc::new(BinaryExpr::new(expr, binary_op, pattern)))
 }
 
+/// Translate a SQL `SIMILAR TO` pattern into an equivalent POSIX regex.
+///
+/// PostgreSQL `SIMILAR TO` mixes SQL LIKE wildcards with POSIX-style regex
+/// metacharacters and requires the pattern to match the entire string.
+/// In particular:
+///
+/// * `%` matches any sequence of zero or more characters (like LIKE).
+/// * `_` matches exactly one character (like LIKE).
+/// * `|`, `*`, `+`, `?`, `()`, `{m[,n]}`, `[...]` keep their POSIX regex meaning.
+/// * `.`, `^`, `$` are *literal* characters (not regex metacharacters).
+/// * `\` is the default escape character, so `\X` means a literal `X`.
+///
+/// The translated regex is wrapped with `^...$` so the regex engine enforces
+/// a full-string match.
+pub fn translate_similar_to_pattern(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len() + 2);
+    out.push('^');
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '%' => out.push_str(".*"),
+            '_' => out.push('.'),
+            '\\' => {
+                // Backslash escapes the next character in SIMILAR TO. Emit it
+                // as a literal in the regex by re-escaping it.
+                match chars.next() {
+                    Some(next) => {
+                        out.push('\\');
+                        out.push(next);
+                    }
+                    None => out.push_str("\\\\"),
+                }
+            }
+            '[' => {
+                // Pass through a POSIX bracket expression verbatim. Inside a
+                // bracket expression `%`/`_` are literal and most other
+                // metacharacters lose their special meaning, so we copy until
+                // the matching `]`.
+                out.push('[');
+                // The first character after `[` (or `[^`) is always literal
+                // even if it is `]`.
+                if matches!(chars.peek(), Some('^')) {
+                    out.push(chars.next().unwrap());
+                }
+                if matches!(chars.peek(), Some(']')) {
+                    out.push(chars.next().unwrap());
+                }
+                for b in chars.by_ref() {
+                    out.push(b);
+                    if b == ']' {
+                        break;
+                    }
+                }
+            }
+            // SIMILAR TO metacharacters that map 1:1 to regex.
+            '|' | '*' | '+' | '?' | '(' | ')' | '{' | '}' => out.push(c),
+            // Regex metacharacters that SIMILAR TO treats as literals.
+            '.' | '^' | '$' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out.push('$');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5605,5 +5673,39 @@ mod tests {
         let expected =
             BooleanArray::from_iter(vec![Some(true), Some(true), Some(true), Some(true)]);
         assert_eq!(eq_result.into_array(4).unwrap().as_boolean(), &expected);
+    }
+
+    #[test]
+    fn similar_to_pattern_translation() {
+        let cases = [
+            // Empty pattern matches only the empty string.
+            ("", "^$"),
+            // SQL wildcards expand to their POSIX regex equivalents.
+            ("a%", "^a.*$"),
+            ("a_b", "^a.b$"),
+            // POSIX metacharacters borrowed by SIMILAR TO pass through unchanged.
+            ("p[12]%", "^p[12].*$"),
+            ("(foo|bar)+", "^(foo|bar)+$"),
+            ("a{2,3}", "^a{2,3}$"),
+            // `.`, `^`, `$` are literal in SIMILAR TO and must be escaped for regex.
+            ("a.b", "^a\\.b$"),
+            ("^a$", "^\\^a\\$$"),
+            // Backslash escapes the SQL wildcards.
+            ("100\\%", "^100\\%$"),
+            ("a\\_b", "^a\\_b$"),
+            // Bracket expressions are passed through verbatim, including a
+            // leading literal `]` and `%`/`_` inside the class.
+            ("[%_]", "^[%_]$"),
+            ("[]abc]", "^[]abc]$"),
+            ("[^abc]", "^[^abc]$"),
+            ("[^]abc]", "^[^]abc]$"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                translate_similar_to_pattern(input),
+                expected,
+                "pattern: {input:?}"
+            );
+        }
     }
 }
