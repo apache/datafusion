@@ -24,11 +24,11 @@ use arrow::array::{
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
-    Field, FieldRef, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt32Type,
-    UInt64Type,
+    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type,
+    Decimal128Type, Decimal256Type, Field, FieldRef, Int32Type, Int64Type,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt32Type, UInt64Type,
 };
 use datafusion_common::ScalarValue;
 use datafusion_common::hash_utils::create_hashes;
@@ -759,6 +759,12 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 Box::new(NumericHLLAccumulator::<TimestampNanosecondType>::new())
             }
+            DataType::Decimal32(_, _) => {
+                Box::new(NumericHLLAccumulator::<Decimal32Type>::new())
+            }
+            DataType::Decimal64(_, _) => {
+                Box::new(NumericHLLAccumulator::<Decimal64Type>::new())
+            }
             DataType::Decimal128(_, _) => {
                 Box::new(NumericHLLAccumulator::<Decimal128Type>::new())
             }
@@ -825,6 +831,8 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
             | DataType::Timestamp(TimeUnit::Millisecond, _)
             | DataType::Timestamp(TimeUnit::Microsecond, _)
             | DataType::Timestamp(TimeUnit::Nanosecond, _)
+            | DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
             | DataType::Utf8
@@ -844,7 +852,8 @@ mod tests {
     mod real_hash_test {
         use super::*;
         use arrow::array::{
-            AsArray, Decimal128Array, Decimal256Array, Int64Array, StringViewArray,
+            AsArray, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+            Int64Array, StringViewArray,
         };
         use arrow::datatypes::i256;
         use std::sync::Arc;
@@ -904,6 +913,44 @@ mod tests {
 
         #[test]
         fn decimal_support_numerical_acc_and_group_acc() {
+            let decimal_32: ArrayRef = Arc::new(
+                Decimal32Array::from(vec![
+                    1i32,
+                    2,
+                    2,
+                    3,
+                    3,
+                    3,
+                    0,
+                    0,
+                    123_456_789,
+                    999_999_999,
+                    999_999_999,
+                ])
+                .with_precision_and_scale(9, 2)
+                .unwrap(),
+            );
+            assert_count_numerical_acc_and_group_acc::<Decimal32Type>(decimal_32, 6);
+
+            let decimal_64: ArrayRef = Arc::new(
+                Decimal64Array::from(vec![
+                    1i64,
+                    2,
+                    2,
+                    3,
+                    3,
+                    3,
+                    0,
+                    0,
+                    1_234_567_890_123,
+                    9_999_999_999_999,
+                    9_999_999_999_999,
+                ])
+                .with_precision_and_scale(18, 2)
+                .unwrap(),
+            );
+            assert_count_numerical_acc_and_group_acc::<Decimal64Type>(decimal_64, 6);
+
             let decimal_128: ArrayRef = Arc::new(
                 Decimal128Array::from(vec![
                     1i128,

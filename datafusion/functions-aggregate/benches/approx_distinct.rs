@@ -19,8 +19,9 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, Decimal128Array, Decimal256Array, Int8Array, Int16Array, Int64Array,
-    StringArray, StringViewArray, UInt8Array, UInt16Array,
+    ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    Int8Array, Int16Array, Int64Array, StringArray, StringViewArray, UInt8Array,
+    UInt16Array,
 };
 use arrow::datatypes::{DataType, Field, Schema, i256};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -44,6 +45,8 @@ const N_GROUPS: usize = 50_000;
 const AVG_ROWS_PER_GROUP: usize = 8;
 const STRING_POOL_SIZE: usize = 100_000;
 
+const DECIMAL32_PRECISION: u8 = 9;
+const DECIMAL64_PRECISION: u8 = 18;
 const DECIMAL128_PRECISION: u8 = 10;
 const DECIMAL256_PRECISION: u8 = 40;
 const DECIMAL_SCALE: i8 = 2;
@@ -63,6 +66,28 @@ fn prepare_accumulator(data_type: DataType) -> Box<dyn Accumulator> {
         exprs: &[expr],
     };
     ApproxDistinct::new().accumulator(accumulator_args).unwrap()
+}
+
+/// Creates a `Decimal32Array` from a pool of `n_distinct` values.
+fn create_decimal32_array(n_distinct: usize) -> Decimal32Array {
+    let mut rng = StdRng::seed_from_u64(42);
+    let pool: Vec<i32> = (0..n_distinct).map(|i| i as i32 * 50).collect();
+    (0..BATCH_SIZE)
+        .map(|_| Some(pool[rng.random_range(0..pool.len())]))
+        .collect::<Decimal32Array>()
+        .with_precision_and_scale(DECIMAL32_PRECISION, DECIMAL_SCALE)
+        .unwrap()
+}
+
+/// Creates a `Decimal64Array` from a pool of `n_distinct` values.
+fn create_decimal64_array(n_distinct: usize) -> Decimal64Array {
+    let mut rng = StdRng::seed_from_u64(42);
+    let pool: Vec<i64> = (0..n_distinct).map(|i| i as i64 * 50).collect();
+    (0..BATCH_SIZE)
+        .map(|_| Some(pool[rng.random_range(0..pool.len())]))
+        .collect::<Decimal64Array>()
+        .with_precision_and_scale(DECIMAL64_PRECISION, DECIMAL_SCALE)
+        .unwrap()
 }
 
 /// Creates a `Decimal128Array` from a pool of `n_distinct` values.
@@ -253,6 +278,34 @@ fn approx_distinct_benchmark(c: &mut Criterion) {
         })
     });
 
+    // Decimal32
+    let values = Arc::new(create_decimal32_array(200)) as ArrayRef;
+    c.bench_function("approx_distinct decimal32", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_accumulator(DataType::Decimal32(
+                DECIMAL32_PRECISION,
+                DECIMAL_SCALE,
+            ));
+            accumulator
+                .update_batch(std::slice::from_ref(&values))
+                .unwrap()
+        })
+    });
+
+    // Decimal64
+    let values = Arc::new(create_decimal64_array(200)) as ArrayRef;
+    c.bench_function("approx_distinct decimal64", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_accumulator(DataType::Decimal64(
+                DECIMAL64_PRECISION,
+                DECIMAL_SCALE,
+            ));
+            accumulator
+                .update_batch(std::slice::from_ref(&values))
+                .unwrap()
+        })
+    });
+
     // Decimal128
     let values = Arc::new(create_decimal128_array(200)) as ArrayRef;
     c.bench_function("approx_distinct decimal128", |b| {
@@ -343,6 +396,20 @@ fn build_grouped_batches(data_type: &DataType) -> Vec<(ArrayRef, Vec<usize>)> {
                         .map(|_| Some(pool[rng.random_range(0..pool.len())].as_str()))
                         .collect::<StringViewArray>(),
                 ),
+                DataType::Decimal32(p, s) => Arc::new(
+                    (0..BATCH_SIZE)
+                        .map(|_| Some(rng.random::<i32>()))
+                        .collect::<Decimal32Array>()
+                        .with_precision_and_scale(*p, *s)
+                        .unwrap(),
+                ),
+                DataType::Decimal64(p, s) => Arc::new(
+                    (0..BATCH_SIZE)
+                        .map(|_| Some(rng.random::<i64>()))
+                        .collect::<Decimal64Array>()
+                        .with_precision_and_scale(*p, *s)
+                        .unwrap(),
+                ),
                 DataType::Decimal128(p, s) => Arc::new(
                     (0..BATCH_SIZE)
                         .map(|_| Some(rng.random::<i64>() as i128))
@@ -374,6 +441,8 @@ fn approx_distinct_grouped_benchmark(c: &mut Criterion) {
         DataType::Int64,
         DataType::Utf8,
         DataType::Utf8View,
+        DataType::Decimal32(DECIMAL32_PRECISION, DECIMAL_SCALE),
+        DataType::Decimal64(DECIMAL64_PRECISION, DECIMAL_SCALE),
         DataType::Decimal128(DECIMAL128_PRECISION, DECIMAL_SCALE),
         DataType::Decimal256(DECIMAL256_PRECISION, DECIMAL_SCALE),
     ] {
