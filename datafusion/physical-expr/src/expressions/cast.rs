@@ -64,6 +64,10 @@ pub struct CastExpr {
     target_field: FieldRef,
     /// Cast options
     cast_options: CastOptions<'static>,
+    /// Whether to preserve non-extension metadata from the source field.
+    /// When true (default), source metadata is merged with target metadata.
+    /// When false, only the target field's metadata is used.
+    preserve_source_metadata: bool,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
@@ -72,6 +76,9 @@ impl PartialEq for CastExpr {
         self.expr.eq(&other.expr)
             && self.target_field.eq(&other.target_field)
             && self.cast_options.eq(&other.cast_options)
+            && self
+                .preserve_source_metadata
+                .eq(&other.preserve_source_metadata)
     }
 }
 
@@ -80,6 +87,7 @@ impl Hash for CastExpr {
         self.expr.hash(state);
         self.target_field.hash(state);
         self.cast_options.hash(state);
+        self.preserve_source_metadata.hash(state);
     }
 }
 
@@ -128,6 +136,29 @@ impl CastExpr {
             expr,
             target_field,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
+            preserve_source_metadata: true,
+        }
+    }
+
+    /// Create a new `CastExpr` with an explicit target `FieldRef`, using the
+    /// target field exactly without merging source metadata.
+    ///
+    /// Unlike [`CastExpr::new_with_target_field`], this constructor does NOT
+    /// merge non-extension metadata from the source field. The target field's
+    /// metadata (if any) is used exactly as provided. This is useful when the
+    /// cast represents a complete type transformation where source metadata
+    /// should not propagate (e.g., rewriting placeholder functions like
+    /// `file_row_index()` to concrete column references).
+    pub fn new_with_exact_target_field(
+        expr: Arc<dyn PhysicalExpr>,
+        target_field: FieldRef,
+        cast_options: Option<CastOptions<'static>>,
+    ) -> Self {
+        Self {
+            expr,
+            target_field,
+            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
+            preserve_source_metadata: false,
         }
     }
 
@@ -151,7 +182,20 @@ impl CastExpr {
         &self.cast_options
     }
 
+    /// Whether source metadata is preserved through the cast.
+    pub fn preserve_source_metadata(&self) -> bool {
+        self.preserve_source_metadata
+    }
+
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        // When using exact target field mode, return the target field directly
+        // without consulting the source expression (which may reference columns
+        // beyond the schema, e.g., virtual row-index columns appended at scan time).
+        if !self.preserve_source_metadata && !is_default_target_field(&self.target_field)
+        {
+            return Ok(Arc::clone(&self.target_field));
+        }
+
         self.expr.return_field(input_schema).map(|source_field| {
             if is_default_target_field(&self.target_field) {
                 // Type-only cast: derive from source field but strip extension metadata
@@ -167,7 +211,7 @@ impl CastExpr {
                         .with_metadata(metadata),
                 )
             } else {
-                // Explicit target field: use target's attributes but handle metadata carefully
+                // Explicit target field with source metadata preservation:
                 // - Start with source's non-extension metadata
                 // - Then add all target metadata (including extension type metadata)
                 let mut metadata = source_field.metadata().clone();
@@ -279,11 +323,12 @@ impl PhysicalExpr for CastExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(CastExpr::new_with_target_field(
-            Arc::clone(&children[0]),
-            Arc::clone(&self.target_field),
-            Some(self.cast_options.clone()),
-        )))
+        Ok(Arc::new(CastExpr {
+            expr: Arc::clone(&children[0]),
+            target_field: Arc::clone(&self.target_field),
+            cast_options: self.cast_options.clone(),
+            preserve_source_metadata: self.preserve_source_metadata,
+        }))
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {

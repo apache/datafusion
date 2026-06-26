@@ -102,7 +102,7 @@ pub fn rewrite_file_row_index_expr(
     rewrite_scalar_udf::<FileRowIndexFunc, _>(expr, |_| {
         let source = Arc::new(Column::new(row_index_name, row_index_idx));
         let target_field = Arc::new(Field::new("file_row_index", DataType::Int64, true));
-        Ok(Arc::new(CastExpr::new_with_target_field(
+        Ok(Arc::new(CastExpr::new_with_exact_target_field(
             source,
             target_field,
             None,
@@ -319,6 +319,8 @@ mod tests {
         assert_eq!(source.name(), "__datafusion_file_row_index");
         assert_eq!(source.index(), 2);
 
+        // The row index column is at index 2, beyond the user-visible schema.
+        // With exact target field mode, return_field does not consult the source.
         let input_schema = Schema::new(vec![
             Field::new("value", DataType::Int64, true),
             Field::new("__datafusion_file_row_index", DataType::Int64, false)
@@ -331,6 +333,7 @@ mod tests {
         assert_eq!(return_field.name(), "file_row_index");
         assert_eq!(return_field.data_type(), &DataType::Int64);
         assert!(return_field.is_nullable());
+        // Exact target field does not preserve source metadata
         assert!(return_field.metadata().is_empty());
         Ok(())
     }
