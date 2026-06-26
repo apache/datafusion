@@ -27,6 +27,7 @@ use datafusion_common::{HashMap, TableReference};
 use object_store::path::Path;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Base trait for cache implementations with common operations.
@@ -208,14 +209,17 @@ impl DFHeapSize for SchemaFingerprint {
 pub struct FileStatisticsCacheKey {
     pub table: Option<TableReference>,
     pub path: Path,
-    pub schema: SchemaFingerprint,
+    // `Arc` so building a key per file is a cheap refcount bump rather than a
+    // deep clone of the fingerprint. `Arc`'s `Eq`/`Hash` compare the inner value,
+    // so keying remains by schema contents (not pointer identity).
+    pub schema: Arc<SchemaFingerprint>,
 }
 
 impl DFHeapSize for FileStatisticsCacheKey {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
         self.path.as_ref().heap_size(ctx)
             + self.table.heap_size(ctx)
-            + self.schema.heap_size(ctx)
+            + self.schema.as_ref().heap_size(ctx)
     }
 }
 

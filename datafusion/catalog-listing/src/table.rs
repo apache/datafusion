@@ -37,7 +37,10 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchemaBuilder, compute_all_files_statistics,
 };
-use datafusion_execution::cache::cache_manager::{FileStatisticsCache, TableScopedPath};
+use datafusion_execution::cache::cache_manager::{
+    CachedFileMetadata, FileStatisticsCache, FileStatisticsCacheKey, SchemaFingerprint,
+    TableScopedPath,
+};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
@@ -197,6 +200,9 @@ pub struct ListingTable {
     column_defaults: HashMap<String, Expr>,
     /// Optional [`PhysicalExprAdapterFactory`] for creating physical expression adapters
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    /// Precomputed fingerprint of `file_schema` for the file-statistics cache
+    /// key. Constant for the table, so computed once here instead of per file.
+    file_schema_fingerprint: Arc<SchemaFingerprint>,
 }
 
 impl ListingTable {
@@ -227,6 +233,9 @@ impl ListingTable {
                 .with_metadata(file_schema.metadata().clone()),
         );
 
+        let file_schema_fingerprint =
+            Arc::new(SchemaFingerprint::from_schema(&file_schema));
+
         let table = Self {
             table_paths: config.table_paths,
             file_schema,
@@ -238,6 +247,7 @@ impl ListingTable {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             expr_adapter_factory: config.expr_adapter_factory,
+            file_schema_fingerprint,
         };
 
         Ok(table)
@@ -975,17 +985,14 @@ impl ListingTable {
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
-        use datafusion_execution::cache::cache_manager::{
-            CachedFileMetadata, FileStatisticsCacheKey, SchemaFingerprint,
-        };
-
         let key = FileStatisticsCacheKey {
             table: part_file.table_reference.clone(),
             path: part_file.object_meta.location.clone(),
-            // Statistics are computed against `file_schema`, so key on it: reads
-            // of the same path under a different schema get their own entry
-            // rather than reusing incompatible column statistics.
-            schema: SchemaFingerprint::from_schema(&self.file_schema),
+            // Statistics are computed against `file_schema`, so key on its
+            // fingerprint: reads of the same path under a different schema get
+            // their own entry rather than reusing incompatible column statistics.
+            // The fingerprint is precomputed once per table (see `try_new`).
+            schema: Arc::clone(&self.file_schema_fingerprint),
         };
         let meta = &part_file.object_meta;
 

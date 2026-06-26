@@ -830,7 +830,7 @@ mod tests {
         let key_1 = FileStatisticsCacheKey {
             path: meta.location.clone(),
             table: None,
-            schema: SchemaFingerprint::from_schema(&schema),
+            schema: Arc::new(SchemaFingerprint::from_schema(&schema)),
         };
 
         // Cache miss
@@ -857,7 +857,7 @@ mod tests {
         let key_2 = FileStatisticsCacheKey {
             path: meta2.location.clone(),
             table: None,
-            schema: SchemaFingerprint::from_schema(&schema),
+            schema: Arc::new(SchemaFingerprint::from_schema(&schema)),
         };
 
         let cached = cache.get(&key_2).unwrap();
@@ -878,7 +878,7 @@ mod tests {
         let key_3 = FileStatisticsCacheKey {
             path: Path::from("test"),
             table: None,
-            schema: SchemaFingerprint::from_schema(&schema),
+            schema: Arc::new(SchemaFingerprint::from_schema(&schema)),
         };
 
         let entry = entries.get(&key_3).unwrap();
