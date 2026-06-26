@@ -304,7 +304,10 @@ pub(super) enum AggregateHashTableState {
     Building(AggregateHashTableBuffer),
     /// Emitting results directly from group keys and aggregate state.
     Outputting(AggregateHashTableBuffer),
-    /// Emitting slices from final aggregate output that was already evaluated.
+    /// Materialize all the output results, and then incrementally output in the `OutputtingMaterializedFinal` state.
+    ///
+    /// Note this is a temporary solution until the `GroupValues` issue is solved:
+    /// Issue: <https://github.com/apache/datafusion/issues/23178>
     OutputtingMaterializedFinal(MaterializedFinalOutput),
     Done,
 }
