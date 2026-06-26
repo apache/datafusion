@@ -63,7 +63,10 @@ make_higher_order_function_expr_and_func!(
         name = "array",
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     ),
-    argument(name = "lambda", description = "Lambda")
+    argument(
+        name = "lambda",
+        description = "The lambda function used to transform each value of the array."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayTransform {
