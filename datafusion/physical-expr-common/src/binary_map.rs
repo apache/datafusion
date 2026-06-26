@@ -523,6 +523,18 @@ where
         // Copy only the surviving bytes into the fresh builder.
         self.buffer.append_slice(&frozen[end..]);
 
+        // Rebase non-inline offsets: buffer now starts at what was `end`.
+        // Only surviving entries (offset >= end) need rebasing; emitted entries
+        // (offset < end) are removed by drain_emitted and must not be touched.
+        if end > 0 {
+            for entry in self.map.iter_mut() {
+                if entry.len.as_usize() > SHORT_VALUE_LEN && entry.offset_or_inline >= end
+                {
+                    entry.offset_or_inline -= end;
+                }
+            }
+        }
+
         let nulls = self.null.and_then(|(_, null_idx)| {
             if null_idx >= cursor && null_idx < cursor + n {
                 Some(single_null_buffer(n, null_idx - cursor))

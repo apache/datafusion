@@ -85,13 +85,19 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let n = match emit_to {
-            EmitTo::All => self.num_groups,
-            EmitTo::First(n) => n.min(self.num_groups),
+        let group_values = match emit_to {
+            EmitTo::All => {
+                self.num_groups = 0;
+                self.map.take().into_state()
+            }
+            EmitTo::First(n) => {
+                let n = n.min(self.num_groups);
+                let group_values = self.map.emit(n);
+                self.map.drain_emitted(n);
+                self.num_groups -= n;
+                group_values
+            }
         };
-        let group_values = self.map.emit(n);
-        self.map.drain_emitted(n);
-        self.num_groups -= n;
         Ok(vec![group_values])
     }
 
