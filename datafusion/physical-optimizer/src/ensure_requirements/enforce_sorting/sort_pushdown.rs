@@ -398,16 +398,15 @@ fn pushdown_requirement_to_children(
         // Child-0 order: []"). If a required column maps to a computed
         // (non-`Column`) projection expression it cannot be expressed below the
         // projection, so the sort is kept above it.
-        let child_required = if let Some(projection) =
-            plan.downcast_ref::<ProjectionExec>()
-        {
-            match remap_requirement_through_projection(projection, &parent_required) {
-                Some(remapped) => remapped,
-                None => return Ok(None),
-            }
-        } else {
-            parent_required.clone()
-        };
+        let child_required =
+            if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
+                match remap_requirement_through_projection(projection, &parent_required) {
+                    Some(remapped) => remapped,
+                    None => return Ok(None),
+                }
+            } else {
+                parent_required.clone()
+            };
         let Some(ordering) = plan.properties().output_ordering() else {
             return Ok(Some(vec![Some(child_required)]));
         };
@@ -1040,8 +1039,8 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{col, BinaryExpr};
     use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::expressions::{BinaryExpr, col};
     use datafusion_physical_plan::empty::EmptyExec;
 
     const DESC: SortOptions = SortOptions {
@@ -1127,8 +1126,10 @@ mod tests {
             remap_requirement_through_projection(&projection, &required).unwrap();
 
         // `score@1` -> `c@2`, `a@0` -> `a@0`; still a single hard requirement.
-        let expected =
-            OrderingRequirements::new(lex([req("c", &child, DESC), req("a", &child, ASC)]));
+        let expected = OrderingRequirements::new(lex([
+            req("c", &child, DESC),
+            req("a", &child, ASC),
+        ]));
         assert_eq!(remapped, expected);
     }
 
