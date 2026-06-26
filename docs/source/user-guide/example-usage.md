@@ -125,7 +125,7 @@ Please be aware that all identifiers are effectively made lower-case in SQL, so 
 
 To illustrate this behavior, consider the [`capitalized_example.csv`](../../../datafusion/core/tests/data/capitalized_example.csv) file:
 
-## Run a SQL query against data stored in a CSV:
+## Run a SQL query against data stored in a CSV (example 2)
 
 ```rust
 use datafusion::prelude::*;
@@ -145,7 +145,7 @@ async fn main() -> datafusion::error::Result<()> {
 }
 ```
 
-## Use the DataFrame API to process data stored in a CSV:
+## Use the DataFrame API to process data stored in a CSV (example 2)
 
 ```rust
 use datafusion::prelude::*;
