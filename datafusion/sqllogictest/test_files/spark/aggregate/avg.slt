@@ -54,3 +54,24 @@ GROUP BY a
 ORDER BY a;
 ----
 0 0
+
+# Regression coverage for Spark AVG grouped state conversion with NULL input and FILTER.
+# Spark AVG uses state order [sum, count] with Int64 count; this query exercises
+# planner/executor partial/final aggregation rather than only accumulator internals.
+query IR
+SELECT g, avg(v) FILTER (WHERE keep) AS avg_v
+FROM (VALUES
+  (1, CAST(1.0 AS DOUBLE), true),
+  (1, CAST(NULL AS DOUBLE), true),
+  (1, CAST(3.0 AS DOUBLE), false),
+  (1, CAST(5.0 AS DOUBLE), CAST(NULL AS BOOLEAN)),
+  (2, CAST(10.0 AS DOUBLE), true),
+  (2, CAST(30.0 AS DOUBLE), true),
+  (2, CAST(50.0 AS DOUBLE), false),
+  (2, CAST(NULL AS DOUBLE), true)
+) AS t(g, v, keep)
+GROUP BY g
+ORDER BY g;
+----
+1 1
+2 20
