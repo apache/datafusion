@@ -2843,7 +2843,7 @@ Returns the corresponding date.
 Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.
 
 ```sql
-to_date('2017-05-31', '%Y-%m-%d')
+to_date(expression[, ..., format_n])
 ```
 
 #### Arguments
@@ -2944,7 +2944,7 @@ Returns the corresponding time.
 Note: `to_time` returns Time64(Nanosecond), which represents the time of day in nanoseconds since midnight.
 
 ```sql
-to_time('12:30:45', '%H:%M:%S')
+to_time(expression[, ..., format_n])
 ```
 
 #### Arguments
