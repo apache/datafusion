@@ -132,6 +132,16 @@ enum OutOfMemoryMode {
 
 /// HashTable based Grouping Aggregator
 ///
+/// # Development Note
+///
+/// This implementation is being incrementally refactored. See the tracking issue
+/// for details.
+///
+/// New features and improvements should go directly into the new implementation.
+/// Please coordinate through the tracking issue.
+///
+/// Issue: <https://github.com/apache/datafusion/issues/22710>
+///
 /// # Design Goals
 ///
 /// This structure is designed so that updating the aggregates can be
