@@ -1648,6 +1648,15 @@ config_namespace! {
         /// branches share the same source and compatible wrapper nodes such as identical
         /// projections or aliases.
         pub enable_unions_to_filter: bool, default = false
+
+        /// When set to true, the logical optimizer will fuse multiple uncorrelated
+        /// scalar-aggregate subqueries that read from the same source into a single
+        /// aggregate, pushing each subquery's predicate into a `FILTER (WHERE ...)`
+        /// clause. This avoids scanning the shared source once per subquery. The
+        /// rewrite is conservative: it only applies to uncorrelated scalar aggregates
+        /// over an identical source and skips `DISTINCT`, ordered, or volatile
+        /// aggregates.
+        pub enable_fuse_scalar_subqueries: bool, default = false
     }
 }
 
