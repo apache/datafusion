@@ -90,8 +90,11 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
                 self.num_groups = 0;
                 self.map.take().into_state()
             }
+            EmitTo::First(n) if n >= self.num_groups => {
+                self.num_groups = 0;
+                self.map.take().into_state()
+            }
             EmitTo::First(n) => {
-                let n = n.min(self.num_groups);
                 let group_values = self.map.emit(n);
                 self.num_groups -= n;
                 group_values

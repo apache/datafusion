@@ -488,7 +488,7 @@ where
     {
         let total = self.offsets.len() - 1;
         let remaining = total - self.emitted;
-        assert!(n <= remaining, "emit({n}): only {remaining} values remain");
+        debug_assert!(n <= remaining, "emit({n}): only {remaining} values remain");
 
         let cursor = self.emitted;
         let start = self.offsets[cursor].as_usize();
@@ -517,16 +517,21 @@ where
         // Copy only the surviving bytes into the fresh builder.
         self.buffer.append_slice(&frozen[end..]);
 
-        // Only surviving entries (offset >= end) need rebasing; emitted entries
-        // (offset < end) are removed by drain_emitted and must not be touched.
-        if end > 0 {
-            for entry in self.map.iter_mut() {
-                if entry.len.as_usize() > SHORT_VALUE_LEN && entry.offset_or_inline >= end
-                {
-                    entry.offset_or_inline -= end;
-                }
+        // drop emitted entries, rebase buffer offsets and payloads.
+        let threshold = V::from(n);
+        self.map.retain(|entry| {
+            if entry.payload < threshold {
+                return false;
             }
-        }
+            if end > 0
+                && entry.len.as_usize() > SHORT_VALUE_LEN
+                && entry.offset_or_inline >= end
+            {
+                entry.offset_or_inline -= end;
+            }
+            entry.payload = entry.payload - threshold;
+            true
+        });
 
         let nulls = self.null.and_then(|(_, null_idx)| {
             if null_idx >= cursor && null_idx < cursor + n {
@@ -542,8 +547,11 @@ where
                 None
             }
         });
-
-        self.drain_emitted(n);
+        // Rebase null payload. If self.null survived the and_then above,
+        // null_idx >= cursor + n, which by invariant means payload >= threshold.
+        if let Some((ref mut payload, _)) = self.null {
+            *payload = *payload - threshold;
+        }
 
         match self.output_type {
             OutputType::Binary => Arc::new(unsafe {
@@ -604,25 +612,6 @@ where
                 })
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
-        }
-    }
-
-    #[inline]
-    fn drain_emitted(&mut self, n: usize)
-    where
-        V: std::ops::Sub<Output = V> + PartialOrd + From<usize>,
-    {
-        let threshold = V::from(n);
-        self.map.retain(|entry| entry.payload >= threshold);
-        for entry in self.map.iter_mut() {
-            entry.payload = entry.payload - threshold;
-        }
-        match &mut self.null {
-            Some((payload, _)) if *payload >= threshold => {
-                *payload = *payload - threshold;
-            }
-            Some(_) => self.null = None, // null was in the emitted window
-            None => {}
         }
     }
 
