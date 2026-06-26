@@ -98,18 +98,18 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
                 left,
                 op: op @ (Operator::Eq | Operator::IsNotDistinctFrom),
                 right,
-            }) => match (*left, *right) {
+            }) => match (*left.into_inner(), *right.into_inner()) {
                 (Expr::Column(l), Expr::Column(r)) => match op {
                     Operator::Eq => eq_keys.push((l, r)),
                     Operator::IsNotDistinctFrom => indistinct_keys.push((l, r)),
                     _ => unreachable!(),
                 },
                 (left, right) => {
-                    accum_filters.push(Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(left),
+                    accum_filters.push(Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(left),
                         op,
-                        right: Box::new(right),
-                    }));
+                        Box::new(right),
+                    )));
                 }
             },
             _ => accum_filters.push(expr),
@@ -121,11 +121,11 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
             // Mixed: use eq_keys as equijoin keys, demote indistinct keys to filter
             (false, false) => {
                 for (l, r) in indistinct_keys {
-                    accum_filters.push(Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(Expr::Column(l)),
-                        op: Operator::IsNotDistinctFrom,
-                        right: Box::new(Expr::Column(r)),
-                    }));
+                    accum_filters.push(Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(Expr::Column(l)),
+                        Operator::IsNotDistinctFrom,
+                        Box::new(Expr::Column(r)),
+                    )));
                 }
                 (eq_keys, NullEquality::NullEqualsNothing)
             }
@@ -170,11 +170,11 @@ mod tests {
     }
 
     fn indistinct(left: Expr, right: Expr) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left),
-            op: Operator::IsNotDistinctFrom,
-            right: Box::new(right),
-        })
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            Operator::IsNotDistinctFrom,
+            Box::new(right),
+        ))
     }
 
     fn fmt_keys(keys: &[(Column, Column)]) -> String {

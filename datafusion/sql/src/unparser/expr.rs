@@ -2535,19 +2535,19 @@ mod tests {
                 "[1, 2, 3]",
             ),
             (
-                Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(col("a")),
-                    op: Operator::ArrowAt,
-                    right: Box::new(col("b")),
-                }),
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(col("a")),
+                    Operator::ArrowAt,
+                    Box::new(col("b")),
+                )),
                 "(a <@ b)",
             ),
             (
-                Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(col("a")),
-                    op: Operator::AtArrow,
-                    right: Box::new(col("b")),
-                }),
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(col("a")),
+                    Operator::AtArrow,
+                    Box::new(col("b")),
+                )),
                 "(a @> b)",
             ),
         ];
@@ -3124,11 +3124,11 @@ mod tests {
             [(default_dialect, "(a / b)"), (duckdb_dialect, "(a // b)")]
         {
             let unparser = Unparser::new(&dialect);
-            let expr = Expr::BinaryExpr(BinaryExpr {
-                left: Box::new(col("a")),
-                op: Operator::Divide,
-                right: Box::new(col("b")),
-            });
+            let expr = Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(col("a")),
+                Operator::Divide,
+                Box::new(col("b")),
+            ));
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = format!("{ast}");

@@ -80,11 +80,11 @@ pub(super) fn unwrap_cast_in_comparison_for_binary(
 
             if let Some(value) = cast_literal_to_type_with_op(&lit_value, &expr_type, op)
             {
-                return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
-                    left: expr,
+                return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                    expr,
                     op,
-                    right: Box::new(lit(value)),
-                })));
+                    Box::new(lit(value)),
+                ))));
             };
 
             // if the lit_value can be casted to the type of internal_left_expr
@@ -96,11 +96,11 @@ pub(super) fn unwrap_cast_in_comparison_for_binary(
                     &expr_type
                 );
             };
-            Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
-                left: expr,
+            Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                expr,
                 op,
-                right: Box::new(lit(value)),
-            })))
+                Box::new(lit(value)),
+            ))))
         }
         _ => internal_err!("Expect cast expr and literal"),
     }

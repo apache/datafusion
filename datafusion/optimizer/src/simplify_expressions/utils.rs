@@ -356,26 +356,32 @@ pub fn negate_clause(expr: Expr) -> Expr {
     match expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             if let Some(negated_op) = op.negate() {
-                return Expr::BinaryExpr(BinaryExpr::new(left, negated_op, right));
+                return Expr::BinaryExpr(BinaryExpr::new(
+                    left.into_inner(),
+                    negated_op,
+                    right.into_inner(),
+                ));
             }
             match op {
                 // not (A and B) ===> (not A) or (not B)
                 Operator::And => {
-                    let left = negate_clause(*left);
-                    let right = negate_clause(*right);
+                    let left = negate_clause(*left.into_inner());
+                    let right = negate_clause(*right.into_inner());
 
                     or(left, right)
                 }
                 // not (A or B) ===> (not A) and (not B)
                 Operator::Or => {
-                    let left = negate_clause(*left);
-                    let right = negate_clause(*right);
+                    let left = negate_clause(*left.into_inner());
+                    let right = negate_clause(*right.into_inner());
 
                     and(left, right)
                 }
                 // use not clause
                 _ => Expr::Not(Box::new(Expr::BinaryExpr(BinaryExpr::new(
-                    left, op, right,
+                    left.into_inner(),
+                    op,
+                    right.into_inner(),
                 )))),
             }
         }
@@ -427,21 +433,23 @@ pub fn distribute_negation(expr: Expr) -> Expr {
             match op {
                 // ~(A & B) ===> ~A | ~B
                 Operator::BitwiseAnd => {
-                    let left = distribute_negation(*left);
-                    let right = distribute_negation(*right);
+                    let left = distribute_negation(*left.into_inner());
+                    let right = distribute_negation(*right.into_inner());
 
                     bitwise_or(left, right)
                 }
                 // ~(A | B) ===> ~A & ~B
                 Operator::BitwiseOr => {
-                    let left = distribute_negation(*left);
-                    let right = distribute_negation(*right);
+                    let left = distribute_negation(*left.into_inner());
+                    let right = distribute_negation(*right.into_inner());
 
                     bitwise_and(left, right)
                 }
                 // use negative clause
                 _ => Expr::Negative(Box::new(Expr::BinaryExpr(BinaryExpr::new(
-                    left, op, right,
+                    left.into_inner(),
+                    op,
+                    right.into_inner(),
                 )))),
             }
         }

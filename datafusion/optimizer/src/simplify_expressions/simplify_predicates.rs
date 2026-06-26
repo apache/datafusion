@@ -279,7 +279,7 @@ mod tests {
                 left, 
                 op: Operator::Lt, 
                 right 
-            }) if matches!(left.as_ref(), Expr::Cast(_)) && right == &Box::new(lit("abc")))
+            }) if matches!(left.as_ref(), Expr::Cast(_)) && right.as_ref() == &lit("abc"))
         });
         assert!(has_cast_predicate, "Cast predicate should be preserved");
 
@@ -289,7 +289,7 @@ mod tests {
                 left, 
                 op: Operator::Lt, 
                 right 
-            }) if left == &Box::new(col("a")) && right == &Box::new(lit(5i32)))
+            }) if left.as_ref() == &col("a") && right.as_ref() == &lit(5i32))
         });
         assert!(has_column_predicate, "Should have a < 5 predicate");
     }
@@ -326,7 +326,7 @@ mod tests {
                 left, 
                 op: Operator::Lt, 
                 right 
-            }) if left == &Box::new(col("a")) && right == &Box::new(lit(3i32)))
+            }) if left.as_ref() == &col("a") && right.as_ref() == &lit(3i32))
         });
         assert!(has_a_predicate, "Should have a < 3 predicate");
 
@@ -336,7 +336,7 @@ mod tests {
                 left, 
                 op: Operator::Gt, 
                 right 
-            }) if left == &Box::new(col("b")) && right == &Box::new(lit(20i32)))
+            }) if left.as_ref() == &col("b") && right.as_ref() == &lit(20i32))
         });
         assert!(has_b_predicate, "Should have b > 20 predicate");
     }

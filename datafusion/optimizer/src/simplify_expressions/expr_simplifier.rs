@@ -827,8 +827,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right,
             }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
                 Transformed::yes(match as_bool_lit(&left)? {
-                    Some(true) => *right,
-                    Some(false) => Expr::Not(right),
+                    Some(true) => *right.into_inner(),
+                    Some(false) => Expr::Not(right.into_inner()),
                     None => lit_bool_null(),
                 })
             }
@@ -841,8 +841,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right,
             }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
                 Transformed::yes(match as_bool_lit(&right)? {
-                    Some(true) => *left,
-                    Some(false) => Expr::Not(left),
+                    Some(true) => *left.into_inner(),
+                    Some(false) => Expr::Not(left.into_inner()),
                     None => lit_bool_null(),
                 })
             }
@@ -857,11 +857,11 @@ impl TreeNodeRewriter for Simplifier<'_> {
             }) if (left == right) & !left.is_volatile() => {
                 Transformed::yes(match !info.nullable(&left)? {
                     true => lit(true),
-                    false => Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(Expr::IsNotNull(left)),
-                        op: Or,
-                        right: Box::new(lit_bool_null()),
-                    }),
+                    false => Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(Expr::IsNotNull(left.into_inner())),
+                        Or,
+                        Box::new(lit_bool_null()),
+                    )),
                 })
             }
 
@@ -877,8 +877,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right,
             }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
                 Transformed::yes(match as_bool_lit(&left)? {
-                    Some(true) => Expr::Not(right),
-                    Some(false) => *right,
+                    Some(true) => Expr::Not(right.into_inner()),
+                    Some(false) => *right.into_inner(),
                     None => lit_bool_null(),
                 })
             }
@@ -891,8 +891,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right,
             }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
                 Transformed::yes(match as_bool_lit(&right)? {
-                    Some(true) => Expr::Not(left),
-                    Some(false) => *left,
+                    Some(true) => Expr::Not(left.into_inner()),
+                    Some(false) => *left.into_inner(),
                     None => lit_bool_null(),
                 })
             }
@@ -906,25 +906,25 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: Or,
                 right: _,
-            }) if is_true(&left) => Transformed::yes(*left),
+            }) if is_true(&left) => Transformed::yes(*left.into_inner()),
             // false OR A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if is_false(&left) => Transformed::yes(*right),
+            }) if is_false(&left) => Transformed::yes(*right.into_inner()),
             // A OR true --> true (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: Or,
                 right,
-            }) if is_true(&right) => Transformed::yes(*right),
+            }) if is_true(&right) => Transformed::yes(*right.into_inner()),
             // A OR false --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if is_false(&right) => Transformed::yes(*left),
+            }) if is_false(&right) => Transformed::yes(*left.into_inner()),
             // A OR !A ---> true (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -946,25 +946,29 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: Or,
                 right,
-            }) if expr_contains(&left, &right, Or) => Transformed::yes(*left),
+            }) if expr_contains(&left, &right, Or) => {
+                Transformed::yes(*left.into_inner())
+            }
             // A OR (..A..) --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if expr_contains(&right, &left, Or) => Transformed::yes(*right),
+            }) if expr_contains(&right, &left, Or) => {
+                Transformed::yes(*right.into_inner())
+            }
             // A OR (A AND B) --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if is_op_with(And, &right, &left) => Transformed::yes(*left),
+            }) if is_op_with(And, &right, &left) => Transformed::yes(*left.into_inner()),
             // (A AND B) OR A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if is_op_with(And, &left, &right) => Transformed::yes(*right),
+            }) if is_op_with(And, &left, &right) => Transformed::yes(*right.into_inner()),
             // Eliminate common factors in conjunctions e.g
             // (A AND B) OR (A AND C) -> A AND (B OR C)
             Expr::BinaryExpr(BinaryExpr {
@@ -972,9 +976,11 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: Or,
                 right,
             }) if has_common_conjunction(&left, &right) => {
-                let lhs: IndexSet<Expr> = iter_conjunction_owned(*left).collect();
-                let (common, rhs): (Vec<_>, Vec<_>) = iter_conjunction_owned(*right)
-                    .partition(|e| lhs.contains(e) && !e.is_volatile());
+                let lhs: IndexSet<Expr> =
+                    iter_conjunction_owned(*left.into_inner()).collect();
+                let (common, rhs): (Vec<_>, Vec<_>) =
+                    iter_conjunction_owned(*right.into_inner())
+                        .partition(|e| lhs.contains(e) && !e.is_volatile());
 
                 let new_rhs = rhs.into_iter().reduce(and);
                 let new_lhs = lhs.into_iter().filter(|e| !common.contains(e)).reduce(and);
@@ -996,25 +1002,25 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: And,
                 right,
-            }) if is_true(&left) => Transformed::yes(*right),
+            }) if is_true(&left) => Transformed::yes(*right.into_inner()),
             // false AND A --> false (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right: _,
-            }) if is_false(&left) => Transformed::yes(*left),
+            }) if is_false(&left) => Transformed::yes(*left.into_inner()),
             // A AND true --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            }) if is_true(&right) => Transformed::yes(*left),
+            }) if is_true(&right) => Transformed::yes(*left.into_inner()),
             // A AND false --> false (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: And,
                 right,
-            }) if is_false(&right) => Transformed::yes(*right),
+            }) if is_false(&right) => Transformed::yes(*right.into_inner()),
             // A AND !A ---> false (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -1036,25 +1042,29 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: And,
                 right,
-            }) if expr_contains(&left, &right, And) => Transformed::yes(*left),
+            }) if expr_contains(&left, &right, And) => {
+                Transformed::yes(*left.into_inner())
+            }
             // A AND (..A..) --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            }) if expr_contains(&right, &left, And) => Transformed::yes(*right),
+            }) if expr_contains(&right, &left, And) => {
+                Transformed::yes(*right.into_inner())
+            }
             // A AND (A OR B) --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            }) if is_op_with(Or, &right, &left) => Transformed::yes(*left),
+            }) if is_op_with(Or, &right, &left) => Transformed::yes(*left.into_inner()),
             // (A OR B) AND A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            }) if is_op_with(Or, &left, &right) => Transformed::yes(*right),
+            }) if is_op_with(Or, &left, &right) => Transformed::yes(*right.into_inner()),
             // A >= constant AND constant <= A --> A = constant
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -1065,13 +1075,13 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     left: left_left,
                     right: left_right,
                     ..
-                }) = *left
+                }) = *left.into_inner()
                 {
-                    Transformed::yes(Expr::BinaryExpr(BinaryExpr {
-                        left: left_left,
-                        op: Eq,
-                        right: left_right,
-                    }))
+                    Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                        left_left.into_inner(),
+                        Eq,
+                        left_right.into_inner(),
+                    )))
                 } else {
                     return internal_err!(
                         "can_reduce_to_equal_statement should only be called with a BinaryExpr"
@@ -1084,7 +1094,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: And,
                 right,
             }) if is_eq_and_ne_with_different_literal(&left, &right) => {
-                Transformed::yes(*left)
+                Transformed::yes(*left.into_inner())
             }
             // A != L2 AND A = L1 --> A = L1 (when L1 != L2)
             Expr::BinaryExpr(BinaryExpr {
@@ -1092,7 +1102,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: And,
                 right,
             }) if is_eq_and_ne_with_different_literal(&right, &left) => {
-                Transformed::yes(*right)
+                Transformed::yes(*right.into_inner())
             }
 
             //
@@ -1105,7 +1115,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: Multiply,
                 right,
             }) if is_one(&right) => {
-                simplify_right_is_one_case(info, left, &Multiply, &right)?
+                simplify_right_is_one_case(info, left.into_inner(), &Multiply, &right)?
             }
             // 1 * A --> A
             Expr::BinaryExpr(BinaryExpr {
@@ -1114,7 +1124,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right,
             }) if is_one(&left) => {
                 // 1 * A is equivalent to A * 1
-                simplify_right_is_one_case(info, right, &Multiply, &left)?
+                simplify_right_is_one_case(info, right.into_inner(), &Multiply, &left)?
             }
 
             // A * 0 --> 0 (if A is not null and not floating, since NAN * 0 -> NAN)
@@ -1126,7 +1136,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 && !info.get_data_type(&left)?.is_floating()
                 && is_zero(&right) =>
             {
-                Transformed::yes(*right)
+                Transformed::yes(*right.into_inner())
             }
             // 0 * A --> 0 (if A is not null and not floating, since 0 * NAN -> NAN)
             Expr::BinaryExpr(BinaryExpr {
@@ -1137,7 +1147,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 && !info.get_data_type(&right)?.is_floating()
                 && is_zero(&left) =>
             {
-                Transformed::yes(*left)
+                Transformed::yes(*left.into_inner())
             }
 
             //
@@ -1150,7 +1160,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: Divide,
                 right,
             }) if is_one(&right) => {
-                simplify_right_is_one_case(info, left, &Divide, &right)?
+                simplify_right_is_one_case(info, left.into_inner(), &Divide, &right)?
             }
 
             //
@@ -1181,14 +1191,18 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: BitwiseAnd,
                 right,
-            }) if !info.nullable(&left)? && is_zero(&right) => Transformed::yes(*right),
+            }) if !info.nullable(&left)? && is_zero(&right) => {
+                Transformed::yes(*right.into_inner())
+            }
 
             // 0 & A -> 0 (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: BitwiseAnd,
                 right,
-            }) if !info.nullable(&right)? && is_zero(&left) => Transformed::yes(*left),
+            }) if !info.nullable(&right)? && is_zero(&left) => {
+                Transformed::yes(*left.into_inner())
+            }
 
             // !A & A -> 0 (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
@@ -1219,14 +1233,18 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: BitwiseAnd,
                 right,
-            }) if expr_contains(&left, &right, BitwiseAnd) => Transformed::yes(*left),
+            }) if expr_contains(&left, &right, BitwiseAnd) => {
+                Transformed::yes(*left.into_inner())
+            }
 
             // A & (..A..) --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: BitwiseAnd,
                 right,
-            }) if expr_contains(&right, &left, BitwiseAnd) => Transformed::yes(*right),
+            }) if expr_contains(&right, &left, BitwiseAnd) => {
+                Transformed::yes(*right.into_inner())
+            }
 
             // A & (A | B) --> A (if B not null)
             Expr::BinaryExpr(BinaryExpr {
@@ -1234,7 +1252,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: BitwiseAnd,
                 right,
             }) if !info.nullable(&right)? && is_op_with(BitwiseOr, &right, &left) => {
-                Transformed::yes(*left)
+                Transformed::yes(*left.into_inner())
             }
 
             // (A | B) & A --> A (if B not null)
@@ -1243,7 +1261,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: BitwiseAnd,
                 right,
             }) if !info.nullable(&left)? && is_op_with(BitwiseOr, &left, &right) => {
-                Transformed::yes(*right)
+                Transformed::yes(*right.into_inner())
             }
 
             //
@@ -1255,14 +1273,14 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: BitwiseOr,
                 right,
-            }) if is_zero(&right) => Transformed::yes(*left),
+            }) if is_zero(&right) => Transformed::yes(*left.into_inner()),
 
             // 0 | A -> A (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: BitwiseOr,
                 right,
-            }) if is_zero(&left) => Transformed::yes(*right),
+            }) if is_zero(&left) => Transformed::yes(*right.into_inner()),
 
             // !A | A -> -1 (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
@@ -1293,14 +1311,18 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: BitwiseOr,
                 right,
-            }) if expr_contains(&left, &right, BitwiseOr) => Transformed::yes(*left),
+            }) if expr_contains(&left, &right, BitwiseOr) => {
+                Transformed::yes(*left.into_inner())
+            }
 
             // A | (..A..) --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: BitwiseOr,
                 right,
-            }) if expr_contains(&right, &left, BitwiseOr) => Transformed::yes(*right),
+            }) if expr_contains(&right, &left, BitwiseOr) => {
+                Transformed::yes(*right.into_inner())
+            }
 
             // A | (A & B) --> A (if B not null)
             Expr::BinaryExpr(BinaryExpr {
@@ -1308,7 +1330,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: BitwiseOr,
                 right,
             }) if !info.nullable(&right)? && is_op_with(BitwiseAnd, &right, &left) => {
-                Transformed::yes(*left)
+                Transformed::yes(*left.into_inner())
             }
 
             // (A & B) | A --> A (if B not null)
@@ -1317,7 +1339,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: BitwiseOr,
                 right,
             }) if !info.nullable(&left)? && is_op_with(BitwiseAnd, &left, &right) => {
-                Transformed::yes(*right)
+                Transformed::yes(*right.into_inner())
             }
 
             //
@@ -1329,14 +1351,18 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: BitwiseXor,
                 right,
-            }) if !info.nullable(&left)? && is_zero(&right) => Transformed::yes(*left),
+            }) if !info.nullable(&left)? && is_zero(&right) => {
+                Transformed::yes(*left.into_inner())
+            }
 
             // 0 ^ A -> A (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: BitwiseXor,
                 right,
-            }) if !info.nullable(&right)? && is_zero(&left) => Transformed::yes(*right),
+            }) if !info.nullable(&right)? && is_zero(&left) => {
+                Transformed::yes(*right.into_inner())
+            }
 
             // !A ^ A -> -1 (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
@@ -1405,7 +1431,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: BitwiseShiftRight,
                 right,
-            }) if is_zero(&right) => Transformed::yes(*left),
+            }) if is_zero(&right) => Transformed::yes(*left.into_inner()),
 
             //
             // Rules for BitwiseShiftRight
@@ -1416,7 +1442,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: BitwiseShiftLeft,
                 right,
-            }) if is_zero(&right) => Transformed::yes(*left),
+            }) if is_zero(&right) => Transformed::yes(*left.into_inner()),
 
             //
             // Rules for Not
@@ -1440,7 +1466,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: op @ (Eq | NotEq),
                 right,
             }) if is_case_with_literal_outputs(&left) && is_lit(&right) => {
-                let case = into_case(*left)?;
+                let case = into_case(*left.into_inner())?;
                 Transformed::yes(Expr::Case(Case {
                     expr: None,
                     when_then_expr: case
@@ -1449,20 +1475,20 @@ impl TreeNodeRewriter for Simplifier<'_> {
                         .map(|(when, then)| {
                             (
                                 when,
-                                Box::new(Expr::BinaryExpr(BinaryExpr {
-                                    left: then,
+                                Box::new(Expr::BinaryExpr(BinaryExpr::new(
+                                    then,
                                     op,
-                                    right: right.clone(),
-                                })),
+                                    right.clone().into_inner(),
+                                ))),
                             )
                         })
                         .collect(),
                     else_expr: case.else_expr.map(|els| {
-                        Box::new(Expr::BinaryExpr(BinaryExpr {
-                            left: els,
+                        Box::new(Expr::BinaryExpr(BinaryExpr::new(
+                            els,
                             op,
-                            right,
-                        }))
+                            right.into_inner(),
+                        )))
                     }),
                 }))
             }
@@ -1661,7 +1687,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: op @ (RegexMatch | RegexNotMatch | RegexIMatch | RegexNotIMatch),
                 right,
-            }) => simplify_regex_expr(left, op, right)?,
+            }) => simplify_regex_expr(left.into_inner(), op, right.into_inner())?,
 
             // Rules for Like
             Expr::Like(like) => {
@@ -1719,11 +1745,11 @@ impl TreeNodeRewriter for Simplifier<'_> {
                             {
                                 // If the pattern does not contain any wildcards, we can simplify the like expression to an equality expression
                                 // TODO: handle escape characters
-                                Transformed::yes(Expr::BinaryExpr(BinaryExpr {
-                                    left: like.expr.clone(),
-                                    op: if like.negated { NotEq } else { Eq },
-                                    right: like.pattern.clone(),
-                                }))
+                                Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                                    like.expr.clone(),
+                                    if like.negated { NotEq } else { Eq },
+                                    like.pattern.clone(),
+                                )))
                             }
 
                             Some(_pattern_str) => Transformed::no(Expr::Like(like)),
@@ -1788,8 +1814,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: Or,
                 right,
             }) if are_inlist_and_eq(left.as_ref(), right.as_ref()) => {
-                let lhs = to_inlist(*left).unwrap();
-                let rhs = to_inlist(*right).unwrap();
+                let lhs = to_inlist(*left.into_inner()).unwrap();
+                let rhs = to_inlist(*right.into_inner()).unwrap();
                 #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                 // Expr contains Arc with interior mutability but is intentionally used as hash key
                 let mut seen: HashSet<Expr> = HashSet::new();
@@ -1836,7 +1862,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 false,
             ) =>
             {
-                match (*left, *right) {
+                match (*left.into_inner(), *right.into_inner()) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
                         return inlist_intersection(l1, &l2, false).map(Transformed::yes);
                     }
@@ -1856,7 +1882,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 true,
             ) =>
             {
-                match (*left, *right) {
+                match (*left.into_inner(), *right.into_inner()) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
                         return inlist_union(l1, l2, true).map(Transformed::yes);
                     }
@@ -1876,7 +1902,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 true,
             ) =>
             {
-                match (*left, *right) {
+                match (*left.into_inner(), *right.into_inner()) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
                         return inlist_except(l1, &l2).map(Transformed::yes);
                     }
@@ -1896,7 +1922,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 false,
             ) =>
             {
-                match (*left, *right) {
+                match (*left.into_inner(), *right.into_inner()) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
                         return inlist_except(l2, &l1).map(Transformed::yes);
                     }
@@ -1916,7 +1942,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 true,
             ) =>
             {
-                match (*left, *right) {
+                match (*left.into_inner(), *right.into_inner()) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
                         return inlist_intersection(l1, &l2, true).map(Transformed::yes);
                     }
@@ -1936,7 +1962,12 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     info, &left, op, &right,
                 ) && op.supports_propagation() =>
             {
-                unwrap_cast_in_comparison_for_binary(info, *left, *right, op)?
+                unwrap_cast_in_comparison_for_binary(
+                    info,
+                    *left.into_inner(),
+                    *right.into_inner(),
+                    op,
+                )?
             }
             // literal op try_cast/cast(expr as data_type)
             // -->
@@ -1949,8 +1980,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
             {
                 unwrap_cast_in_comparison_for_binary(
                     info,
-                    *right,
-                    *left,
+                    *right.into_inner(),
+                    *left.into_inner(),
                     op.swap().unwrap(),
                 )?
             }
@@ -2225,13 +2256,13 @@ fn as_inlist(expr: &'_ Expr) -> Option<Cow<'_, InList>> {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == Operator::Eq => {
             match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(_), Expr::Literal(_, _)) => Some(Cow::Owned(InList {
-                    expr: left.clone(),
-                    list: vec![*right.clone()],
+                    expr: left.clone().into_inner(),
+                    list: vec![*right.clone().into_inner()],
                     negated: false,
                 })),
                 (Expr::Literal(_, _), Expr::Column(_)) => Some(Cow::Owned(InList {
-                    expr: right.clone(),
-                    list: vec![*left.clone()],
+                    expr: right.clone().into_inner(),
+                    list: vec![*left.clone().into_inner()],
                     negated: false,
                 })),
                 _ => None,
@@ -2250,13 +2281,13 @@ fn to_inlist(expr: Expr) -> Option<InList> {
             right,
         }) => match (left.as_ref(), right.as_ref()) {
             (Expr::Column(_), Expr::Literal(_, _)) => Some(InList {
-                expr: left,
-                list: vec![*right],
+                expr: left.into_inner(),
+                list: vec![*right.into_inner()],
                 negated: false,
             }),
             (Expr::Literal(_, _), Expr::Column(_)) => Some(InList {
-                expr: right,
-                list: vec![*left],
+                expr: right.into_inner(),
+                list: vec![*left.into_inner()],
                 negated: false,
             }),
             _ => None,
@@ -2321,11 +2352,11 @@ fn is_exactly_true(expr: Expr, info: &SimplifyContext) -> Result<Expr> {
     if !info.nullable(&expr)? {
         Ok(expr)
     } else {
-        Ok(Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(expr),
-            op: Operator::IsNotDistinctFrom,
-            right: Box::new(lit(true)),
-        }))
+        Ok(Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(expr),
+            Operator::IsNotDistinctFrom,
+            Box::new(lit(true)),
+        )))
     }
 }
 
@@ -3592,35 +3623,35 @@ mod tests {
     }
 
     fn regex_match(left: Expr, right: Expr) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left),
-            op: Operator::RegexMatch,
-            right: Box::new(right),
-        })
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            Operator::RegexMatch,
+            Box::new(right),
+        ))
     }
 
     fn regex_not_match(left: Expr, right: Expr) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left),
-            op: Operator::RegexNotMatch,
-            right: Box::new(right),
-        })
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            Operator::RegexNotMatch,
+            Box::new(right),
+        ))
     }
 
     fn regex_imatch(left: Expr, right: Expr) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left),
-            op: Operator::RegexIMatch,
-            right: Box::new(right),
-        })
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            Operator::RegexIMatch,
+            Box::new(right),
+        ))
     }
 
     fn regex_not_imatch(left: Expr, right: Expr) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left),
-            op: Operator::RegexNotIMatch,
-            right: Box::new(right),
-        })
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            Operator::RegexNotIMatch,
+            Box::new(right),
+        ))
     }
 
     // ------------------------------
@@ -4287,19 +4318,19 @@ mod tests {
     }
 
     fn distinct_from(left: impl Into<Expr>, right: impl Into<Expr>) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left.into()),
-            op: Operator::IsDistinctFrom,
-            right: Box::new(right.into()),
-        })
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left.into()),
+            Operator::IsDistinctFrom,
+            Box::new(right.into()),
+        ))
     }
 
     fn not_distinct_from(left: impl Into<Expr>, right: impl Into<Expr>) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left.into()),
-            op: Operator::IsNotDistinctFrom,
-            right: Box::new(right.into()),
-        })
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left.into()),
+            Operator::IsNotDistinctFrom,
+            Box::new(right.into()),
+        ))
     }
 
     #[test]

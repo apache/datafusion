@@ -2384,19 +2384,19 @@ impl Unparser<'_> {
 
         // Outer joins: fold table-scan filters into ON to preserve semantics.
         let combined = table_scan_filters.into_iter().reduce(|acc, filter| {
-            Expr::BinaryExpr(BinaryExpr {
-                left: Box::new(acc),
-                op: Operator::And,
-                right: Box::new(filter),
-            })
+            Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(acc),
+                Operator::And,
+                Box::new(filter),
+            ))
         });
 
         let on_filter = match (join_filter, combined) {
-            (Some(jf), Some(c)) => Some(Expr::BinaryExpr(BinaryExpr {
-                left: Box::new(jf.clone()),
-                op: Operator::And,
-                right: Box::new(c),
-            })),
+            (Some(jf), Some(c)) => Some(Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(jf.clone()),
+                Operator::And,
+                Box::new(c),
+            ))),
             (Some(jf), None) => Some(jf.clone()),
             (None, Some(c)) => Some(c),
             (None, None) => None,

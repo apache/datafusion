@@ -1537,11 +1537,11 @@ impl ExprPlanner for MyCustomPlanner {
                 // Rewrite `->` as a string concatenation operation
                 // - `left` and `right` are the operands (e.g., 'hello' and 'world')
                 // - `Operator::StringConcat` tells DataFusion to concatenate them
-                Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(expr.left.clone()),
-                    right: Box::new(expr.right.clone()),
-                    op: Operator::StringConcat,
-                })))
+                Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(expr.left.clone()),
+                    Operator::StringConcat,
+                    Box::new(expr.right.clone()),
+                ))))
             }
             _ => Ok(PlannerResult::Original(expr)),
         }

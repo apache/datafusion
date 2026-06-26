@@ -41,18 +41,18 @@ impl ExprPlanner for MyCustomPlanner {
     ) -> Result<PlannerResult<RawBinaryExpr>> {
         match &expr.op {
             BinaryOperator::Arrow => {
-                Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(expr.left.clone()),
-                    right: Box::new(expr.right.clone()),
-                    op: Operator::StringConcat,
-                })))
+                Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(expr.left.clone()),
+                    Operator::StringConcat,
+                    Box::new(expr.right.clone()),
+                ))))
             }
             BinaryOperator::LongArrow => {
-                Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(expr.left.clone()),
-                    right: Box::new(expr.right.clone()),
-                    op: Operator::Plus,
-                })))
+                Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(expr.left.clone()),
+                    Operator::Plus,
+                    Box::new(expr.right.clone()),
+                ))))
             }
             BinaryOperator::Question => {
                 Ok(PlannerResult::Planned(Expr::Alias(Alias::new(
