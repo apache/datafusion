@@ -2081,7 +2081,7 @@ impl ScalarValue {
     }
 
     #[inline]
-    fn can_use_direct_add(lhs: &ScalarValue, rhs: &ScalarValue) -> bool {
+    fn can_use_direct_arithmetic(lhs: &ScalarValue, rhs: &ScalarValue) -> bool {
         matches!(
             (lhs, rhs),
             (ScalarValue::Int8(_), ScalarValue::Int8(_))
@@ -2283,6 +2283,178 @@ impl ScalarValue {
         self.try_add_in_place_impl(other, true)
     }
 
+    #[inline]
+    fn sub_optional<T: ArrowNativeTypeOp>(
+        lhs: &mut Option<T>,
+        rhs: Option<T>,
+        checked: bool,
+    ) -> Result<()> {
+        match rhs {
+            Some(rhs) => {
+                if let Some(lhs) = lhs.as_mut() {
+                    *lhs = if checked {
+                        lhs.sub_checked(rhs).map_err(|e| arrow_datafusion_err!(e))?
+                    } else {
+                        lhs.sub_wrapping(rhs)
+                    };
+                }
+            }
+            None => *lhs = None,
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn sub_decimal_values<T: DecimalType>(
+        lhs_value: &mut Option<T::Native>,
+        lhs_precision: &mut u8,
+        lhs_scale: &mut i8,
+        rhs_value: Option<T::Native>,
+        rhs_precision: u8,
+        rhs_scale: i8,
+    ) -> Result<()>
+    where
+        T::Native: ArrowNativeTypeOp,
+    {
+        Self::validate_decimal_or_internal_err::<T>(*lhs_precision, *lhs_scale)?;
+        Self::validate_decimal_or_internal_err::<T>(rhs_precision, rhs_scale)?;
+
+        let result_scale = (*lhs_scale).max(rhs_scale);
+        // Decimal scales can be negative, so use a wider signed type for the
+        // intermediate precision arithmetic.
+        let lhs_precision_delta = i16::from(*lhs_precision) - i16::from(*lhs_scale);
+        let rhs_precision_delta = i16::from(rhs_precision) - i16::from(rhs_scale);
+        let result_precision =
+            (i16::from(result_scale) + lhs_precision_delta.max(rhs_precision_delta) + 1)
+                .min(i16::from(T::MAX_PRECISION)) as u8;
+
+        Self::validate_decimal_or_internal_err::<T>(result_precision, result_scale)?;
+
+        let lhs_mul = T::Native::usize_as(10)
+            .pow_checked((result_scale - *lhs_scale) as u32)
+            .map_err(|e| arrow_datafusion_err!(e))?;
+        let rhs_mul = T::Native::usize_as(10)
+            .pow_checked((result_scale - rhs_scale) as u32)
+            .map_err(|e| arrow_datafusion_err!(e))?;
+
+        // Mirror the Arrow decimal kernels, which always use checked multiply +
+        // checked subtract for the rescaled operands regardless of the wrapping
+        // vs. checked variant, so results stay identical to the kernel path.
+        let result_value = match (*lhs_value, rhs_value) {
+            (Some(lhs_value), Some(rhs_value)) => Some(
+                lhs_value
+                    .mul_checked(lhs_mul)
+                    .and_then(|lhs| {
+                        rhs_value
+                            .mul_checked(rhs_mul)
+                            .and_then(|rhs| lhs.sub_checked(rhs))
+                    })
+                    .map_err(|e| arrow_datafusion_err!(e))?,
+            ),
+            _ => None,
+        };
+
+        *lhs_value = result_value;
+        *lhs_precision = result_precision;
+        *lhs_scale = result_scale;
+
+        Ok(())
+    }
+
+    #[inline]
+    fn try_sub_in_place_impl(
+        &mut self,
+        other: &ScalarValue,
+        checked: bool,
+    ) -> Result<bool> {
+        match (self, other) {
+            (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
+                Self::sub_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::Int16(lhs), ScalarValue::Int16(rhs)) => {
+                Self::sub_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::Int32(lhs), ScalarValue::Int32(rhs)) => {
+                Self::sub_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
+                Self::sub_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::UInt8(lhs), ScalarValue::UInt8(rhs)) => {
+                Self::sub_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::UInt16(lhs), ScalarValue::UInt16(rhs)) => {
+                Self::sub_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::UInt32(lhs), ScalarValue::UInt32(rhs)) => {
+                Self::sub_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
+                Self::sub_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::Float16(lhs), ScalarValue::Float16(rhs)) => {
+                Self::sub_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => {
+                Self::sub_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => {
+                Self::sub_optional(lhs, *rhs, checked)?;
+            }
+            (
+                ScalarValue::Decimal32(lhs, p, s),
+                ScalarValue::Decimal32(rhs, rhs_p, rhs_s),
+            ) => {
+                Self::sub_decimal_values::<Decimal32Type>(
+                    lhs, p, s, *rhs, *rhs_p, *rhs_s,
+                )?;
+            }
+            (
+                ScalarValue::Decimal64(lhs, p, s),
+                ScalarValue::Decimal64(rhs, rhs_p, rhs_s),
+            ) => {
+                Self::sub_decimal_values::<Decimal64Type>(
+                    lhs, p, s, *rhs, *rhs_p, *rhs_s,
+                )?;
+            }
+            (
+                ScalarValue::Decimal128(lhs, p, s),
+                ScalarValue::Decimal128(rhs, rhs_p, rhs_s),
+            ) => {
+                Self::sub_decimal_values::<Decimal128Type>(
+                    lhs, p, s, *rhs, *rhs_p, *rhs_s,
+                )?;
+            }
+            (
+                ScalarValue::Decimal256(lhs, p, s),
+                ScalarValue::Decimal256(rhs, rhs_p, rhs_s),
+            ) => {
+                Self::sub_decimal_values::<Decimal256Type>(
+                    lhs, p, s, *rhs, *rhs_p, *rhs_s,
+                )?;
+            }
+            _ => return Ok(false),
+        }
+
+        Ok(true)
+    }
+
+    #[inline]
+    pub(crate) fn try_sub_wrapping_in_place(
+        &mut self,
+        other: &ScalarValue,
+    ) -> Result<bool> {
+        self.try_sub_in_place_impl(other, false)
+    }
+
+    #[inline]
+    pub(crate) fn try_sub_checked_in_place(
+        &mut self,
+        other: &ScalarValue,
+    ) -> Result<bool> {
+        self.try_sub_in_place_impl(other, true)
+    }
+
     /// Calculate arithmetic negation for a scalar value
     pub fn arithmetic_negate(&self) -> Result<Self> {
         fn neg_checked_with_ctx<T: ArrowNativeTypeOp>(
@@ -2419,7 +2591,7 @@ impl ScalarValue {
     /// should operate on Arrays directly, using vectorized array kernels
     pub fn add<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let other = other.borrow();
-        if Self::can_use_direct_add(self, other) {
+        if Self::can_use_direct_arithmetic(self, other) {
             let mut result = self.clone();
             if result.try_add_wrapping_in_place(other)? {
                 return Ok(result);
@@ -2437,7 +2609,7 @@ impl ScalarValue {
     /// should operate on Arrays directly, using vectorized array kernels
     pub fn add_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let other = other.borrow();
-        if Self::can_use_direct_add(self, other) {
+        if Self::can_use_direct_arithmetic(self, other) {
             let mut result = self.clone();
             if result.try_add_checked_in_place(other)? {
                 return Ok(result);
@@ -2454,7 +2626,16 @@ impl ScalarValue {
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
     /// should operate on Arrays directly, using vectorized array kernels
     pub fn sub<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let r = sub_wrapping(&self.to_scalar()?, &other.borrow().to_scalar()?)?;
+        let other = other.borrow();
+        if Self::can_use_direct_arithmetic(self, other) {
+            let mut result = self.clone();
+            if result.try_sub_wrapping_in_place(other)? {
+                return Ok(result);
+            }
+            debug_assert!(false, "fast-path eligibility drifted from implementation");
+        }
+
+        let r = sub_wrapping(&self.to_scalar()?, &other.to_scalar()?)?;
         Self::try_from_array(r.as_ref(), 0)
     }
 
@@ -2463,7 +2644,16 @@ impl ScalarValue {
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
     /// should operate on Arrays directly, using vectorized array kernels
     pub fn sub_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let r = sub(&self.to_scalar()?, &other.borrow().to_scalar()?)?;
+        let other = other.borrow();
+        if Self::can_use_direct_arithmetic(self, other) {
+            let mut result = self.clone();
+            if result.try_sub_checked_in_place(other)? {
+                return Ok(result);
+            }
+            debug_assert!(false, "fast-path eligibility drifted from implementation");
+        }
+
+        let r = sub(&self.to_scalar()?, &other.to_scalar()?)?;
         Self::try_from_array(r.as_ref(), 0)
     }
 
@@ -6765,6 +6955,95 @@ mod tests {
             err,
             "Arrow error: Arithmetic overflow: Overflow happened on: 9223372036854775807 - -9223372036854775808"
         )
+    }
+
+    #[test]
+    fn scalar_sub_fast_path_primitive_parity() -> Result<()> {
+        // Wrapping subtraction matches native `wrapping_sub` for the whitelisted
+        // primitive types (the in-place fast path).
+        assert_eq!(
+            ScalarValue::Int8(Some(3)).sub(ScalarValue::Int8(Some(10)))?,
+            ScalarValue::Int8(Some(-7))
+        );
+        // signed wrap-around
+        assert_eq!(
+            ScalarValue::Int8(Some(i8::MIN)).sub(ScalarValue::Int8(Some(1)))?,
+            ScalarValue::Int8(Some(i8::MAX))
+        );
+        // unsigned underflow wraps under the wrapping variant
+        assert_eq!(
+            ScalarValue::UInt32(Some(0)).sub(ScalarValue::UInt32(Some(5)))?,
+            ScalarValue::UInt32(Some(u32::MAX - 4))
+        );
+        assert_eq!(
+            ScalarValue::Int64(Some(42)).sub(ScalarValue::Int64(Some(100)))?,
+            ScalarValue::Int64(Some(-58))
+        );
+        assert_eq!(
+            ScalarValue::Float64(Some(1.5)).sub(ScalarValue::Float64(Some(0.5)))?,
+            ScalarValue::Float64(Some(1.0))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_sub_checked_fast_path_overflow() {
+        // unsigned underflow errors under the checked variant
+        assert!(
+            ScalarValue::UInt32(Some(0))
+                .sub_checked(ScalarValue::UInt32(Some(1)))
+                .is_err()
+        );
+        assert!(
+            ScalarValue::Int8(Some(i8::MIN))
+                .sub_checked(ScalarValue::Int8(Some(1)))
+                .is_err()
+        );
+        // no overflow -> Ok
+        assert_eq!(
+            ScalarValue::UInt32(Some(10))
+                .sub_checked(ScalarValue::UInt32(Some(3)))
+                .unwrap(),
+            ScalarValue::UInt32(Some(7))
+        );
+    }
+
+    #[test]
+    fn scalar_sub_fast_path_null_parity() -> Result<()> {
+        // NULL on either side propagates to NULL, matching the kernel path.
+        assert_eq!(
+            ScalarValue::Int32(Some(5)).sub(ScalarValue::Int32(None))?,
+            ScalarValue::Int32(None)
+        );
+        assert_eq!(
+            ScalarValue::Int32(None).sub(ScalarValue::Int32(Some(5)))?,
+            ScalarValue::Int32(None)
+        );
+        assert_eq!(
+            ScalarValue::Int32(None).sub_checked(ScalarValue::Int32(None))?,
+            ScalarValue::Int32(None)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_sub_fast_path_decimal_scale() -> Result<()> {
+        // 1.23 (scale 2) - 0.4 (scale 1): rhs rescaled to 40, 123 - 40 = 83,
+        // result scale 2, precision 11 (mirrors the add decimal scale test).
+        let decimal = ScalarValue::Decimal128(Some(123), 10, 2);
+        let decimal_2 = ScalarValue::Decimal128(Some(4), 9, 1);
+        assert_eq!(
+            decimal.sub(decimal_2)?,
+            ScalarValue::Decimal128(Some(83), 11, 2)
+        );
+
+        let decimal = ScalarValue::Decimal256(Some(i256::from(123)), 10, 2);
+        let decimal_2 = ScalarValue::Decimal256(Some(i256::from(4)), 9, 1);
+        assert_eq!(
+            decimal.sub(decimal_2)?,
+            ScalarValue::Decimal256(Some(i256::from(83)), 11, 2)
+        );
+        Ok(())
     }
 
     #[test]
