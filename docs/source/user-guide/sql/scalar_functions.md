@@ -4637,7 +4637,7 @@ array_to_string(array, delimiter[, null_string])
 transforms the values of an array
 
 ```sql
-array_transform(array, x -> x*2)
+array_transform(array, lambda)
 ```
 
 #### Arguments
