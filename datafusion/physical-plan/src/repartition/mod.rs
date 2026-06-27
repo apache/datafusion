@@ -576,7 +576,9 @@ enum BatchPartitionerState {
         ordering: LexOrdering,
         /// Boundaries between adjacent partitions.
         split_points: Vec<SplitPoint>,
-        num_partitions: usize,
+        // Collection of arrays, where the index of each array is associated w/ that corresponding output partition, and the values in that array
+        // correspond to the rows that will make up the RecordBatch being sent to the corresponding output partition
+        indices: Vec<Vec<u32>>,
     },
 }
 
@@ -732,7 +734,7 @@ impl BatchPartitioner {
             state: BatchPartitionerState::Range {
                 ordering,
                 split_points,
-                num_partitions,
+                indices: vec![vec![]; num_partitions],
             },
             timer,
         }
@@ -741,7 +743,7 @@ impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] based on the provided [`Partitioning`] scheme.
     ///
     /// This is a convenience constructor that delegates to the specialized
-    /// hash or round-robin constructors depending on the partitioning variant.
+    /// hash or round-robin or range constructors depending on the partitioning variant.
     ///
     /// # Parameters
     /// - `partitioning`: Partitioning scheme to apply (hash or round-robin).
@@ -862,6 +864,33 @@ impl BatchPartitioner {
 
                     Box::new(partitioned_batches.into_iter())
                 }
+                BatchPartitionerState::Range {
+                    ordering,
+                    split_points,
+                    indices,
+                } => {
+                    // Tracking time required for distributing indexes across output partitions
+                    let timer = self.timer.timer();
+
+                    let arrays = evaluate_expressions_to_arrays(
+                        ordering.iter().map(|e| &e.expr),
+                        &batch,
+                    )?;
+
+                    // TODO: go through arrays and assign rows in the `batch` to a corresponding output partition in `indices`
+
+                    indices.iter_mut().for_each(|v| v.clear());
+
+                    partition_reducer.partition_indices(hash_buffer, indices);
+
+                    // Finished building index-arrays for output partitions
+                    timer.done();
+
+                    let partitioned_batches =
+                        Self::partition_grouped_take(&batch, indices, &self.timer)?;
+
+                    Box::new(partitioned_batches.into_iter())
+                }
             };
 
         Ok(it)
@@ -870,9 +899,9 @@ impl BatchPartitioner {
     // return the number of output partitions
     fn num_partitions(&self) -> usize {
         match &self.state {
-            BatchPartitionerState::RoundRobin { num_partitions, .. }
-            | BatchPartitionerState::Range { num_partitions, .. } => *num_partitions,
-            BatchPartitionerState::Hash { indices, .. } => indices.len(),
+            BatchPartitionerState::RoundRobin { num_partitions, .. } => *num_partitions,
+            BatchPartitionerState::Hash { indices, .. }
+            | BatchPartitionerState::Range { indices, .. } => indices.len(),
         }
     }
 
