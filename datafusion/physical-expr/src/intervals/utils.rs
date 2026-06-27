@@ -35,7 +35,8 @@ use datafusion_expr::{Operator, Volatility};
 /// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.
 /// We do not support every type of [`Operator`]s either. Over time, this check
 /// will relax as more types of `PhysicalExpr`s and `Operator`s are supported.
-/// Currently, [`CastExpr`], [`NegativeExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
+/// Currently, [`CastExpr`], [`NegativeExpr`], [`BinaryExpr`], [`Column`], [`Literal`] and
+/// non-volatile [`ScalarFunctionExpr`]s are supported.
 pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
     if let Some(binary_expr) = expr.downcast_ref::<BinaryExpr>() {
         is_operator_supported(binary_expr.op())
