@@ -23,7 +23,7 @@
 
 # Tests for Spark-compatible ceil function.
 # Spark semantics differ from DataFusion's built-in ceil in two ways:
-#   1. Return type: Spark returns Int64 for float/integer inputs;
+#   1. Return type: 1-arg Spark returns Int64 for float/integer inputs;
 #      DataFusion returns the same float type (e.g. ceil(1.5::DOUBLE) -> DOUBLE in DF, BIGINT in Spark)
 #   2. Decimal precision: Spark adjusts precision to (p - s + 1) for Decimal128(p, s) with scale > 0;
 #      DataFusion preserves the original precision and scale
@@ -41,13 +41,13 @@ SELECT ceil(-0.1::decimal(1,1)), arrow_typeof(ceil(-0.1::decimal(1,1)));
 
 ## Original Query: SELECT ceil(3.1411, -3);
 ## PySpark 3.5.5 Result: {'ceil(3.1411, -3)': Decimal('1000'), 'typeof(ceil(3.1411, -3))': 'decimal(4,0)', 'typeof(3.1411)': 'decimal(5,4)', 'typeof(-3)': 'int'}
-## TODO: 2-argument ceil(value, scale) is not yet implemented
+## TODO: 2-argument ceil(decimal, scale) is not yet implemented (returns NotImplemented at execution).
 #query
 #SELECT ceil(3.1411::decimal(5,4), -3::int);
 
 ## Original Query: SELECT ceil(3.1411, 3);
 ## PySpark 3.5.5 Result: {'ceil(3.1411, 3)': Decimal('3.142'), 'typeof(ceil(3.1411, 3))': 'decimal(5,3)', 'typeof(3.1411)': 'decimal(5,4)', 'typeof(3)': 'int'}
-## TODO: 2-argument ceil(value, scale) is not yet implemented
+## TODO: 2-argument ceil(decimal, scale) is not yet implemented (returns NotImplemented at execution).
 #query
 #SELECT ceil(3.1411::decimal(5,4), 3::int);
 
@@ -57,6 +57,10 @@ query IT
 SELECT ceil(5::int), arrow_typeof(ceil(5::int));
 ----
 5 Int64
+
+# -------------------------------------------------------------------
+# 1-argument ceil — float / integer / decimal scalars and arrays
+# -------------------------------------------------------------------
 
 # Scalar input: float64 returns bigint
 query IIIIIIIT
@@ -156,3 +160,140 @@ SELECT ceil(a) FROM (VALUES (1.50::DECIMAL(10, 2)), (-1.50::DECIMAL(10, 2)), (1.
 -1
 1
 NULL
+
+# -------------------------------------------------------------------
+# 2-argument ceil(value, scale)
+#
+# The 2-arg form preserves the input type for float and integer inputs.
+# Decimal inputs in the 2-arg form are not yet supported (see TODO above).
+# -------------------------------------------------------------------
+
+# ceil(double, positive scale) — preserves Float64
+query RT
+SELECT ceil(3.1411::DOUBLE, 2::int), arrow_typeof(ceil(3.1411::DOUBLE, 2::int));
+----
+3.15 Float64
+
+# ceil(double, negative scale) — preserves Float64
+query RT
+SELECT ceil(3345.1::DOUBLE, -2::int), arrow_typeof(ceil(3345.1::DOUBLE, -2::int));
+----
+3400 Float64
+
+# ceil(double, 0) — type contract: stays Float64 (NOT promoted to Int64)
+query RT
+SELECT ceil(3.5::DOUBLE, 0::int), arrow_typeof(ceil(3.5::DOUBLE, 0::int));
+----
+4 Float64
+
+# ceil(float, scale) — preserves Float32
+query RT
+SELECT ceil(arrow_cast(3.1, 'Float32'), 1::int), arrow_typeof(ceil(arrow_cast(3.1, 'Float32'), 1::int));
+----
+3.1 Float32
+
+# ceil(float, 0) — type contract: stays Float32
+query RT
+SELECT ceil(arrow_cast(3.5, 'Float32'), 0::int), arrow_typeof(ceil(arrow_cast(3.5, 'Float32'), 0::int));
+----
+4 Float32
+
+# ceil(double, NULL) — NULL scale produces NULL
+query RT
+SELECT ceil(3.5::DOUBLE, NULL::int), arrow_typeof(ceil(3.5::DOUBLE, NULL::int));
+----
+NULL Float64
+
+# Array input: float64 with scale, mixed values + NULL
+query R
+SELECT ceil(a, 2::int) FROM (VALUES (3.1411::DOUBLE), (-1.001::DOUBLE), (0.0::DOUBLE), (NULL::DOUBLE)) AS t(a);
+----
+3.15
+-1
+0
+NULL
+
+# 2-arg integer with negative scale — actually applies the scale (not a no-op).
+query IT
+SELECT ceil(25::int, -1::int), arrow_typeof(ceil(25::int, -1::int));
+----
+30 Int64
+
+query I
+SELECT ceil(24::int, -1::int);
+----
+30
+
+# Ceiling rounds toward +∞ for negatives — distinct from HALF_UP rounding.
+query I
+SELECT ceil(-25::int, -1::int);
+----
+-20
+
+query I
+SELECT ceil(123::int, -2::int);
+----
+200
+
+query I
+SELECT ceil(-123::int, -2::int);
+----
+-100
+
+# Already on a boundary: no change.
+query I
+SELECT ceil(100::int, -2::int);
+----
+100
+
+# Positive scale on integer: no-op (integers have no fractional part).
+query I
+SELECT ceil(42::int, 2::int);
+----
+42
+
+# 2-arg integer with extreme negative scale — factor overflows i64 → 0 (matches round).
+query I
+SELECT ceil(42::int, -20::int);
+----
+0
+
+# Other integer widths.
+query I
+SELECT ceil(25::tinyint, -1::int);
+----
+30
+
+query I
+SELECT ceil(25::smallint, -1::int);
+----
+30
+
+query I
+SELECT ceil(25::bigint, -1::int);
+----
+30
+
+query I
+SELECT ceil(arrow_cast(25, 'UInt8'), -1::int);
+----
+30
+
+query I
+SELECT ceil(arrow_cast(25, 'UInt16'), -1::int);
+----
+30
+
+query I
+SELECT ceil(arrow_cast(150, 'UInt32'), -2::int);
+----
+200
+
+query I
+SELECT ceil(arrow_cast(25, 'UInt64'), -1::int);
+----
+30
+
+# 2-arg decimal — currently not supported; surface a clear NotImplemented error.
+query error DataFusion error: This feature is not implemented: 2-argument ceil is not yet supported for decimal inputs
+SELECT ceil(1.50::DECIMAL(10, 2), 0::int);
