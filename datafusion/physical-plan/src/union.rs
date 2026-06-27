@@ -111,24 +111,6 @@ pub struct UnionExec {
 }
 
 impl UnionExec {
-    /// Create a new UnionExec
-    #[deprecated(since = "44.0.0", note = "Use UnionExec::try_new instead")]
-    pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
-        let schema =
-            union_schema(&inputs).expect("UnionExec::new called with empty inputs");
-        // The schema of the inputs and the union schema is consistent when:
-        // - They have the same number of fields, and
-        // - Their fields have same types at the same indices.
-        // Here, we know that schemas are consistent and the call below can
-        // not return an error.
-        let cache = Self::compute_properties(&inputs, schema).unwrap();
-        UnionExec {
-            inputs,
-            metrics: ExecutionPlanMetricsSet::new(),
-            cache: Arc::new(cache),
-        }
-    }
-
     /// Try to create a new UnionExec.
     ///
     /// # Errors

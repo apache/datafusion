@@ -38,6 +38,7 @@ use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 mod array_static_filter;
 mod primitive_filter;
+mod result;
 mod static_filter;
 mod strategy;
 

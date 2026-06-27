@@ -229,6 +229,23 @@ impl JoinLeftData {
         &self.batch
     }
 
+    /// Returns `true` if the build side physically contains rows.
+    ///
+    /// This is distinct from [`Self::has_matchable_build_rows`]: a build side
+    /// can hold rows while its hash map is empty (see that method).
+    pub(super) fn has_build_rows(&self) -> bool {
+        self.batch().num_rows() > 0
+    }
+
+    /// Returns `true` if the build-side hash map has any matchable entries.
+    ///
+    /// Under [`NullEquality::NullEqualsNothing`] build rows whose join key is
+    /// NULL are omitted from the map, so this can be `false` even when
+    /// [`Self::has_build_rows`] is `true`.
+    pub(super) fn has_matchable_build_rows(&self) -> bool {
+        !self.map().is_empty()
+    }
+
     /// returns a reference to the build side expressions values
     pub(super) fn values(&self) -> &[ArrayRef] {
         &self.values
@@ -1075,6 +1092,12 @@ impl HashJoinExec {
         &self,
         partition_mode: PartitionMode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_or_internal_err!(
+            self.dynamic_filter.is_none(),
+            "Cannot swap HashJoinExec inputs after dynamic filters have been constructed. \
+             Optimizer rules that reorder join inputs must run before optimizer rules `FilterPushdown::new_post_optimization()`"
+        );
+
         let left = self.left();
         let right = self.right();
         let new_join = self
@@ -6606,6 +6629,45 @@ mod tests {
                 .expect("DynamicFilterPhysicalExpr always has an expression_id"),
             df.expression_id()
                 .expect("DynamicFilterPhysicalExpr always has an expression_id"),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_swap_inputs_rejects_dynamic_filter() -> Result<()> {
+        let left = build_table(
+            ("l_key", &vec![1]),
+            ("l_payload", &vec![10]),
+            ("l_other", &vec![100]),
+        );
+        let right = build_table(
+            ("r_payload", &vec![20]),
+            ("r_key", &vec![1]),
+            ("r_other", &vec![200]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("l_key", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("r_key", &right.schema())?) as _,
+        )];
+
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftSemi,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?
+        .with_dynamic_filter_expr(dynamic_filter)?;
+
+        let err = join.swap_inputs(PartitionMode::CollectLeft).unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Cannot swap HashJoinExec inputs after dynamic filters have been constructed"
         );
         Ok(())
     }

@@ -46,9 +46,8 @@ impl SortMergeJoinMetrics {
         let input_rows = MetricBuilder::new(metrics)
             .with_category(MetricCategory::Rows)
             .counter("input_rows", partition);
-        let peak_mem_used = MetricBuilder::new(metrics)
-            .with_category(MetricCategory::Bytes)
-            .gauge("peak_mem_used", partition);
+        let peak_mem_used =
+            MetricBuilder::new(metrics).peak_memory_usage("peak_mem_used", partition);
 
         let baseline_metrics = BaselineMetrics::new(metrics, partition);
 

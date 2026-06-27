@@ -1094,7 +1094,7 @@ pub fn ensure_distribution(
     // When `false`, round robin repartition will not be added to increase parallelism
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
-    let batch_size = config.execution.batch_size;
+    let batch_size = config.execution.batch_size.get();
     let should_use_estimates = config
         .execution
         .use_row_number_estimates_to_optimize_partitioning;

@@ -60,8 +60,8 @@ use datafusion_datasource_json::file_format::{
 use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RecursiveQuery, SkipType,
-    TableSource, Unnest, WriteOp,
+    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RangePartitioning,
+    RecursiveQuery, SkipType, TableSource, Unnest, WriteOp,
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, JoinConstraint, LogicalPlan, LogicalPlanBuilder,
@@ -76,6 +76,7 @@ use datafusion_expr::{
 use datafusion_proto_common::protobuf_common;
 
 use self::to_proto::{serialize_expr, serialize_exprs};
+use crate::logical_plan::to_proto::serialize_range_split_point;
 use crate::logical_plan::to_proto::serialize_sorts;
 use datafusion_catalog::TableProvider;
 use datafusion_catalog::default_table_source::{provider_as_source, source_as_provider};
@@ -745,6 +746,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     PartitionMethod::RoundRobin(partition_count) => {
                         Partitioning::RoundRobinBatch(*partition_count as usize)
                     }
+                    PartitionMethod::Range(protobuf::RangeRepartition {
+                        sort_expr: pb_sort_expr,
+                        split_point,
+                    }) => Partitioning::Range(RangePartitioning::try_new(
+                        from_proto::parse_sorts(pb_sort_expr, ctx, extension_codec)?,
+                        split_point
+                            .iter()
+                            .map(from_proto::parse_protobuf_range_split_point)
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )?),
                 };
 
                 LogicalPlanBuilder::from(input)
@@ -1754,10 +1765,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Partitioning::RoundRobinBatch(partition_count) => {
                         PartitionMethod::RoundRobin(*partition_count as u64)
                     }
-                    Partitioning::Range(_) => {
-                        // TODO: Support range repartition protobuf serialization.
-                        // Tracked by https://github.com/apache/datafusion/issues/22787
-                        return not_impl_err!("Range repartition");
+                    Partitioning::Range(range_partitioning) => {
+                        let ordering = range_partitioning.ordering();
+                        let split_point = range_partitioning
+                            .split_points()
+                            .iter()
+                            .map(serialize_range_split_point)
+                            .collect::<Result<Vec<_>, _>>()?;
+
+                        PartitionMethod::Range(protobuf::RangeRepartition {
+                            sort_expr: serialize_sorts(ordering, extension_codec)?,
+                            split_point,
+                        })
                     }
                     Partitioning::DistributeBy(_) => {
                         return not_impl_err!("DistributeBy");
