@@ -312,6 +312,24 @@ where
         }
     }
 
+    #[inline]
+    fn append_repeated_string<B: BulkNullStringArrayBuilder>(
+        builder: &mut B,
+        buffer: &mut Vec<u8>,
+        string: &str,
+        count: i64,
+    ) -> Result<()> {
+        if count > 0 {
+            repeat_to_buffer(buffer, string, count as usize);
+            // SAFETY: buffer contains valid UTF-8 since we only copy from a valid &str
+            builder.try_append_value(unsafe {
+                std::str::from_utf8_unchecked(buffer.as_slice())
+            })
+        } else {
+            builder.try_append_value("")
+        }
+    }
+
     // Output is null IFF either input is null
     let nulls = NullBuffer::union(string_array.nulls(), number_array.nulls());
 
@@ -324,30 +342,14 @@ where
             // SAFETY: index `i` in both arrays is valid
             let string = unsafe { string_array.value_unchecked(i) };
             let count = unsafe { number_array.value_unchecked(i) };
-            if count > 0 {
-                repeat_to_buffer(&mut buffer, string, count as usize);
-                // SAFETY: buffer contains valid UTF-8 since we only copy from a valid &str
-                builder.try_append_value(unsafe {
-                    std::str::from_utf8_unchecked(&buffer)
-                })?;
-            } else {
-                builder.try_append_value("")?;
-            }
+            append_repeated_string(&mut builder, &mut buffer, string, count)?;
         }
     } else {
         for i in 0..string_array.len() {
             // SAFETY: no nulls, so every index in both arrays is valid
             let string = unsafe { string_array.value_unchecked(i) };
             let count = unsafe { number_array.value_unchecked(i) };
-            if count > 0 {
-                repeat_to_buffer(&mut buffer, string, count as usize);
-                // SAFETY: buffer contains valid UTF-8 since we only copy from a valid &str
-                builder.try_append_value(unsafe {
-                    std::str::from_utf8_unchecked(&buffer)
-                })?;
-            } else {
-                builder.try_append_value("")?;
-            }
+            append_repeated_string(&mut builder, &mut buffer, string, count)?;
         }
     }
 

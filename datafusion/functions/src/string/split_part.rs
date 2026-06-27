@@ -634,8 +634,7 @@ fn append_split_part<B: BulkNullStringArrayBuilder>(
             return exec_err!("field position must not be zero");
         }
     };
-    builder.try_append_value(result.unwrap_or(""))?;
-    Ok(())
+    builder.try_append_value(result.unwrap_or(""))
 }
 
 #[cfg(test)]

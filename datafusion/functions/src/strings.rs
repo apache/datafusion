@@ -1047,22 +1047,22 @@ fn push_char_to_vec(v: &mut Vec<u8>, c: char) {
 /// Three methods append a non-null row; which method to pick depends on how the
 /// row is produced:
 ///
-/// - [`append_value`](Self::append_value) pushes an already-finished `&str`.
-///   Use it when the row is forwarded from an existing slice (e.g. an input
-///   column) — there is nothing to elide.
-/// - [`append_byte_map`](Self::append_byte_map) emits a row whose bytes are a
-///   byte-to-byte mapping of an input slice. Output length is known up front
-///   and the inner loop is straight-line, so this is the fastest path when the
-///   shape fits.
-/// - [`append_with`](Self::append_with) emits a row by feeding fragments to a
-///   [`StringWriter`]. Use it when the row is computed from multiple sources or
-///   when the output length is not known up front. Bytes are written directly
-///   into the builder, so it is typically faster than assembling a `String` and
-///   calling `append_value(&scratch)`.
+/// - [`try_append_value`](Self::try_append_value) pushes an already-finished
+///   `&str`. Use it when the row is forwarded from an existing slice (e.g. an
+///   input column) — there is nothing to elide.
+/// - [`try_append_byte_map`](Self::try_append_byte_map) emits a row whose bytes
+///   are a byte-to-byte mapping of an input slice. Output length is known up
+///   front and the inner loop is straight-line, so this is the fastest path
+///   when the shape fits.
+/// - [`try_append_with`](Self::try_append_with) emits a row by feeding fragments
+///   to a [`StringWriter`]. Use it when the row is computed from multiple
+///   sources or when the output length is not known up front. Bytes are written
+///   directly into the builder, so it is typically faster than assembling a
+///   `String` and calling `try_append_value(&scratch)`.
 ///
-/// For a NULL row, call [`append_placeholder`](Self::append_placeholder) to
-/// advance the row count without writing into the value buffer; the caller MUST
-/// clear the corresponding bit in the null buffer passed to
+/// For a NULL row, call [`try_append_placeholder`](Self::try_append_placeholder)
+/// to advance the row count without writing into the value buffer; the caller
+/// MUST clear the corresponding bit in the null buffer passed to
 /// [`finish`](Self::finish).
 pub(crate) trait BulkNullStringArrayBuilder {
     /// Per-builder concrete writer type, exposed as a GAT so generic callers
@@ -1179,6 +1179,8 @@ impl BulkNullStringArrayBuilder for StringViewArrayBuilder {
     where
         F: for<'a> FnOnce(&mut Self::Writer<'a>),
     {
+        // StringView's closure-based path is still infallible; the Result
+        // keeps this trait uniform with offset-based builders.
         StringViewArrayBuilder::append_with(self, f);
         Ok(())
     }
@@ -1188,6 +1190,8 @@ impl BulkNullStringArrayBuilder for StringViewArrayBuilder {
         src: &[u8],
         map: F,
     ) -> Result<()> {
+        // StringView's byte-map path is still infallible; the Result keeps this
+        // trait uniform with offset-based builders.
         // SAFETY: contract forwarded.
         unsafe { StringViewArrayBuilder::append_byte_map(self, src, map) };
         Ok(())
