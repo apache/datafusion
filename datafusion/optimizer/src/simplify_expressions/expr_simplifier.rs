@@ -39,12 +39,12 @@ use datafusion_common::{
     metadata::FieldMetadata,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
-use datafusion_expr::expr::HigherOrderFunction;
 use datafusion_expr::{
     BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator, Volatility,
     and, binary::BinaryTypeCoercer, lit, or, preimage::PreimageResult,
 };
 use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
+use datafusion_expr::{binary_expr, expr::HigherOrderFunction};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
     expr::{InList, InSubquery},
@@ -2383,39 +2383,24 @@ fn reassociate_literals(expr: Expr) -> Expr {
     let mut out = exprs.next().unwrap();
     let mut lit = None;
     for expr in exprs {
-        if matches!(expr, Expr::Literal(_, _)) {
+        if is_lit(&expr) {
             if let Some(left) = lit {
-                lit = Some(Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(left),
-                    op,
-                    right: Box::new(expr),
-                }));
+                lit = Some(binary_expr(left, op, expr));
             } else {
                 lit = Some(expr);
             }
         } else {
             if let Some(lit) = lit.take() {
-                out = Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(out),
-                    op,
-                    right: Box::new(lit),
-                });
+                out = binary_expr(out, op, lit);
             }
-            out = Expr::BinaryExpr(BinaryExpr {
-                left: Box::new(out),
-                op,
-                right: Box::new(expr),
-            });
+            out = binary_expr(out, op, expr);
         }
     }
     if let Some(lit) = lit.take() {
-        out = Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(out),
-            op,
-            right: Box::new(lit),
-        });
+        binary_expr(out, op, lit)
+    } else {
+        out
     }
-    out
 }
 
 #[cfg(test)]
