@@ -1978,6 +1978,35 @@ true
 statement ok
 DROP TABLE approx_distinct_dense_test;
 
+# This test runs approx_distinct over decimal128 and decimal256 for the scalar and the grouped path.
+statement ok
+CREATE TABLE approx_distinct_decimal_test (g INT, dec128 DECIMAL(20, 2), dec256 DECIMAL(40, 2)) AS VALUES
+  (1, 12345678901234.56,  12345678901234567890123456.78),
+  (1, 98765432109876.54,  98765432109876543210987654.32),
+  (1, 98765432109876.54,  98765432109876543210987654.32),
+  (2, 55555555555555.55,  55555555555555555555555555.55),
+  (2, -0.0,               -0.0),
+  (2, 0.0,                0.0);
+
+# Scalar path
+query II
+SELECT approx_distinct(dec128), approx_distinct(dec256) FROM approx_distinct_decimal_test;
+----
+4 4
+
+# Grouped path
+query III
+SELECT g, approx_distinct(dec128), approx_distinct(dec256)
+FROM approx_distinct_decimal_test GROUP BY g ORDER BY g;
+----
+1 2 2
+2 2 2
+
+statement ok
+DROP TABLE approx_distinct_decimal_test;
+
+
+
 ## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
 ## data, asserting the estimated quantiles are ±5% their actual values.
 ##
