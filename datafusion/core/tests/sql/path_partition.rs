@@ -38,6 +38,7 @@ use datafusion_common::ScalarValue;
 use datafusion_common::stats::Precision;
 use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_execution::config::SessionConfig;
+use datafusion_physical_plan::statistics::StatisticsArgs;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -462,7 +463,7 @@ async fn parquet_statistics() -> Result<()> {
     assert_eq!(schema.fields().len(), 4);
 
     let stat_cols = physical_plan
-        .partition_statistics(None)?
+        .statistics_with_args(&StatisticsArgs::new())?
         .column_statistics
         .clone();
     assert_eq!(stat_cols.len(), 4);
@@ -489,7 +490,7 @@ async fn parquet_statistics() -> Result<()> {
     assert_eq!(schema.fields().len(), 2);
 
     let stat_cols = physical_plan
-        .partition_statistics(None)?
+        .statistics_with_args(&StatisticsArgs::new())?
         .column_statistics
         .clone();
     assert_eq!(stat_cols.len(), 2);
@@ -609,8 +610,7 @@ async fn create_partitioned_alltypes_parquet_table(
                 .iter()
                 .map(|x| (x.0.to_owned(), x.1.clone()))
                 .collect::<Vec<_>>(),
-        )
-        .with_session_config_options(&ctx.copied_config());
+        );
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
     let store_path =

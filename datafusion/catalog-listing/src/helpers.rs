@@ -17,7 +17,6 @@
 
 //! Helper functions for the table implementation
 
-use std::mem;
 use std::sync::Arc;
 
 use datafusion_catalog::Session;
@@ -136,41 +135,6 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
 
 /// The maximum number of concurrent listing requests
 const CONCURRENCY_LIMIT: usize = 100;
-
-/// Partition the list of files into `n` groups
-#[deprecated(since = "47.0.0", note = "use `FileGroup::split_files` instead")]
-pub fn split_files(
-    mut partitioned_files: Vec<PartitionedFile>,
-    n: usize,
-) -> Vec<Vec<PartitionedFile>> {
-    if partitioned_files.is_empty() {
-        return vec![];
-    }
-
-    // ObjectStore::list does not guarantee any consistent order and for some
-    // implementations such as LocalFileSystem, it may be inconsistent. Thus
-    // Sort files by path to ensure consistent plans when run more than once.
-    partitioned_files.sort_by(|a, b| a.path().cmp(b.path()));
-
-    // effectively this is div with rounding up instead of truncating
-    let chunk_size = partitioned_files.len().div_ceil(n);
-    let mut chunks = Vec::with_capacity(n);
-    let mut current_chunk = Vec::with_capacity(chunk_size);
-    for file in partitioned_files.drain(..) {
-        current_chunk.push(file);
-        if current_chunk.len() == chunk_size {
-            let full_chunk =
-                mem::replace(&mut current_chunk, Vec::with_capacity(chunk_size));
-            chunks.push(full_chunk);
-        }
-    }
-
-    if !current_chunk.is_empty() {
-        chunks.push(current_chunk)
-    }
-
-    chunks
-}
 
 #[derive(Debug)]
 pub struct Partition {
@@ -325,7 +289,7 @@ pub fn evaluate_partition_prefix<'a>(
     }
 }
 
-fn filter_partitions(
+pub fn filter_partitioned_file(
     pf: PartitionedFile,
     filters: &[Expr],
     df_schema: &DFSchema,
@@ -447,7 +411,7 @@ pub async fn pruned_partition_list<'a>(
                 ))
             })
             .try_filter_map(move |pf| {
-                futures::future::ready(filter_partitions(pf, filters, &df_schema))
+                futures::future::ready(filter_partitioned_file(pf, filters, &df_schema))
             })
             .boxed())
     }
