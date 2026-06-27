@@ -26,6 +26,7 @@ use datafusion_expr::{
     Case, Expr, Like, Operator,
     expr::{Between, BinaryExpr, InList},
     expr_fn::{and, bitwise_and, bitwise_or, or},
+    simplify::SimplifyContext,
 };
 
 pub static POWS_OF_TEN: [i128; 38] = [
@@ -293,14 +294,18 @@ pub fn is_lit(expr: &Expr) -> bool {
     matches!(expr, Expr::Literal(_, _))
 }
 
-pub fn has_associative_op(expr: &Expr) -> bool {
+pub fn has_associative_op(expr: &Expr, info: &SimplifyContext) -> Result<bool> {
     let op = match expr {
         Expr::BinaryExpr(expr) => expr.op,
         _ => unreachable!(),
     };
+    let datatype = info.get_data_type(expr)?;
     // TODO: add other associative ops
-    // TODO: check types (float addition isn't associative)
-    matches!(op, Operator::Plus | Operator::StringConcat)
+    match op {
+        Operator::Plus => Ok(datatype.is_integer()),
+        Operator::StringConcat => Ok(datatype.is_string() || datatype.is_binary()),
+        _ => Ok(false),
+    }
 }
 
 pub fn has_adjacent_literals(expr: &Expr) -> bool {

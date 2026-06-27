@@ -1096,7 +1096,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
             }
 
             expr @ Expr::BinaryExpr(_)
-                if has_associative_op(&expr) && has_adjacent_literals(&expr) =>
+                if has_associative_op(&expr, self.info)?
+                    && has_adjacent_literals(&expr) =>
             {
                 Transformed::yes(reassociate_literals(expr))
             }
