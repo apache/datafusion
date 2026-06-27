@@ -139,4 +139,8 @@ required-features = ["test_utils"]
 
 [[bench]]
 harness = false
+name = "hash_group_by_reuse"
+
+[[bench]]
+harness = false
 name = "multi_group_by"
