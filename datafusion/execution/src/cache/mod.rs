@@ -25,8 +25,9 @@ use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::instant::Instant;
 use datafusion_common::{HashMap, TableReference};
 use object_store::path::Path;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt::{Debug, Display, Formatter};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -174,27 +175,54 @@ impl Display for TableScopedPath {
 /// `Statistics::column_statistics`: each column's name, data type and
 /// nullability, in order. It deliberately excludes field/schema metadata, which
 /// cannot affect statistics — including it would needlessly fragment the cache.
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub struct SchemaFingerprint(Vec<(String, DataType, bool)>);
+#[derive(Clone, Debug)]
+pub struct SchemaFingerprint {
+    columns: Vec<(String, DataType, bool)>,
+    /// Precomputed hash of `columns`, so hashing a key on every cache lookup is
+    /// O(1) rather than O(schema width). Computed once in `from_schema` with a
+    /// fixed-seed hasher so it is stable across keys; `PartialEq` still compares
+    /// `columns` exactly, so a hash collision can never make two different
+    /// schemas share a cache entry.
+    hash: u64,
+}
 
 impl SchemaFingerprint {
     /// Builds a fingerprint from the `file_schema` used to compute statistics
     /// (the schema of the columns physically read, not the full table schema —
     /// partition columns and their statistics are handled separately).
     pub fn from_schema(file_schema: &Schema) -> Self {
-        Self(
-            file_schema
-                .fields()
-                .iter()
-                .map(|f| (f.name().clone(), f.data_type().clone(), f.is_nullable()))
-                .collect(),
-        )
+        let columns: Vec<(String, DataType, bool)> = file_schema
+            .fields()
+            .iter()
+            .map(|f| (f.name().clone(), f.data_type().clone(), f.is_nullable()))
+            .collect();
+        let mut hasher = DefaultHasher::new();
+        columns.hash(&mut hasher);
+        Self {
+            columns,
+            hash: hasher.finish(),
+        }
+    }
+}
+
+impl PartialEq for SchemaFingerprint {
+    fn eq(&self, other: &Self) -> bool {
+        // Cheap hash gate first, then an exact comparison so collisions are safe.
+        self.hash == other.hash && self.columns == other.columns
+    }
+}
+
+impl Eq for SchemaFingerprint {}
+
+impl Hash for SchemaFingerprint {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
     }
 }
 
 impl DFHeapSize for SchemaFingerprint {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        self.0.heap_size(ctx)
+        self.columns.heap_size(ctx)
     }
 }
 
