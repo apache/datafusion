@@ -529,6 +529,83 @@ struct StructFieldAccess {
     field_path: Vec<String>,
 }
 
+/// Trie of nested struct accesses, keyed at the top by the root column index in
+/// the file schema and then by field names down each access path.
+///
+/// # Example
+///
+/// For a filter expression
+///
+/// ```sql
+/// WHERE s['outer']['a'] > 10
+///   AND s['outer']['b'] < 20
+///   AND s['outer']['inner']['c'] IS NOT NULL
+/// ```
+///
+/// where `s` is column index `2` in the file schema, three accesses are
+/// recorded — all with `root_index = 2` and paths `["outer","a"]`,
+/// `["outer","b"]`, `["outer","inner","c"]`. They produce a trie in which
+/// the shared `"outer"` prefix is represented by a single intermediate node:
+///
+/// ```text
+/// roots:
+///   2 ──► node { selected_here: false }
+///         children:
+///           "outer" ──► node { selected_here: false }
+///                       children:
+///                         "a"     ──► { selected_here: true,  children: {} }
+///                         "b"     ──► { selected_here: true,  children: {} }
+///                         "inner" ──► { selected_here: false,
+///                                       children: {
+///                                         "c" ──► { selected_here: true,
+///                                                   children: {} }
+///                                       } }
+/// ```
+#[derive(Debug, Default)]
+struct StructAccessTree {
+    roots: BTreeMap<usize, StructAccessNode>,
+}
+
+/// One node in a [`StructAccessTree`].
+///
+/// `selected_here` is `true` when at least one access path terminates at this
+/// node. Duplicate paths are idempotent.
+#[derive(Debug, Default)]
+struct StructAccessNode {
+    children: BTreeMap<String, StructAccessNode>,
+    selected_here: bool,
+}
+
+impl StructAccessTree {
+    /// Builds a [`StructAccessTree`] from a flat list of accesses.
+    ///
+    /// For each [`StructFieldAccess`], walks from the given root index down
+    /// the field path, creating intermediate nodes as needed, and sets the
+    /// terminal node's `selected_here` to `true`. Paths sharing a prefix
+    /// collapse onto common intermediate nodes.
+    fn from_accesses(accesses: &[StructFieldAccess]) -> Self {
+        let mut tree = Self::default();
+        for StructFieldAccess {
+            root_index,
+            field_path,
+        } in accesses
+        {
+            let mut node = tree.roots.entry(*root_index).or_default();
+            for component in field_path {
+                node = node.children.entry(component.clone()).or_default();
+            }
+            node.selected_here = true;
+        }
+        tree
+    }
+
+    /// Returns the node for the given file-schema column index, or `None` if
+    /// no access path was recorded under that root.
+    fn root(&self, idx: usize) -> Option<&StructAccessNode> {
+        self.roots.get(&idx)
+    }
+}
+
 /// Checks if a given expression can be pushed down to the parquet decoder.
 ///
 /// Returns `Some(PushdownColumns)` if the expression can be pushed down,
@@ -572,14 +649,13 @@ pub(crate) fn build_parquet_read_plan(
 
     let root_indices = &required_columns.required_columns;
 
+    let access_tree =
+        StructAccessTree::from_accesses(&required_columns.struct_field_accesses);
+
     let mut leaf_indices =
         leaf_indices_for_roots(root_indices.iter().copied(), schema_descr);
 
-    let struct_leaf_indices = resolve_struct_field_leaves(
-        &required_columns.struct_field_accesses,
-        file_schema,
-        schema_descr,
-    );
+    let struct_leaf_indices = resolve_struct_field_leaves(&access_tree, schema_descr);
     leaf_indices.extend_from_slice(&struct_leaf_indices);
     leaf_indices.sort_unstable();
     leaf_indices.dedup();
@@ -589,11 +665,7 @@ pub(crate) fn build_parquet_read_plan(
     let projection_mask =
         ProjectionMask::leaves(schema_descr, leaf_indices.iter().copied());
 
-    let projected_schema = build_filter_schema(
-        file_schema,
-        root_indices,
-        &required_columns.struct_field_accesses,
-    );
+    let projected_schema = build_filter_schema(file_schema, root_indices, &access_tree);
 
     Ok(Some((
         ParquetReadPlan {
@@ -707,11 +779,12 @@ pub(crate) fn build_projection_read_plan(
         };
     }
 
+    let access_tree = StructAccessTree::from_accesses(&all_struct_accesses);
+
     let leaf_indices = {
         let mut out =
             leaf_indices_for_roots(all_root_indices.iter().copied(), schema_descr);
-        let struct_leaf_indices =
-            resolve_struct_field_leaves(&all_struct_accesses, file_schema, schema_descr);
+        let struct_leaf_indices = resolve_struct_field_leaves(&access_tree, schema_descr);
 
         out.extend_from_slice(&struct_leaf_indices);
         out.sort_unstable();
@@ -724,7 +797,7 @@ pub(crate) fn build_projection_read_plan(
         ProjectionMask::leaves(schema_descr, leaf_indices.iter().copied());
 
     let projected_schema =
-        build_filter_schema(file_schema, &all_root_indices, &all_struct_accesses);
+        build_filter_schema(file_schema, &all_root_indices, &access_tree);
 
     ParquetReadPlan {
         projection_mask,
@@ -754,66 +827,126 @@ where
         .collect()
 }
 
-/// Resolves struct field access to specific Parquet leaf column indices
+/// Returns the Parquet leaf column indices selected by the access tree.
 ///
-/// For every `StructFieldAccess`, finds the leaf columns in the Parquet schema
-/// whose path matches the struct root name + field path. This avoids reading all
-/// leaves of a struct when only specific fields are needed
+/// # Matching
+///
+/// Iterates Parquet leaves in ascending order (`0..num_columns()`). For each
+/// leaf:
+///
+/// 1. **Root dispatch.** Look up the leaf's root index — the top-level Arrow
+///    column it belongs to — via `SchemaDescriptor::get_column_root_idx`. If
+///    that root is absent from the access tree (the filter never touched any
+///    field under it), skip the leaf without further work.
+///
+/// 2. **Path walk.** Otherwise, take the leaf's dotted column path
+///    (`col.path().parts()`), drop the first component (the root field name,
+///    already used in step 1), and walk the remaining components against the
+///    matching trie subtree via [`leaf_under_tree`].
+///
+/// 3. **Inclusion.** The leaf is added to the result iff the walk reaches a
+///    node with `selected_here = true` — either an ancestor along the
+///    descent (subsumption: a shallower access subsumes the leaf) or the
+///    terminal node reached at the end of the path (exact match).
+///
+/// # Returns
+///
+/// `Vec<usize>` of Parquet leaf column indices. The scan visits each leaf
+/// exactly once and pushes in iteration order, so the result is in ascending
+/// order and free of duplicates by construction — callers do not need to
+/// sort or dedup.
 fn resolve_struct_field_leaves(
-    accesses: &[StructFieldAccess],
-    file_schema: &Schema,
+    access_tree: &StructAccessTree,
     schema_descr: &SchemaDescriptor,
 ) -> Vec<usize> {
-    let mut leaf_indices = Vec::new();
+    let mut leaf_indices = Vec::with_capacity(access_tree.roots.len() * 2);
 
-    for access in accesses {
-        let root_name = file_schema.field(access.root_index).name();
-        let prefix = std::iter::once(root_name.as_str())
-            .chain(access.field_path.iter().map(|p| p.as_str()))
-            .collect::<Vec<_>>();
-
-        for leaf_idx in 0..schema_descr.num_columns() {
-            let col = schema_descr.column(leaf_idx);
-            let col_path = col.path().parts();
-
-            // A leaf matches if its path starts with our prefix.
-            // e.g., prefix=["s", "value"] matches leaf path ["s", "value"]
-            // prefix=["s", "outer"] matches ["s", "outer", "inner"]
-
-            // a leaf matches if its path starts with our prefix
-            // for example: prefix=["s", "value"] matches leaf path ["s", "value"]
-            //              prefix=["s", "outer"] matches ["s", "outer", "inner"]
-            let leaf_matches_path = col_path.len() >= prefix.len()
-                && col_path.iter().zip(prefix.iter()).all(|(a, b)| a == b);
-
-            if leaf_matches_path {
-                leaf_indices.push(leaf_idx);
-            }
+    for leaf_idx in 0..schema_descr.num_columns() {
+        let root_idx = schema_descr.get_column_root_idx(leaf_idx);
+        let Some(root_node) = access_tree.roots.get(&root_idx) else {
+            continue;
+        };
+        // `parts()[0]` is the root field name; walk the rest against the tree.
+        let col = schema_descr.column(leaf_idx);
+        let path = col.path().parts();
+        if leaf_under_tree(root_node, &path[1..]) {
+            leaf_indices.push(leaf_idx);
         }
     }
 
     leaf_indices
 }
 
-/// Builds a filter schema that includes only the fields actually accessed by the
-/// filter expression.
+/// True when the leaf path beneath a root is selected by the access tree.
 ///
-/// For regular (non-struct) columns, the full field type is used.
-/// For struct columns accessed via `get_field`, a pruned struct type is created
-/// containing only the fields along the access path. Note: it must match the schema
-/// that the Parquet reader produces when projecting specific struct leaves
+/// A shallower `selected_here` node subsumes deeper accesses: once the walk
+/// reaches such a node, every leaf below it is included.
+fn leaf_under_tree(mut node: &StructAccessNode, path: &[String]) -> bool {
+    for component in path {
+        if node.selected_here {
+            return true;
+        }
+        let Some(child) = node.children.get(component.as_str()) else {
+            return false;
+        };
+        node = child;
+    }
+    node.selected_here
+}
+
+/// Builds the Arrow schema used to evaluate the filter expression.
+///
+/// The returned schema is a **subset** of `file_schema`, restricted to the
+/// columns the filter actually touches and (for struct columns accessed
+/// only through nested paths) **pruned** to only the accessed fields.
+///
+/// # Inputs
+///
+/// - `file_schema` — the full file schema; provides the source `Field`s
+///   (names, types, nullability, metadata).
+/// - `regular_indices` — file-schema column indices the filter references
+///   as **whole columns** (non-struct columns, or struct roots referenced
+///   in their entirety). Must be sorted, deduplicated.
+/// - `access_tree` — the trie of nested struct field accesses recorded by
+///   [`PushdownChecker`].
+///
+/// # Behavior
+///
+/// The set of columns to include is the union of `regular_indices` and
+/// `access_tree.roots.keys()`. For each column index in that union, decide
+/// how the field appears in the output:
+///
+/// 1. **Whole-column reference** (`idx` is in `regular_indices`). Keep the
+///    field's full type unchanged. This is the **whole-root override**:
+///    pruning is only valid when a column is accessed *exclusively* through
+///    nested field accesses; if any predicate references the whole column,
+///    the projected schema must preserve the full type for that column.
+///
+/// 2. **Nested-access-only struct root.** Look up the column's node in the
+///    access tree and call [`prune_struct_type`] on the field's `DataType`
+///    with that node. Wrap the pruned type in a new `Field` carrying the
+///    original name and nullability.
+///
+/// Column order in the output schema follows ascending file-schema index
+/// (via the `BTreeSet` union), matching the order the Parquet reader
+/// produces when projecting these columns.
+///
+/// # Returns
+///
+/// An `Arc<Schema>` whose fields are a subset of `file_schema`'s, with
+/// struct types pruned per the access tree. The schema's metadata is
+/// inherited from `file_schema`.
 fn build_filter_schema(
     file_schema: &Schema,
     regular_indices: &[usize],
-    struct_field_accesses: &[StructFieldAccess],
+    access_tree: &StructAccessTree,
 ) -> SchemaRef {
     let regular_set: BTreeSet<usize> = regular_indices.iter().copied().collect();
-    let paths_by_root = group_access_paths_by_root(struct_field_accesses);
 
     let all_indices = regular_indices
         .iter()
         .copied()
-        .chain(paths_by_root.keys().copied())
+        .chain(access_tree.roots.keys().copied())
         .collect::<BTreeSet<_>>();
 
     let fields = all_indices
@@ -830,11 +963,11 @@ fn build_filter_schema(
                 return Arc::new(field.clone());
             }
 
-            let Some(field_paths) = paths_by_root.get(&idx) else {
+            let Some(node) = access_tree.root(idx) else {
                 return Arc::new(field.clone());
             };
 
-            let pruned_data_type = prune_struct_type(field.data_type(), field_paths);
+            let pruned_data_type = prune_struct_type(field.data_type(), node);
             Arc::new(Field::new(
                 field.name(),
                 pruned_data_type,
@@ -849,68 +982,64 @@ fn build_filter_schema(
     ))
 }
 
-/// Groups struct field access paths once for the root schema level.
+/// Returns a copy of `dt` with non-accessed struct children removed.
 ///
-/// Each map entry contains the complete field paths accessed below a root
-/// column. Recursive pruning groups these paths by their next component at each
-/// nested struct level.
-fn group_access_paths_by_root(
-    struct_field_accesses: &[StructFieldAccess],
-) -> BTreeMap<usize, Vec<&[String]>> {
-    let mut paths_by_root: BTreeMap<usize, Vec<&[String]>> = BTreeMap::new();
-    for StructFieldAccess {
-        root_index,
-        field_path,
-    } in struct_field_accesses
-    {
-        paths_by_root
-            .entry(*root_index)
-            .or_default()
-            .push(field_path.as_slice());
+/// # Behavior
+///
+/// - If `node.selected_here` is `true`, the input type is returned
+///   unchanged. An access path terminates at this node, so the whole
+///   subtree (every field of `dt`, recursively) is required. This mirrors
+///   the subsumption check in [`leaf_under_tree`] so the projection mask
+///   and the projected schema agree even if a producer ever records an
+///   access whose `field_path` terminates above a struct.
+///
+/// - Otherwise, if `dt` is not a `DataType::Struct`, it is cloned and
+///   returned unchanged. The trie only ever guides struct-level pruning;
+///   other types pass through.
+///
+/// - Otherwise, `dt` is a struct and its fields are iterated in their
+///   original order. For each field `f`:
+///   1. Look up `f.name()` in `node.children`.
+///      - **Absent.** No access goes through this field. Drop it.
+///      - **Present, child node's `selected_here` is `true`.** An access
+///        path terminates at this field. Keep the entire subtree by
+///        cloning `f` unchanged (`Arc::clone` — no new `Field`).
+///      - **Present, child node's `selected_here` is `false`.** Some
+///        access goes through this field to a deeper terminal. Recurse
+///        into `f.data_type()` with the matching child node, then wrap
+///        the pruned type in a fresh `Field` with `f`'s name and
+///        nullability.
+///
+/// Field ordering is preserved (consumers must match the order the Parquet
+/// reader produces when projecting specific leaves). Iterating Arrow's
+/// `Fields` directly — rather than iterating `node.children` — is what
+/// preserves that order.
+///
+/// # Returns
+///
+/// A new `DataType::Struct` whose fields are a subset of `dt`'s, restricted
+/// to the paths represented by `node`. The original `dt` is not modified.
+fn prune_struct_type(dt: &DataType, node: &StructAccessNode) -> DataType {
+    if node.selected_here {
+        // Subsumption: the entire subtree below this node is required.
+        return dt.clone();
     }
 
-    paths_by_root
-}
-
-/// Groups access paths once for the current struct level.
-///
-/// The map key is the field name at this level. The map value is the list of
-/// remaining path suffixes below that field. An empty suffix means the access
-/// path terminates at that field, so the full field must be preserved.
-fn group_paths_by_next_field<'a>(
-    paths: &'a [&'a [String]],
-) -> BTreeMap<&'a str, Vec<&'a [String]>> {
-    let mut paths_by_field: BTreeMap<&str, Vec<&[String]>> = BTreeMap::new();
-    for path in paths {
-        if let Some((field, sub_path)) = path.split_first() {
-            paths_by_field
-                .entry(field.as_str())
-                .or_default()
-                .push(sub_path);
-        }
-    }
-
-    paths_by_field
-}
-
-fn prune_struct_type(dt: &DataType, paths: &[&[String]]) -> DataType {
     let DataType::Struct(fields) = dt else {
         return dt.clone();
     };
 
-    let paths_by_field = group_paths_by_next_field(paths);
-
     let pruned_fields = fields
         .iter()
         .filter_map(|f| {
-            let sub_paths = paths_by_field.get(f.name().as_str())?;
+            let child = node.children.get(f.name().as_str())?;
 
-            let out = if sub_paths.iter().any(|sub| sub.is_empty()) {
-                // Leaf of access path — keep the field as-is.
+            let out = if child.selected_here {
+                // Access path terminates at this field — preserve the whole subtree.
                 Arc::clone(f)
             } else {
                 // Recurse into nested struct.
-                let pruned = prune_struct_type(f.data_type(), sub_paths);
+                let pruned = prune_struct_type(f.data_type(), child);
                 Arc::new(Field::new(f.name(), pruned, f.is_nullable()))
             };
 
@@ -2052,6 +2181,455 @@ mod test {
         assert_eq!(file_metrics.pushdown_rows_matched.value(), 2);
     }
 
+    /// Multiple sibling fields under one struct root: `s['value'] AND s['label']`.
+    /// The projection mask should include exactly those two leaves (not the third
+    /// sibling), and the projected schema should be pruned to those siblings.
+    #[test]
+    fn get_field_multiple_fields_under_same_root_uses_only_those_leaves() {
+        // Schema: s (Struct{value: Int32, label: Utf8, extra: Int32})
+        // Parquet leaves: s.value=0, s.label=1, s.extra=2
+        let struct_fields: Fields = vec![
+            Arc::new(Field::new("value", DataType::Int32, false)),
+            Arc::new(Field::new("label", DataType::Utf8, false)),
+            Arc::new(Field::new("extra", DataType::Int32, false)),
+        ]
+        .into();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(struct_fields.clone()),
+            false,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StructArray::new(
+                struct_fields.clone(),
+                vec![
+                    Arc::new(Int32Array::from(vec![10, 20, 30])) as _,
+                    Arc::new(StringArray::from(vec!["a", "b", "c"])) as _,
+                    Arc::new(Int32Array::from(vec![100, 200, 300])) as _,
+                ],
+                None,
+            ))],
+        )
+        .unwrap();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader_file = file.reopen().expect("reopen file");
+        let builder = ParquetRecordBatchReaderBuilder::try_new(reader_file)
+            .expect("reader builder");
+        let metadata = builder.metadata().clone();
+        let file_schema = builder.schema().clone();
+
+        // s['value'] > 5 AND s['label'] = 'b'
+        let value_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("value".to_string())), None),
+            ])
+            .gt(Expr::Literal(ScalarValue::Int32(Some(5)), None));
+        let label_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("label".to_string())), None),
+            ])
+            .eq(Expr::Literal(
+                ScalarValue::Utf8(Some("b".to_string())),
+                None,
+            ));
+        let expr = logical2physical(&value_expr.and(label_expr), &file_schema);
+
+        let candidate = FilterCandidateBuilder::new(expr, Arc::clone(&file_schema))
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("conjunction of two get_field predicates should be pushable");
+
+        // Only s.value (leaf 0) and s.label (leaf 1) should be projected; s.extra (leaf 2) skipped.
+        let expected_mask =
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0, 1]);
+        assert_eq!(
+            candidate.read_plan.projection_mask, expected_mask,
+            "projection_mask should include only the two accessed sibling leaves"
+        );
+
+        let s_field = candidate
+            .read_plan
+            .projected_schema
+            .field_with_name("s")
+            .unwrap();
+        let expected_pruned: Fields = vec![
+            Arc::new(Field::new("value", DataType::Int32, false)),
+            Arc::new(Field::new("label", DataType::Utf8, false)),
+        ]
+        .into();
+        assert_eq!(
+            s_field.data_type(),
+            &DataType::Struct(expected_pruned),
+            "projected struct schema should drop the un-accessed `extra` sibling"
+        );
+    }
+
+    /// Two predicates share a nested prefix: `s['outer']['a'] AND s['outer']['b']`.
+    /// The projection mask should include exactly those two leaves and exclude
+    /// the cousin under `s['other']` plus `s['outer']['c']`. The projected
+    /// schema must mirror that shape.
+    #[test]
+    fn get_field_nested_shared_prefix_uses_only_prefix_leaves() {
+        // Schema: s (Struct{outer: Struct{a, b, c}, other: Struct{x}})
+        // Parquet leaves: s.outer.a=0, s.outer.b=1, s.outer.c=2, s.other.x=3
+        let outer_fields: Fields = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, false)),
+            Arc::new(Field::new("c", DataType::Int32, false)),
+        ]
+        .into();
+        let other_fields: Fields =
+            vec![Arc::new(Field::new("x", DataType::Int32, false))].into();
+        let s_fields: Fields = vec![
+            Arc::new(Field::new(
+                "outer",
+                DataType::Struct(outer_fields.clone()),
+                false,
+            )),
+            Arc::new(Field::new(
+                "other",
+                DataType::Struct(other_fields.clone()),
+                false,
+            )),
+        ]
+        .into();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(s_fields.clone()),
+            false,
+        )]));
+
+        let outer_arr = StructArray::new(
+            outer_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as _,
+                Arc::new(Int32Array::from(vec![10, 20])) as _,
+                Arc::new(Int32Array::from(vec![100, 200])) as _,
+            ],
+            None,
+        );
+        let other_arr = StructArray::new(
+            other_fields,
+            vec![Arc::new(Int32Array::from(vec![7, 8])) as _],
+            None,
+        );
+        let s_arr = StructArray::new(
+            s_fields,
+            vec![Arc::new(outer_arr) as _, Arc::new(other_arr) as _],
+            None,
+        );
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s_arr)]).unwrap();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader_file = file.reopen().expect("reopen file");
+        let builder = ParquetRecordBatchReaderBuilder::try_new(reader_file)
+            .expect("reader builder");
+        let metadata = builder.metadata().clone();
+        let file_schema = builder.schema().clone();
+
+        // s['outer']['a'] > 0 AND s['outer']['b'] > 0
+        let a_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("outer".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("a".to_string())), None),
+            ])
+            .gt(Expr::Literal(ScalarValue::Int32(Some(0)), None));
+        let b_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("outer".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("b".to_string())), None),
+            ])
+            .gt(Expr::Literal(ScalarValue::Int32(Some(0)), None));
+        let expr = logical2physical(&a_expr.and(b_expr), &file_schema);
+
+        let candidate = FilterCandidateBuilder::new(expr, Arc::clone(&file_schema))
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("shared-prefix nested predicates should be pushable");
+
+        // Only s.outer.a (0) and s.outer.b (1) — not s.outer.c (2), not s.other.x (3).
+        let expected_mask =
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0, 1]);
+        assert_eq!(
+            candidate.read_plan.projection_mask, expected_mask,
+            "projection_mask should drop cousin and un-accessed sibling leaves"
+        );
+
+        let s_field = candidate
+            .read_plan
+            .projected_schema
+            .field_with_name("s")
+            .unwrap();
+        let expected_inner: Fields = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, false)),
+        ]
+        .into();
+        let expected_outer: Fields = vec![Arc::new(Field::new(
+            "outer",
+            DataType::Struct(expected_inner),
+            false,
+        ))]
+        .into();
+        assert_eq!(
+            s_field.data_type(),
+            &DataType::Struct(expected_outer),
+            "projected schema should keep only the shared-prefix subtree"
+        );
+    }
+
+    /// Two predicates touch disjoint subtrees of the same struct root:
+    /// `s['outer']['a'] AND s['other']['x']`. Both subtrees must be retained
+    /// in the projection mask and in the projected schema.
+    #[test]
+    fn get_field_disjoint_subtrees_keep_both() {
+        // Schema: s (Struct{outer: Struct{a, b}, other: Struct{x, y}})
+        // Parquet leaves: s.outer.a=0, s.outer.b=1, s.other.x=2, s.other.y=3
+        let outer_fields: Fields = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, false)),
+        ]
+        .into();
+        let other_fields: Fields = vec![
+            Arc::new(Field::new("x", DataType::Int32, false)),
+            Arc::new(Field::new("y", DataType::Int32, false)),
+        ]
+        .into();
+        let s_fields: Fields = vec![
+            Arc::new(Field::new(
+                "outer",
+                DataType::Struct(outer_fields.clone()),
+                false,
+            )),
+            Arc::new(Field::new(
+                "other",
+                DataType::Struct(other_fields.clone()),
+                false,
+            )),
+        ]
+        .into();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(s_fields.clone()),
+            false,
+        )]));
+
+        let outer_arr = StructArray::new(
+            outer_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as _,
+                Arc::new(Int32Array::from(vec![3, 4])) as _,
+            ],
+            None,
+        );
+        let other_arr = StructArray::new(
+            other_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![5, 6])) as _,
+                Arc::new(Int32Array::from(vec![7, 8])) as _,
+            ],
+            None,
+        );
+        let s_arr = StructArray::new(
+            s_fields,
+            vec![Arc::new(outer_arr) as _, Arc::new(other_arr) as _],
+            None,
+        );
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s_arr)]).unwrap();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader_file = file.reopen().expect("reopen file");
+        let builder = ParquetRecordBatchReaderBuilder::try_new(reader_file)
+            .expect("reader builder");
+        let metadata = builder.metadata().clone();
+        let file_schema = builder.schema().clone();
+
+        // s['outer']['a'] > 0 AND s['other']['x'] > 0
+        let a_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("outer".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("a".to_string())), None),
+            ])
+            .gt(Expr::Literal(ScalarValue::Int32(Some(0)), None));
+        let x_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("other".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("x".to_string())), None),
+            ])
+            .gt(Expr::Literal(ScalarValue::Int32(Some(0)), None));
+        let expr = logical2physical(&a_expr.and(x_expr), &file_schema);
+
+        let candidate = FilterCandidateBuilder::new(expr, Arc::clone(&file_schema))
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("disjoint nested predicates should be pushable");
+
+        // s.outer.a (0) and s.other.x (2); not s.outer.b (1), not s.other.y (3).
+        let expected_mask =
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0, 2]);
+        assert_eq!(
+            candidate.read_plan.projection_mask, expected_mask,
+            "projection_mask should keep one leaf from each disjoint subtree"
+        );
+
+        let s_field = candidate
+            .read_plan
+            .projected_schema
+            .field_with_name("s")
+            .unwrap();
+        let expected_outer: Fields =
+            vec![Arc::new(Field::new("a", DataType::Int32, false))].into();
+        let expected_other: Fields =
+            vec![Arc::new(Field::new("x", DataType::Int32, false))].into();
+        let expected_s: Fields = vec![
+            Arc::new(Field::new("outer", DataType::Struct(expected_outer), false)),
+            Arc::new(Field::new("other", DataType::Struct(expected_other), false)),
+        ]
+        .into();
+        assert_eq!(
+            s_field.data_type(),
+            &DataType::Struct(expected_s),
+            "projected schema should keep one pruned field from each disjoint subtree"
+        );
+    }
+
+    /// End-to-end: shared-prefix nested predicates filter rows correctly during
+    /// Parquet decoding and report the expected pushdown metrics.
+    #[test]
+    fn get_field_end_to_end_shared_prefix_filters_rows() {
+        // Schema: id (Int32), s (Struct{outer: Struct{a, b}})
+        // Parquet leaves: id=0, s.outer.a=1, s.outer.b=2
+        let outer_fields: Fields = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, false)),
+        ]
+        .into();
+        let s_fields: Fields = vec![Arc::new(Field::new(
+            "outer",
+            DataType::Struct(outer_fields.clone()),
+            false,
+        ))]
+        .into();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("s", DataType::Struct(s_fields.clone()), false),
+        ]));
+
+        // +----+--------------------------+
+        // | id | s                        |
+        // +----+--------------------------+
+        // |  1 | {outer: {a: 10, b: 50}}  |  <- a>5 and b<100 → match
+        // |  2 | {outer: {a:  0, b: 60}}  |  <- a>5 fails    → drop
+        // |  3 | {outer: {a: 20, b: 80}}  |  <- a>5 and b<100 → match
+        // |  4 | {outer: {a: 30, b: 200}} |  <- b<100 fails  → drop
+        // +----+--------------------------+
+        let outer_arr = StructArray::new(
+            outer_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![10, 0, 20, 30])) as _,
+                Arc::new(Int32Array::from(vec![50, 60, 80, 200])) as _,
+            ],
+            None,
+        );
+        let s_arr = StructArray::new(s_fields, vec![Arc::new(outer_arr) as _], None);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(s_arr),
+            ],
+        )
+        .unwrap();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader_file = file.reopen().expect("reopen file");
+        let parquet_reader_builder =
+            ParquetRecordBatchReaderBuilder::try_new(reader_file)
+                .expect("reader builder");
+        let metadata = parquet_reader_builder.metadata().clone();
+        let file_schema = parquet_reader_builder.schema().clone();
+
+        // s['outer']['a'] > 5 AND s['outer']['b'] < 100
+        let a_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("outer".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("a".to_string())), None),
+            ])
+            .gt(Expr::Literal(ScalarValue::Int32(Some(5)), None));
+        let b_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("outer".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("b".to_string())), None),
+            ])
+            .lt(Expr::Literal(ScalarValue::Int32(Some(100)), None));
+        let expr = logical2physical(&a_expr.and(b_expr), &file_schema);
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let file_metrics =
+            ParquetFileMetrics::new(0, "shared_prefix_e2e.parquet", &metrics);
+
+        let row_filter =
+            build_row_filter(&expr, &file_schema, &metadata, false, &file_metrics)
+                .expect("building row filter")
+                .expect("row filter should exist");
+
+        let reader = parquet_reader_builder
+            .with_row_filter(row_filter)
+            .build()
+            .expect("build reader");
+
+        let mut total_rows = 0;
+        for batch in reader {
+            let batch = batch.expect("record batch");
+            total_rows += batch.num_rows();
+        }
+
+        assert_eq!(
+            total_rows, 2,
+            "expected 2 rows matching s.outer.a > 5 AND s.outer.b < 100"
+        );
+        assert_eq!(file_metrics.pushdown_rows_pruned.value(), 2);
+        assert_eq!(file_metrics.pushdown_rows_matched.value(), 2);
+    }
+
     #[test]
     fn projection_read_plan_preserves_full_struct() {
         // Schema: id (Int32), s (Struct{value: Int32, label: Utf8})
@@ -2132,6 +2710,91 @@ mod test {
         assert_eq!(read_plan.projection_mask, expected_mask,);
     }
 
+    /// test: mixed whole-root and nested access.
+    /// Projecting `s` (whole) alongside `get_field(s, 'outer', 'a')` (nested)
+    /// must preserve the full `s` struct type AND include all `s` leaves in
+    /// the projection mask. The nested access does not narrow the whole-root
+    /// reference — `regular_indices` wins over the access tree for that root.
+    #[test]
+    fn projection_whole_root_plus_nested_access_keeps_full_struct() {
+        // Schema: s (Struct{outer: Struct{a, b}})
+        // Parquet leaves: s.outer.a=0, s.outer.b=1
+        let outer_fields: Fields = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, false)),
+        ]
+        .into();
+        let s_fields: Fields = vec![Arc::new(Field::new(
+            "outer",
+            DataType::Struct(outer_fields.clone()),
+            false,
+        ))]
+        .into();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(s_fields.clone()),
+            false,
+        )]));
+
+        let outer_arr = StructArray::new(
+            outer_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as _,
+                Arc::new(Int32Array::from(vec![3, 4])) as _,
+            ],
+            None,
+        );
+        let s_arr =
+            StructArray::new(s_fields.clone(), vec![Arc::new(outer_arr) as _], None);
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s_arr)]).unwrap();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader_file = file.reopen().expect("reopen file");
+        let builder = ParquetRecordBatchReaderBuilder::try_new(reader_file)
+            .expect("reader builder");
+        let metadata = builder.metadata().clone();
+        let file_schema = builder.schema().clone();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        // Column("s") (whole struct) + get_field(s, 'outer', 'a') (nested access).
+        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(PhysicalColumn::new("s", 0)),
+            logical2physical(
+                &get_field().call(vec![
+                    col("s"),
+                    Expr::Literal(ScalarValue::Utf8(Some("outer".to_string())), None),
+                    Expr::Literal(ScalarValue::Utf8(Some("a".to_string())), None),
+                ]),
+                &file_schema,
+            ),
+        ];
+
+        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+
+        // `s` must keep its full nested type — NOT narrowed to Struct{outer: Struct{a}}.
+        let s_field = read_plan.projected_schema.field_with_name("s").unwrap();
+        assert_eq!(
+            s_field.data_type(),
+            &DataType::Struct(s_fields),
+            "whole-root reference must preserve the full nested struct type \
+             even when a nested access is also recorded"
+        );
+
+        // All `s` leaves must be in the projection mask (s.outer.a AND s.outer.b).
+        let expected_mask = ProjectionMask::leaves(schema_descr, [0, 1]);
+        assert_eq!(
+            read_plan.projection_mask, expected_mask,
+            "whole-root reference must select every leaf under the root"
+        );
+    }
+
     /// Sanity check that the given expression could be evaluated against the given schema without any errors.
     /// This will fail if the expression references columns that are not in the schema or if the types of the columns are incompatible, etc.
     fn check_expression_can_evaluate_against_schema(
@@ -2140,5 +2803,131 @@ mod test {
     ) -> bool {
         let batch = RecordBatch::new_empty(Arc::clone(table_schema));
         expr.evaluate(&batch).is_ok()
+    }
+
+    fn access(root: usize, path: &[&str]) -> StructFieldAccess {
+        StructFieldAccess {
+            root_index: root,
+            field_path: path.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn struct_access_tree_from_empty_input_has_no_roots() {
+        let tree = StructAccessTree::from_accesses(&[]);
+        assert!(tree.roots.is_empty());
+    }
+
+    #[test]
+    fn struct_access_tree_groups_paths_by_root() {
+        let tree = StructAccessTree::from_accesses(&[
+            access(0, &["a"]),
+            access(2, &["x"]),
+            access(2, &["y"]),
+        ]);
+
+        assert_eq!(tree.roots.keys().copied().collect::<Vec<_>>(), vec![0, 2]);
+        let root0 = tree.root(0).unwrap();
+        assert!(root0.children.contains_key("a"));
+        assert!(root0.children["a"].selected_here);
+
+        let root2 = tree.root(2).unwrap();
+        assert_eq!(
+            root2.children.keys().cloned().collect::<Vec<_>>(),
+            vec!["x".to_string(), "y".to_string()],
+        );
+    }
+
+    #[test]
+    fn struct_access_tree_shared_prefix_collapses_into_one_node() {
+        let tree = StructAccessTree::from_accesses(&[
+            access(0, &["outer", "a"]),
+            access(0, &["outer", "b"]),
+        ]);
+
+        let root = tree.root(0).unwrap();
+        assert!(!root.selected_here);
+
+        let outer = &root.children["outer"];
+        // `outer` itself was never the terminal of an access path.
+        assert!(!outer.selected_here);
+        // Both leaves below share the single `outer` node.
+        assert_eq!(
+            outer.children.keys().cloned().collect::<Vec<_>>(),
+            vec!["a".to_string(), "b".to_string()],
+        );
+        assert!(outer.children["a"].selected_here);
+        assert!(outer.children["b"].selected_here);
+    }
+
+    #[test]
+    fn struct_access_tree_records_both_shallow_and_deep_selection() {
+        // `s['outer']` (whole subtree) and `s['outer']['a']` (specific leaf)
+        // both recorded. Consumers honor the shallower selection at walk time;
+        // the builder simply records both `selected_here` flags.
+        let tree = StructAccessTree::from_accesses(&[
+            access(0, &["outer"]),
+            access(0, &["outer", "a"]),
+        ]);
+
+        let outer = &tree.root(0).unwrap().children["outer"];
+        assert!(outer.selected_here);
+        assert!(outer.children["a"].selected_here);
+    }
+
+    /// `prune_struct_type` must honor `selected_here` on the input node
+    /// itself, not only on its children — symmetric with `leaf_under_tree`.
+    /// Without this guard, a node with `selected_here = true` and no
+    /// children produces an empty struct (silent drift from the leaf set).
+    #[test]
+    fn prune_struct_type_returns_full_type_when_node_is_selected_here() {
+        let node = StructAccessNode {
+            selected_here: true,
+            ..Default::default()
+        };
+
+        let s_type = DataType::Struct(
+            vec![
+                Arc::new(Field::new("outer", DataType::Int32, false)),
+                Arc::new(Field::new("other", DataType::Int32, false)),
+            ]
+            .into(),
+        );
+
+        let pruned = prune_struct_type(&s_type, &node);
+
+        assert_eq!(
+            pruned, s_type,
+            "selected_here on the input node must preserve the full type"
+        );
+    }
+
+    /// Same guard, but for the case where `selected_here` is set on an
+    /// intermediate node that also has children — e.g. both `s['outer']`
+    /// and `s['outer']['a']` are recorded. The shallower terminal must
+    /// keep the entire `outer` subtree, ignoring the deeper child entry.
+    #[test]
+    fn prune_struct_type_shallow_selection_subsumes_deeper_children() {
+        let tree = StructAccessTree::from_accesses(&[
+            access(0, &["outer"]),
+            access(0, &["outer", "a"]),
+        ]);
+
+        let outer_type = DataType::Struct(
+            vec![
+                Arc::new(Field::new("a", DataType::Int32, false)),
+                Arc::new(Field::new("b", DataType::Int32, false)),
+            ]
+            .into(),
+        );
+
+        let outer_node = &tree.root(0).unwrap().children["outer"];
+        let pruned = prune_struct_type(&outer_type, outer_node);
+
+        assert_eq!(
+            pruned, outer_type,
+            "shallow selected_here must preserve the whole subtree, \
+             not narrow to the deeper child"
+        );
     }
 }
