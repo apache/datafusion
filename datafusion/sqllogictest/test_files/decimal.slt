@@ -1291,3 +1291,12 @@ ORDER BY c1;
 
 statement ok
 DROP TABLE decimal_div_mismatch;
+
+query RT
+select avg(d), arrow_typeof(avg(d))
+from (
+    select arrow_cast(99999.0, 'Decimal32(5, 0)') as d
+    from generate_series(1, 21476)
+) t;
+----
+99999.0000 Decimal32(9, 4)
