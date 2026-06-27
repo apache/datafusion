@@ -591,7 +591,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 idents.len()
             )
         } else {
-            let columns = plan.schema().columns().clone();
+            let columns = plan.schema().columns();
             LogicalPlanBuilder::from(plan)
                 .project(columns.into_iter().zip(idents).map(|(col, ident)| {
                     Expr::Column(col).alias(self.ident_normalizer.normalize(ident))
