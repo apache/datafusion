@@ -199,6 +199,16 @@ enum OutOfMemoryMode {
 
 /// HashTable based Grouping Aggregator
 ///
+/// # Development Note
+///
+/// This implementation is being incrementally refactored. See the tracking issue
+/// for details.
+///
+/// New features and improvements should go directly into the new implementation.
+/// Please coordinate through the tracking issue.
+///
+/// Issue: <https://github.com/apache/datafusion/issues/22710>
+///
 /// # Design Goals
 ///
 /// This structure is designed so that updating the aggregates can be
@@ -628,8 +638,7 @@ impl GroupedHashAggregateStream {
             merging_aggregate_arguments,
             merging_group_by: PhysicalGroupBy::new_single(merging_group_by_expr),
             peak_mem_used: MetricBuilder::new(&agg.metrics)
-                .with_category(MetricCategory::Bytes)
-                .gauge("peak_mem_used", partition),
+                .peak_memory_usage("peak_mem_used", partition),
             spill_manager,
         };
 

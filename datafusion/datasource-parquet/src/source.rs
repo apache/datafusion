@@ -44,12 +44,12 @@ use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
-use datafusion_physical_expr_adapter::expr_references_scalar_udf;
-use datafusion_physical_expr_adapter::{
-    DefaultPhysicalExprAdapterFactory, rewrite_file_row_index_projection,
+use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
+use datafusion_physical_expr_adapter::rewrite::{
+    expr_references_scalar_udf, rewrite_file_row_index_projection,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -740,6 +740,33 @@ impl FileSource for ParquetSource {
                     write!(f, ", reverse_row_groups=true")?;
                 }
 
+                // Plan-time marker for dynamic RG-level pruning: if the
+                // predicate is dynamic (e.g. a TopK threshold expression),
+                // the parquet opener will pause the single decoder at row
+                // group boundaries and consult `RowGroupPruner` to drop
+                // RGs the current threshold proves unwinnable, rebuilding
+                // the decoder via `into_builder().with_row_groups(...)` to
+                // skip them. The actual pruning count appears as
+                // `row_groups_pruned_dynamic_filter` in EXPLAIN ANALYZE.
+                // We use `contains_dynamic_filter()` (matches both `Watching`
+                // and `AllComplete`) rather than the stricter `Watching(_)`
+                // check the opener uses to construct the pruner. Reason: the
+                // opener gate is evaluated at file-open time, when a TopK
+                // threshold has not yet been pushed — at that moment a still-
+                // useful pruner needs `Watching`. `fmt_extra`, on the other
+                // hand, is called *also* by `EXPLAIN ANALYZE` after execution
+                // completes, at which point TopK has marked its dynamic
+                // filter complete and `classify` returns `AllComplete`. The
+                // marker is plan-time metadata ("this scan was eligible for
+                // runtime RG pruning"), so it should still show in that
+                // post-run rendering.
+                if let Some(predicate) = self.filter()
+                    && DynamicFilterTracking::classify(&predicate)
+                        .contains_dynamic_filter()
+                {
+                    write!(f, ", dynamic_rg_pruning=eligible")?;
+                }
+
                 // Try to build the pruning predicates.
                 // These are only generated here because it's useful to have *some*
                 // idea of what pushdown is happening when viewing plans.
@@ -1182,6 +1209,88 @@ mod tests {
 
         assert!(source.reverse_row_groups());
         assert!(source.filter().is_some());
+    }
+
+    /// Render a `ParquetSource`'s `fmt_extra` output as a `String` for
+    /// inspection in tests.
+    fn render_fmt_extra(source: &ParquetSource, t: DisplayFormatType) -> String {
+        use std::fmt::Display;
+
+        struct Wrap<'a> {
+            source: &'a ParquetSource,
+            t: DisplayFormatType,
+        }
+        impl Display for Wrap<'_> {
+            fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+                self.source.fmt_extra(self.t, f)
+            }
+        }
+        Wrap { source, t }.to_string()
+    }
+
+    /// EXPLAIN must surface a `dynamic_rg_pruning=eligible` marker when the
+    /// predicate carries a `DynamicFilterPhysicalExpr`. This is the
+    /// plan-time signal that the runtime row-group pruner will fire at
+    /// every RG boundary.
+    #[test]
+    fn fmt_extra_marks_dynamic_predicate_as_pruning_eligible() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let dynamic = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("v", 0))],
+            lit(true),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let source =
+            ParquetSource::new(Arc::clone(&schema)).with_predicate(Arc::clone(&dynamic));
+
+        let rendered = render_fmt_extra(&source, DisplayFormatType::Default);
+        assert!(
+            rendered.contains("dynamic_rg_pruning=eligible"),
+            "expected marker in Default fmt_extra, got: {rendered}"
+        );
+
+        let rendered_verbose = render_fmt_extra(&source, DisplayFormatType::Verbose);
+        assert!(
+            rendered_verbose.contains("dynamic_rg_pruning=eligible"),
+            "expected marker in Verbose fmt_extra, got: {rendered_verbose}"
+        );
+    }
+
+    /// EXPLAIN must NOT show the dynamic-RG-pruning marker when the
+    /// predicate is purely static — the optimization will not fire, so
+    /// surfacing it would mislead the reader.
+    #[test]
+    fn fmt_extra_omits_marker_for_static_predicate() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+        let predicate = lit(true);
+        let source = ParquetSource::new(schema).with_predicate(predicate);
+
+        let rendered = render_fmt_extra(&source, DisplayFormatType::Default);
+        assert!(
+            !rendered.contains("dynamic_rg_pruning"),
+            "did not expect marker for static predicate, got: {rendered}"
+        );
+    }
+
+    /// EXPLAIN must NOT show the marker when there is no predicate at all
+    /// (e.g. unfiltered table scan).
+    #[test]
+    fn fmt_extra_omits_marker_when_no_predicate() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+        let source = ParquetSource::new(schema);
+
+        let rendered = render_fmt_extra(&source, DisplayFormatType::Default);
+        assert!(
+            !rendered.contains("dynamic_rg_pruning"),
+            "did not expect marker for predicate-less scan, got: {rendered}"
+        );
     }
 
     /// Helpers for the `try_pushdown_sort` regression tests below.
@@ -1720,7 +1829,7 @@ mod tests {
         use datafusion_expr::{col, lit as logical_lit};
         use datafusion_functions::core::expr_fn::file_row_index;
         use datafusion_physical_expr::planner::logical2physical;
-        use datafusion_physical_expr_adapter::rewrite_file_row_index_expr;
+        use datafusion_physical_expr_adapter::rewrite::rewrite_file_row_index_expr;
         use datafusion_physical_plan::filter_pushdown::PushedDown;
         use parquet::arrow::RowNumber;
 
