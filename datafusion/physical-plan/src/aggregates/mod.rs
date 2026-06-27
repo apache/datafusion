@@ -69,6 +69,7 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
+pub(crate) use partition_runs::{PartitionRun, set_partition_runs_metadata};
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
@@ -77,6 +78,7 @@ mod hash_aggregate;
 mod hash_table;
 mod no_grouping;
 pub mod order;
+mod partition_runs;
 mod row_hash;
 mod skip_partial;
 mod topk;

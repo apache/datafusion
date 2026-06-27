@@ -772,7 +772,7 @@ fn add_hash_on_top(
 }
 
 fn hash_aggregate_partition_factor(input: &Arc<dyn ExecutionPlan>) -> usize {
-    const DEFAULT_HASH_AGGREGATE_PARTITION_FACTOR: usize = 4;
+    const DEFAULT_HASH_AGGREGATE_PARTITION_FACTOR: usize = 16;
 
     input
         .downcast_ref::<AggregateExec>()
