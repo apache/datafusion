@@ -17,7 +17,7 @@
 
 //! Utility functions for expression simplification
 
-use arrow::datatypes::i256;
+use arrow::datatypes::{DataType, i256};
 use datafusion_common::{
     Result, ScalarValue, internal_err,
     tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
@@ -294,30 +294,40 @@ pub fn is_lit(expr: &Expr) -> bool {
     matches!(expr, Expr::Literal(_, _))
 }
 
-pub fn has_associative_op(expr: &Expr, info: &SimplifyContext) -> Result<bool> {
-    let op = match expr {
-        Expr::BinaryExpr(expr) => expr.op,
-        _ => unreachable!(),
-    };
-    let datatype = info.get_data_type(expr)?;
-    // TODO: add other associative ops
+pub fn is_associative(op: Operator, datatype: &DataType) -> bool {
     match op {
-        Operator::Plus => Ok(datatype.is_integer()),
-        Operator::StringConcat => Ok(datatype.is_string() || datatype.is_binary()),
-        _ => Ok(false),
+        Operator::Plus | Operator::Multiply => datatype.is_integer(),
+        Operator::StringConcat
+        | Operator::BitwiseAnd
+        | Operator::BitwiseOr
+        | Operator::BitwiseXor => true,
+        _ => false,
     }
 }
 
-pub fn has_adjacent_literals(expr: &Expr) -> bool {
-    struct AdjacentLiteralVisitor {
-        op: Operator,
+pub fn is_associative_with_adjacent_literals(
+    expr: &Expr,
+    info: &SimplifyContext,
+) -> bool {
+    struct AdjacentLiteralVisitor<'a> {
         last_expr_was_literal: bool,
+        op: Operator,
+        datatype: DataType,
+        info: &'a SimplifyContext,
     }
 
-    impl<'n> TreeNodeVisitor<'n> for AdjacentLiteralVisitor {
+    impl<'a, 'n> TreeNodeVisitor<'n> for AdjacentLiteralVisitor<'a> {
         type Node = Expr;
 
         fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+            match self.info.get_data_type(node) {
+                Ok(datatype) if datatype == self.datatype => {}
+                _ => {
+                    self.last_expr_was_literal = false;
+                    return Ok(TreeNodeRecursion::Jump);
+                }
+            }
+
             match node {
                 Expr::BinaryExpr(expr) if expr.op == self.op => {
                     Ok(TreeNodeRecursion::Continue)
@@ -330,18 +340,27 @@ pub fn has_adjacent_literals(expr: &Expr) -> bool {
                         Ok(TreeNodeRecursion::Continue)
                     }
                 }
-                _ => Ok(TreeNodeRecursion::Jump),
+                _ => {
+                    self.last_expr_was_literal = false;
+                    Ok(TreeNodeRecursion::Jump)
+                }
             }
         }
     }
 
-    let op = match expr {
-        Expr::BinaryExpr(expr) => expr.op,
-        _ => unreachable!(),
+    let (op, datatype) = match (expr, info.get_data_type(expr)) {
+        (Expr::BinaryExpr(expr), Ok(datatype)) => (expr.op, datatype),
+        _ => return false,
     };
+    if !is_associative(op, &datatype) {
+        return false;
+    }
+
     let mut visitor = AdjacentLiteralVisitor {
-        op,
         last_expr_was_literal: false,
+        op,
+        datatype,
+        info,
     };
     expr.visit(&mut visitor).unwrap() == TreeNodeRecursion::Stop
 }

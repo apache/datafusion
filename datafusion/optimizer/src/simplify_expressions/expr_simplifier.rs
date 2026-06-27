@@ -1095,11 +1095,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 Transformed::yes(*right)
             }
 
-            expr @ Expr::BinaryExpr(_)
-                if has_associative_op(&expr, self.info)?
-                    && has_adjacent_literals(&expr) =>
-            {
-                Transformed::yes(reassociate_literals(expr))
+            // (A + 1) + 2 -> A + (1 + 2)
+            expr if is_associative_with_adjacent_literals(&expr, self.info) => {
+                Transformed::yes(reassociate_literals(expr, self.info))
             }
 
             //
@@ -2362,23 +2360,35 @@ fn simplify_right_is_one_case(
     }
 }
 
-fn reassociate_literals(expr: Expr) -> Expr {
-    fn flatten(op: Operator, expr: Expr, out: &mut Vec<Expr>) {
-        match expr {
-            Expr::BinaryExpr(expr) if expr.op == op => {
-                flatten(op, *expr.left, out);
-                flatten(op, *expr.right, out);
+fn reassociate_literals(expr: Expr, info: &SimplifyContext) -> Expr {
+    fn flatten(
+        op: Operator,
+        datatype: &DataType,
+        info: &SimplifyContext,
+        expr: Expr,
+        out: &mut Vec<Expr>,
+    ) {
+        match &expr {
+            Expr::BinaryExpr(binary)
+                if binary.op == op
+                    && matches!(info.get_data_type(&expr), Ok(dt) if &dt == datatype) =>
+            {
+                let Expr::BinaryExpr(binary) = expr else {
+                    unreachable!()
+                };
+                flatten(op, datatype, info, *binary.left, out);
+                flatten(op, datatype, info, *binary.right, out);
             }
-            expr => out.push(expr),
+            _ => out.push(expr),
         }
     }
 
-    let op = match &expr {
-        Expr::BinaryExpr(expr) => expr.op,
-        _ => unreachable!(),
+    let (op, datatype) = match (&expr, info.get_data_type(&expr)) {
+        (Expr::BinaryExpr(expr), Ok(datatype)) => (expr.op, datatype),
+        _ => return expr,
     };
     let mut exprs = Vec::new();
-    flatten(op, expr, &mut exprs);
+    flatten(op, &datatype, info, expr, &mut exprs);
     let mut exprs = exprs.into_iter();
 
     let mut out = exprs.next().unwrap();
@@ -3418,23 +3428,56 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_nested_associative_expr() {
-        let plus_expr = (col("c1") + lit(1)) + (lit(2) + col("c2"));
-        assert_eq!(simplify(plus_expr), col("c1") + lit(3) + col("c2"));
-
-        let mixed_expr =
-            col("c1") * col("c2") + lit(1) + lit(2) + (lit(3) + lit(4) * col("c3"));
-        assert_eq!(
-            simplify(mixed_expr),
-            col("c1") * col("c2") + lit(6) + lit(4) * col("c3")
+    fn test_simplify_nested_literals_associative() {
+        assert_change(
+            col("c3") + lit(1i64) + lit(2i64) + lit(3i64) + col("c3_non_null"),
+            col("c3") + lit(6i64) + col("c3_non_null"),
+        );
+        assert_change(
+            (col("c3") + lit(1i64)) + (lit(2i64) + col("c3_non_null")),
+            col("c3") + lit(3i64) + col("c3_non_null"),
+        );
+        assert_change(lit(1i64) + lit(2i64) + col("c3"), lit(3i64) + col("c3"));
+        assert_change(col("c4") + lit(1u32) + lit(2u32), col("c4") + lit(3u32));
+        assert_change(
+            col("c3") + lit(1i64) + col("c3_non_null") + lit(2i64) + lit(3i64),
+            col("c3") + lit(1i64) + col("c3_non_null") + lit(5i64),
+        );
+        assert_change(
+            col("c3") * col("c3") + lit(2i64) + (lit(3i64) + lit(4i64) * col("c3")),
+            col("c3") * col("c3") + lit(5i64) + lit(4i64) * col("c3"),
+        );
+        assert_change(col("c3") * lit(2i64) * lit(3i64), col("c3") * lit(6i64));
+        assert_change(
+            (col("c3") * lit(2i64)) * (lit(3i64) * col("c3_non_null")),
+            col("c3") * lit(6i64) * col("c3_non_null"),
         );
 
-        let concat = |left, right| binary_expr(left, Operator::StringConcat, right);
-        let concat_expr =
-            concat(concat(concat(col("c1"), lit("a")), lit("b")), col("c2"));
-        assert_eq!(
-            simplify(concat_expr),
-            concat(concat(col("c1"), lit("ab")), col("c2"))
+        let cat = |left, right| binary_expr(left, Operator::StringConcat, right);
+        assert_change(
+            simplify(cat(cat(cat(col("c1"), lit("a")), lit("b")), col("c1"))),
+            cat(cat(col("c1"), lit("ab")), col("c1")),
+        );
+
+        assert_change(col("c3") & lit(12i64) & lit(10i64), col("c3") & lit(8i64));
+        assert_change(
+            (col("c4") & lit(12u32)) & (lit(10u32) & col("c4_non_null")),
+            col("c4") & lit(8u32) & col("c4_non_null"),
+        );
+
+        assert_change(col("c3") | lit(1i64) | lit(2i64), col("c3") | lit(3i64));
+        assert_change(col("c4") ^ lit(1u32) ^ lit(3u32), col("c4") ^ lit(2u32));
+
+        assert_no_change(col("c3") + lit(1i64));
+        assert_no_change(lit(1i64) + col("c3"));
+        assert_no_change(col("c6") + lit(1.0) + lit(2.0));
+        assert_no_change(col("c6") * lit(3.0) * lit(4.0));
+        assert_no_change(col("c4") + lit(5u32) + lit(6u8));
+        assert_no_change(lit(7i64) + col("c3") + lit(8i64));
+
+        assert_change(
+            col("c4") + lit(1u32) + lit(2i64) + lit(3i64),
+            col("c4") + lit(1u32) + lit(5i64),
         );
     }
 
@@ -3755,6 +3798,7 @@ mod tests {
                         Field::new("c3_non_null", DataType::Int64, false),
                         Field::new("c4_non_null", DataType::UInt32, false),
                         Field::new("c5", DataType::FixedSizeBinary(3), true),
+                        Field::new("c6", DataType::Float64, true),
                     ]
                     .into(),
                     HashMap::new(),
