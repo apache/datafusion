@@ -23,6 +23,7 @@
 //!
 //! Entry points: [`set_partition_runs_metadata`] and [`partition_runs`].
 
+use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
 
@@ -53,6 +54,15 @@ impl PartitionRun {
             len,
         })
     }
+}
+
+/// Return partition runs encoded on `schema`, if present.
+pub(crate) fn partition_runs(schema: &Schema) -> Result<Option<Vec<PartitionRun>>> {
+    schema
+        .metadata()
+        .get(AGGR_PARTITION_RUNS_METADATA_KEY)
+        .map(|value| decode_partition_runs(value))
+        .transpose()
 }
 
 /// Encode partition runs as schema metadata value.

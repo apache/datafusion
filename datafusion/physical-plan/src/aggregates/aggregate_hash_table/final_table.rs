@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -23,6 +24,8 @@ use datafusion_common::{Result, internal_err};
 use datafusion_expr::EmitTo;
 
 use crate::aggregates::AggregateExec;
+use crate::aggregates::group_values::new_group_values;
+use crate::aggregates::order::GroupOrdering;
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState, FinalMarker,
@@ -44,6 +47,36 @@ impl AggregateHashTable<FinalMarker> {
             batch_size,
             vec![None; agg.aggr_expr.len()],
         )
+    }
+
+    pub(in crate::aggregates) fn empty_like(&self) -> Result<Self> {
+        let AggregateHashTableState::Building(state) = &self.state else {
+            return internal_err!(
+                "cannot create empty final hash aggregate table from non-building state"
+            );
+        };
+
+        let group_schema = state.group_by.group_schema(&self.input_schema)?;
+        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        let accumulators = state
+            .accumulators
+            .iter()
+            .map(|acc| acc.empty_like())
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(AggregateHashTable {
+            group_by_metrics: self.group_by_metrics.clone(),
+            input_schema: Arc::clone(&self.input_schema),
+            output_schema: Arc::clone(&self.output_schema),
+            batch_size: self.batch_size,
+            state: AggregateHashTableState::Building(AggregateHashTableBuffer {
+                group_by: Arc::clone(&state.group_by),
+                group_values,
+                batch_group_indices: Default::default(),
+                accumulators,
+            }),
+            _mode: PhantomData,
+        })
     }
 
     /// Emits the next batch of aggregated group keys and final aggregate values.
