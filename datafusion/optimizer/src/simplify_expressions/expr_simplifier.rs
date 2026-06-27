@@ -1095,6 +1095,12 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 Transformed::yes(*right)
             }
 
+            expr @ Expr::BinaryExpr(_)
+                if has_associative_op(&expr) && has_adjacent_literals(&expr) =>
+            {
+                Transformed::yes(reassociate_literals(expr))
+            }
+
             //
             // Rules for Multiply
             //
@@ -2355,6 +2361,63 @@ fn simplify_right_is_one_case(
     }
 }
 
+fn reassociate_literals(expr: Expr) -> Expr {
+    fn flatten(op: Operator, expr: Expr, out: &mut Vec<Expr>) {
+        match expr {
+            Expr::BinaryExpr(expr) if expr.op == op => {
+                flatten(op, *expr.left, out);
+                flatten(op, *expr.right, out);
+            }
+            expr => out.push(expr),
+        }
+    }
+
+    let op = match &expr {
+        Expr::BinaryExpr(expr) => expr.op,
+        _ => unreachable!(),
+    };
+    let mut exprs = Vec::new();
+    flatten(op, expr, &mut exprs);
+    let mut exprs = exprs.into_iter();
+
+    let mut out = exprs.next().unwrap();
+    let mut lit = None;
+    for expr in exprs {
+        if matches!(expr, Expr::Literal(_, _)) {
+            if let Some(left) = lit {
+                lit = Some(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(expr),
+                }));
+            } else {
+                lit = Some(expr);
+            }
+        } else {
+            if let Some(lit) = lit.take() {
+                out = Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(out),
+                    op,
+                    right: Box::new(lit),
+                });
+            }
+            out = Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(out),
+                op,
+                right: Box::new(expr),
+            });
+        }
+    }
+    if let Some(lit) = lit.take() {
+        out = Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(out),
+            op,
+            right: Box::new(lit),
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3366,6 +3429,27 @@ mod tests {
         let expr_eq = binary_expr(lit(1), Operator::Eq, lit(1));
 
         assert_eq!(simplify(expr_eq), lit(true));
+    }
+
+    #[test]
+    fn test_simplify_nested_associative_expr() {
+        let plus_expr = (col("c1") + lit(1)) + (lit(2) + col("c2"));
+        assert_eq!(simplify(plus_expr), col("c1") + lit(3) + col("c2"));
+
+        let mixed_expr =
+            col("c1") * col("c2") + lit(1) + lit(2) + (lit(3) + lit(4) * col("c3"));
+        assert_eq!(
+            simplify(mixed_expr),
+            col("c1") * col("c2") + lit(6) + lit(4) * col("c3")
+        );
+
+        let concat = |left, right| binary_expr(left, Operator::StringConcat, right);
+        let concat_expr =
+            concat(concat(concat(col("c1"), lit("a")), lit("b")), col("c2"));
+        assert_eq!(
+            simplify(concat_expr),
+            concat(concat(col("c1"), lit("ab")), col("c2"))
+        );
     }
 
     #[test]

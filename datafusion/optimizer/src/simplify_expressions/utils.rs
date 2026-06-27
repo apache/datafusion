@@ -18,7 +18,10 @@
 //! Utility functions for expression simplification
 
 use arrow::datatypes::i256;
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{
+    Result, ScalarValue, internal_err,
+    tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
+};
 use datafusion_expr::{
     Case, Expr, Like, Operator,
     expr::{Between, BinaryExpr, InList},
@@ -288,6 +291,54 @@ pub fn into_case(expr: Expr) -> Result<Case> {
 
 pub fn is_lit(expr: &Expr) -> bool {
     matches!(expr, Expr::Literal(_, _))
+}
+
+pub fn has_associative_op(expr: &Expr) -> bool {
+    let op = match expr {
+        Expr::BinaryExpr(expr) => expr.op,
+        _ => unreachable!(),
+    };
+    // TODO: add other associative ops
+    // TODO: check types (float addition isn't associative)
+    matches!(op, Operator::Plus | Operator::StringConcat)
+}
+
+pub fn has_adjacent_literals(expr: &Expr) -> bool {
+    struct AdjacentLiteralVisitor {
+        op: Operator,
+        last_expr_was_literal: bool,
+    }
+
+    impl<'n> TreeNodeVisitor<'n> for AdjacentLiteralVisitor {
+        type Node = Expr;
+
+        fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+            match node {
+                Expr::BinaryExpr(expr) if expr.op == self.op => {
+                    Ok(TreeNodeRecursion::Continue)
+                }
+                Expr::Literal(_, _) => {
+                    if self.last_expr_was_literal {
+                        Ok(TreeNodeRecursion::Stop)
+                    } else {
+                        self.last_expr_was_literal = true;
+                        Ok(TreeNodeRecursion::Continue)
+                    }
+                }
+                _ => Ok(TreeNodeRecursion::Jump),
+            }
+        }
+    }
+
+    let op = match expr {
+        Expr::BinaryExpr(expr) => expr.op,
+        _ => unreachable!(),
+    };
+    let mut visitor = AdjacentLiteralVisitor {
+        op,
+        last_expr_was_literal: false,
+    };
+    expr.visit(&mut visitor).unwrap() == TreeNodeRecursion::Stop
 }
 
 /// Checks if `eq_expr` is `A = L1` and `ne_expr` is `A != L2` where L1 != L2.
