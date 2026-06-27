@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 pub mod regexpcount;
+pub mod regexpextract;
 pub mod regexpinstr;
 pub mod regexplike;
 pub mod regexpmatch;
@@ -30,6 +31,7 @@ pub mod regexpreplace;
 
 // create UDFs
 make_udf_function!(regexpcount::RegexpCountFunc, regexp_count);
+make_udf_function!(regexpextract::RegexpExtractFunc, regexp_extract);
 make_udf_function!(regexpinstr::RegexpInstrFunc, regexp_instr);
 make_udf_function!(regexpmatch::RegexpMatchFunc, regexp_match);
 make_udf_function!(regexplike::RegexpLikeFunc, regexp_like);
@@ -102,6 +104,11 @@ pub mod expr_fn {
         super::regexp_like().call(args)
     }
 
+    /// Extracts the first match of a regular expression capture group from a string.
+    pub fn regexp_extract(str: Expr, regexp: Expr, idx: Expr) -> Expr {
+        super::regexp_extract().call(vec![str, regexp, idx])
+    }
+
     /// Replaces substrings in a string that match.
     pub fn regexp_replace(
         string: Expr,
@@ -121,6 +128,7 @@ pub mod expr_fn {
 pub fn functions() -> Vec<Arc<datafusion_expr::ScalarUDF>> {
     vec![
         regexp_count(),
+        regexp_extract(),
         regexp_match(),
         regexp_instr(),
         regexp_like(),
