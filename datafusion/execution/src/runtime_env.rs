@@ -18,8 +18,7 @@
 //! Execution [`RuntimeEnv`] environment that manages access to object
 //! store, memory manager, disk manager.
 
-#[expect(deprecated)]
-use crate::disk_manager::{DiskManagerConfig, SpillingProgress};
+use crate::disk_manager::SpillingProgress;
 use crate::{
     disk_manager::{DiskManager, DiskManagerBuilder, DiskManagerMode},
     memory_pool::{
@@ -333,9 +332,8 @@ impl Default for RuntimeEnv {
 /// See example on [`RuntimeEnv`]
 #[derive(Clone)]
 pub struct RuntimeEnvBuilder {
-    #[expect(deprecated)]
     /// DiskManager to manage temporary disk file usage
-    pub disk_manager: DiskManagerConfig,
+    pub disk_manager: Option<Arc<DiskManager>>,
     /// DiskManager builder to manager temporary disk file usage
     pub disk_manager_builder: Option<DiskManagerBuilder>,
     /// [`MemoryPool`] from which to allocate memory
@@ -371,14 +369,6 @@ impl RuntimeEnvBuilder {
         }
     }
 
-    #[expect(deprecated)]
-    #[deprecated(since = "48.0.0", note = "Use with_disk_manager_builder instead")]
-    /// Customize disk manager
-    pub fn with_disk_manager(mut self, disk_manager: DiskManagerConfig) -> Self {
-        self.disk_manager = disk_manager;
-        self
-    }
-
     /// Customize the disk manager builder
     pub fn with_disk_manager_builder(mut self, disk_manager: DiskManagerBuilder) -> Self {
         self.disk_manager_builder = Some(disk_manager);
@@ -409,23 +399,12 @@ impl RuntimeEnvBuilder {
     /// Specify the total memory to use while running the DataFusion
     /// plan to `max_memory * memory_fraction` in bytes.
     ///
-    /// If a memory pool is already configured on this builder, this first
-    /// attempts to resize it in place via [`MemoryPool::try_resize`]. Pools
-    /// that support resize (e.g. [`GreedyMemoryPool`]) keep their identity
-    /// — useful for any wrapper that needs to observe limit changes (e.g.
-    /// to retune external accounting). Pools whose [`MemoryPool::try_resize`]
-    /// returns `Err` (the default) fall back to wholesale replacement
-    /// with a [`TrackConsumersPool`]-wrapped [`GreedyMemoryPool`] (top 5
-    /// consumers), preserving the historical behavior.
+    /// This defaults to using [`GreedyMemoryPool`] wrapped in the
+    /// [`TrackConsumersPool`] with a maximum of 5 consumers.
     ///
     /// Note DataFusion does not yet respect this limit in all cases.
     pub fn with_memory_limit(self, max_memory: usize, memory_fraction: f64) -> Self {
         let pool_size = (max_memory as f64 * memory_fraction) as usize;
-        if let Some(existing) = &self.memory_pool
-            && existing.try_resize(pool_size).is_ok()
-        {
-            return self;
-        }
         self.with_memory_pool(Arc::new(TrackConsumersPool::new(
             GreedyMemoryPool::new(pool_size),
             NonZeroUsize::new(5).unwrap(),
@@ -483,14 +462,15 @@ impl RuntimeEnvBuilder {
         let memory_pool =
             memory_pool.unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
 
+        let disk_manager: Arc<DiskManager> = match (disk_manager, disk_manager_builder) {
+            (_, Some(builder)) => Arc::new(builder.build()?),
+            (Some(manager), None) => manager,
+            (None, None) => Arc::new(DiskManagerBuilder::default().build()?),
+        };
+
         Ok(RuntimeEnv {
             memory_pool,
-            disk_manager: if let Some(builder) = disk_manager_builder {
-                Arc::new(builder.build()?)
-            } else {
-                #[expect(deprecated)]
-                DiskManager::try_new(disk_manager)?
-            },
+            disk_manager,
             cache_manager: CacheManager::try_new(&cache_manager)?,
             object_store_registry,
             #[cfg(feature = "parquet_encryption")]
@@ -522,10 +502,7 @@ impl RuntimeEnvBuilder {
         };
 
         Self {
-            #[expect(deprecated)]
-            disk_manager: DiskManagerConfig::Existing(Arc::clone(
-                &runtime_env.disk_manager,
-            )),
+            disk_manager: Some(Arc::clone(&runtime_env.disk_manager)),
             disk_manager_builder: None,
             memory_pool: Some(Arc::clone(&runtime_env.memory_pool)),
             cache_manager: cache_config,
@@ -571,50 +548,5 @@ impl RuntimeEnvBuilder {
             );
         }
         docs
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::memory_pool::{GreedyMemoryPool, MemoryLimit, UnboundedMemoryPool};
-
-    #[test]
-    fn with_memory_limit_resizes_in_place_when_pool_supports_it() {
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(100));
-        let pool_ptr = Arc::as_ptr(&pool);
-
-        let env = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::clone(&pool))
-            .with_memory_limit(500, 1.0)
-            .build()
-            .unwrap();
-
-        // Same Arc as before — wrapper-or-other-resize-capable pools survive.
-        assert!(std::ptr::eq(Arc::as_ptr(&env.memory_pool), pool_ptr));
-        assert!(matches!(
-            env.memory_pool.memory_limit(),
-            MemoryLimit::Finite(500)
-        ));
-    }
-
-    #[test]
-    fn with_memory_limit_falls_back_to_replace_when_resize_unsupported() {
-        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-        let pool_ptr = Arc::as_ptr(&pool);
-
-        let env = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::clone(&pool))
-            .with_memory_limit(500, 1.0)
-            .build()
-            .unwrap();
-
-        // Different Arc — wholesale replacement happened because Unbounded's
-        // default `try_resize` returns Err.
-        assert!(!std::ptr::eq(Arc::as_ptr(&env.memory_pool), pool_ptr));
-        assert!(matches!(
-            env.memory_pool.memory_limit(),
-            MemoryLimit::Finite(500)
-        ));
     }
 }

@@ -58,6 +58,7 @@ use std::task::{Context, Poll};
 
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
+use crate::statistics::StatisticsArgs;
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
@@ -76,7 +77,37 @@ use datafusion_physical_expr::LexOrdering;
 use futures::{Stream, StreamExt, ready};
 use log::trace;
 
-/// Partial Sort execution plan.
+/// Sort execution plan for inputs that are already partially sorted.
+///
+/// This operator takes input ordered by a prefix of the required ordering, and
+/// produces output ordered by the required ordering. This is useful for
+/// unbounded or large inputs where a [`SortExec`] must buffer all rows before
+/// producing any output.
+///
+/// [`PartialSortExec`] relies on the property that rows with the same sort
+/// prefix are contiguous, so it can sort one prefix group at a time, emitting
+/// completed groups without reading (and buffering) the entire input.
+///
+/// For example, if the required output is `(a, b, c)`, but the input is only
+/// ordered by `(a, b)`, `PartialSortExec` sorts only within each `(a, b)`
+/// group to produce output ordered by `(a, b, c)`.
+///
+/// ```text
+/// input ordered by a, b              output ordered by a, b, c
+///
+/// +---+---+---+                      +---+---+---+
+/// | a | b | c |                      | a | b | c |
+/// +---+---+---+                      +---+---+---+
+/// | 0 | 0 | 3 |  -- same group  -->  | 0 | 0 | 2 |
+/// | 0 | 0 | 2 |                      | 0 | 0 | 3 |
+/// | 0 | 1 | 1 |  -- single row  -->  | 0 | 1 | 1 |
+/// | 0 | 2 | 4 |  -- same group -->   | 0 | 2 | 0 |
+/// | 0 | 2 | 0 |                      | 0 | 2 | 4 |
+/// | 1 | 0 | 5 |  -- single row  -->  | 1 | 0 | 5 |
+/// +---+---+---+                      +---+---+---+
+/// ```
+///
+/// [`SortExec`]: crate::sorts::sort::SortExec
 #[derive(Debug, Clone)]
 pub struct PartialSortExec {
     /// Input schema
@@ -334,8 +365,8 @@ impl ExecutionPlan for PartialSortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(partition)
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        args.compute_child_statistics(&self.input, args.partition())
     }
 }
 

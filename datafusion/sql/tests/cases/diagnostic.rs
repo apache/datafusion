@@ -17,12 +17,17 @@
 
 use datafusion_functions::string;
 use insta::assert_snapshot;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::ControlFlow, sync::Arc};
 
+use datafusion_common::diagnostic::DiagnosticKind;
 use datafusion_common::{Diagnostic, Location, Result, Span};
 use datafusion_sql::{
-    parser::{DFParser, DFParserBuilder},
+    parser::{DFParser, DFParserBuilder, Statement as DFStatement},
     planner::{ParserOptions, SqlToRel},
+    sqlparser::{
+        ast::{Expr as SQLExpr, visit_expressions_mut},
+        tokenizer::Span as SQLParserSpan,
+    },
 };
 use regex::Regex;
 
@@ -49,6 +54,41 @@ fn do_query(sql: &'static str) -> Diagnostic {
             None => panic!("expected diagnostic"),
         },
     }
+}
+
+fn do_query_warnings(sql: &'static str) -> Vec<Diagnostic> {
+    let statement = DFParserBuilder::new(sql)
+        .build()
+        .expect("unable to create parser")
+        .parse_statement()
+        .expect("unable to parse query");
+    do_statement_warnings(statement)
+}
+
+fn do_statement_warnings(statement: DFStatement) -> Vec<Diagnostic> {
+    let options = ParserOptions {
+        collect_spans: true,
+        ..ParserOptions::default()
+    };
+    let state = MockSessionState::default();
+    let context = MockContextProvider { state };
+    let sql_to_rel = SqlToRel::new_with_options(&context, options);
+    sql_to_rel
+        .statement_to_plan(statement)
+        .expect("expected planning to succeed");
+    sql_to_rel.take_warnings()
+}
+
+fn clear_value_spans(statement: &mut DFStatement) {
+    let DFStatement::Statement(statement) = statement else {
+        panic!("expected sqlparser statement");
+    };
+    let _ = visit_expressions_mut(statement.as_mut(), |expr| {
+        if let SQLExpr::Value(value) = expr {
+            value.span = SQLParserSpan::empty();
+        }
+        ControlFlow::<()>::Continue(())
+    });
 }
 
 /// Given a query that contains tag delimited spans, returns a mapping from the
@@ -370,6 +410,56 @@ fn test_unary_op_plus_with_non_column() -> Result<()> {
 }
 
 #[test]
+fn test_unary_op_minus_with_column() -> Result<()> {
+    let query = "SELECT -/*whole*/first_name/*whole*/ FROM person";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"- cannot be used with Utf8");
+    assert_eq!(diag.span, Some(spans["whole"]));
+    assert_snapshot!(diag.notes[0].message, @"- can only be used with signed numeric types, intervals, and timestamps");
+    assert_snapshot!(diag.helps[0].message, @"perhaps you need to cast person.first_name");
+    Ok(())
+}
+
+#[test]
+fn test_unary_op_minus_with_non_column() -> Result<()> {
+    let query = "SELECT -'a'";
+    let diag = do_query(query);
+    assert_eq!(diag.message, "- cannot be used with Utf8");
+    assert_snapshot!(diag.notes[0].message, @"- can only be used with signed numeric types, intervals, and timestamps");
+    assert_eq!(diag.notes[0].span, None);
+    assert_snapshot!(diag.helps[0].message, @r#"perhaps you need to cast Utf8("a")"#);
+    assert_eq!(diag.helps[0].span, None);
+    assert_eq!(diag.span, None);
+    Ok(())
+}
+
+#[test]
+fn test_unary_op_not_with_column() -> Result<()> {
+    let query = "SELECT NOT /*whole*/first_name/*whole*/ FROM person";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"NOT cannot be used with Utf8");
+    assert_eq!(diag.span, Some(spans["whole"]));
+    assert_snapshot!(diag.notes[0].message, @"NOT can only be used with boolean expressions");
+    assert_snapshot!(diag.helps[0].message, @"perhaps you need to cast person.first_name");
+    Ok(())
+}
+
+#[test]
+fn test_unary_op_not_with_non_column() -> Result<()> {
+    let query = "SELECT NOT 'a'";
+    let diag = do_query(query);
+    assert_eq!(diag.message, "NOT cannot be used with Utf8");
+    assert_snapshot!(diag.notes[0].message, @"NOT can only be used with boolean expressions");
+    assert_eq!(diag.notes[0].span, None);
+    assert_snapshot!(diag.helps[0].message, @r#"perhaps you need to cast Utf8("a")"#);
+    assert_eq!(diag.helps[0].span, None);
+    assert_eq!(diag.span, None);
+    Ok(())
+}
+
+#[test]
 fn test_syntax_error() -> Result<()> {
     // create a table with a column of type varchar
     let query = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c1, p1 /*int*/int/*int*/) LOCATION 'foo.csv'";
@@ -389,4 +479,195 @@ fn test_syntax_error() -> Result<()> {
             }
         },
     }
+}
+
+#[test]
+fn test_eq_null_warning_in_where() -> Result<()> {
+    let query = "SELECT * FROM person WHERE /*cmp*/first_name = /*null*/NULL/*null+cmp*/";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+
+    let warning = &warnings[0];
+    assert_eq!(warning.kind, DiagnosticKind::Warning);
+    assert_snapshot!(
+        warning.message,
+        @"comparison with NULL using `=` always evaluates to NULL"
+    );
+    assert_eq!(warning.span, Some(spans["cmp"]));
+    assert_snapshot!(
+        warning.helps[0].message,
+        @"use `IS NULL` to check for NULL values"
+    );
+    assert_eq!(warning.helps[0].span, Some(spans["null"]));
+    Ok(())
+}
+
+#[test]
+fn test_null_eq_warning_in_where() -> Result<()> {
+    let query = "SELECT * FROM person WHERE /*cmp+null*/NULL/*null*/ = first_name/*cmp*/";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].kind, DiagnosticKind::Warning);
+    assert_snapshot!(
+        warnings[0].message,
+        @"comparison with NULL using `=` always evaluates to NULL"
+    );
+    assert_eq!(warnings[0].span, Some(spans["cmp"]));
+    assert_eq!(warnings[0].helps[0].span, Some(spans["null"]));
+    Ok(())
+}
+
+#[test]
+fn test_not_eq_null_warning_in_where() -> Result<()> {
+    let query =
+        "SELECT * FROM person WHERE /*cmp*/first_name <> /*null*/NULL/*null+cmp*/";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].kind, DiagnosticKind::Warning);
+    assert_snapshot!(
+        warnings[0].message,
+        @"comparison with NULL using `<>` always evaluates to NULL"
+    );
+    assert_eq!(warnings[0].span, Some(spans["cmp"]));
+    assert_snapshot!(
+        warnings[0].helps[0].message,
+        @"use `IS NOT NULL` to check for non-NULL values"
+    );
+    assert_eq!(warnings[0].helps[0].span, Some(spans["null"]));
+    Ok(())
+}
+
+#[test]
+fn test_eq_null_warning_in_join_on() -> Result<()> {
+    let query =
+        "SELECT * FROM person a JOIN person b ON /*cmp*/a.id = /*null*/NULL/*null+cmp*/";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].kind, DiagnosticKind::Warning);
+    assert_snapshot!(
+        warnings[0].message,
+        @"comparison with NULL using `=` always evaluates to NULL"
+    );
+    assert_eq!(warnings[0].span, Some(spans["cmp"]));
+    Ok(())
+}
+
+#[test]
+fn test_eq_null_warning_in_having() -> Result<()> {
+    let query = "SELECT first_name FROM person GROUP BY first_name HAVING /*cmp*/1 = /*null*/NULL/*null+cmp*/";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].kind, DiagnosticKind::Warning);
+    assert_snapshot!(
+        warnings[0].message,
+        @"comparison with NULL using `=` always evaluates to NULL"
+    );
+    assert_eq!(warnings[0].span, Some(spans["cmp"]));
+    Ok(())
+}
+
+#[test]
+fn test_eq_null_warning_nested_in_case_predicate() -> Result<()> {
+    let query = "SELECT * FROM person WHERE CASE WHEN /*cmp*/first_name = /*null*/NULL/*null+cmp*/ THEN true ELSE false END";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].kind, DiagnosticKind::Warning);
+    assert_eq!(warnings[0].span, Some(spans["cmp"]));
+    Ok(())
+}
+
+#[test]
+fn test_eq_null_warning_under_is_null_predicate() -> Result<()> {
+    let query = "SELECT * FROM person WHERE (/*cmp*/first_name = /*null*/NULL/*null+cmp*/) IS NULL";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].kind, DiagnosticKind::Warning);
+    assert_eq!(warnings[0].span, Some(spans["cmp"]));
+    assert_eq!(warnings[0].helps[0].span, Some(spans["null"]));
+    Ok(())
+}
+
+#[test]
+fn test_eq_null_warning_without_null_span() -> Result<()> {
+    let query = "SELECT * FROM person WHERE first_name = NULL";
+    let mut statement = DFParserBuilder::new(query)
+        .build()
+        .expect("unable to create parser")
+        .parse_statement()
+        .expect("unable to parse query");
+    clear_value_spans(&mut statement);
+
+    let warnings = do_statement_warnings(statement);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].kind, DiagnosticKind::Warning);
+    assert_snapshot!(
+        warnings[0].message,
+        @"comparison with NULL using `=` always evaluates to NULL"
+    );
+    assert_eq!(warnings[0].helps[0].span, None);
+    Ok(())
+}
+
+#[test]
+fn test_is_null_has_no_warning() -> Result<()> {
+    let warnings = do_query_warnings("SELECT * FROM person WHERE first_name IS NULL");
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    Ok(())
+}
+
+#[test]
+fn test_eq_null_projection_has_no_warning() -> Result<()> {
+    let warnings = do_query_warnings("SELECT first_name = NULL FROM person");
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    Ok(())
+}
+
+#[test]
+fn test_eq_null_projection_in_exists_has_no_warning() -> Result<()> {
+    let warnings = do_query_warnings(
+        "SELECT * FROM person WHERE EXISTS (SELECT first_name = NULL FROM person)",
+    );
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    Ok(())
+}
+
+#[test]
+fn test_eq_null_warning_in_exists_subquery_where() -> Result<()> {
+    let query = "SELECT * FROM person WHERE EXISTS (SELECT 1 FROM person WHERE /*cmp*/first_name = /*null*/NULL/*null+cmp*/)";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].kind, DiagnosticKind::Warning);
+    assert_snapshot!(
+        warnings[0].message,
+        @"comparison with NULL using `=` always evaluates to NULL"
+    );
+    assert_eq!(warnings[0].span, Some(spans["cmp"]));
+    assert_eq!(warnings[0].helps[0].span, Some(spans["null"]));
+    Ok(())
+}
+
+#[test]
+fn test_multiple_null_comparison_warnings() -> Result<()> {
+    let warnings = do_query_warnings(
+        "SELECT * FROM person WHERE first_name = NULL OR last_name <> NULL",
+    );
+    assert_eq!(warnings.len(), 2);
+    assert!(warnings.iter().all(|w| w.kind == DiagnosticKind::Warning));
+    assert_snapshot!(
+        warnings[0].message,
+        @"comparison with NULL using `=` always evaluates to NULL"
+    );
+    assert_snapshot!(
+        warnings[1].message,
+        @"comparison with NULL using `<>` always evaluates to NULL"
+    );
+    Ok(())
 }

@@ -19,7 +19,7 @@
 
 use arrow::array::{
     Array, ArrayRef, AsArray, Capacities, GenericListArray, MutableArrayData,
-    NullBufferBuilder, OffsetBufferBuilder, OffsetSizeTrait, Scalar, new_null_array,
+    NullBufferBuilder, OffsetSizeTrait, Scalar, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
@@ -391,7 +391,8 @@ fn general_replace<O: OffsetSizeTrait>(
     arr_n: &[Option<i64>],
 ) -> Result<ArrayRef> {
     // Build up the offsets for the final output array
-    let mut offsets: Vec<O> = vec![O::usize_as(0)];
+    let mut offsets: Vec<O> = Vec::with_capacity(list_array.len() + 1);
+    offsets.push(O::usize_as(0));
     let values = list_array.values();
     let original_data = values.to_data();
     let to_data = to_array.to_data();
@@ -538,7 +539,8 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
         capacity,
     );
 
-    let mut offsets = OffsetBufferBuilder::<O>::new(list_array.len());
+    let mut offsets = Vec::<O>::with_capacity(list_array.len() + 1);
+    offsets.push(O::zero());
 
     // Single bulk comparison over the visible values only.
     let match_bitmap = arrow_ord::cmp::not_distinct(&visible_values, needle)?;
@@ -551,7 +553,7 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
         let row_len = end - start;
 
         if list_array.is_null(row_index) {
-            offsets.push_length(0);
+            offsets.push(offsets[row_index]);
             continue;
         }
 
@@ -563,7 +565,7 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
             .peekable();
         if match_positions.peek().is_none() {
             mutable.extend(0, start, end);
-            offsets.push_length(row_len);
+            offsets.push(offsets[row_index] + O::usize_as(row_len));
             continue;
         }
 
@@ -586,14 +588,14 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
             mutable.extend(0, start + prev_end, end);
         }
 
-        offsets.push_length(row_len);
+        offsets.push(offsets[row_index] + O::usize_as(row_len));
     }
 
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(list_array.value_type(), true)),
-        offsets.finish(),
+        OffsetBuffer::new(offsets.into()),
         arrow::array::make_array(data),
         list_array.nulls().cloned(),
     )?))
@@ -631,7 +633,7 @@ fn array_replace_with_scalar_args(
             let list = list_array.as_list::<i64>();
             general_replace_with_scalar::<i64>(list, &needle, scalar_to, max_replacements)
         }
-        DataType::Null => Ok(new_null_array(list_array.data_type(), 1)),
+        DataType::Null => Ok(new_null_array(list_array.data_type(), list_array.len())),
         array_type => exec_err!("array_replace does not support type '{array_type}'."),
     }
 }
@@ -651,7 +653,7 @@ fn array_replace_internal(
             let list_array = array.as_list::<i64>();
             general_replace::<i64>(list_array, from, to, arr_n)
         }
-        DataType::Null => Ok(new_null_array(array.data_type(), 1)),
+        DataType::Null => Ok(new_null_array(array.data_type(), array.len())),
         array_type => exec_err!("array_replace does not support type '{array_type}'."),
     }
 }

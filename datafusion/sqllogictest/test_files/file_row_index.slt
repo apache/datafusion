@@ -1,0 +1,171 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+COPY  (VALUES (10), (20), (30), (40), (50))
+TO 'test_files/scratch/file_row_index/parquet_table/data.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE parquet_table(column1 int)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/file_row_index/parquet_table/';
+
+query TT
+EXPLAIN SELECT file_row_index(), column1 FROM parquet_table
+----
+logical_plan
+01)Projection: file_row_index(), parquet_table.column1
+02)--TableScan: parquet_table projection=[column1]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64) as file_row_index(), column1], file_type=parquet
+
+
+query II
+SELECT file_row_index(), column1 FROM parquet_table ORDER BY column1
+----
+0 10
+1 20
+2 30
+3 40
+4 50
+
+query III
+SELECT file_row_index(), file_row_index() + 1, column1
+FROM parquet_table
+ORDER BY column1
+----
+0 1 10
+1 2 20
+2 3 30
+3 4 40
+4 5 50
+
+
+query II
+SELECT file_row_index(), column1
+FROM parquet_table
+WHERE file_row_index() > 2
+ORDER BY column1
+----
+3 40
+4 50
+
+# Filter on file_row_index without having it in projection
+
+query TT
+EXPLAIN SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1
+----
+logical_plan
+01)Sort: parquet_table.column1 ASC NULLS LAST
+02)--Projection: parquet_table.column1
+03)----Filter: __datafusion_extracted_1 > Int64(2)
+04)------Projection: file_row_index() AS __datafusion_extracted_1, parquet_table.column1
+05)--------TableScan: parquet_table projection=[column1]
+physical_plan
+01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--FilterExec: __datafusion_extracted_1@0 > 2, projection=[column1@1]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64) as __datafusion_extracted_1, column1], file_type=parquet
+
+query I
+SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1
+----
+40
+50
+
+# Filter on file_row_index without projecting it, while enabling filter pushdown
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+query TT
+EXPLAIN SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1
+----
+logical_plan
+01)Sort: parquet_table.column1 ASC NULLS LAST
+02)--Projection: parquet_table.column1
+03)----Filter: __datafusion_extracted_1 > Int64(2)
+04)------Projection: file_row_index() AS __datafusion_extracted_1, parquet_table.column1
+05)--------TableScan: parquet_table projection=[column1]
+physical_plan
+01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--FilterExec: __datafusion_extracted_1@0 > 2, projection=[column1@1]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64) as __datafusion_extracted_1, column1], file_type=parquet
+
+query I
+SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1
+----
+40
+50
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
+
+# Without the rewrite in ParquetSource, `file_row_index()` errors because it
+# depends on file-source context
+
+query error file_row_index\(\) is source dependent and cannot be evaluated directly
+SELECT file_row_index()
+
+# Testing pushdown over a source that doesn't support `file_row_index()`.
+
+statement ok
+COPY  (VALUES (10), (20), (30), (40), (50))
+TO 'test_files/scratch/file_row_index/csv_table/data.csv'
+STORED AS CSV;
+
+statement ok
+CREATE EXTERNAL TABLE csv_table(column1 int)
+STORED AS CSV
+LOCATION 'test_files/scratch/file_row_index/csv_table/data.csv';
+
+query error file_row_index\(\) is source dependent and cannot be evaluated directly
+SELECT *, file_row_index() FROM csv_table;
+
+# Testing a table with two files.
+
+statement ok
+COPY  (VALUES (10), (20))
+TO 'test_files/scratch/file_row_index/parquet_two_files/part-1.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY  (VALUES (30), (40))
+TO 'test_files/scratch/file_row_index/parquet_two_files/part-2.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE parquet_two_files(column1 int)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/file_row_index/parquet_two_files/';
+
+query II
+SELECT file_row_index(), column1
+FROM parquet_two_files
+WHERE file_row_index() = 1
+ORDER BY column1
+----
+1 20
+1 40
+
+statement ok
+DROP TABLE parquet_two_files;
+
+statement ok
+DROP TABLE parquet_table;
+
+statement ok
+DROP TABLE csv_table;

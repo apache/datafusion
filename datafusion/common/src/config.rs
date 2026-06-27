@@ -21,7 +21,7 @@ use arrow_ipc::CompressionType;
 
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
-use crate::error::_config_err;
+use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::DFParquetWriterVersion;
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
@@ -33,6 +33,7 @@ use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 #[cfg(feature = "parquet_encryption")]
 use std::sync::Arc;
@@ -278,8 +279,8 @@ config_namespace! {
         /// are normalized automatically.
         pub enable_options_value_normalization: bool, warn = "`enable_options_value_normalization` is deprecated and ignored", default = false
 
-        /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
-        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks and Spark.
+        /// Configure the SQL dialect used by DataFusion's parser.
+        /// The configuration reference lists the supported values from [`Dialect::available`].
         pub dialect: Dialect, default = Dialect::Generic
         // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
@@ -323,52 +324,172 @@ config_namespace! {
     }
 }
 
-/// This is the SQL dialect used by DataFusion's parser.
-/// This mirrors [sqlparser::dialect::Dialect](https://docs.rs/sqlparser/latest/sqlparser/dialect/trait.Dialect.html)
-/// trait in order to offer an easier API and avoid adding the `sqlparser` dependency
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum Dialect {
-    #[default]
-    Generic,
-    MySQL,
-    PostgreSQL,
-    Hive,
-    SQLite,
-    Snowflake,
-    Redshift,
-    MsSQL,
-    ClickHouse,
-    BigQuery,
-    Ansi,
-    DuckDB,
-    Databricks,
-    Spark,
+/// Metadata for a SQL dialect supported by DataFusion configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DialectInfo {
+    pub dialect: Dialect,
+    pub canonical_name: &'static str,
+    pub display_name: &'static str,
+    pub aliases: &'static [&'static str],
+}
+
+// Keep this key in sync with the `SqlParserOptions::dialect` config path.
+const SQL_PARSER_DIALECT_CONFIG_KEY: &str = "datafusion.sql_parser.dialect";
+
+macro_rules! dialect_display_list {
+    ($($display_name:literal),+ $(,)?) => {
+        dialect_display_list!(@acc [] $($display_name),+)
+    };
+    (@acc [$($acc:tt)*] $last:literal) => {
+        concat!($($acc)* $last)
+    };
+    (@acc [$($acc:tt)*] $next:literal, $($rest:literal),+) => {
+        dialect_display_list!(@acc [$($acc)* $next, ", ",] $($rest),+)
+    };
+}
+
+macro_rules! dialect_metadata {
+    (
+        default: $default_variant:ident;
+        $(
+            $variant:ident {
+                canonical_name: $canonical_name:literal,
+                display_name: $display_name:literal,
+                aliases: [$($alias:literal),* $(,)?],
+            }
+        ),+ $(,)?
+    ) => {
+        /// This is the SQL dialect used by DataFusion's parser.
+        /// This mirrors [sqlparser::dialect::Dialect](https://docs.rs/sqlparser/latest/sqlparser/dialect/trait.Dialect.html)
+        /// trait in order to offer an easier API and avoid adding the `sqlparser` dependency
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Dialect {
+            $($variant,)+
+        }
+
+        impl Default for Dialect {
+            fn default() -> Self {
+                Self::$default_variant
+            }
+        }
+
+        const DIALECT_INFOS: &[DialectInfo] = &[
+            $(
+                DialectInfo {
+                    dialect: Dialect::$variant,
+                    canonical_name: $canonical_name,
+                    display_name: $display_name,
+                    aliases: &[$($alias),*],
+                },
+            )+
+        ];
+
+        const AVAILABLE_DIALECTS: &str = dialect_display_list!($($display_name),+);
+        const DIALECT_CONFIG_DESCRIPTION: &str = concat!(
+            "Configure the SQL dialect used by DataFusion's parser; supported values include: ",
+            dialect_display_list!($($display_name),+),
+            "."
+        );
+    };
+}
+
+dialect_metadata! {
+    default: Generic;
+    Generic {
+        canonical_name: "generic",
+        display_name: "Generic",
+        aliases: [],
+    },
+    MySQL {
+        canonical_name: "mysql",
+        display_name: "MySQL",
+        aliases: [],
+    },
+    PostgreSQL {
+        canonical_name: "postgresql",
+        display_name: "PostgreSQL",
+        aliases: ["postgres"],
+    },
+    Hive {
+        canonical_name: "hive",
+        display_name: "Hive",
+        aliases: [],
+    },
+    SQLite {
+        canonical_name: "sqlite",
+        display_name: "SQLite",
+        aliases: [],
+    },
+    Snowflake {
+        canonical_name: "snowflake",
+        display_name: "Snowflake",
+        aliases: [],
+    },
+    Redshift {
+        canonical_name: "redshift",
+        display_name: "Redshift",
+        aliases: [],
+    },
+    MsSQL {
+        canonical_name: "mssql",
+        display_name: "MsSQL",
+        aliases: [],
+    },
+    ClickHouse {
+        canonical_name: "clickhouse",
+        display_name: "ClickHouse",
+        aliases: [],
+    },
+    BigQuery {
+        canonical_name: "bigquery",
+        display_name: "BigQuery",
+        aliases: [],
+    },
+    Ansi {
+        canonical_name: "ansi",
+        display_name: "Ansi",
+        aliases: [],
+    },
+    DuckDB {
+        canonical_name: "duckdb",
+        display_name: "DuckDB",
+        aliases: [],
+    },
+    Databricks {
+        canonical_name: "databricks",
+        display_name: "Databricks",
+        aliases: [],
+    },
+    Spark {
+        canonical_name: "spark",
+        display_name: "Spark",
+        aliases: ["sparksql"],
+    },
 }
 
 impl Dialect {
-    /// List of all supported dialect names, for use in error messages.
-    pub const AVAILABLE: &'static str = "Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks, Spark";
+    /// Return metadata for all supported dialects.
+    pub fn metadata() -> &'static [DialectInfo] {
+        DIALECT_INFOS
+    }
+
+    /// Return all supported dialect names, for use in error messages.
+    pub fn available() -> &'static str {
+        AVAILABLE_DIALECTS
+    }
+
+    fn info(&self) -> &'static DialectInfo {
+        DIALECT_INFOS
+            .iter()
+            .find(|info| info.dialect == *self)
+            .expect("all Dialect variants are listed in DIALECT_INFOS")
+    }
 }
 
 impl AsRef<str> for Dialect {
     fn as_ref(&self) -> &str {
-        match self {
-            Self::Generic => "generic",
-            Self::MySQL => "mysql",
-            Self::PostgreSQL => "postgresql",
-            Self::Hive => "hive",
-            Self::SQLite => "sqlite",
-            Self::Snowflake => "snowflake",
-            Self::Redshift => "redshift",
-            Self::MsSQL => "mssql",
-            Self::ClickHouse => "clickhouse",
-            Self::BigQuery => "bigquery",
-            Self::Ansi => "ansi",
-            Self::DuckDB => "duckdb",
-            Self::Databricks => "databricks",
-            Self::Spark => "spark",
-        }
+        self.info().canonical_name
     }
 }
 
@@ -376,34 +497,31 @@ impl FromStr for Dialect {
     type Err = DataFusionError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let value = match s.to_ascii_lowercase().as_str() {
-            "generic" => Self::Generic,
-            "mysql" => Self::MySQL,
-            "postgresql" | "postgres" => Self::PostgreSQL,
-            "hive" => Self::Hive,
-            "sqlite" => Self::SQLite,
-            "snowflake" => Self::Snowflake,
-            "redshift" => Self::Redshift,
-            "mssql" => Self::MsSQL,
-            "clickhouse" => Self::ClickHouse,
-            "bigquery" => Self::BigQuery,
-            "ansi" => Self::Ansi,
-            "duckdb" => Self::DuckDB,
-            "databricks" => Self::Databricks,
-            "spark" | "sparksql" => Self::Spark,
-            other => {
-                return Err(DataFusionError::Configuration(format!(
-                    "Invalid Dialect: {other}. Expected one of: {}",
-                    Self::AVAILABLE
-                )));
+        for info in DIALECT_INFOS {
+            if info.canonical_name.eq_ignore_ascii_case(s)
+                || info
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.eq_ignore_ascii_case(s))
+            {
+                return Ok(info.dialect);
             }
-        };
-        Ok(value)
+        }
+
+        Err(DataFusionError::Configuration(format!(
+            "Invalid Dialect: {s}. Expected one of: {}",
+            Self::available()
+        )))
     }
 }
 
 impl ConfigField for Dialect {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        let description = if key == SQL_PARSER_DIALECT_CONFIG_KEY {
+            DIALECT_CONFIG_DESCRIPTION
+        } else {
+            description
+        };
         v.some(key, self, description)
     }
 
@@ -462,6 +580,86 @@ impl Display for SpillCompression {
             Self::Uncompressed => "uncompressed",
         };
         write!(f, "{str}")
+    }
+}
+
+/// A `usize` configuration value that rejects zero when set from strings.
+///
+/// Use this for options where zero is never a meaningful runtime value.
+/// Invalid values return a configuration error through [`ConfigField`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConfigNonZeroUsize(NonZeroUsize);
+
+/// Private helper for hard-coded defaults in `config_namespace!`, which cannot
+/// use `?`. All external construction should use [`ConfigNonZeroUsize::try_new`].
+const fn non_zero_usize_default(value: usize) -> ConfigNonZeroUsize {
+    match NonZeroUsize::new(value) {
+        Some(value) => ConfigNonZeroUsize(value),
+        None => panic!("value must be greater than 0"),
+    }
+}
+
+impl ConfigNonZeroUsize {
+    /// Creates a [`ConfigNonZeroUsize`], returning a configuration error if
+    /// `value` is zero.
+    pub fn try_new(value: usize) -> Result<Self> {
+        NonZeroUsize::new(value)
+            .map(Self)
+            .ok_or_else(|| _config_datafusion_err!("value must be greater than 0"))
+    }
+
+    /// Returns the wrapped `usize`.
+    pub const fn get(self) -> usize {
+        self.0.get()
+    }
+}
+
+impl From<ConfigNonZeroUsize> for usize {
+    fn from(value: ConfigNonZeroUsize) -> Self {
+        value.get()
+    }
+}
+
+impl FromStr for ConfigNonZeroUsize {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_new(default_config_transform(s)?)
+    }
+}
+
+impl ConfigField for ConfigNonZeroUsize {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field batch_size is a scalar ConfigNonZeroUsize and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = ConfigNonZeroUsize::from_str(value)?;
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field batch_size is a scalar ConfigNonZeroUsize and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
+impl Display for ConfigNonZeroUsize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get())
     }
 }
 
@@ -532,7 +730,7 @@ config_namespace! {
         /// Default batch size while creating new batches, it's especially useful for
         /// buffer-in-memory batches since creating tiny batches would result in too much
         /// metadata memory consumption
-        pub batch_size: usize, default = 8192
+        pub batch_size: ConfigNonZeroUsize, default = non_zero_usize_default(8192)
 
         /// A perfect hash join (see `HashJoinExec` for more details) will be considered
         /// if the range of keys (max - min) on the build side is < this threshold.
@@ -560,8 +758,7 @@ config_namespace! {
         pub coalesce_batches: bool, default = true
 
         /// Should DataFusion collect statistics when first creating a table.
-        /// Has no effect after the table is created. Applies to the default
-        /// `ListingTableProvider` in DataFusion. Defaults to true.
+        /// Has no effect after the table is created. Defaults to true.
         pub collect_statistics: bool, default = true
 
         /// Number of partitions for query execution. Increasing partitions can increase
@@ -595,6 +792,17 @@ config_namespace! {
         /// This is used to workaround bugs in the planner that are now caught by
         /// the new schema verification step.
         pub skip_physical_aggregate_schema_check: bool, default = false
+
+        /// Temporary switch for aggregate stream implementations that are being
+        /// migrated from `GroupedHashAggregateStream`.
+        ///
+        /// When set to true, DataFusion tries the migrated implementations when
+        /// their preconditions are satisfied. When set to false, grouped
+        /// aggregation falls back to `GroupedHashAggregateStream`. This option
+        /// will be removed after the migration is finished.
+        ///
+        /// See <https://github.com/apache/datafusion/issues/22710> for details.
+        pub enable_migration_aggregate: bool, default = true
 
         /// Sets the compression codec used when spilling data to disk.
         ///
@@ -4171,15 +4379,82 @@ mod tests {
     }
 
     #[test]
-    fn test_dialect_spark_roundtrip() {
+    fn test_dialect_metadata_roundtrip() {
         use crate::config::Dialect;
         use std::str::FromStr;
 
-        assert_eq!(Dialect::from_str("spark").unwrap(), Dialect::Spark);
-        assert_eq!(Dialect::from_str("sparksql").unwrap(), Dialect::Spark);
-        assert_eq!(Dialect::from_str("SPARK").unwrap(), Dialect::Spark);
-        assert_eq!(Dialect::Spark.as_ref(), "spark");
-        assert_eq!(Dialect::Spark.to_string(), "spark");
+        assert_eq!(Dialect::default(), Dialect::Generic);
+        assert!(!Dialect::metadata().is_empty());
+
+        for info in Dialect::metadata() {
+            let dialect = info.dialect;
+
+            assert_eq!(Dialect::from_str(info.canonical_name).unwrap(), dialect);
+            assert_eq!(
+                Dialect::from_str(&info.canonical_name.to_ascii_uppercase()).unwrap(),
+                dialect
+            );
+            assert_eq!(dialect.as_ref(), info.canonical_name);
+            assert_eq!(dialect.to_string(), info.canonical_name);
+        }
+    }
+
+    #[test]
+    fn test_dialect_aliases() {
+        use crate::config::Dialect;
+        use std::str::FromStr;
+
+        for info in Dialect::metadata() {
+            for alias in info.aliases {
+                assert_eq!(Dialect::from_str(alias).unwrap(), info.dialect);
+                assert_eq!(
+                    Dialect::from_str(&alias.to_ascii_uppercase()).unwrap(),
+                    info.dialect
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_available_dialects_includes_each_display_name_once() {
+        use crate::config::Dialect;
+        use std::collections::BTreeSet;
+
+        let available = Dialect::available();
+        let listed: Vec<_> = available.split(", ").collect();
+        let display_names: Vec<_> = Dialect::metadata()
+            .iter()
+            .map(|info| info.display_name)
+            .collect();
+        let unique_display_names: BTreeSet<_> = display_names.iter().copied().collect();
+
+        assert_eq!(display_names.len(), unique_display_names.len());
+        assert_eq!(listed, display_names);
+    }
+
+    #[test]
+    fn test_dialect_config_description_uses_metadata() {
+        use crate::config::{ConfigOptions, Dialect, SQL_PARSER_DIALECT_CONFIG_KEY};
+
+        let description = ConfigOptions::default()
+            .entries()
+            .into_iter()
+            .find(|entry| entry.key == SQL_PARSER_DIALECT_CONFIG_KEY)
+            .unwrap()
+            .description;
+
+        assert!(description.contains(Dialect::available()));
+    }
+
+    #[test]
+    fn test_invalid_dialect_error_lists_available_dialects() {
+        use crate::config::Dialect;
+        use std::str::FromStr;
+
+        let error = Dialect::from_str("notadialect").unwrap_err().to_string();
+
+        assert!(error.contains("Invalid Dialect: notadialect"));
+        assert!(error.contains(Dialect::available()));
     }
 
     #[test]

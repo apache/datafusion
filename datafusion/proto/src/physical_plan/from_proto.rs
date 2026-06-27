@@ -64,9 +64,7 @@ use super::{
 use crate::convert::TryFromProto;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::{convert_required, convert_required_proto, protobuf};
-use datafusion_physical_expr::expressions::{
-    DynamicFilterInner, DynamicFilterPhysicalExpr,
-};
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 
 /// Parses a physical sort expression from a protobuf.
 ///
@@ -303,41 +301,7 @@ pub fn parse_physical_expr_with_converter(
         ExprType::NotExpr(_) => NotExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Negative(_) => NegativeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::InList(_) => InListExpr::try_from_proto(proto, &decode_ctx)?,
-        ExprType::Case(e) => Arc::new(CaseExpr::try_new(
-            e.expr
-                .as_ref()
-                .map(|e| {
-                    proto_converter.proto_to_physical_expr(e.as_ref(), input_schema, ctx)
-                })
-                .transpose()?,
-            e.when_then_expr
-                .iter()
-                .map(|e| {
-                    Ok((
-                        parse_required_physical_expr(
-                            e.when_expr.as_ref(),
-                            ctx,
-                            "when_expr",
-                            input_schema,
-                            proto_converter,
-                        )?,
-                        parse_required_physical_expr(
-                            e.then_expr.as_ref(),
-                            ctx,
-                            "then_expr",
-                            input_schema,
-                            proto_converter,
-                        )?,
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?,
-            e.else_expr
-                .as_ref()
-                .map(|e| {
-                    proto_converter.proto_to_physical_expr(e.as_ref(), input_schema, ctx)
-                })
-                .transpose()?,
-        )?),
+        ExprType::Case(_) => CaseExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Cast(_) => CastExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::TryCast(_) => TryCastExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::ScalarUdf(e) => {
@@ -393,52 +357,8 @@ pub fn parse_physical_expr_with_converter(
                 results.clone(),
             ))
         }
-        ExprType::DynamicFilter(dynamic_filter) => {
-            let children = parse_physical_exprs(
-                &dynamic_filter.children,
-                ctx,
-                input_schema,
-                proto_converter,
-            )?;
-
-            let remapped_children = if !dynamic_filter.remapped_children.is_empty() {
-                Some(parse_physical_exprs(
-                    &dynamic_filter.remapped_children,
-                    ctx,
-                    input_schema,
-                    proto_converter,
-                )?)
-            } else {
-                None
-            };
-
-            let inner_expr = parse_required_physical_expr(
-                dynamic_filter.inner_expr.as_deref(),
-                ctx,
-                "inner_expr",
-                input_schema,
-                proto_converter,
-            )?;
-
-            let expression_id = proto.expr_id.ok_or_else(|| {
-                proto_error(
-                    "DynamicFilterPhysicalExpr requires PhysicalExprNode.expr_id \
-                     to be set by the serializer",
-                )
-            })?;
-
-            let base_filter: Arc<dyn PhysicalExpr> =
-                Arc::new(DynamicFilterPhysicalExpr::from_parts(
-                    children,
-                    remapped_children,
-                    DynamicFilterInner {
-                        expression_id,
-                        generation: dynamic_filter.generation,
-                        expr: inner_expr,
-                        is_complete: dynamic_filter.is_complete,
-                    },
-                ));
-            base_filter
+        ExprType::DynamicFilter(_) => {
+            DynamicFilterPhysicalExpr::try_from_proto(proto, &decode_ctx)?
         }
         ExprType::Extension(extension) => {
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
@@ -452,18 +372,6 @@ pub fn parse_physical_expr_with_converter(
     };
 
     Ok(pexpr)
-}
-
-fn parse_required_physical_expr(
-    expr: Option<&protobuf::PhysicalExprNode>,
-    ctx: &PhysicalPlanDecodeContext<'_>,
-    field: &str,
-    input_schema: &Schema,
-    proto_converter: &dyn PhysicalProtoConverterExtension,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.map(|e| proto_converter.proto_to_physical_expr(e, input_schema, ctx))
-        .transpose()?
-        .ok_or_else(|| internal_datafusion_err!("Missing required field {field:?}"))
 }
 
 pub fn parse_protobuf_hash_partitioning(
@@ -644,6 +552,12 @@ pub fn parse_protobuf_file_scan_config(
         )?;
         output_ordering.extend(LexOrdering::new(sort_exprs));
     }
+    let output_partitioning = parse_protobuf_partitioning(
+        proto.output_partitioning.as_ref(),
+        ctx,
+        &schema,
+        proto_converter,
+    )?;
 
     // Parse projection expressions if present and apply to file source
     let file_source = if let Some(proto_projection_exprs) = &proto.projection_exprs {
@@ -672,15 +586,18 @@ pub fn parse_protobuf_file_scan_config(
         file_source
     };
 
-    let config = FileScanConfigBuilder::new(object_store_url, file_source)
+    let mut config_builder = FileScanConfigBuilder::new(object_store_url, file_source)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_output_ordering(output_ordering)
-        .with_batch_size(proto.batch_size.map(|s| s as usize))
-        .with_partitioned_by_file_group(proto.partitioned_by_file_group.unwrap_or(false))
-        .build();
+        .with_output_partitioning(output_partitioning)
+        .with_batch_size(proto.batch_size.map(|s| s as usize));
+    if proto.partitioned_by_file_group.unwrap_or(false) {
+        config_builder = config_builder.with_partitioned_by_file_group(true);
+    }
+    let config = config_builder.build();
     Ok(config)
 }
 

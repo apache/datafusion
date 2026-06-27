@@ -3292,6 +3292,7 @@ _Alias of [current_date](#current_date)._
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
 - [array_subtract](#array_subtract)
+- [array_sum](#array_sum)
 - [array_to_string](#array_to_string)
 - [array_transform](#array_transform)
 - [array_union](#array_union)
@@ -3351,6 +3352,7 @@ _Alias of [current_date](#current_date)._
 - [list_slice](#list_slice)
 - [list_sort](#list_sort)
 - [list_subtract](#list_subtract)
+- [list_sum](#list_sum)
 - [list_to_string](#list_to_string)
 - [list_transform](#list_transform)
 - [list_union](#list_union)
@@ -4572,6 +4574,33 @@ array_subtract(array1, array2)
 
 - list_subtract
 
+### `array_sum`
+
+Returns the sum of the elements of the input array, computed as `array[0] + array[1] + ...`. NULL elements are skipped (per SQL aggregate convention). Returns NULL if the input row is NULL, every element is NULL, or the array is empty.
+
+```sql
+array_sum(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_sum([1.0, 2.0, 3.0]);
++----------------------------+
+| array_sum(List([1.0,2.0,3.0])) |
++----------------------------+
+| 6.0                        |
++----------------------------+
+```
+
+#### Aliases
+
+- list_sum
+
 ### `array_to_string`
 
 Converts each element to its text representation.
@@ -5051,6 +5080,10 @@ _Alias of [array_sort](#array_sort)._
 ### `list_subtract`
 
 _Alias of [array_subtract](#array_subtract)._
+
+### `list_sum`
+
+_Alias of [array_sum](#array_sum)._
 
 ### `list_to_string`
 
@@ -5669,7 +5702,9 @@ union_tag(union_expression)
 - [arrow_try_cast](#arrow_try_cast)
 - [arrow_typeof](#arrow_typeof)
 - [cast_to_type](#cast_to_type)
+- [file_row_index](#file_row_index)
 - [get_field](#get_field)
+- [input_file_name](#input_file_name)
 - [try_cast_to_type](#try_cast_to_type)
 - [version](#version)
 - [with_metadata](#with_metadata)
@@ -5852,6 +5887,27 @@ cast_to_type(expression, reference)
 +-----+
 ```
 
+### `file_row_index`
+
+Returns the zero-based row offset within the source file
+that produced the current row.
+
+The value is scoped to one file, so rows from different files in the same scan
+can have the same row index. This function is intended to be rewritten at
+file-scan time. If the input file is not known (for example, if this function
+is evaluated outside a file scan, or was not pushed down into one), direct
+evaluation returns an error.
+
+```sql
+file_row_index()
+```
+
+#### Example
+
+```sql
+SELECT file_row_index() FROM t;
+```
+
 ### `get_field`
 
 Returns a field within a map or a struct with the given key.
@@ -5902,6 +5958,26 @@ get_field(expression, field_name[, field_name2, ...])
 +--------+
 | 42     |
 +--------+
+```
+
+### `input_file_name`
+
+Returns the path of the input file that produced the current row.
+
+Note: file paths/URIs may be sensitive metadata depending on your environment.
+
+This function is intended to be rewritten at file-scan time (when the file is
+known). If the input file is not known (for example, if this function is
+evaluated outside a file scan, or was not pushed down into one), direct evaluation returns an error.
+
+```sql
+input_file_name()
+```
+
+#### Example
+
+```sql
+SELECT input_file_name() FROM t;
 ```
 
 ### `try_cast_to_type`
