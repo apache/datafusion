@@ -140,6 +140,11 @@ required-features = ["test_utils"]
 
 [[bench]]
 harness = false
+name = "hash_aggregate_output_coalescer"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
 name = "hash_group_by_reuse"
 
 [[bench]]
