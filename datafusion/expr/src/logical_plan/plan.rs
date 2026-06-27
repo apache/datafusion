@@ -206,6 +206,97 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # Ok(())
 /// # }
 /// ```
+///
+/// You can also use a [`TreeNodeVisitor`] for structured inspection with
+/// state tracking. The visitor's `f_down` is called top-down and `f_up` is
+/// called bottom-up:
+///
+/// [`TreeNodeVisitor`]: datafusion_common::tree_node::TreeNodeVisitor
+///
+/// ```
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_expr::{col, lit, LogicalPlan, table_scan};
+/// # use datafusion_common::tree_node::{TreeNodeRecursion, TreeNode, TreeNodeVisitor};
+/// # use datafusion_common::Result;
+/// # fn employee_schema() -> Schema {
+/// #    Schema::new(vec![
+/// #           Field::new("name", DataType::Utf8, false),
+/// #           Field::new("salary", DataType::Int32, false),
+/// #       ])
+/// #   }
+/// # fn main() -> Result<()> {
+/// let plan = table_scan(Some("employee"), &employee_schema(), None)?
+///  .filter(col("salary").gt(lit(1000)))?
+///  .project(vec![col("name")])?
+///  .build()?;
+///
+/// /// A visitor that counts the number of nodes in the plan
+/// struct NodeCounter { count: usize }
+///
+/// impl<'n> TreeNodeVisitor<'n> for NodeCounter {
+///     type Node = LogicalPlan;
+///     fn f_down(&mut self, _node: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
+///         self.count += 1;
+///         Ok(TreeNodeRecursion::Continue)
+///     }
+/// }
+///
+/// let mut counter = NodeCounter { count: 0 };
+/// plan.visit(&mut counter)?;
+/// assert_eq!(counter.count, 3); // Projection, Filter, TableScan
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Similarly, use a [`TreeNodeRewriter`] for structured rewrites with state
+/// tracking:
+///
+/// [`TreeNodeRewriter`]: datafusion_common::tree_node::TreeNodeRewriter
+///
+/// ```
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_expr::{col, lit, Expr, Filter, LogicalPlan, table_scan};
+/// # use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+/// # use datafusion_common::{Column, Result};
+/// # fn employee_schema() -> Schema {
+/// #    Schema::new(vec![
+/// #           Field::new("name", DataType::Utf8, false),
+/// #           Field::new("salary", DataType::Int32, false),
+/// #       ])
+/// #   }
+/// # fn main() -> Result<()> {
+/// let plan = table_scan(Some("employee"), &employee_schema(), None)?
+///  .filter(col("salary").gt(lit(1000)))?
+///  .project(vec![col("name")])?
+///  .build()?;
+///
+/// /// A rewriter that removes all Filter nodes from the plan
+/// struct FilterRemover;
+///
+/// impl TreeNodeRewriter for FilterRemover {
+///     type Node = LogicalPlan;
+///     fn f_down(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+///         if let LogicalPlan::Filter(filter) = node {
+///             // Replace the filter with its input (effectively removing it)
+///             let input = filter.input.as_ref().clone();
+///             Ok(Transformed::yes(input))
+///         } else {
+///             Ok(Transformed::no(node))
+///         }
+///     }
+/// }
+///
+/// let result = plan.rewrite(&mut FilterRemover)?;
+/// assert!(result.transformed);
+/// // The filter has been removed
+/// assert_eq!(result.data.display_indent().to_string(),
+/// "Projection: employee.name\
+/// \n  TableScan: employee");
+/// # Ok(())
+/// # }
+/// ```
+///
+/// For more examples, see `datafusion-examples/examples/query_planning/plan_walk.rs`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
