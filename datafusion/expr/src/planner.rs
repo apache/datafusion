@@ -279,6 +279,32 @@ pub trait ExprPlanner: Debug + Send + Sync {
     fn plan_window(&self, expr: RawWindowExpr) -> Result<PlannerResult<RawWindowExpr>> {
         Ok(PlannerResult::Original(expr))
     }
+
+    /// Plans an any expression, such as `needle <compare_op> ANY(haystack)`
+    ///
+    /// Returns original expression arguments if not possible
+    fn plan_any(&self, args: RawAnyAllExpr) -> Result<PlannerResult<RawAnyAllExpr>> {
+        Ok(PlannerResult::Original(args))
+    }
+
+    /// Plans an any expression, such as `needle <compare_op> ALL(haystack)`
+    ///
+    /// Returns original expression arguments if not possible
+    fn plan_all(&self, args: RawAnyAllExpr) -> Result<PlannerResult<RawAnyAllExpr>> {
+        Ok(PlannerResult::Original(args))
+    }
+}
+
+/// Used to represent `<needle> <op> ANY(<haystack>)` and `<needle> <op> ALL(<haystack>)`,
+/// such as `1 <> ANY([1, 2, 3])`.
+#[derive(Debug, Clone)]
+pub struct RawAnyAllExpr {
+    #[cfg(not(feature = "sql"))]
+    pub op: datafusion_expr_common::operator::Operator,
+    #[cfg(feature = "sql")]
+    pub op: sqlparser::ast::BinaryOperator,
+    pub needle: Expr,
+    pub haystack: Expr,
 }
 
 /// An operator with two arguments to plan
