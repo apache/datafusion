@@ -274,6 +274,10 @@ name = "sort"
 
 [[bench]]
 harness = false
+name = "sort_indices"
+
+[[bench]]
+harness = false
 name = "topk_aggregate"
 
 [[bench]]

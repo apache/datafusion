@@ -18,9 +18,9 @@
 use crate::SendableRecordBatchStream;
 use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
 use crate::{PhysicalExpr, PhysicalSortExpr};
-use arrow::array::{Array, UInt32Array};
-use arrow::compute::take_record_batch;
-use arrow::datatypes::Schema;
+use arrow::array::{Array, ArrayRef, UInt32Array};
+use arrow::compute::{SortColumn, take_record_batch};
+use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow_ord::sort::lexsort_to_indices;
@@ -281,6 +281,67 @@ impl<T: CursorArray> PartitionedStream for FieldCursorStream<T> {
     }
 }
 
+/// Returns true when sorting `sort_columns` via the Arrow row format is
+/// expected to beat [`lexsort_to_indices`].
+///
+/// Benchmarks (`sort_indices` bench) show the row format wins for multi-column
+/// keys whose **leading** column is an expensive (variable-length or
+/// dictionary) comparison — there `lexsort`'s column-by-column comparator pays
+/// a heavy per-comparison cost. For a single column, or a cheap primitive
+/// leading column where `lexsort` short-circuits most comparisons on the first
+/// column, `lexsort` wins, so those keep the lexicographic path.
+fn use_row_format_sort(sort_columns: &[SortColumn]) -> bool {
+    sort_columns.len() > 1
+        && matches!(
+            sort_columns[0].values.data_type(),
+            DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView
+                | DataType::FixedSizeBinary(_)
+                | DataType::Dictionary(_, _)
+        )
+}
+
+/// Compute the sorted permutation of row indices for `sort_columns`.
+///
+/// For multi-column keys with an expensive leading column (see
+/// [`use_row_format_sort`]) this encodes the key columns once into the Arrow
+/// row format (`RowConverter`) and argsorts the row indices with a cheap
+/// `memcmp`, avoiding the per-comparison column-by-column dynamic dispatch of
+/// [`lexsort_to_indices`]. The larger the run, the more the one-off encode is
+/// amortized. Everything else (single column, primitive-leading keys, and
+/// limited/`fetch` sorts which want a partial sort) uses [`lexsort_to_indices`].
+pub(crate) fn sorted_indices(
+    sort_columns: &[SortColumn],
+    fetch: Option<usize>,
+) -> Result<UInt32Array> {
+    if fetch.is_some() || !use_row_format_sort(sort_columns) {
+        return Ok(lexsort_to_indices(sort_columns, fetch)?);
+    }
+
+    let fields = sort_columns
+        .iter()
+        .map(|c| {
+            SortField::new_with_options(
+                c.values.data_type().clone(),
+                c.options.unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let converter = RowConverter::new(fields)?;
+    let arrays = sort_columns
+        .iter()
+        .map(|c| Arc::clone(&c.values))
+        .collect::<Vec<ArrayRef>>();
+    let rows = converter.convert_columns(&arrays)?;
+    let mut indices: Vec<u32> = (0..rows.num_rows() as u32).collect();
+    indices.sort_unstable_by(|&a, &b| rows.row(a as usize).cmp(&rows.row(b as usize)));
+    Ok(UInt32Array::from(indices))
+}
+
 /// A lazy, memory-efficient sort iterator used as a fallback during aggregate
 /// spill when there is not enough memory for an eager sort (which requires ~2x
 /// peak memory to hold both the unsorted and sorted copies simultaneously).
@@ -339,9 +400,9 @@ impl Iterator for IncrementalSortIterator {
                     Err(e) => return Some(Err(e)),
                 };
 
-                let indices = match lexsort_to_indices(&sort_columns, None) {
+                let indices = match sorted_indices(&sort_columns, None) {
                     Ok(indices) => indices,
-                    Err(e) => return Some(Err(e.into())),
+                    Err(e) => return Some(Err(e)),
                 };
                 self.indices = Some(indices);
 
