@@ -206,7 +206,7 @@ where
     if let Some(nulls_ref) = nulls.as_ref() {
         for i in 0..len {
             if nulls_ref.is_null(i) {
-                builder.append_placeholder();
+                builder.try_append_placeholder()?;
                 continue;
             }
 
@@ -214,7 +214,7 @@ where
             let string = unsafe { string_array.value_unchecked(i) };
             let from = unsafe { from_array.value_unchecked(i) };
             let to = unsafe { to_array.value_unchecked(i) };
-            append_translated_row(&mut builder, string, from, to, &mut from_map);
+            append_translated_row(&mut builder, string, from, to, &mut from_map)?;
         }
     } else {
         for i in 0..len {
@@ -222,7 +222,7 @@ where
             let string = unsafe { string_array.value_unchecked(i) };
             let from = unsafe { from_array.value_unchecked(i) };
             let to = unsafe { to_array.value_unchecked(i) };
-            append_translated_row(&mut builder, string, from, to, &mut from_map);
+            append_translated_row(&mut builder, string, from, to, &mut from_map)?;
         }
     }
 
@@ -236,10 +236,9 @@ fn append_translated_row<B: BulkNullStringArrayBuilder>(
     from: &str,
     to: &str,
     from_map: &mut HashMap<char, Option<char>>,
-) {
+) -> Result<()> {
     if let Some(ascii_table) = build_ascii_translate_table(from, to) {
-        append_translated_ascii(builder, string, &ascii_table);
-        return;
+        return append_translated_ascii(builder, string, &ascii_table);
     }
 
     from_map.clear();
@@ -249,7 +248,7 @@ fn append_translated_row<B: BulkNullStringArrayBuilder>(
         from_map.entry(c).or_insert(replacement);
     }
 
-    builder.append_with(|w| write_translated_chars(w, string, from_map));
+    builder.try_append_with(|w| write_translated_chars(w, string, from_map))
 }
 
 #[inline]
@@ -339,7 +338,7 @@ fn append_translated_ascii<B: BulkNullStringArrayBuilder>(
     builder: &mut B,
     input: &str,
     table: &AsciiTranslateTable,
-) {
+) -> Result<()> {
     // Fast path: equal-length byte-to-byte map when no deletions.
     if !table.has_delete {
         // SAFETY: ASCII source bytes map to ASCII replacements; non-ASCII
@@ -347,10 +346,10 @@ fn append_translated_ascii<B: BulkNullStringArrayBuilder>(
         // pass through unchanged. Output length equals input length and
         // remains valid UTF-8.
         unsafe {
-            builder.append_byte_map(input.as_bytes(), |b| table.map[b as usize]);
+            builder.try_append_byte_map(input.as_bytes(), |b| table.map[b as usize])
         }
     } else {
-        builder.append_with(|w| write_translated_ascii(w, input, table));
+        builder.try_append_with(|w| write_translated_ascii(w, input, table))
     }
 }
 
@@ -398,19 +397,19 @@ where
     if let Some(nulls_ref) = nulls.as_ref() {
         for i in 0..len {
             if nulls_ref.is_null(i) {
-                builder.append_placeholder();
+                builder.try_append_placeholder()?;
                 continue;
             }
 
             // SAFETY: input null buffer is non-null at i.
             let s = unsafe { string_array.value_unchecked(i) };
-            apply_translate_table(&mut builder, s, table);
+            apply_translate_table(&mut builder, s, table)?;
         }
     } else {
         for i in 0..len {
             // SAFETY: no null buffer means every index is valid.
             let s = unsafe { string_array.value_unchecked(i) };
-            apply_translate_table(&mut builder, s, table);
+            apply_translate_table(&mut builder, s, table)?;
         }
     }
 
@@ -422,11 +421,11 @@ fn apply_translate_table<B: BulkNullStringArrayBuilder>(
     builder: &mut B,
     input: &str,
     table: &TranslateTable,
-) {
+) -> Result<()> {
     match table {
         TranslateTable::Byte(t) => append_translated_ascii(builder, input, t),
         TranslateTable::Char(m) => {
-            builder.append_with(|w| write_translated_chars(w, input, m))
+            builder.try_append_with(|w| write_translated_chars(w, input, m))
         }
     }
 }

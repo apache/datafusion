@@ -431,7 +431,7 @@ fn generic_string_substr_copy<T: OffsetSizeTrait>(
 
     for i in 0..len {
         if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            result_builder.append_placeholder();
+            result_builder.try_append_placeholder()?;
             continue;
         }
 
@@ -440,7 +440,7 @@ fn generic_string_substr_copy<T: OffsetSizeTrait>(
         let count = count_array_opt.map(|a| a.value(i));
 
         let (byte_start, byte_end) = get_true_start_end(string, start, count, is_ascii)?;
-        result_builder.append_value(&string[byte_start..byte_end]);
+        result_builder.try_append_value(&string[byte_start..byte_end])?;
     }
 
     Ok(Arc::new(result_builder.finish(nulls)?) as ArrayRef)

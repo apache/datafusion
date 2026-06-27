@@ -318,7 +318,7 @@ where
     if let Some(ref n) = nulls {
         for i in 0..string_array.len() {
             if n.is_null(i) {
-                builder.append_placeholder();
+                builder.try_append_placeholder()?;
                 continue;
             }
             // SAFETY: index `i` in both arrays is valid
@@ -327,9 +327,11 @@ where
             if count > 0 {
                 repeat_to_buffer(&mut buffer, string, count as usize);
                 // SAFETY: buffer contains valid UTF-8 since we only copy from a valid &str
-                builder.append_value(unsafe { std::str::from_utf8_unchecked(&buffer) });
+                builder.try_append_value(unsafe {
+                    std::str::from_utf8_unchecked(&buffer)
+                })?;
             } else {
-                builder.append_value("");
+                builder.try_append_value("")?;
             }
         }
     } else {
@@ -340,9 +342,11 @@ where
             if count > 0 {
                 repeat_to_buffer(&mut buffer, string, count as usize);
                 // SAFETY: buffer contains valid UTF-8 since we only copy from a valid &str
-                builder.append_value(unsafe { std::str::from_utf8_unchecked(&buffer) });
+                builder.try_append_value(unsafe {
+                    std::str::from_utf8_unchecked(&buffer)
+                })?;
             } else {
-                builder.append_value("");
+                builder.try_append_value("")?;
             }
         }
     }

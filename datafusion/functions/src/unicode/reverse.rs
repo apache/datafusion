@@ -136,18 +136,18 @@ where
     if let Some(ref n) = nulls {
         for i in 0..item_len {
             if n.is_null(i) {
-                array_builder.append_placeholder();
+                array_builder.try_append_placeholder()?;
             } else {
                 // SAFETY: `n.is_null(i)` was false in the branch above.
                 let s = unsafe { string_array.value_unchecked(i) };
-                append_reversed(s, &mut array_builder, &mut byte_buf, &mut string_buf);
+                append_reversed(s, &mut array_builder, &mut byte_buf, &mut string_buf)?;
             }
         }
     } else {
         for i in 0..item_len {
             // SAFETY: no null buffer means every index is valid.
             let s = unsafe { string_array.value_unchecked(i) };
-            append_reversed(s, &mut array_builder, &mut byte_buf, &mut string_buf);
+            append_reversed(s, &mut array_builder, &mut byte_buf, &mut string_buf)?;
         }
     }
 
@@ -160,20 +160,21 @@ fn append_reversed<B: BulkNullStringArrayBuilder>(
     builder: &mut B,
     byte_buf: &mut Vec<u8>,
     string_buf: &mut String,
-) {
+) -> Result<()> {
     if s.is_ascii() {
         // reverse bytes directly since ASCII characters are single bytes
         byte_buf.extend(s.as_bytes());
         byte_buf.reverse();
         // SAFETY: input was ASCII, so reversed bytes are still valid UTF-8.
         let reversed = unsafe { std::str::from_utf8_unchecked(byte_buf) };
-        builder.append_value(reversed);
+        builder.try_append_value(reversed)?;
         byte_buf.clear();
     } else {
         string_buf.extend(s.chars().rev());
-        builder.append_value(string_buf);
+        builder.try_append_value(string_buf)?;
         string_buf.clear();
     }
+    Ok(())
 }
 
 #[cfg(test)]

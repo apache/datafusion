@@ -378,18 +378,18 @@ where
     if let Some(ref n) = nulls {
         for i in 0..item_len {
             if n.is_null(i) {
-                builder.append_placeholder();
+                builder.try_append_placeholder()?;
             } else {
                 // SAFETY: `n.is_null(i)` was false in the branch above.
                 let s = unsafe { string_array.value_unchecked(i) };
-                builder.append_value(f(s).unwrap_or(""));
+                builder.try_append_value(f(s).unwrap_or(""))?;
             }
         }
     } else {
         for i in 0..item_len {
             // SAFETY: no null buffer means every index is valid.
             let s = unsafe { string_array.value_unchecked(i) };
-            builder.append_value(f(s).unwrap_or(""));
+            builder.try_append_value(f(s).unwrap_or(""))?;
         }
     }
 
@@ -571,7 +571,7 @@ where
     if let Some(ref n) = nulls {
         for i in 0..string_array.len() {
             if n.is_null(i) {
-                builder.append_placeholder();
+                builder.try_append_placeholder()?;
                 continue;
             }
 
@@ -634,7 +634,7 @@ fn append_split_part<B: BulkNullStringArrayBuilder>(
             return exec_err!("field position must not be zero");
         }
     };
-    builder.append_value(result.unwrap_or(""));
+    builder.try_append_value(result.unwrap_or(""))?;
     Ok(())
 }
 

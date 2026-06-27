@@ -425,6 +425,7 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     /// # Panics
     ///
     /// Panics if the cumulative byte length exceeds `O::MAX`.
+    #[allow(dead_code)]
     #[inline]
     pub fn append_value(&mut self, value: &str) {
         self.try_append_value(value)
@@ -435,6 +436,7 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     ///
     /// Note: new call sites that need recoverable overflow handling should
     /// prefer [`Self::try_append_placeholder`].
+    #[allow(dead_code)]
     #[inline]
     pub fn append_placeholder(&mut self) {
         self.try_append_placeholder()
@@ -476,6 +478,7 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     /// # Panics
     ///
     /// Panics if the cumulative byte length exceeds `O::MAX`.
+    #[allow(dead_code)]
     #[inline]
     pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
         // SAFETY: caller upholds this method's UTF-8 contract.
@@ -520,6 +523,7 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     /// # Panics
     ///
     /// Panics if the cumulative byte length exceeds `O::MAX`.
+    #[allow(dead_code)]
     #[inline]
     pub fn append_with<F>(&mut self, f: F)
     where
@@ -735,6 +739,7 @@ impl StringViewArrayBuilder {
     ///
     /// Panics under the same conditions that [`Self::try_append_value`] returns
     /// an error.
+    #[allow(dead_code)]
     #[inline]
     pub fn append_value(&mut self, value: &str) {
         self.try_append_value(value)
@@ -1069,15 +1074,15 @@ pub(crate) trait BulkNullStringArrayBuilder {
 
     /// Append `value` as the next row.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the resulting array would exceed the per-implementation
-    /// size limit. See the inherent method on each builder for specifics.
-    fn append_value(&mut self, value: &str);
+    /// Returns an error if the resulting array would exceed the
+    /// per-implementation size limit.
+    fn try_append_value(&mut self, value: &str) -> Result<()>;
 
     /// Append an empty placeholder row. The corresponding slot MUST be masked
     /// as null by the null buffer passed to [`finish`](Self::finish).
-    fn append_placeholder(&mut self);
+    fn try_append_placeholder(&mut self) -> Result<()>;
 
     /// Append a row whose bytes are produced by `f` calling write methods on
     /// the supplied [`StringWriter`].
@@ -1086,10 +1091,10 @@ pub(crate) trait BulkNullStringArrayBuilder {
     /// `StringWriter` zero or more times. Zero calls produces a row containing
     /// the empty string.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// See [`append_value`](Self::append_value).
-    fn append_with<F>(&mut self, f: F)
+    /// See [`try_append_value`](Self::try_append_value).
+    fn try_append_with<F>(&mut self, f: F) -> Result<()>
     where
         F: for<'a> FnOnce(&mut Self::Writer<'a>);
 
@@ -1098,7 +1103,7 @@ pub(crate) trait BulkNullStringArrayBuilder {
     ///
     /// Because the output length is known up front and the inner loop is
     /// straight-line, this is more efficient than
-    /// [`append_with`](Self::append_with) for byte-to-byte mappings and
+    /// [`try_append_with`](Self::try_append_with) for byte-to-byte mappings and
     /// autovectorizes well.
     ///
     /// # Safety
@@ -1106,10 +1111,14 @@ pub(crate) trait BulkNullStringArrayBuilder {
     /// The bytes produced by applying `map` to each byte of `src`, in order,
     /// must form valid UTF-8.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// See [`append_value`](Self::append_value).
-    unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F);
+    /// See [`try_append_value`](Self::try_append_value).
+    unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
+        &mut self,
+        src: &[u8],
+        map: F,
+    ) -> Result<()>;
 
     /// Finalize into a concrete array using the caller-supplied null buffer.
     ///
@@ -1124,24 +1133,28 @@ impl<O: OffsetSizeTrait> BulkNullStringArrayBuilder for GenericStringArrayBuilde
     type Writer<'a> = GenericStringWriter<'a>;
 
     #[inline]
-    fn append_value(&mut self, value: &str) {
-        GenericStringArrayBuilder::<O>::append_value(self, value)
+    fn try_append_value(&mut self, value: &str) -> Result<()> {
+        GenericStringArrayBuilder::<O>::try_append_value(self, value)
     }
     #[inline]
-    fn append_placeholder(&mut self) {
-        GenericStringArrayBuilder::<O>::append_placeholder(self)
+    fn try_append_placeholder(&mut self) -> Result<()> {
+        GenericStringArrayBuilder::<O>::try_append_placeholder(self)
     }
     #[inline]
-    fn append_with<F>(&mut self, f: F)
+    fn try_append_with<F>(&mut self, f: F) -> Result<()>
     where
         F: for<'a> FnOnce(&mut Self::Writer<'a>),
     {
-        GenericStringArrayBuilder::<O>::append_with(self, f)
+        GenericStringArrayBuilder::<O>::try_append_with(self, f)
     }
     #[inline]
-    unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
+    unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
+        &mut self,
+        src: &[u8],
+        map: F,
+    ) -> Result<()> {
         // SAFETY: contract forwarded.
-        unsafe { GenericStringArrayBuilder::<O>::append_byte_map(self, src, map) }
+        unsafe { GenericStringArrayBuilder::<O>::try_append_byte_map(self, src, map) }
     }
     fn finish(self, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
         Ok(Arc::new(GenericStringArrayBuilder::<O>::finish(
@@ -1154,24 +1167,30 @@ impl BulkNullStringArrayBuilder for StringViewArrayBuilder {
     type Writer<'a> = StringViewWriter<'a>;
 
     #[inline]
-    fn append_value(&mut self, value: &str) {
-        StringViewArrayBuilder::append_value(self, value)
+    fn try_append_value(&mut self, value: &str) -> Result<()> {
+        StringViewArrayBuilder::try_append_value(self, value)
     }
     #[inline]
-    fn append_placeholder(&mut self) {
-        StringViewArrayBuilder::append_placeholder(self)
+    fn try_append_placeholder(&mut self) -> Result<()> {
+        StringViewArrayBuilder::try_append_placeholder(self)
     }
     #[inline]
-    fn append_with<F>(&mut self, f: F)
+    fn try_append_with<F>(&mut self, f: F) -> Result<()>
     where
         F: for<'a> FnOnce(&mut Self::Writer<'a>),
     {
-        StringViewArrayBuilder::append_with(self, f)
+        StringViewArrayBuilder::append_with(self, f);
+        Ok(())
     }
     #[inline]
-    unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
+    unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
+        &mut self,
+        src: &[u8],
+        map: F,
+    ) -> Result<()> {
         // SAFETY: contract forwarded.
-        unsafe { StringViewArrayBuilder::append_byte_map(self, src, map) }
+        unsafe { StringViewArrayBuilder::append_byte_map(self, src, map) };
+        Ok(())
     }
     fn finish(self, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
         Ok(Arc::new(StringViewArrayBuilder::finish(self, nulls)?))
@@ -1491,8 +1510,8 @@ mod tests {
     where
         B: BulkNullStringArrayBuilder,
     {
-        builder.append_value("a");
-        builder.append_value("b");
+        builder.try_append_value("a").unwrap();
+        builder.try_append_value("b").unwrap();
         let nulls = NullBuffer::from(vec![true, false, true]);
         assert!(builder.finish(Some(nulls)).is_err());
     }

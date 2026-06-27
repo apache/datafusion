@@ -175,12 +175,11 @@ fn apply_overlay<B: BulkNullStringArrayBuilder>(
         return exec_err!("overlay start position must be at least 1: {start_pos}");
     }
     let (prefix_end, suffix_start) = overlay_bounds(string, start_pos, replace_len);
-    builder.append_with(|w| {
+    builder.try_append_with(|w| {
         w.write_str(&string[..prefix_end]);
         w.write_str(characters);
         w.write_str(&string[suffix_start..]);
-    });
-    Ok(())
+    })
 }
 
 #[inline]
@@ -276,7 +275,7 @@ where
     if let Some(nulls_ref) = nulls.as_ref() {
         for i in 0..len {
             if nulls_ref.is_null(i) {
-                builder.append_placeholder();
+                builder.try_append_placeholder()?;
                 continue;
             }
             // SAFETY: `i < len`, and null bitmap check implies not-null

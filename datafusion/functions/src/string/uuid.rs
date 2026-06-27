@@ -98,7 +98,7 @@ impl ScalarUDFImpl for UuidFunc {
             *x = *x & 0xFFFFFFFFFFFF4FFFBFFFFFFFFFFFFFFF | 0x40008000000000000000;
             let uuid = Uuid::from_u128(*x);
             let fmt = uuid::fmt::Hyphenated::from_uuid(uuid);
-            builder.append_value(fmt.encode_lower(&mut buffer));
+            builder.try_append_value(fmt.encode_lower(&mut buffer))?;
         }
 
         Ok(ColumnarValue::Array(Arc::new(builder.finish(None)?)))
