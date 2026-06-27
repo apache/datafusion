@@ -19,7 +19,9 @@
 
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 
+use arrow::array::UInt32Builder;
 use arrow::buffer::NullBuffer;
+use arrow::compute::take;
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
@@ -480,6 +482,44 @@ impl PartitionEvaluator for NthValueEvaluator {
     fn uses_window_frame(&self) -> bool {
         true
     }
+
+    fn supports_evaluate_all_with_frame_ranges(&self) -> bool {
+        // The IGNORE NULLS path walks the null bitmap per row (see
+        // `valid_index_with_nulls`) and stays on the scalar `evaluate` path.
+        // The default (respect NULLs) case is a pure positional gather that we
+        // vectorize with a single `take`.
+        !self.ignore_nulls
+    }
+
+    fn evaluate_all_with_frame_ranges(
+        &mut self,
+        values: &[ArrayRef],
+        ranges: &[Range<usize>],
+    ) -> Result<ArrayRef> {
+        // A finalized (constant) result fills the whole column in one shot.
+        if let Some(result) = &self.state.finalized_result {
+            return result.to_array_of_size(ranges.len());
+        }
+        // FIRST_VALUE, LAST_VALUE and NTH_VALUE take a single column.
+        let arr = &values[0];
+        let mut indices = UInt32Builder::with_capacity(ranges.len());
+        for range in ranges {
+            // Empty frame -> NULL, matching the `n_range == 0` guard in `evaluate`.
+            let index = if range.end == range.start {
+                None
+            } else {
+                self.valid_index(arr, range)
+            };
+            match index {
+                Some(index) => indices.append_value(index as u32),
+                None => indices.append_null(),
+            }
+        }
+        let indices = indices.finish();
+        // `take` yields NULL for the NULL index slots, matching the `None`
+        // branch of `evaluate`.
+        Ok(take(arr.as_ref(), &indices, None)?)
+    }
 }
 
 impl NthValueEvaluator {
@@ -667,6 +707,63 @@ mod tests {
                 Some(-2),
             ]),
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn evaluate_all_with_frame_ranges_matches_per_row() -> Result<()> {
+        // Array with nulls so the gather-index null handling is exercised.
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(3),
+            Some(4),
+            None,
+            Some(6),
+        ]));
+        let values = vec![arr];
+        // Diverse frames: empty, single, growing, sliding, full.
+        let ranges: Vec<Range<usize>> =
+            vec![0..0, 0..1, 0..3, 2..2, 1..5, 0..6, 3..6, 4..6, 5..6];
+
+        let field: FieldRef = Field::new("f", DataType::Int32, true).into();
+        let col = Arc::new(Column::new("c", 0)) as Arc<dyn PhysicalExpr>;
+        let n2 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
+        let nm1 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(-1)))) as Arc<dyn PhysicalExpr>;
+
+        let cases: Vec<(NthValue, Vec<Arc<dyn PhysicalExpr>>)> = vec![
+            (NthValue::first(), vec![Arc::clone(&col)]),
+            (NthValue::last(), vec![Arc::clone(&col)]),
+            (NthValue::nth(), vec![Arc::clone(&col), Arc::clone(&n2)]),
+            (NthValue::nth(), vec![Arc::clone(&col), Arc::clone(&nm1)]),
+        ];
+
+        for (expr, exprs) in cases {
+            let make_args = || {
+                PartitionEvaluatorArgs::new(
+                    &exprs,
+                    std::slice::from_ref(&field),
+                    false,
+                    false,
+                )
+            };
+            // Per-row reference result.
+            let mut per_row_eval = expr.partition_evaluator(make_args())?;
+            let per_row = ranges
+                .iter()
+                .map(|range| per_row_eval.evaluate(&values, range))
+                .collect::<Result<Vec<_>>>()?;
+            let per_row = ScalarValue::iter_to_array(per_row)?;
+
+            // Vectorized result must match element-for-element (including NULLs).
+            let mut vectorized_eval = expr.partition_evaluator(make_args())?;
+            let vectorized =
+                vectorized_eval.evaluate_all_with_frame_ranges(&values, &ranges)?;
+
+            assert_eq!(as_int32_array(&per_row)?, as_int32_array(&vectorized)?);
+        }
         Ok(())
     }
 

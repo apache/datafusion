@@ -117,7 +117,6 @@ impl WindowExpr for StandardWindowExpr {
         let num_rows = batch.num_rows();
         if evaluator.uses_window_frame() {
             let sort_options = self.order_by.iter().map(|o| o.options).collect();
-            let mut row_wise_results = vec![];
 
             let mut values = self.evaluate_args(batch)?;
             let order_bys = get_orderby_values(self.order_by_columns(batch)?);
@@ -128,19 +127,39 @@ impl WindowExpr for StandardWindowExpr {
             let mut window_frame_ctx =
                 WindowFrameContext::new(Arc::clone(&self.window_frame), sort_options);
             let mut last_range = Range { start: 0, end: 0 };
-            // We iterate on each row to calculate window frame range and and window function result
-            for idx in 0..num_rows {
-                let range = window_frame_ctx.calculate_range(
-                    order_bys_ref,
-                    &last_range,
-                    num_rows,
-                    idx,
-                )?;
-                let value = evaluator.evaluate(&values, &range)?;
-                row_wise_results.push(value);
-                last_range = range;
+
+            if evaluator.supports_evaluate_all_with_frame_ranges() {
+                // Compute every frame range up front, then let the evaluator
+                // build the whole output column in one vectorized pass instead
+                // of boxing a `ScalarValue` per row.
+                let mut ranges = Vec::with_capacity(num_rows);
+                for idx in 0..num_rows {
+                    let range = window_frame_ctx.calculate_range(
+                        order_bys_ref,
+                        &last_range,
+                        num_rows,
+                        idx,
+                    )?;
+                    last_range = range.clone();
+                    ranges.push(range);
+                }
+                evaluator.evaluate_all_with_frame_ranges(&values, &ranges)
+            } else {
+                let mut row_wise_results = vec![];
+                // We iterate on each row to calculate window frame range and and window function result
+                for idx in 0..num_rows {
+                    let range = window_frame_ctx.calculate_range(
+                        order_bys_ref,
+                        &last_range,
+                        num_rows,
+                        idx,
+                    )?;
+                    let value = evaluator.evaluate(&values, &range)?;
+                    row_wise_results.push(value);
+                    last_range = range;
+                }
+                ScalarValue::iter_to_array(row_wise_results)
             }
-            ScalarValue::iter_to_array(row_wise_results)
         } else if evaluator.include_rank() {
             let columns = self.order_by_columns(batch)?;
             let sort_partition_points = evaluate_partition_ranges(num_rows, &columns)?;
