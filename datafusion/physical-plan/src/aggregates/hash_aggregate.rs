@@ -37,7 +37,9 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
-use super::hash_table::{AggregateHashTable, Final, Partial, PartialSkip};
+use super::aggregate_hash_table::{
+    AggregateHashTable, FinalMarker, PartialMarker, PartialSkipMarker,
+};
 use super::skip_partial::SkipAggregationProbe;
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
@@ -131,25 +133,25 @@ pub(crate) struct PartialHashAggregateStream {
     group_values_soft_limit: Option<usize>,
 
     /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
-    /// state for materializing and slicing output batches.
+    /// state for emitting output batches.
     state: Option<PartialHashAggregateState>,
 }
 
 /// States for partial hash aggregation processing.
 enum PartialHashAggregateState {
     ReadingInput {
-        hash_table: AggregateHashTable<Partial>,
+        hash_table: AggregateHashTable<PartialMarker>,
     },
     ProducingOutput {
-        hash_table: AggregateHashTable<Partial>,
+        hash_table: AggregateHashTable<PartialMarker>,
         /// If `None`, partial skip was never triggered and this state will
         /// finish in `Done`. If `Some`, partial skip has triggered and the
         /// stream will move to `SkippingAggregation` after these accumulated
         /// groups are emitted.
-        skip_hash_table: Option<AggregateHashTable<PartialSkip>>,
+        skip_hash_table: Option<AggregateHashTable<PartialSkipMarker>>,
     },
     SkippingAggregation {
-        hash_table: AggregateHashTable<PartialSkip>,
+        hash_table: AggregateHashTable<PartialSkipMarker>,
     },
     Done,
 }
@@ -161,7 +163,7 @@ type PartialHashAggregateStateTransition = ControlFlow<
 >;
 
 impl PartialHashAggregateState {
-    fn hash_table(&self) -> &AggregateHashTable<Partial> {
+    fn hash_table(&self) -> &AggregateHashTable<PartialMarker> {
         match self {
             Self::ReadingInput { hash_table }
             | Self::ProducingOutput { hash_table, .. } => hash_table,
@@ -171,7 +173,7 @@ impl PartialHashAggregateState {
         }
     }
 
-    fn hash_table_mut(&mut self) -> &mut AggregateHashTable<Partial> {
+    fn hash_table_mut(&mut self) -> &mut AggregateHashTable<PartialMarker> {
         match self {
             Self::ReadingInput { hash_table }
             | Self::ProducingOutput { hash_table, .. } => hash_table,
@@ -203,7 +205,7 @@ pub(crate) struct FinalHashAggregateStream {
     group_values_soft_limit: Option<usize>,
 
     /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
-    /// state for materializing and slicing output batches.
+    /// state for emitting output batches.
     state: Option<FinalHashAggregateState>,
 }
 
@@ -212,10 +214,10 @@ pub(crate) struct FinalHashAggregateStream {
 // the future.
 enum FinalHashAggregateState {
     ReadingInput {
-        hash_table: AggregateHashTable<Final>,
+        hash_table: AggregateHashTable<FinalMarker>,
     },
     ProducingOutput {
-        hash_table: AggregateHashTable<Final>,
+        hash_table: AggregateHashTable<FinalMarker>,
     },
     Done,
 }
@@ -227,7 +229,7 @@ type FinalHashAggregateStateTransition = ControlFlow<
 >;
 
 impl FinalHashAggregateState {
-    fn hash_table(&self) -> &AggregateHashTable<Final> {
+    fn hash_table(&self) -> &AggregateHashTable<FinalMarker> {
         match self {
             Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
                 hash_table
@@ -236,7 +238,7 @@ impl FinalHashAggregateState {
         }
     }
 
-    fn hash_table_mut(&mut self) -> &mut AggregateHashTable<Final> {
+    fn hash_table_mut(&mut self) -> &mut AggregateHashTable<FinalMarker> {
         match self {
             Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
                 hash_table
@@ -245,7 +247,7 @@ impl FinalHashAggregateState {
         }
     }
 
-    fn into_hash_table(self) -> AggregateHashTable<Final> {
+    fn into_hash_table(self) -> AggregateHashTable<FinalMarker> {
         match self {
             Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
                 hash_table
@@ -285,7 +287,7 @@ impl PartialHashAggregateStream {
             .with_type(metrics::MetricType::Summary)
             .ratio_metrics("reduction_factor", partition);
 
-        let hash_table = AggregateHashTable::<Partial>::new(
+        let hash_table = AggregateHashTable::<PartialMarker>::new(
             agg,
             partition,
             Arc::clone(&schema),
@@ -332,7 +334,10 @@ impl PartialHashAggregateStream {
     }
 
     /// See comments in [`Self::group_values_soft_limit`] for details.
-    fn hit_soft_group_limit(&self, hash_table: &AggregateHashTable<Partial>) -> bool {
+    fn hit_soft_group_limit(
+        &self,
+        hash_table: &AggregateHashTable<PartialMarker>,
+    ) -> bool {
         self.group_values_soft_limit
             .is_some_and(|limit| limit <= hash_table.building_group_count())
     }
@@ -354,7 +359,7 @@ impl PartialHashAggregateStream {
 
     fn start_output(
         &mut self,
-        hash_table: &mut AggregateHashTable<Partial>,
+        hash_table: &mut AggregateHashTable<PartialMarker>,
         close_input: bool,
     ) -> Result<()> {
         if close_input {
@@ -757,7 +762,7 @@ impl FinalHashAggregateStream {
         // Preserve the existing aggregate metric surface for this plan node.
         let _spill_metrics = SpillMetrics::new(&agg.metrics, partition);
 
-        let hash_table = AggregateHashTable::<Final>::new(
+        let hash_table = AggregateHashTable::<FinalMarker>::new(
             agg,
             partition,
             Arc::clone(&schema),
@@ -779,12 +784,15 @@ impl FinalHashAggregateStream {
     }
 
     /// See comments in [`Self::group_values_soft_limit`] for details.
-    fn hit_soft_group_limit(&self, hash_table: &AggregateHashTable<Final>) -> bool {
+    fn hit_soft_group_limit(&self, hash_table: &AggregateHashTable<FinalMarker>) -> bool {
         self.group_values_soft_limit
             .is_some_and(|limit| limit <= hash_table.building_group_count())
     }
 
-    fn start_output(&mut self, hash_table: &mut AggregateHashTable<Final>) -> Result<()> {
+    fn start_output(
+        &mut self,
+        hash_table: &mut AggregateHashTable<FinalMarker>,
+    ) -> Result<()> {
         let input_schema = self.input.schema();
         self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
         hash_table.start_output()
