@@ -18,11 +18,12 @@
 //! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, Datum, Scalar,
-    StringArrayType,
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray, BooleanArray,
+    BooleanBufferBuilder, Datum, PrimitiveArray, Scalar, StringArrayType,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::DataType;
+use arrow::downcast_primitive_array;
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::cast::{as_fixed_size_list_array, as_generic_list_array};
 use datafusion_common::utils::string_utils::string_array_to_vec;
@@ -323,11 +324,26 @@ impl<'a> ArrayWrapper<'a> {
     }
 }
 
+/// Evaluate `array_has` with an array (per-row) needle.
+///
+/// The straightforward implementation compares each row with the Arrow `eq`
+/// kernel, which allocates a `BooleanArray` and pays dispatch on every row --
+/// overhead that dominates for short lists. Primitive and string element types
+/// therefore take [`array_has_array_fast_path`]; nested (and any other) types
+/// fall back to the per-row kernel.
 fn array_has_dispatch_for_array<'a>(
     haystack: ArrayWrapper<'a>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
     let combined_nulls = NullBuffer::union(haystack.nulls(), needle.nulls());
+
+    if let Some(values) =
+        array_has_array_fast_path(&haystack, needle, combined_nulls.as_ref())
+    {
+        return Ok(Arc::new(BooleanArray::new(values, combined_nulls)));
+    }
+
+    // Fallback: per-row `eq` kernel (nested element types, or a type mismatch).
     let mut result = BooleanBufferBuilder::new(haystack.len());
     for (i, arr) in haystack.iter().enumerate() {
         if combined_nulls.as_ref().is_some_and(|n| n.is_null(i)) {
@@ -342,6 +358,181 @@ fn array_has_dispatch_for_array<'a>(
     }
 
     Ok(Arc::new(BooleanArray::new(result.finish(), combined_nulls)))
+}
+
+/// Average list length past which the element-null fast path (case 2 of
+/// [`array_has_array_primitive`]) stops beating the per-row `eq` kernel and is
+/// bailed out of -- an empirically measured crossover.
+const NULL_FAST_PATH_MAX_LEN: usize = 512;
+
+/// Per-element fast path for primitive and string element types. Returns `None`
+/// for any other type (and on a needle/element type mismatch), so the caller
+/// falls back to the per-row `eq` kernel.
+fn array_has_array_fast_path(
+    haystack: &ArrayWrapper<'_>,
+    needle: &ArrayRef,
+    combined_nulls: Option<&NullBuffer>,
+) -> Option<BooleanBuffer> {
+    let needle = needle.as_ref();
+
+    // The element-null primitive branch loses to the per-row `eq` kernel past a
+    // moderate average list length; detect that with O(1) checks (before any
+    // offset collection or slicing) and bail there. Strings (single-pass) and
+    // nested types have no such crossover.
+    let num_rows = haystack.len();
+    if num_rows > 0
+        && haystack.values().null_count() > 0
+        && haystack.values().len() / num_rows > NULL_FAST_PATH_MAX_LEN
+        && !matches!(
+            haystack.value_type(),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        )
+    {
+        return None;
+    }
+
+    // Normalize for sliced arrays (like `array_has_dispatch_for_scalar`): slice
+    // to the visible region so `offsets[i] - first_offset` indexes the values.
+    let offsets: Vec<usize> = haystack.offsets().collect();
+    let first_offset = offsets[0];
+    let visible_values = haystack
+        .values()
+        .slice(first_offset, offsets[offsets.len() - 1] - first_offset);
+    let visible_values = visible_values.as_ref();
+
+    // The needle shares the haystack's element type after coercion; defer any
+    // mismatch to the generic path rather than panicking in the downcasts.
+    if visible_values.data_type() != needle.data_type() {
+        return None;
+    }
+
+    downcast_primitive_array! {
+        visible_values => Some(array_has_array_primitive(
+            visible_values, needle, &offsets, first_offset, combined_nulls,
+        )),
+        DataType::Utf8 => Some(array_has_array_string(
+            visible_values.as_string::<i32>(),
+            needle.as_string::<i32>(),
+            &offsets,
+            first_offset,
+            combined_nulls,
+        )),
+        DataType::LargeUtf8 => Some(array_has_array_string(
+            visible_values.as_string::<i64>(),
+            needle.as_string::<i64>(),
+            &offsets,
+            first_offset,
+            combined_nulls,
+        )),
+        DataType::Utf8View => Some(array_has_array_string(
+            visible_values.as_string_view(),
+            needle.as_string_view(),
+            &offsets,
+            first_offset,
+            combined_nulls,
+        )),
+        _ => None,
+    }
+}
+
+/// Primitive fast path, with two branches on element validity:
+///
+/// 1. No element nulls: a branchless OR-reduction over the raw value slice --
+///    auto-vectorizes, and is the common, fastest case.
+/// 2. Element nulls: a null slot's backing value is arbitrary, so validity must
+///    be consulted. Compare into an equality bitmap and AND it with the validity
+///    bitmap -- one word-parallel op, no per-element branch -- then reduce each
+///    row to "any bit set". Chunked so the expanded-needle scratch stays bounded
+///    regardless of batch size.
+fn array_has_array_primitive<T: ArrowPrimitiveType>(
+    values: &PrimitiveArray<T>,
+    needle: &dyn Array,
+    offsets: &[usize],
+    first_offset: usize,
+    combined_nulls: Option<&NullBuffer>,
+) -> BooleanBuffer
+where
+    T::Native: ArrowNativeTypeOp,
+{
+    let needle = needle.as_primitive::<T>();
+    let num_rows = offsets.len() - 1;
+    let value_slice = values.values();
+    let needle_slice = needle.values();
+
+    let Some(element_nulls) = values.nulls() else {
+        return BooleanBuffer::collect_bool(num_rows, |i| {
+            if combined_nulls.is_some_and(|n| n.is_null(i)) {
+                return false;
+            }
+            // `needle[i]` is non-null here: combined_nulls covers the needle nulls.
+            let needle_val = needle_slice[i];
+            let start = offsets[i] - first_offset;
+            let end = offsets[i + 1] - first_offset;
+            value_slice[start..end]
+                .iter()
+                .fold(false, |acc, &v| acc | v.is_eq(needle_val))
+        });
+    };
+
+    // Case 2 (see fn doc), chunked like the all/any kernels.
+    let mut result = BooleanBufferBuilder::new(num_rows);
+    let mut needle_expanded: Vec<T::Native> = Vec::new();
+    for chunk_start in (0..num_rows).step_by(ROW_CONVERSION_CHUNK_SIZE) {
+        let chunk_end = (chunk_start + ROW_CONVERSION_CHUNK_SIZE).min(num_rows);
+        let elem_start = offsets[chunk_start] - first_offset;
+        let elem_end = offsets[chunk_end] - first_offset;
+
+        // Expand the per-row needle across this chunk's elements (reused scratch),
+        // then compare in one vectorizable pass and mask out null elements.
+        needle_expanded.clear();
+        for i in chunk_start..chunk_end {
+            needle_expanded
+                .resize(offsets[i + 1] - first_offset - elem_start, needle_slice[i]);
+        }
+        let chunk_values = &value_slice[elem_start..elem_end];
+        let eq_bits = BooleanBuffer::collect_bool(chunk_values.len(), |k| {
+            chunk_values[k].is_eq(needle_expanded[k])
+        });
+        let matched = &eq_bits
+            & &element_nulls
+                .inner()
+                .slice(elem_start, elem_end - elem_start);
+
+        for i in chunk_start..chunk_end {
+            if combined_nulls.is_some_and(|n| n.is_null(i)) {
+                result.append(false);
+                continue;
+            }
+            let start = offsets[i] - first_offset - elem_start;
+            let end = offsets[i + 1] - first_offset - elem_start;
+            result.append(matched.slice(start, end - start).has_true());
+        }
+    }
+    result.finish()
+}
+
+/// String implementation of `array_has_array_fast_path`, generic over the
+/// concrete string array type (`Utf8`, `LargeUtf8`, `Utf8View`).
+fn array_has_array_string<'a, S: StringArrayType<'a> + Copy>(
+    values: S,
+    needle: S,
+    offsets: &[usize],
+    first_offset: usize,
+    combined_nulls: Option<&NullBuffer>,
+) -> BooleanBuffer {
+    let num_rows = offsets.len() - 1;
+    BooleanBuffer::collect_bool(num_rows, |i| {
+        if combined_nulls.is_some_and(|n| n.is_null(i)) {
+            return false;
+        }
+        // `needle[i]` is non-null here: combined_nulls covers the needle nulls.
+        let needle_val = needle.value(i);
+        let start = offsets[i] - first_offset;
+        let end = offsets[i + 1] - first_offset;
+        // Compare the value first and only consult validity on a match (see the
+        // primitive path for why this is correct and faster on no-match scans).
+        (start..end).any(|k| values.value(k) == needle_val && !values.is_null(k))
+    })
 }
 
 fn array_has_dispatch_for_scalar(
@@ -972,13 +1163,14 @@ fn general_array_has_all_and_any_kernel(
 mod tests {
     use std::sync::Arc;
 
-    use arrow::datatypes::Int32Type;
+    use arrow::datatypes::{Float32Type, Float64Type, Int32Type};
     use arrow::{
         array::{
-            Array, ArrayRef, AsArray, FixedSizeListArray, Int32Array, ListArray,
-            create_array,
+            Array, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder,
+            FixedSizeListArray, Float32Array, Float64Array, Int32Array, LargeListArray,
+            ListArray, Scalar, StringArray, create_array,
         },
-        buffer::OffsetBuffer,
+        buffer::{NullBuffer, OffsetBuffer},
         datatypes::{DataType, Field},
     };
     use datafusion_common::{
@@ -1309,6 +1501,331 @@ mod tests {
             &sliced_haystack,
             needle_any,
             &[Some(true), Some(true)],
+        );
+    }
+
+    /// Invoke `array_has` with the needle as an array (a column with one value
+    /// per row). This exercises `array_has_dispatch_for_array` and its fast path.
+    fn invoke_array_has_array(haystack: ArrayRef, needle: ArrayRef) -> ArrayRef {
+        let num_rows = haystack.len();
+        let haystack_type = haystack.data_type().clone();
+        let needle_type = needle.data_type().clone();
+        ArrayHas::new()
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Array(haystack), ColumnarValue::Array(needle)],
+                arg_fields: vec![
+                    Arc::new(Field::new("haystack", haystack_type, false)),
+                    Arc::new(Field::new("needle", needle_type, false)),
+                ],
+                number_rows: num_rows,
+                return_field: Arc::new(Field::new("return", DataType::Boolean, true)),
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap()
+            .into_array(num_rows)
+            .unwrap()
+    }
+
+    /// Reference implementation of the array-needle path using the original
+    /// per-row Arrow `eq` kernel + `has_true`. Used to prove the fast path is
+    /// behavior-preserving. Handles `List` haystacks (Int32 offsets).
+    fn reference_array_has_array(
+        haystack: &ListArray,
+        needle: &ArrayRef,
+    ) -> BooleanArray {
+        let combined = NullBuffer::union(haystack.nulls(), needle.nulls());
+        let mut builder = BooleanBufferBuilder::new(haystack.len());
+        for i in 0..haystack.len() {
+            if combined.as_ref().is_some_and(|n| n.is_null(i)) {
+                builder.append(false);
+                continue;
+            }
+            let row = haystack.value(i);
+            let is_nested = row.data_type().is_nested();
+            let needle_row = Scalar::new(needle.slice(i, 1));
+            let eq = super::compare_with_eq(&row, &needle_row, is_nested).unwrap();
+            builder.append(eq.has_true());
+        }
+        BooleanArray::new(builder.finish(), combined)
+    }
+
+    #[test]
+    fn test_array_has_array_needle_element_nulls() {
+        // Element nulls, needle nulls, null rows and empty rows, for a primitive
+        // (Int32) and a string (Utf8) element type. Verified against the
+        // original per-row `eq` + `has_true` reference.
+        //
+        //   [1, 2, 3]     needle 2     -> true
+        //   [4, 5, 6]     needle 9     -> false
+        //   null row      needle 5     -> null
+        //   [7, null, 9]  needle null  -> null  (null needle)
+        //   [7, null, 9]  needle 7     -> true
+        //   [null]        needle 1     -> false (null element never matches)
+        //   []            needle 1     -> false (empty)
+        let haystack: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                Some(vec![Some(4), Some(5), Some(6)]),
+                None,
+                Some(vec![Some(7), None, Some(9)]),
+                Some(vec![Some(7), None, Some(9)]),
+                Some(vec![None]),
+                Some(vec![]),
+            ]));
+        let needle: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(2),
+            Some(9),
+            Some(5),
+            None,
+            Some(7),
+            Some(1),
+            Some(1),
+        ]));
+        let result = invoke_array_has_array(Arc::clone(&haystack), Arc::clone(&needle));
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![
+                Some(true),
+                Some(false),
+                None,
+                None,
+                Some(true),
+                Some(false),
+                Some(false),
+            ]
+        );
+        assert_eq!(
+            result.as_boolean(),
+            &reference_array_has_array(haystack.as_list::<i32>(), &needle)
+        );
+
+        //   ["a", "b"]  needle "b" -> true
+        //   [null]      needle "z" -> false (null element never matches)
+        //   ["c", "d"]  needle "x" -> false
+        let values =
+            StringArray::from(vec![Some("a"), Some("b"), None, Some("c"), Some("d")]);
+        let offsets = OffsetBuffer::new(vec![0, 2, 3, 5].into());
+        let haystack: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Utf8, true)),
+            offsets,
+            Arc::new(values),
+            None,
+        ));
+        let needle: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("b"), Some("z"), Some("x")]));
+        let result = invoke_array_has_array(Arc::clone(&haystack), Arc::clone(&needle));
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(false), Some(false)]
+        );
+        assert_eq!(
+            result.as_boolean(),
+            &reference_array_has_array(haystack.as_list::<i32>(), &needle)
+        );
+    }
+
+    #[test]
+    fn test_array_has_array_needle_null_fill_collision() {
+        // A null primitive slot keeps the type default (0) in the value buffer,
+        // so a needle of 0 collides with it. The null element must still not
+        // match; only a valid 0 does.
+        //   [0, null]  needle 0 -> true   (valid 0 matches)
+        //   [null, 5]  needle 0 -> false  (null slot's backing 0 must not match)
+        //   [null]     needle 0 -> false
+        let haystack: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(0), None]),
+                Some(vec![None, Some(5)]),
+                Some(vec![None]),
+            ]));
+        let needle: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(0), Some(0), Some(0)]));
+        let result = invoke_array_has_array(Arc::clone(&haystack), Arc::clone(&needle));
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(false), Some(false)]
+        );
+        assert_eq!(
+            result.as_boolean(),
+            &reference_array_has_array(haystack.as_list::<i32>(), &needle)
+        );
+    }
+
+    #[test]
+    fn test_array_has_array_needle_chunk_boundary() {
+        // The element-null path is processed in ROW_CONVERSION_CHUNK_SIZE (512)
+        // row chunks; use > 2 chunks with element nulls, null rows and varying
+        // needles to exercise the chunk rebasing, verified against the oracle.
+        let n = 1500usize;
+        let mut rows: Vec<Option<Vec<Option<i32>>>> = Vec::with_capacity(n);
+        let mut needles: Vec<Option<i32>> = Vec::with_capacity(n);
+        for i in 0..n {
+            if i % 13 == 0 {
+                rows.push(None); // null row
+            } else {
+                let r = (i % 7) as i32;
+                rows.push(Some(vec![Some(r), None, Some((r + 1) % 5)]));
+            }
+            needles.push(if i % 11 == 0 {
+                None
+            } else {
+                Some((i % 5) as i32)
+            });
+        }
+        let haystack: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(rows));
+        let needle: ArrayRef = Arc::new(Int32Array::from(needles));
+        let result = invoke_array_has_array(Arc::clone(&haystack), Arc::clone(&needle));
+        assert_eq!(
+            result.as_boolean(),
+            &reference_array_has_array(haystack.as_list::<i32>(), &needle)
+        );
+    }
+
+    #[test]
+    fn test_array_has_array_needle_long_lists_with_nulls_bail() {
+        // Average list length past NULL_FAST_PATH_MAX_LEN with element nulls
+        // routes to the per-row `eq` kernel; the result must still match the
+        // oracle.
+        let rows = 20usize;
+        let len = super::NULL_FAST_PATH_MAX_LEN + 64; // > threshold
+        let mut data: Vec<Option<Vec<Option<i32>>>> = Vec::with_capacity(rows);
+        let mut needles: Vec<Option<i32>> = Vec::with_capacity(rows);
+        for i in 0..rows {
+            let row = (0..len)
+                .map(|j| {
+                    if j % 5 == 0 {
+                        None
+                    } else {
+                        Some(((i + j) % 7) as i32)
+                    }
+                })
+                .collect::<Vec<_>>();
+            data.push(Some(row));
+            needles.push(Some((i % 7) as i32));
+        }
+        let haystack: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data));
+        let needle: ArrayRef = Arc::new(Int32Array::from(needles));
+        let result = invoke_array_has_array(Arc::clone(&haystack), Arc::clone(&needle));
+        assert_eq!(
+            result.as_boolean(),
+            &reference_array_has_array(haystack.as_list::<i32>(), &needle)
+        );
+    }
+
+    #[test]
+    fn test_array_has_array_needle_large_list() {
+        // The fast path also covers LargeList (i64 offsets); exercise it through
+        // the null branch, including a null-fill collision (needle 0).
+        //   [1, 2]     needle 2 -> true
+        //   [null, 3]  needle 0 -> false (null slot's backing 0 must not match)
+        //   [4, null]  needle 4 -> true
+        let haystack: ArrayRef =
+            Arc::new(LargeListArray::from_iter_primitive::<Int32Type, _, _>(
+                vec![
+                    Some(vec![Some(1), Some(2)]),
+                    Some(vec![None, Some(3)]),
+                    Some(vec![Some(4), None]),
+                ],
+            ));
+        let needle: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(2), Some(0), Some(4)]));
+        let result = invoke_array_has_array(haystack, needle);
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(false), Some(true)]
+        );
+    }
+
+    #[test]
+    fn test_array_has_array_needle_float_total_order() {
+        // Arrow `eq` uses total-order float equality: NaN == NaN (same bits) is
+        // true, and +0.0 == -0.0 is false. The fast path must match this.
+        let haystack: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Float64Type, _, _>(vec![
+                Some(vec![Some(f64::NAN), Some(1.0)]),
+                Some(vec![Some(0.0)]),
+                Some(vec![Some(-0.0)]),
+                Some(vec![Some(2.0)]),
+            ]));
+        let needle: ArrayRef = Arc::new(Float64Array::from(vec![
+            f64::NAN, // matches NaN element
+            -0.0,     // does NOT match +0.0
+            -0.0,     // matches -0.0
+            2.0,      // matches
+        ]));
+
+        let result = invoke_array_has_array(Arc::clone(&haystack), Arc::clone(&needle));
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(false), Some(true), Some(true)]
+        );
+        assert_eq!(
+            result.as_boolean(),
+            &reference_array_has_array(haystack.as_list::<i32>(), &needle)
+        );
+
+        // Float32 too, to cover the f32 total-order path.
+        let haystack32: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Float32Type, _, _>(vec![
+                Some(vec![Some(f32::NAN), Some(1.0)]),
+                Some(vec![Some(0.0)]),
+                Some(vec![Some(-0.0)]),
+                Some(vec![Some(2.0)]),
+            ]));
+        let needle32: ArrayRef =
+            Arc::new(Float32Array::from(vec![f32::NAN, -0.0, -0.0, 2.0]));
+        let result32 = invoke_array_has_array(haystack32, needle32);
+        assert_eq!(
+            result32.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(false), Some(true), Some(true)]
+        );
+    }
+
+    #[test]
+    fn test_array_has_array_needle_sliced() {
+        // Offset normalization for sliced haystacks must keep the element ranges
+        // and the needle column aligned. Covers both `ArrayWrapper` offset
+        // branches: `List` (offsets from the buffer) and `FixedSizeList`
+        // (offsets computed as `i * value_length`).
+
+        // Sliced List haystack AND a sliced needle column (rows 1..=3 visible).
+        // Verified against the original per-row reference.
+        let full = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(10), Some(20), Some(30)]), // needle 20 -> true
+            Some(vec![Some(40)]),                     // needle 41 -> false
+            Some(vec![Some(50), Some(60)]),           // needle 60 -> true
+            Some(vec![Some(70)]),
+        ]);
+        let sliced_haystack: ArrayRef = Arc::new(full.slice(1, 3));
+        let sliced_needle: ArrayRef =
+            Arc::new(Int32Array::from(vec![999, 20, 41, 60, 999]).slice(1, 3));
+        let result = invoke_array_has_array(
+            Arc::clone(&sliced_haystack),
+            Arc::clone(&sliced_needle),
+        );
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(false), Some(true)]
+        );
+        assert_eq!(
+            result.as_boolean(),
+            &reference_array_has_array(sliced_haystack.as_list::<i32>(), &sliced_needle)
+        );
+
+        // Sliced FixedSizeList haystack (width 2; rows 1..=2 of [[1,2],[11,12],
+        // [21,22],[31,32]] visible) with an aligned needle column.
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let fsl_values = Arc::new(Int32Array::from(vec![1, 2, 11, 12, 21, 22, 31, 32]));
+        let fsl: ArrayRef =
+            Arc::new(FixedSizeListArray::new(field, 2, fsl_values, None).slice(1, 2));
+        let needle: ArrayRef = Arc::new(Int32Array::from(vec![11, 99]));
+        let result = invoke_array_has_array(fsl, needle);
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(false)]
         );
     }
 }
