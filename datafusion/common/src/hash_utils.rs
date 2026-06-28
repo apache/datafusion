@@ -1852,8 +1852,6 @@ mod tests {
         assert_eq!(hashes1, hashes2);
     }
 
-    // Tests actual values of hashes, which are different if forcing collisions
-    #[cfg(not(feature = "force_hash_collisions"))]
     #[test]
     #[cfg(not(feature = "force_hash_collisions"))]
     fn test_create_hashes_with_quality_hash_state() {
