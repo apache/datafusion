@@ -721,7 +721,7 @@ impl StringViewArrayBuilder {
         self.placeholder_count += 1;
     }
 
-    /// Fallible variant of [`Self::ensure_long_capacity`].
+    /// Ensure enough capacity for a long string row.
     #[inline]
     fn try_ensure_long_capacity(&mut self, length: u32) -> Result<()> {
         let required_cap = self
