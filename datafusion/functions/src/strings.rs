@@ -344,6 +344,8 @@ fn string_view_overflow_error(field: &str) -> DataFusionError {
 }
 
 fn try_string_view_part(field: &str, value: usize) -> Result<u32> {
+    // StringView stores these fields as u32, but Arrow limits lengths,
+    // offsets, and buffer indices to i32::MAX.
     Ok(i32::try_from(value).map_err(|_| string_view_overflow_error(field))? as u32)
 }
 
@@ -907,6 +909,8 @@ impl StringViewArrayBuilder {
             builder: self,
         };
         f(&mut writer);
+        // Destructure `writer` to end its mutable borrow of `self` before
+        // mutating the builder below.
         let StringViewWriter {
             inline_buf,
             inline_len,
