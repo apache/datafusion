@@ -1,0 +1,265 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements. See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership. The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied. See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Ceil Preimage Tests
+##
+## ceil(col) = N rewrites to col > N-1 AND col <= N
+## expressed as [next_up(N-1), next_up(N)) in the half-open preimage API.
+##########
+
+statement ok
+CREATE TABLE test_data (
+    id   INT,
+    fval DOUBLE,
+    dval DECIMAL(10,2)
+) AS VALUES
+    (1, 4.1,   4.10),
+    (2, 5.0,   5.00),
+    (3, 5.0001, 5.01),
+    (4, 6.0,   6.00),
+    (5, -4.9,  -4.90),
+    (6, -5.0,  -5.00),
+    (7, NULL,  NULL);
+
+##########
+## Data Correctness Tests
+##########
+
+# ceil(x) = 5 — 4.1→5, 5.0→5
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) = arrow_cast(5, 'Float64');
+----
+1
+2
+
+# ceil(x) = 6 — 5.0001→6, 6.0→6
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) = arrow_cast(6, 'Float64');
+----
+3
+4
+
+# Negative: ceil(x) = -4 — -4.9→-4
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) = arrow_cast(-4, 'Float64');
+----
+5
+
+# Negative: ceil(x) = -5
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) = arrow_cast(-5, 'Float64');
+----
+6
+
+# Decimal128: ceil(x) = 5.00 — 4.10→5.00, 5.00→5.00
+query I rowsort
+SELECT id FROM test_data WHERE ceil(dval) = arrow_cast(5.00, 'Decimal128(10,2)');
+----
+1
+2
+
+# Non-integer literal: no rows
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) = arrow_cast(5.5, 'Float64');
+----
+
+# Column on RHS
+query I rowsort
+SELECT id FROM test_data WHERE arrow_cast(5, 'Float64') = ceil(fval);
+----
+1
+2
+
+# IN list
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) IN (arrow_cast(5, 'Float64'), arrow_cast(6, 'Float64'));
+----
+1
+2
+3
+4
+
+# NOT IN list
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) NOT IN (arrow_cast(5, 'Float64'), arrow_cast(6, 'Float64'));
+----
+5
+6
+
+# IS NOT DISTINCT FROM
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) IS NOT DISTINCT FROM arrow_cast(5, 'Float64');
+----
+1
+2
+
+# IS DISTINCT FROM — NULL row (id=7) is included
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) IS DISTINCT FROM arrow_cast(5, 'Float64');
+----
+3
+4
+5
+6
+7
+
+# ceil(x) > 5
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) > arrow_cast(5, 'Float64');
+----
+3
+4
+
+# ceil(x) >= 5
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) >= arrow_cast(5, 'Float64');
+----
+1
+2
+3
+4
+
+# ceil(x) < 5
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) < arrow_cast(5, 'Float64');
+----
+5
+6
+
+# ceil(x) <= 5
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) <= arrow_cast(5, 'Float64');
+----
+1
+2
+5
+6
+
+# ceil(x) != 5
+query I rowsort
+SELECT id FROM test_data WHERE ceil(fval) != arrow_cast(5, 'Float64');
+----
+3
+4
+5
+6
+
+##########
+## EXPLAIN Tests
+##########
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# Float64 equality — rewritten to [next_up(4), next_up(5))
+query TT
+EXPLAIN SELECT * FROM test_data WHERE ceil(fval) = arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval >= Float64(4.000000000000001) AND test_data.fval < Float64(5.000000000000001)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# Decimal128 equality
+query TT
+EXPLAIN SELECT * FROM test_data WHERE ceil(dval) = arrow_cast(5.00, 'Decimal128(10,2)');
+----
+logical_plan
+01)Filter: test_data.dval >= Decimal128(4.01,10,2) AND test_data.dval < Decimal128(5.01,10,2)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# Negative N
+query TT
+EXPLAIN SELECT * FROM test_data WHERE ceil(fval) = arrow_cast(-5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval >= Float64(-5.999999999999999) AND test_data.fval < Float64(-4.999999999999999)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# IS NOT DISTINCT FROM — adds IS NOT NULL check
+query TT
+EXPLAIN SELECT * FROM test_data WHERE ceil(fval) IS NOT DISTINCT FROM arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval IS NOT NULL AND test_data.fval >= Float64(4.000000000000001) AND test_data.fval < Float64(5.000000000000001)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# IS DISTINCT FROM — adds OR IS NULL branch
+query TT
+EXPLAIN SELECT * FROM test_data WHERE ceil(fval) IS DISTINCT FROM arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval < Float64(4.000000000000001) OR test_data.fval >= Float64(5.000000000000001) OR test_data.fval IS NULL
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# NOT IN — each item inverted and ANDed
+query TT
+EXPLAIN SELECT * FROM test_data WHERE ceil(fval) NOT IN (arrow_cast(5, 'Float64'), arrow_cast(6, 'Float64'));
+----
+logical_plan
+01)Filter: (test_data.fval < Float64(4.000000000000001) OR test_data.fval >= Float64(5.000000000000001)) AND (test_data.fval < Float64(5.000000000000001) OR test_data.fval >= Float64(6.000000000000001))
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# Non-integer literal — predicate preserved
+query TT
+EXPLAIN SELECT * FROM test_data WHERE ceil(fval) = arrow_cast(5.5, 'Float64');
+----
+logical_plan
+01)Filter: ceil(test_data.fval) = Float64(5.5)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# ceil(x) > 5 → fval >= next_up(5)
+query TT
+EXPLAIN SELECT * FROM test_data WHERE ceil(fval) > arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval >= Float64(5.000000000000001)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# ceil(x) <= 5 → fval < next_up(5)
+query TT
+EXPLAIN SELECT * FROM test_data WHERE ceil(fval) <= arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval < Float64(5.000000000000001)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# ceil(x) < 5 → fval < next_up(4)
+query TT
+EXPLAIN SELECT * FROM test_data WHERE ceil(fval) < arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval < Float64(4.000000000000001)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# ceil(x) >= 5 → fval >= next_up(4)
+query TT
+EXPLAIN SELECT * FROM test_data WHERE ceil(fval) >= arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval >= Float64(4.000000000000001)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+##########
+## Cleanup
+##########
+
+statement ok
+DROP TABLE test_data;
