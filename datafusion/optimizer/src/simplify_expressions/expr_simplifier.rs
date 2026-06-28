@@ -3455,7 +3455,7 @@ mod tests {
 
         let cat = |left, right| binary_expr(left, Operator::StringConcat, right);
         assert_change(
-            simplify(cat(cat(cat(col("c1"), lit("a")), lit("b")), col("c1"))),
+            cat(cat(cat(col("c1"), lit("a")), lit("b")), col("c1")),
             cat(cat(col("c1"), lit("ab")), col("c1")),
         );
 
