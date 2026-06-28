@@ -2006,6 +2006,35 @@ statement ok
 DROP TABLE approx_distinct_decimal_test;
 
 
+# This test runs approx_distinct over the intervals YearMonth,
+# DayTime, MonthDayNano for the scalar and the grouped path.
+statement ok
+CREATE TABLE approx_distinct_interval_test (g INT, ym INTERVAL, dt INTERVAL, mdn INTERVAL) AS VALUES
+  (1, INTERVAL '1' MONTH,  INTERVAL '1' DAY,             INTERVAL '1' MONTH),
+  (1, INTERVAL '2' MONTH,  INTERVAL '1 day 5 hours',     INTERVAL '1 day 5 nanoseconds'),
+  (1, INTERVAL '2' MONTH,  INTERVAL '1 day 5 hours',     INTERVAL '1 day 5 nanoseconds'),
+  (2, INTERVAL '3' YEAR,   INTERVAL '2' DAY,             INTERVAL '2' DAY),
+  (2, INTERVAL '0' MONTH,  INTERVAL '0' DAY,             INTERVAL '0' DAY),
+  (2, INTERVAL '0' MONTH,  INTERVAL '0' DAY,             INTERVAL '0' DAY);
+
+# Scalar path
+query III
+SELECT approx_distinct(ym), approx_distinct(dt), approx_distinct(mdn) FROM approx_distinct_interval_test;
+----
+4 4 4
+
+# Grouped path
+query IIII
+SELECT g, approx_distinct(ym), approx_distinct(dt), approx_distinct(mdn)
+FROM approx_distinct_interval_test GROUP BY g ORDER BY g;
+----
+1 2 2 2
+2 2 2 2
+
+statement ok
+DROP TABLE approx_distinct_interval_test;
+
+
 
 ## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
 ## data, asserting the estimated quantiles are ±5% their actual values.
