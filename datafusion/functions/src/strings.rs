@@ -918,13 +918,13 @@ impl StringViewArrayBuilder {
             self.in_progress.truncate(old_len);
             return Err(error);
         }
-        match self.push_view_from_writer(&inline_buf, inline_len, spill_cursor) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                self.in_progress.truncate(old_len);
-                Err(error)
-            }
+        if let Err(error) =
+            self.push_view_from_writer(&inline_buf, inline_len, spill_cursor)
+        {
+            self.in_progress.truncate(old_len);
+            return Err(error);
         }
+        Ok(())
     }
 
     /// See [`BulkNullStringArrayBuilder::append_with`].
@@ -1056,9 +1056,12 @@ impl StringWriter for StringViewWriter<'_> {
             return;
         }
 
-        let Ok(length) = try_string_view_part("value length", new_len) else {
-            self.fail(string_view_overflow_error("value length"));
-            return;
+        let length = match try_string_view_part("value length", new_len) {
+            Ok(length) => length,
+            Err(error) => {
+                self.fail(error);
+                return;
+            }
         };
         if let Err(error) = self.builder.try_ensure_long_capacity(length) {
             self.fail(error);
@@ -1095,9 +1098,12 @@ impl StringWriter for StringViewWriter<'_> {
             return;
         }
 
-        let Ok(length) = try_string_view_part("value length", new_len) else {
-            self.fail(string_view_overflow_error("value length"));
-            return;
+        let length = match try_string_view_part("value length", new_len) {
+            Ok(length) => length,
+            Err(error) => {
+                self.fail(error);
+                return;
+            }
         };
         if let Err(error) = self.builder.try_ensure_long_capacity(length) {
             self.fail(error);
@@ -1320,51 +1326,6 @@ impl BulkNullStringArrayBuilder for StringViewArrayBuilder {
     }
     fn finish(self, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
         Ok(Arc::new(StringViewArrayBuilder::finish(self, nulls)?))
-    }
-}
-
-#[cfg(test)]
-pub(crate) struct FailingStringWriter;
-
-#[cfg(test)]
-impl StringWriter for FailingStringWriter {
-    fn write_str(&mut self, _s: &str) {}
-
-    fn write_char(&mut self, _c: char) {}
-}
-
-#[cfg(test)]
-pub(crate) struct FailingBulkNullStringArrayBuilder;
-
-#[cfg(test)]
-impl BulkNullStringArrayBuilder for FailingBulkNullStringArrayBuilder {
-    type Writer<'a> = FailingStringWriter;
-
-    fn try_append_value(&mut self, _value: &str) -> Result<()> {
-        Err(exec_datafusion_err!("byte array offset overflow"))
-    }
-
-    fn try_append_placeholder(&mut self) -> Result<()> {
-        Err(exec_datafusion_err!("byte array offset overflow"))
-    }
-
-    fn try_append_with<F>(&mut self, _f: F) -> Result<()>
-    where
-        F: for<'a> FnOnce(&mut Self::Writer<'a>),
-    {
-        Err(exec_datafusion_err!("byte array offset overflow"))
-    }
-
-    unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
-        &mut self,
-        _src: &[u8],
-        _map: F,
-    ) -> Result<()> {
-        Err(exec_datafusion_err!("byte array offset overflow"))
-    }
-
-    fn finish(self, _nulls: Option<NullBuffer>) -> Result<ArrayRef> {
-        internal_err!("failing test builder cannot finish")
     }
 }
 
@@ -1926,6 +1887,51 @@ mod tests {
             err.contains("byte array offset overflow"),
             "unexpected error: {err}"
         );
+    }
+
+    struct FailingStringWriter;
+
+    impl StringWriter for FailingStringWriter {
+        fn write_str(&mut self, _s: &str) {}
+
+        fn write_char(&mut self, _c: char) {}
+    }
+
+    struct FailingBulkNullStringArrayBuilder;
+
+    fn failing_overflow() -> Result<()> {
+        Err(exec_datafusion_err!("byte array offset overflow"))
+    }
+
+    impl BulkNullStringArrayBuilder for FailingBulkNullStringArrayBuilder {
+        type Writer<'a> = FailingStringWriter;
+
+        fn try_append_value(&mut self, _value: &str) -> Result<()> {
+            failing_overflow()
+        }
+
+        fn try_append_placeholder(&mut self) -> Result<()> {
+            failing_overflow()
+        }
+
+        fn try_append_with<F>(&mut self, _f: F) -> Result<()>
+        where
+            F: for<'a> FnOnce(&mut Self::Writer<'a>),
+        {
+            failing_overflow()
+        }
+
+        unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
+            &mut self,
+            _src: &[u8],
+            _map: F,
+        ) -> Result<()> {
+            failing_overflow()
+        }
+
+        fn finish(self, _nulls: Option<NullBuffer>) -> Result<ArrayRef> {
+            internal_err!("failing test builder cannot finish")
+        }
     }
 
     #[test]
