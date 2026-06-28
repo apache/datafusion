@@ -141,3 +141,7 @@ required-features = ["test_utils"]
 [[bench]]
 harness = false
 name = "multi_group_by"
+[[bench]]
+harness = false
+name = "partial_partition_output"
+
