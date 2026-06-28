@@ -58,7 +58,7 @@ use crate::{
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{
     DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
@@ -476,9 +476,8 @@ impl ExternalSorter {
         // reserved again for the next spill.
         self.merge_reservation.free();
 
-        // No coalescing on the spill path: it raises per-run peak memory.
         let mut sorted_stream =
-            self.in_mem_sort_stream(self.metrics.baseline.intermediate(), false)?;
+            self.in_mem_sort_stream(self.metrics.baseline.intermediate(), true)?;
         // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
         // to construct a globally sorted stream.
         assert_or_internal_err!(
@@ -627,13 +626,13 @@ impl ExternalSorter {
             return self.sort_batch_stream(batch, &metrics, reservation);
         }
 
-        // For single-column sorts, coalesce the buffered batches into fewer,
-        // larger runs to cut the merge fan-in (where the cheap per-key compare is
-        // dominated by per-stream cursor/merge overhead). Multi-column sorts are
-        // left as one run per batch: the row-format merge of many small runs
-        // beats sorting a few large runs with the lexicographic comparator.
+        // For single primitive-column sorts, coalesce the buffered batches into
+        // fewer, larger runs to cut the merge fan-in (where the cheap per-key
+        // compare is dominated by per-stream cursor/merge overhead). Multi-column
+        // sorts are left as one run per batch: the row-format merge of many small
+        // runs beats sorting a few large runs with the lexicographic comparator.
         let batches = std::mem::take(&mut self.in_mem_batches);
-        let runs = if coalesce_runs && self.expr.len() == 1 {
+        let runs = if coalesce_runs && self.should_coalesce_single_column_sort()? {
             self.coalesce_in_mem_batches_into_runs(batches)?
         } else {
             batches
@@ -660,6 +659,18 @@ impl ExternalSorter {
             .with_fetch(None)
             .with_reservation(self.merge_reservation.new_empty())
             .build()
+    }
+
+    fn should_coalesce_single_column_sort(&self) -> Result<bool> {
+        if self.expr.len() != 1 {
+            return Ok(false);
+        }
+
+        let data_type = self.expr[0].expr.data_type(&self.schema)?;
+        Ok(
+            matches!(data_type, DataType::Dictionary(_, ref value_type) if value_type.is_primitive())
+                || data_type.is_primitive(),
+        )
     }
 
     /// Concatenates `batches` into fewer, larger runs, each bounded by
@@ -3244,6 +3255,69 @@ mod tests {
         }
 
         drop(contender);
+        Ok(())
+    }
+
+    #[test]
+    fn should_coalesce_single_primitive_column_sorts() -> Result<()> {
+        let metrics = ExecutionPlanMetricsSet::new();
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, false),
+            Field::new("s", DataType::Utf8, false),
+            Field::new(
+                "d",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Int64),
+                ),
+                false,
+            ),
+        ]));
+
+        let sorter = |expr: LexOrdering| {
+            ExternalSorter::new(
+                0,
+                Arc::clone(&schema),
+                expr,
+                1024,
+                0,
+                1024,
+                SpillCompression::Uncompressed,
+                &metrics,
+                Arc::clone(&runtime),
+            )
+        };
+
+        assert!(
+            sorter(
+                [PhysicalSortExpr::new_default(Arc::new(Column::new("i", 0)))].into()
+            )?
+            .should_coalesce_single_column_sort()?
+        );
+        assert!(
+            sorter(
+                [PhysicalSortExpr::new_default(Arc::new(Column::new("d", 2)))].into()
+            )?
+            .should_coalesce_single_column_sort()?
+        );
+        assert!(
+            !sorter(
+                [PhysicalSortExpr::new_default(Arc::new(Column::new("s", 1)))].into()
+            )?
+            .should_coalesce_single_column_sort()?
+        );
+        assert!(
+            !sorter(
+                [
+                    PhysicalSortExpr::new_default(Arc::new(Column::new("i", 0))),
+                    PhysicalSortExpr::new_default(Arc::new(Column::new("s", 1))),
+                ]
+                .into()
+            )?
+            .should_coalesce_single_column_sort()?
+        );
+
         Ok(())
     }
 
