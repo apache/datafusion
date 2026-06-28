@@ -279,6 +279,29 @@ SELECT id, UNNEST(items) FROM orders;
 items (implicit lateral references such as `FROM orders AS t, UNNEST(t.items)`
 are not currently supported).
 
+### `explode` and `explode_outer`
+
+`explode(col)` and `explode_outer(col)` are accepted as aliases for `UNNEST(col)`
+for compatibility with Spark and Hive dialects. They differ from plain `UNNEST`
+in how `NULL` and empty input lists are handled:
+
+| Form                  | `NULL` input list | Empty input list |
+| --------------------- | ----------------- | ---------------- |
+| `UNNEST(col)`         | dropped           | dropped          |
+| `explode(col)`        | dropped           | dropped          |
+| `explode_outer(col)`  | one `NULL` row    | one `NULL` row   |
+
+```sql
+SELECT id, explode_outer(tags) AS tag FROM rows;
+```
+
+An input row with an empty `tags` array or `NULL` `tags` produces one output
+row whose `tag` is `NULL`, instead of being dropped.
+
+`explode_outer` cannot be mixed with `unnest` or `explode` in the same `SELECT`
+— the unnest plan node carries a single null-handling mode for all its output
+columns, so a mix would be ambiguous. The planner returns an error in that case.
+
 ## WHERE clause
 
 ```text
