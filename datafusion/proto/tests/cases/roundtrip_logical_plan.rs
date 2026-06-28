@@ -54,9 +54,9 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::expr_fn::{
-    approx_median, approx_percentile_cont, approx_percentile_cont_with_weight, count,
-    count_distinct, covar_pop, covar_samp, first_value, grouping, max, median, min,
-    stddev, stddev_pop, sum, var_pop, var_sample,
+    approx_median, approx_percentile_cont, approx_percentile_cont_with_weight,
+    approx_top_k, count, count_distinct, covar_pop, covar_samp, first_value, grouping,
+    max, median, min, stddev, stddev_pop, sum, var_pop, var_sample,
 };
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
@@ -1447,6 +1447,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         stddev_pop(lit(2.2)),
         approx_distinct(lit(2)),
         approx_median(lit(2)),
+        approx_top_k(vec![col("a"), lit(3)]),
         approx_percentile_cont(lit(2).sort(true, false), lit(0.5), None),
         approx_percentile_cont(lit(2).sort(true, false), lit(0.5), Some(lit(50))),
         approx_percentile_cont_with_weight(
