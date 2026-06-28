@@ -1998,7 +1998,7 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
     let expected_schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
     let expected = RecordBatch::try_new(
         SchemaRef::from(expected_schema),
-        vec![create_array!(Utf8, ["AEST"])],
+        vec![create_array!(Utf8, ["Australia/Sydney"])],
     )?;
 
     assert_eq!(expected, actual[0]);

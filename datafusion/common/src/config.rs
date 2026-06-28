@@ -2283,7 +2283,13 @@ impl ConfigField for Option<ConfigTimeZone> {
         }
     }
 
-    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field is an optional timezone and does not have nested field \"{}\"",
+                key
+            );
+        }
         *self = Some(value.parse()?);
         Ok(())
     }
@@ -4414,6 +4420,16 @@ mod tests {
             );
             assert_eq!(config.execution.time_zone, previous);
         }
+
+        let err = config
+            .set("datafusion.execution.time_zone.name", "UTC")
+            .unwrap_err();
+        assert!(
+            err.strip_backtrace()
+                .contains("does not have nested field \"name\""),
+            "Unexpected error {err:?}"
+        );
+        assert_eq!(config.execution.time_zone, previous);
     }
 
     #[cfg(feature = "parquet")]

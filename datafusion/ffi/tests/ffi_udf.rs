@@ -149,7 +149,7 @@ mod tests {
         assert!(result.len() == 1);
         assert!(!result[0].column(0).as_string::<i32>().is_null(0));
         let result = result[0].column(0).as_string::<i32>().value(0);
-        assert_eq!(result, "AEST");
+        assert_eq!(result, "Australia/Sydney");
 
         Ok(())
     }
