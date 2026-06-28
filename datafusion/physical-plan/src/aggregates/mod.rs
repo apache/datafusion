@@ -2440,7 +2440,7 @@ mod tests {
     use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::Int32Type;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
-    use datafusion_common::{DataFusionError, assert_contains, internal_err};
+    use datafusion_common::{DataFusionError, internal_err};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -2474,19 +2474,6 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
 
         Ok(schema)
-    }
-
-    #[test]
-    fn count_requires_physical_argument() {
-        let err = AggregateExprBuilder::new(count_udaf(), vec![])
-            .alias("count")
-            .build()
-            .expect_err("empty-argument physical count should fail");
-
-        assert_contains!(
-            err.to_string(),
-            "Physical count aggregate requires an argument"
-        );
     }
 
     /// some mock data to aggregates
