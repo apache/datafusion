@@ -447,7 +447,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
             .expect("byte array offset overflow");
     }
 
-    /// Fallible variant of [`Self::append_byte_map`].
+    /// Fallibly append a row whose bytes are produced by mapping each byte of
+    /// `src` through `map`, in order.
     ///
     /// # Safety
     ///
@@ -469,27 +470,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         })
     }
 
-    /// See [`BulkNullStringArrayBuilder::append_byte_map`].
-    ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_byte_map`].
-    ///
-    /// # Safety
-    ///
-    /// The bytes produced by applying `map` to each byte of `src`, in order,
-    /// must form valid UTF-8.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the cumulative byte length exceeds `O::MAX`.
-    #[inline]
-    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
-        // SAFETY: caller upholds this method's UTF-8 contract.
-        unsafe { self.try_append_byte_map(src, map) }
-            .expect("byte array offset overflow");
-    }
-
-    /// Fallible variant of [`Self::append_with`].
+    /// Fallibly append a row whose bytes are produced by `f` calling write
+    /// methods on the supplied [`StringWriter`].
     ///
     /// # Errors
     ///
@@ -516,22 +498,6 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         };
         self.offsets_buffer.push(next_offset);
         Ok(())
-    }
-
-    /// See [`BulkNullStringArrayBuilder::append_with`].
-    ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_with`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if the cumulative byte length exceeds `O::MAX`.
-    #[inline]
-    pub fn append_with<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut GenericStringWriter<'_>),
-    {
-        self.try_append_with(f).expect("byte array offset overflow");
     }
 
     /// Finalize into a [`GenericStringArray<O>`] using the caller-supplied
@@ -799,7 +765,8 @@ impl StringViewArrayBuilder {
         .into()
     }
 
-    /// Fallible variant of [`Self::append_byte_map`].
+    /// Fallibly append a row whose bytes are produced by mapping each byte of
+    /// `src` through `map`, in order.
     ///
     /// # Safety
     ///
@@ -840,27 +807,6 @@ impl StringViewArrayBuilder {
         Ok(())
     }
 
-    /// See [`BulkNullStringArrayBuilder::append_byte_map`].
-    ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_byte_map`].
-    ///
-    /// # Safety
-    ///
-    /// The bytes produced by applying `map` to each byte of `src`, in order,
-    /// must form valid UTF-8.
-    ///
-    /// # Panics
-    ///
-    /// Panics under the same conditions that [`Self::try_append_byte_map`]
-    /// returns an error.
-    #[inline]
-    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
-        // SAFETY: caller upholds this method's UTF-8 contract.
-        unsafe { self.try_append_byte_map(src, map) }
-            .expect("byte array offset overflow");
-    }
-
     #[inline]
     fn push_view_from_writer(
         &mut self,
@@ -890,7 +836,8 @@ impl StringViewArrayBuilder {
         Ok(())
     }
 
-    /// Fallible variant of [`Self::append_with`].
+    /// Fallibly append a row whose bytes are produced by `f` calling write
+    /// methods on the supplied [`StringWriter`].
     ///
     /// # Errors
     ///
@@ -929,23 +876,6 @@ impl StringViewArrayBuilder {
             return Err(error);
         }
         Ok(())
-    }
-
-    /// See [`BulkNullStringArrayBuilder::append_with`].
-    ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_with`].
-    ///
-    /// # Panics
-    ///
-    /// Panics under the same conditions that [`Self::try_append_with`] returns
-    /// an error.
-    #[inline]
-    pub fn append_with<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut StringViewWriter<'_>),
-    {
-        self.try_append_with(f).expect("byte array offset overflow");
     }
 
     fn flush_in_progress(&mut self) {
