@@ -28,6 +28,7 @@ use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use crate::adaptive_filter::AdaptiveConjunction;
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::common::can_project;
 use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
@@ -622,9 +623,18 @@ impl ExecutionPlan for FilterExec {
             context.task_id()
         );
         let metrics = FilterExecMetrics::new(&self.metrics, partition);
+        let adaptive = AdaptiveConjunction::try_new(
+            &self.predicate,
+            context
+                .session_config()
+                .options()
+                .execution
+                .adaptive_filter_reordering,
+        );
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
+            adaptive,
             input: self.input.execute(partition, context)?,
             metrics,
             projection: self.projection.clone(),
@@ -1322,6 +1332,10 @@ struct FilterExecStream {
     schema: SchemaRef,
     /// The expression to filter on. This expression must evaluate to a boolean value.
     predicate: Arc<dyn PhysicalExpr>,
+    /// When set, the predicate is a reorderable conjunction evaluated
+    /// adaptively (conjuncts measured, then reordered) instead of via
+    /// `predicate`.
+    adaptive: Option<AdaptiveConjunction>,
     /// The input partition to filter.
     input: SendableRecordBatchStream,
     /// Runtime metrics recording
@@ -1417,9 +1431,15 @@ impl Stream for FilterExecStream {
                 }
                 Some(Ok(batch)) => {
                     let timer = elapsed_compute.timer();
-                    let status = self.predicate.as_ref()
-                        .evaluate(&batch)
-                        .and_then(|v| v.into_array(batch.num_rows()))
+                    let array = match self.adaptive.as_mut() {
+                        Some(adaptive) => adaptive.evaluate(&batch),
+                        None => self
+                            .predicate
+                            .as_ref()
+                            .evaluate(&batch)
+                            .and_then(|v| v.into_array(batch.num_rows())),
+                    };
+                    let status = array
                         .and_then(|array| {
                             Ok(match self.projection.as_ref()  {
                                 Some(projection) => {
