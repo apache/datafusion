@@ -672,19 +672,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // `NullHandling::PreserveAndExpandEmpty`. Mixing the two in a
             // single SELECT is a planning error because `UnnestOptions` is
             // per-`UnnestExec`, not per-column.
-            //
-            // When `datafusion.spark.allow_multiple_generators = false`, any
-            // SELECT with more than one generator (even same-mode) is rejected
-            // to match Spark's `UNSUPPORTED_GENERATOR.MULTI_GENERATOR`.
-            let allow_multiple_generators = self
-                .context_provider
-                .options()
-                .spark
-                .allow_multiple_generators;
-            let null_handling = collect_unnest_null_handling(
-                &intermediate_expr_groups,
-                allow_multiple_generators,
-            )?;
+            let null_handling =
+                collect_unnest_null_handling(&intermediate_expr_groups)?;
             let mut unnest_options =
                 UnnestOptions::new().with_null_handling(null_handling);
             let mut unnest_col_vec = vec![];
@@ -1482,18 +1471,9 @@ fn has_unnest_expr_recursively(expr: &Expr) -> bool {
 /// * A mix of `outer = true` and `outer = false` in one SELECT → planning
 ///   error, because `UnnestOptions` applies per `Unnest` plan node, not
 ///   per output column.
-/// * When `allow_multiple_generators` is `false`, any SELECT with more than
-///   one generator is rejected with
-///   `[UNSUPPORTED_GENERATOR.MULTI_GENERATOR]` (Spark-strict mode). When
-///   `true` (the default), DataFusion's native multi-generator support is
-///   preserved.
-fn collect_unnest_null_handling(
-    expr_groups: &[Vec<Expr>],
-    allow_multiple_generators: bool,
-) -> Result<NullHandling> {
+fn collect_unnest_null_handling(expr_groups: &[Vec<Expr>]) -> Result<NullHandling> {
     let mut saw_outer = false;
     let mut saw_inner = false;
-    let mut generator_count: usize = 0;
     for group in expr_groups {
         for expr in group {
             expr.apply(|e| {
@@ -1503,7 +1483,6 @@ fn collect_unnest_null_handling(
                     } else {
                         saw_inner = true;
                     }
-                    generator_count += 1;
                 }
                 Ok(TreeNodeRecursion::Continue)
             })?;
@@ -1515,14 +1494,6 @@ fn collect_unnest_null_handling(
              `explode_outer(...)` in the same SELECT — the unnest operator \
              carries a single null-handling mode. Split the query so each \
              unnest projection uses one mode."
-        );
-    }
-    if !allow_multiple_generators && generator_count > 1 {
-        return plan_err!(
-            "[UNSUPPORTED_GENERATOR.MULTI_GENERATOR] Only one generator \
-             function (`unnest`, `explode`, `explode_outer`, ...) is allowed \
-             per SELECT under Spark-strict mode \
-             (`datafusion.spark.allow_multiple_generators = false`)."
         );
     }
     Ok(if saw_outer {
