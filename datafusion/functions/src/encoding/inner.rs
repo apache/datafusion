@@ -24,7 +24,7 @@ use arrow::{
     },
     datatypes::DataType,
 };
-use arrow_buffer::{Buffer, OffsetBufferBuilder};
+use arrow_buffer::{Buffer, OffsetBuffer};
 use base64::{
     Engine as _,
     engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
@@ -470,22 +470,21 @@ where
     OutputOffset: OffsetSizeTrait,
 {
     let mut values = vec![0; conservative_upper_bound_size];
-    let mut offsets = OffsetBufferBuilder::new(input.len());
+    let mut offsets = Vec::<OutputOffset>::with_capacity(input.len() + 1);
+    offsets.push(OutputOffset::zero());
     let mut total_bytes_decoded = 0;
     for v in input.iter() {
         if let Some(v) = v {
             let cursor = &mut values[total_bytes_decoded..];
             let decoded = decode(v, cursor)?;
             total_bytes_decoded += decoded;
-            offsets.push_length(decoded);
-        } else {
-            offsets.push_length(0);
         }
+        offsets.push(OutputOffset::usize_as(total_bytes_decoded));
     }
     // We reserved an upper bound size for the values buffer, but we only use the actual size
     values.truncate(total_bytes_decoded);
     let binary_array = GenericBinaryArray::<OutputOffset>::try_new(
-        offsets.finish(),
+        OffsetBuffer::new(offsets.into()),
         Buffer::from_vec(values),
         input.nulls().cloned(),
     )?;

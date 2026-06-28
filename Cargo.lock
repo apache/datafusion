@@ -1730,7 +1730,7 @@ dependencies = [
  "glob",
  "indexmap 2.14.0",
  "insta",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "liblzma",
  "log",
  "nix",
@@ -1799,7 +1799,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "log",
  "object_store",
  "parking_lot",
@@ -1824,7 +1824,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "futures",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "log",
  "object_store",
 ]
@@ -1876,7 +1876,7 @@ dependencies = [
  "hex",
  "indexmap 2.14.0",
  "insta",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "libc",
  "log",
  "num-traits",
@@ -1924,7 +1924,7 @@ dependencies = [
  "futures",
  "glob",
  "insta",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "liblzma",
  "log",
  "object_store",
@@ -1955,7 +1955,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "object_store",
  "tokio",
 ]
@@ -2045,7 +2045,7 @@ dependencies = [
  "datafusion-pruning",
  "datafusion-session",
  "futures",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "log",
  "object_store",
  "parking_lot",
@@ -2140,7 +2140,7 @@ dependencies = [
  "env_logger",
  "indexmap 2.14.0",
  "insta",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "recursive",
  "serde_json",
  "sqlparser",
@@ -2154,7 +2154,7 @@ dependencies = [
  "datafusion-common",
  "indexmap 2.14.0",
  "insta",
- "itertools 0.14.0",
+ "itertools 0.15.0",
 ]
 
 [[package]]
@@ -2216,7 +2216,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "env_logger",
  "hex",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "log",
  "md-5 0.11.0",
  "memchr",
@@ -2279,7 +2279,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "hashbrown 0.17.1",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "itoa",
  "log",
  "memchr",
@@ -2353,7 +2353,7 @@ dependencies = [
  "env_logger",
  "indexmap 2.14.0",
  "insta",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "log",
  "recursive",
  "regex",
@@ -2377,7 +2377,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "indexmap 2.14.0",
  "insta",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "parking_lot",
  "petgraph",
  "rand 0.9.4",
@@ -2396,7 +2396,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
- "itertools 0.14.0",
+ "itertools 0.15.0",
 ]
 
 [[package]]
@@ -2411,7 +2411,7 @@ dependencies = [
  "datafusion-proto-models",
  "hashbrown 0.17.1",
  "indexmap 2.14.0",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "parking_lot",
  "pin-project",
  "rand 0.9.4",
@@ -2433,7 +2433,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-pruning",
  "insta",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "recursive",
  "tokio",
 ]
@@ -2467,7 +2467,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "indexmap 2.14.0",
  "insta",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "log",
  "num-traits",
  "parking_lot",
@@ -2551,7 +2551,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "insta",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "log",
 ]
 
@@ -2614,7 +2614,7 @@ dependencies = [
  "env_logger",
  "indexmap 2.14.0",
  "insta",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "log",
  "recursive",
  "regex",
@@ -2639,7 +2639,7 @@ dependencies = [
  "futures",
  "half",
  "indicatif",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "log",
  "object_store",
  "postgres-types",
@@ -2665,7 +2665,7 @@ dependencies = [
  "datafusion-functions-aggregate",
  "half",
  "insta",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "object_store",
  "pbjson-types",
  "prost",
@@ -3772,6 +3772,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4819,7 +4828,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "petgraph",
@@ -4838,7 +4847,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn",
