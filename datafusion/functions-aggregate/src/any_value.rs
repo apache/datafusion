@@ -19,12 +19,21 @@
 
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::mem::size_of_val;
+use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder};
-use arrow::buffer::BooleanBuffer;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, PrimitiveArray,
+};
+use arrow::buffer::{BooleanBuffer, NullBuffer};
+use arrow::datatypes::{
+    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type,
+    Decimal128Type, Decimal256Type, Field, FieldRef, Float16Type, Float32Type,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -128,9 +137,7 @@ impl AggregateUDFImpl for AnyValue {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        Ok(Box::new(AnyValueGroupsAccumulator::try_new(
-            args.return_field.data_type(),
-        )?))
+        create_groups_accumulator(args.return_field.data_type())
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
@@ -139,6 +146,199 @@ impl AggregateUDFImpl for AnyValue {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+fn create_groups_accumulator(data_type: &DataType) -> Result<Box<dyn GroupsAccumulator>> {
+    macro_rules! instantiate_primitive {
+        ($t:ty) => {
+            Ok(Box::new(PrimitiveAnyValueGroupsAccumulator::<$t>::new(
+                data_type.clone(),
+            )) as _)
+        };
+    }
+
+    match data_type {
+        DataType::Int8 => instantiate_primitive!(Int8Type),
+        DataType::Int16 => instantiate_primitive!(Int16Type),
+        DataType::Int32 => instantiate_primitive!(Int32Type),
+        DataType::Int64 => instantiate_primitive!(Int64Type),
+        DataType::UInt8 => instantiate_primitive!(UInt8Type),
+        DataType::UInt16 => instantiate_primitive!(UInt16Type),
+        DataType::UInt32 => instantiate_primitive!(UInt32Type),
+        DataType::UInt64 => instantiate_primitive!(UInt64Type),
+        DataType::Float16 => instantiate_primitive!(Float16Type),
+        DataType::Float32 => instantiate_primitive!(Float32Type),
+        DataType::Float64 => instantiate_primitive!(Float64Type),
+
+        DataType::Decimal32(_, _) => instantiate_primitive!(Decimal32Type),
+        DataType::Decimal64(_, _) => instantiate_primitive!(Decimal64Type),
+        DataType::Decimal128(_, _) => instantiate_primitive!(Decimal128Type),
+        DataType::Decimal256(_, _) => instantiate_primitive!(Decimal256Type),
+
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            instantiate_primitive!(TimestampSecondType)
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            instantiate_primitive!(TimestampMillisecondType)
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            instantiate_primitive!(TimestampMicrosecondType)
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            instantiate_primitive!(TimestampNanosecondType)
+        }
+
+        DataType::Date32 => instantiate_primitive!(Date32Type),
+        DataType::Date64 => instantiate_primitive!(Date64Type),
+        DataType::Time32(TimeUnit::Second) => instantiate_primitive!(Time32SecondType),
+        DataType::Time32(TimeUnit::Millisecond) => {
+            instantiate_primitive!(Time32MillisecondType)
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            instantiate_primitive!(Time64MicrosecondType)
+        }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            instantiate_primitive!(Time64NanosecondType)
+        }
+
+        _ => Ok(Box::new(AnyValueGroupsAccumulator::try_new(data_type)?) as _),
+    }
+}
+
+#[derive(Debug)]
+struct PrimitiveAnyValueGroupsAccumulator<T: ArrowPrimitiveType + Send> {
+    values: Vec<T::Native>,
+    is_set: BooleanBufferBuilder,
+    data_type: DataType,
+}
+
+impl<T: ArrowPrimitiveType + Send> PrimitiveAnyValueGroupsAccumulator<T> {
+    fn new(data_type: DataType) -> Self {
+        Self {
+            values: vec![],
+            is_set: BooleanBufferBuilder::new(0),
+            data_type,
+        }
+    }
+
+    fn ensure_groups(&mut self, total_num_groups: usize) {
+        if self.values.len() < total_num_groups {
+            self.values.resize(total_num_groups, T::default_value());
+            self.is_set.resize(total_num_groups);
+        }
+    }
+
+    fn take_state(&mut self, emit_to: EmitTo) -> (Vec<T::Native>, BooleanBuffer) {
+        let values = emit_to.take_needed(&mut self.values);
+        let is_set = self.is_set.finish();
+        match emit_to {
+            EmitTo::All => (values, is_set),
+            EmitTo::First(n) => {
+                let emitted = is_set.slice(0, n);
+                self.is_set
+                    .append_buffer(&is_set.slice(n, is_set.len() - n));
+                (values, emitted)
+            }
+        }
+    }
+
+    fn values_array(
+        &self,
+        values: Vec<T::Native>,
+        is_set: BooleanBuffer,
+    ) -> PrimitiveArray<T> {
+        PrimitiveArray::<T>::new(values.into(), Some(NullBuffer::new(is_set)))
+            .with_data_type(self.data_type.clone())
+    }
+}
+
+impl<T: ArrowPrimitiveType + Send> GroupsAccumulator
+    for PrimitiveAnyValueGroupsAccumulator<T>
+{
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "any_value expects one argument");
+        let values = values[0].as_primitive::<T>();
+        self.ensure_groups(total_num_groups);
+
+        for (row, &group_index) in group_indices.iter().enumerate() {
+            if opt_filter.is_none_or(|filter| filter.is_valid(row) && filter.value(row))
+                && !self.is_set.get_bit(group_index)
+                && values.is_valid(row)
+            {
+                self.values[group_index] = values.value(row);
+                self.is_set.set_bit(group_index, true);
+            }
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let (values, is_set) = self.take_state(emit_to);
+        Ok(Arc::new(self.values_array(values, is_set)))
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let (values, is_set) = self.take_state(emit_to);
+        Ok(vec![
+            Arc::new(self.values_array(values, is_set.clone())),
+            Arc::new(BooleanArray::new(is_set, None)),
+        ])
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 2, "any_value expects value and is_set state");
+        let state_values = values[0].as_primitive::<T>();
+        let is_set = as_boolean_array(&values[1])?;
+        self.ensure_groups(total_num_groups);
+
+        for (row, &group_index) in group_indices.iter().enumerate() {
+            if is_set.is_valid(row)
+                && is_set.value(row)
+                && !self.is_set.get_bit(group_index)
+                && state_values.is_valid(row)
+            {
+                self.values[group_index] = state_values.value(row);
+                self.is_set.set_bit(group_index, true);
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        assert_eq!(values.len(), 1, "any_value expects one argument");
+        let values = &values[0];
+        let is_set = BooleanArray::from_iter((0..values.len()).map(|row| {
+            values.is_valid(row)
+                && opt_filter
+                    .is_none_or(|filter| filter.is_valid(row) && filter.value(row))
+        }));
+        Ok(vec![Arc::clone(values), Arc::new(is_set)])
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+            + self.values.capacity() * size_of::<T::Native>()
+            + self.is_set.capacity() / 8
     }
 }
 
@@ -282,7 +482,7 @@ mod tests {
 
     #[test]
     fn groups_accumulator_uses_first_non_null_value() -> Result<()> {
-        let mut acc = AnyValueGroupsAccumulator::try_new(&DataType::Int64)?;
+        let mut acc = create_groups_accumulator(&DataType::Int64)?;
         let values = Arc::new(Int64Array::from(vec![
             None,
             Some(10),
@@ -321,7 +521,7 @@ mod tests {
 
     #[test]
     fn groups_accumulator_convert_to_state_applies_filter_and_nulls() -> Result<()> {
-        let acc = AnyValueGroupsAccumulator::try_new(&DataType::Int64)?;
+        let acc = create_groups_accumulator(&DataType::Int64)?;
         let values = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)])) as ArrayRef;
         let filter = BooleanArray::from(vec![true, true, false]);
 
@@ -335,7 +535,7 @@ mod tests {
 
     #[test]
     fn groups_accumulator_emit_first_retains_remaining_groups() -> Result<()> {
-        let mut acc = AnyValueGroupsAccumulator::try_new(&DataType::Int64)?;
+        let mut acc = create_groups_accumulator(&DataType::Int64)?;
         let values =
             Arc::new(Int64Array::from(vec![Some(10), Some(20), Some(30)])) as ArrayRef;
         acc.update_batch(&[values], &[0, 1, 2], None, 3)?;
@@ -351,6 +551,23 @@ mod tests {
         let expected_remaining =
             Arc::new(Int64Array::from(vec![Some(30), Some(40)])) as ArrayRef;
         assert_eq!(&remaining, &expected_remaining);
+        Ok(())
+    }
+
+    #[test]
+    fn primitive_groups_accumulator_merges_partial_state() -> Result<()> {
+        let mut partial = create_groups_accumulator(&DataType::Int64)?;
+        let values = Arc::new(Int64Array::from(vec![Some(10), None, Some(30), Some(40)]))
+            as ArrayRef;
+        partial.update_batch(&[values], &[0, 1, 2, 2], None, 3)?;
+        let state = partial.state(EmitTo::All)?;
+
+        let mut merged = create_groups_accumulator(&DataType::Int64)?;
+        merged.merge_batch(&state, &[0, 1, 2], 4)?;
+        let result = merged.evaluate(EmitTo::All)?;
+        let expected =
+            Arc::new(Int64Array::from(vec![Some(10), None, Some(30), None])) as ArrayRef;
+        assert_eq!(&result, &expected);
         Ok(())
     }
 }
