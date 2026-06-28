@@ -21,6 +21,8 @@ use crate::logical_plan::consumer::utils::{DEFAULT_TIMEZONE, next_struct_field_n
 use crate::variation_const::FLOAT_16_TYPE_NAME;
 #[expect(deprecated)]
 use crate::variation_const::{
+    DECIMAL_32_TYPE_VARIATION_REF, DECIMAL_64_TYPE_VARIATION_REF,
+    DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
@@ -32,7 +34,7 @@ use crate::variation_const::{
 };
 use datafusion::arrow::array::{AsArray, MapArray, new_empty_array};
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::datatypes::{Field, IntervalDayTime, IntervalMonthDayNano};
+use datafusion::arrow::datatypes::{Field, IntervalDayTime, IntervalMonthDayNano, i256};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::common::{
@@ -220,18 +222,50 @@ pub(crate) fn from_substrait_literal(
             ScalarValue::FixedSizeBinary(b.len() as _, Some(b.clone()))
         }
         Some(LiteralType::Decimal(d)) => {
-            let value: [u8; 16] = d
-                .value
-                .clone()
-                .try_into()
-                .or(substrait_err!("Failed to parse decimal value"))?;
             let p = d.precision.try_into().map_err(|e| {
                 substrait_datafusion_err!("Failed to parse decimal precision: {e}")
             })?;
             let s = d.scale.try_into().map_err(|e| {
                 substrait_datafusion_err!("Failed to parse decimal scale: {e}")
             })?;
-            ScalarValue::Decimal128(Some(i128::from_le_bytes(value)), p, s)
+
+            match lit.type_variation_reference {
+                DECIMAL_32_TYPE_VARIATION_REF => {
+                    let value: [u8; 4] = d
+                        .value
+                        .clone()
+                        .try_into()
+                        .or(substrait_err!("Failed to parse decimal value"))?;
+                    ScalarValue::Decimal32(Some(i32::from_le_bytes(value)), p, s)
+                }
+                DECIMAL_64_TYPE_VARIATION_REF => {
+                    let value: [u8; 8] = d
+                        .value
+                        .clone()
+                        .try_into()
+                        .or(substrait_err!("Failed to parse decimal value"))?;
+                    ScalarValue::Decimal64(Some(i64::from_le_bytes(value)), p, s)
+                }
+                DECIMAL_128_TYPE_VARIATION_REF => {
+                    let value: [u8; 16] = d
+                        .value
+                        .clone()
+                        .try_into()
+                        .or(substrait_err!("Failed to parse decimal value"))?;
+                    ScalarValue::Decimal128(Some(i128::from_le_bytes(value)), p, s)
+                }
+                DECIMAL_256_TYPE_VARIATION_REF => {
+                    let value: [u8; 32] = d
+                        .value
+                        .clone()
+                        .try_into()
+                        .or(substrait_err!("Failed to parse decimal value"))?;
+                    ScalarValue::Decimal256(Some(i256::from_le_bytes(value)), p, s)
+                }
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
+            }
         }
         Some(LiteralType::List(l)) => {
             // Each element should start the name index from the same value, then we increase it

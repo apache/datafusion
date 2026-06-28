@@ -20,6 +20,7 @@ use super::utils::{DEFAULT_TIMEZONE, from_substrait_precision, next_struct_field
 #[expect(deprecated)]
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
+    DECIMAL_32_TYPE_VARIATION_REF, DECIMAL_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
     DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
@@ -226,6 +227,12 @@ pub fn from_substrait_type(
                 }
             }
             r#type::Kind::Decimal(d) => match d.type_variation_reference {
+                DECIMAL_32_TYPE_VARIATION_REF => {
+                    Ok(DataType::Decimal32(d.precision as u8, d.scale as i8))
+                }
+                DECIMAL_64_TYPE_VARIATION_REF => {
+                    Ok(DataType::Decimal64(d.precision as u8, d.scale as i8))
+                }
                 DECIMAL_128_TYPE_VARIATION_REF => {
                     Ok(DataType::Decimal128(d.precision as u8, d.scale as i8))
                 }

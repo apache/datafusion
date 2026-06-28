@@ -17,7 +17,8 @@
 
 use crate::logical_plan::producer::{SubstraitProducer, to_substrait_type};
 use crate::variation_const::{
-    DATE_32_TYPE_VARIATION_REF, DECIMAL_128_TYPE_VARIATION_REF,
+    DATE_32_TYPE_VARIATION_REF, DECIMAL_32_TYPE_VARIATION_REF,
+    DECIMAL_64_TYPE_VARIATION_REF, DECIMAL_128_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF, FLOAT_16_TYPE_NAME,
     LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
     TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
@@ -259,6 +260,22 @@ pub(crate) fn to_substrait_literal(
             LiteralType::String(s.clone()),
             VIEW_CONTAINER_TYPE_VARIATION_REF,
         ),
+        ScalarValue::Decimal32(v, p, s) if v.is_some() => (
+            LiteralType::Decimal(Decimal {
+                value: v.unwrap().to_le_bytes().to_vec(),
+                precision: *p as i32,
+                scale: *s as i32,
+            }),
+            DECIMAL_32_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Decimal64(v, p, s) if v.is_some() => (
+            LiteralType::Decimal(Decimal {
+                value: v.unwrap().to_le_bytes().to_vec(),
+                precision: *p as i32,
+                scale: *s as i32,
+            }),
+            DECIMAL_64_TYPE_VARIATION_REF,
+        ),
         ScalarValue::Decimal128(v, p, s) if v.is_some() => (
             LiteralType::Decimal(Decimal {
                 value: v.unwrap().to_le_bytes().to_vec(),
@@ -475,6 +492,11 @@ mod tests {
         round_trip_literal(ScalarValue::Time64Microsecond(None))?;
         round_trip_literal(ScalarValue::Time64Nanosecond(Some(45296789123000)))?;
         round_trip_literal(ScalarValue::Time64Nanosecond(None))?;
+
+        round_trip_literal(ScalarValue::Decimal32(Some(12345), 9, 2))?;
+        round_trip_literal(ScalarValue::Decimal32(None, 9, 2))?;
+        round_trip_literal(ScalarValue::Decimal64(Some(1234567890123456), 18, 2))?;
+        round_trip_literal(ScalarValue::Decimal64(None, 18, 2))?;
 
         round_trip_literal(ScalarValue::List(ScalarValue::new_list_nullable(
             &[ScalarValue::Float32(Some(1.0))],

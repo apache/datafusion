@@ -59,6 +59,8 @@ pub const DEFAULT_MAP_TYPE_VARIATION_REF: u32 = 0;
 pub const DICTIONARY_MAP_TYPE_VARIATION_REF: u32 = 1;
 pub const DECIMAL_128_TYPE_VARIATION_REF: u32 = 0;
 pub const DECIMAL_256_TYPE_VARIATION_REF: u32 = 1;
+pub const DECIMAL_32_TYPE_VARIATION_REF: u32 = 2;
+pub const DECIMAL_64_TYPE_VARIATION_REF: u32 = 3;
 /// Used for the arrow type [`DataType::Interval`] with [`IntervalUnit::DayTime`].
 ///
 /// [`DataType::Interval`]: datafusion::arrow::datatypes::DataType::Interval

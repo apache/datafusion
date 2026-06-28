@@ -19,6 +19,7 @@ use crate::logical_plan::producer::utils::flatten_names;
 use crate::logical_plan::producer::{SubstraitProducer, to_substrait_precision};
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
+    DECIMAL_32_TYPE_VARIATION_REF, DECIMAL_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
     DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
@@ -340,6 +341,22 @@ pub(crate) fn to_substrait_type_from_field(
                 })),
             })
         }
+        DataType::Decimal32(p, s) => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Decimal(r#type::Decimal {
+                type_variation_reference: DECIMAL_32_TYPE_VARIATION_REF,
+                nullability,
+                scale: *s as i32,
+                precision: *p as i32,
+            })),
+        }),
+        DataType::Decimal64(p, s) => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Decimal(r#type::Decimal {
+                type_variation_reference: DECIMAL_64_TYPE_VARIATION_REF,
+                nullability,
+                scale: *s as i32,
+                precision: *p as i32,
+            })),
+        }),
         DataType::Decimal128(p, s) => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Decimal(r#type::Decimal {
                 type_variation_reference: DECIMAL_128_TYPE_VARIATION_REF,
@@ -434,6 +451,8 @@ mod tests {
         round_trip_type(DataType::Utf8)?;
         round_trip_type(DataType::LargeUtf8)?;
         round_trip_type(DataType::Utf8View)?;
+        round_trip_type(DataType::Decimal32(9, 2))?;
+        round_trip_type(DataType::Decimal64(18, 2))?;
         round_trip_type(DataType::Decimal128(10, 2))?;
         round_trip_type(DataType::Decimal256(30, 2))?;
 
