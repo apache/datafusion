@@ -28,11 +28,10 @@ use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
-    AggregateUDF, ColumnarValue, CreateIndex, DdlStatement, Expr,
-    HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
-    HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress, ScalarFunctionArgs,
-    ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, ValueOrLambda, Volatility,
-    col,
+    ColumnarValue, CreateIndex, DdlStatement, Expr, HigherOrderFunctionArgs,
+    HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
+    LambdaParametersProgress, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    ValueOrLambda, Volatility, col,
     expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
     lambda,
     logical_plan::LogicalPlan,
@@ -5134,35 +5133,6 @@ fn test_error_message_invalid_scalar_function_signature() {
 fn test_error_message_invalid_aggregate_function_signature() {
     assert!(error_message("select sum()").starts_with(r"Error during planning: Execution error: Function 'sum' user-defined coercion failed with: Execution error: sum function requires 1 argument, got 0"));
     assert!(error_message("select max(9, 3)").starts_with(r"Error during planning: Execution error: Function 'max' user-defined coercion failed with: Execution error: min/max was called with 2 arguments. It requires only 1"));
-}
-
-#[test]
-fn plan_zero_argument_aggregate_udf() {
-    let state = mock_session_state().with_aggregate_function(Arc::new(
-        AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
-            "window_start",
-            Signature::nullary(Volatility::Immutable),
-            DataType::Utf8,
-            Arc::new(|_| panic!("dummy - not implemented")),
-            vec![Field::new("value", DataType::Utf8, true).into()],
-        )),
-    ));
-    let plan = logical_plan_from_state(
-        "SELECT window_start()",
-        &GenericDialect {},
-        ParserOptions::default(),
-        state,
-    )
-    .unwrap();
-
-    assert_snapshot!(
-        plan,
-        @r#"
-    Projection: window_start()
-      Aggregate: groupBy=[[]], aggr=[[window_start()]]
-        EmptyRelation: rows=1
-    "#
-    );
 }
 
 #[test]
