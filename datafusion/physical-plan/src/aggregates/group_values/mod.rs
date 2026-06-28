@@ -22,11 +22,9 @@ use arrow::array::types::{
     Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-use arrow::array::{Array, ArrayRef, downcast_primitive};
-use arrow::compute::concat;
+use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion_common::Result;
-use std::sync::Arc;
 
 use datafusion_expr::EmitTo;
 
@@ -52,89 +50,6 @@ mod metrics;
 mod null_builder;
 
 pub(crate) use metrics::GroupByMetrics;
-
-#[derive(Debug, Default)]
-pub(crate) struct SkipHashGroupByState {
-    columns: Option<Vec<Vec<ArrayRef>>>,
-    num_groups: usize,
-}
-
-impl SkipHashGroupByState {
-    pub(crate) fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) {
-        if cols.is_empty() {
-            groups.clear();
-            return;
-        }
-
-        groups.clear();
-        groups.extend(self.num_groups..self.num_groups + cols[0].len());
-        self.num_groups += cols[0].len();
-
-        match &mut self.columns {
-            Some(columns) => {
-                for (column, input) in columns.iter_mut().zip(cols) {
-                    column.push(Arc::clone(input));
-                }
-            }
-            None => {
-                self.columns =
-                    Some(cols.iter().map(|column| vec![Arc::clone(column)]).collect());
-            }
-        }
-    }
-
-    pub(crate) fn size(&self) -> usize {
-        self.columns
-            .as_ref()
-            .map(|columns| {
-                columns
-                    .iter()
-                    .flatten()
-                    .map(|array| array.get_array_memory_size())
-                    .sum()
-            })
-            .unwrap_or(0)
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.num_groups == 0
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.num_groups
-    }
-
-    pub(crate) fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let Some(columns) = self.columns.as_mut() else {
-            return Ok(vec![]);
-        };
-
-        let len = match emit_to {
-            EmitTo::All => self.num_groups,
-            EmitTo::First(n) => n,
-        };
-        let mut output = Vec::with_capacity(columns.len());
-        for column in columns.iter_mut() {
-            let arrays = column
-                .iter()
-                .map(|array| array.as_ref())
-                .collect::<Vec<_>>();
-            let array = concat(&arrays)?;
-            output.push(array.slice(0, len));
-            *column = vec![array.slice(len, array.len() - len)];
-        }
-        self.num_groups -= len;
-        if self.num_groups == 0 {
-            self.columns = None;
-        }
-        Ok(output)
-    }
-
-    pub(crate) fn clear_shrink(&mut self) {
-        self.columns = None;
-        self.num_groups = 0;
-    }
-}
 
 /// Stores the group values during hash aggregation.
 ///
@@ -182,12 +97,7 @@ pub trait GroupValues: Send {
     /// If a row has the same value as a previous row, the same group id is
     /// assigned. If a row has a new value, the next available group id is
     /// assigned.
-    fn intern(
-        &mut self,
-        cols: &[ArrayRef],
-        groups: &mut Vec<usize>,
-        hashes_buffer: &[u64],
-    ) -> Result<()>;
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
     /// Returns the number of bytes of memory used by this [`GroupValues`]
     fn size(&self) -> usize;
@@ -200,9 +110,6 @@ pub trait GroupValues: Send {
 
     /// Emits the group values
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
-
-    /// Set the group values to skip hash grouping and treat each row as a new group.
-    fn skip_hash_group_by(&mut self);
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, num_rows: usize);

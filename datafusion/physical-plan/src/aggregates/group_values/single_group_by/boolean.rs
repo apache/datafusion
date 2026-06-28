@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::{GroupValues, SkipHashGroupByState};
+use crate::aggregates::group_values::GroupValues;
 
 use arrow::array::{
     ArrayRef, AsArray as _, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
@@ -29,7 +29,6 @@ pub struct GroupValuesBoolean {
     false_group: Option<usize>,
     true_group: Option<usize>,
     null_group: Option<usize>,
-    skip_hash_group_by: Option<SkipHashGroupByState>,
 }
 
 impl GroupValuesBoolean {
@@ -38,23 +37,12 @@ impl GroupValuesBoolean {
             false_group: None,
             true_group: None,
             null_group: None,
-            skip_hash_group_by: None,
         }
     }
 }
 
 impl GroupValues for GroupValuesBoolean {
-    fn intern(
-        &mut self,
-        cols: &[ArrayRef],
-        groups: &mut Vec<usize>,
-        _hashes_buffer: &[u64],
-    ) -> Result<()> {
-        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
-            skip_hash_group_by.intern(cols, groups);
-            return Ok(());
-        }
-
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         let array = cols[0].as_boolean();
         groups.clear();
 
@@ -96,10 +84,7 @@ impl GroupValues for GroupValuesBoolean {
     }
 
     fn size(&self) -> usize {
-        self.skip_hash_group_by
-            .as_ref()
-            .map(|skip_hash_group_by| skip_hash_group_by.size())
-            .unwrap_or(size_of::<Self>())
+        size_of::<Self>()
     }
 
     fn is_empty(&self) -> bool {
@@ -107,19 +92,12 @@ impl GroupValues for GroupValuesBoolean {
     }
 
     fn len(&self) -> usize {
-        if let Some(skip_hash_group_by) = &self.skip_hash_group_by {
-            return skip_hash_group_by.len();
-        }
         self.false_group.is_some() as usize
             + self.true_group.is_some() as usize
             + self.null_group.is_some() as usize
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
-            return skip_hash_group_by.emit(emit_to);
-        }
-
         let len = self.len();
         let mut builder = BooleanBufferBuilder::new(len);
         let emit_count = match emit_to {
@@ -167,17 +145,7 @@ impl GroupValues for GroupValuesBoolean {
         Ok(vec![Arc::new(BooleanArray::new(values, nulls)) as _])
     }
 
-    fn skip_hash_group_by(&mut self) {
-        self.false_group = None;
-        self.true_group = None;
-        self.null_group = None;
-        self.skip_hash_group_by = Some(SkipHashGroupByState::default());
-    }
-
     fn clear_shrink(&mut self, _num_rows: usize) {
-        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
-            skip_hash_group_by.clear_shrink();
-        }
         self.false_group = None;
         self.true_group = None;
         self.null_group = None;

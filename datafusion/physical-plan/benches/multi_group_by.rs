@@ -97,7 +97,7 @@ fn bench_intern(
 ) {
     for batch in batches {
         groups.clear();
-        gv.intern(batch, groups, &[]).unwrap();
+        gv.intern(batch, groups).unwrap();
     }
     black_box(&*groups);
 }

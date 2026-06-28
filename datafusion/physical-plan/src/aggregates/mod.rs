@@ -3171,6 +3171,7 @@ mod tests {
             TaskContext::default().with_session_config(
                 SessionConfig::new()
                     .with_batch_size(2)
+                    .with_target_partitions(1)
                     .set_bool("datafusion.execution.enable_migration_aggregate", true),
             ),
         );

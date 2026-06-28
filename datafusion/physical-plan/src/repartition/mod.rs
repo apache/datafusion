@@ -620,7 +620,8 @@ enum BatchPartitionerState {
 
 /// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
 /// executions and runs.
-pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_seed(0);
+pub(crate) const REPARTITION_RANDOM_STATE: SeededRandomState =
+    SeededRandomState::with_seed(0);
 
 /// Computes `value % divisor` without division in the hot loop when `divisor`
 /// is fixed for many values.

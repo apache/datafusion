@@ -17,7 +17,7 @@
 
 use std::mem::size_of;
 
-use crate::aggregates::group_values::{GroupValues, SkipHashGroupByState};
+use crate::aggregates::group_values::GroupValues;
 
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use datafusion_common::Result;
@@ -33,7 +33,6 @@ pub struct GroupValuesBytes<O: OffsetSizeTrait> {
     map: ArrowBytesMap<O, usize>,
     /// The total number of groups so far (used to assign group_index)
     num_groups: usize,
-    skip_hash_group_by: Option<SkipHashGroupByState>,
 }
 
 impl<O: OffsetSizeTrait> GroupValuesBytes<O> {
@@ -41,23 +40,13 @@ impl<O: OffsetSizeTrait> GroupValuesBytes<O> {
         Self {
             map: ArrowBytesMap::new(output_type),
             num_groups: 0,
-            skip_hash_group_by: None,
         }
     }
 }
 
 impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
-    fn intern(
-        &mut self,
-        cols: &[ArrayRef],
-        groups: &mut Vec<usize>,
-        _hashes_buffer: &[u64],
-    ) -> Result<()> {
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         assert_eq!(cols.len(), 1);
-        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
-            skip_hash_group_by.intern(cols, groups);
-            return Ok(());
-        }
 
         // look up / add entries in the table
         let arr = &cols[0];
@@ -84,28 +73,18 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
     }
 
     fn size(&self) -> usize {
-        self.skip_hash_group_by
-            .as_ref()
-            .map(|skip_hash_group_by| skip_hash_group_by.size())
-            .unwrap_or_else(|| self.map.size() + size_of::<Self>())
+        self.map.size() + size_of::<Self>()
     }
 
     fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.num_groups == 0
     }
 
     fn len(&self) -> usize {
-        self.skip_hash_group_by
-            .as_ref()
-            .map(|skip_hash_group_by| skip_hash_group_by.len())
-            .unwrap_or(self.num_groups)
+        self.num_groups
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
-            return skip_hash_group_by.emit(emit_to);
-        }
-
         // Reset the map to default, and convert it into a single array
         let map_contents = self.map.take().into_state();
 
@@ -129,7 +108,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
 
                 self.num_groups = 0;
                 let mut group_indexes = vec![];
-                self.intern(&[remaining_group_values], &mut group_indexes, &[])?;
+                self.intern(&[remaining_group_values], &mut group_indexes)?;
 
                 // Verify that the group indexes were assigned in the correct order
                 assert_eq!(0, group_indexes[0]);
@@ -141,16 +120,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
         Ok(vec![group_values])
     }
 
-    fn skip_hash_group_by(&mut self) {
-        self.map.take();
-        self.num_groups = 0;
-        self.skip_hash_group_by = Some(SkipHashGroupByState::default());
-    }
-
     fn clear_shrink(&mut self, _num_rows: usize) {
-        if let Some(skip_hash_group_by) = self.skip_hash_group_by.as_mut() {
-            skip_hash_group_by.clear_shrink();
-        }
         // in theory we could potentially avoid this reallocation and clear the
         // contents of the maps, but for now we just reset the map from the beginning
         self.map.take();

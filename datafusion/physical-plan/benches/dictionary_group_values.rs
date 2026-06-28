@@ -112,8 +112,7 @@ fn bench_intern_emit(c: &mut Criterion) {
                             )
                         },
                         |(gv, groups)| {
-                            gv.intern(std::slice::from_ref(&array), groups, &[])
-                                .unwrap();
+                            gv.intern(std::slice::from_ref(&array), groups).unwrap();
                             black_box(&*groups);
                             black_box(gv.emit(EmitTo::All).unwrap());
                         },
@@ -159,8 +158,7 @@ fn bench_repeated_intern_emit(c: &mut Criterion) {
                         },
                         |(gv, groups)| {
                             for arr in &batches {
-                                gv.intern(std::slice::from_ref(arr), groups, &[])
-                                    .unwrap();
+                                gv.intern(std::slice::from_ref(arr), groups).unwrap();
                                 black_box(&*groups);
                             }
                             black_box(gv.emit(EmitTo::All).unwrap());

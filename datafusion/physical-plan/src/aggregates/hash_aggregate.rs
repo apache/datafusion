@@ -39,6 +39,7 @@ use futures::stream::{Stream, StreamExt};
 use super::AggregateExec;
 use super::aggregate_hash_table::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialSkipMarker,
+    PartitionedPartialHashAggregateTables,
 };
 use super::skip_partial::SkipAggregationProbe;
 use crate::metrics::{
@@ -140,10 +141,10 @@ pub(crate) struct PartialHashAggregateStream {
 /// States for partial hash aggregation processing.
 enum PartialHashAggregateState {
     ReadingInput {
-        hash_table: AggregateHashTable<PartialMarker>,
+        hash_table: PartialHashTable,
     },
     ProducingOutput {
-        hash_table: AggregateHashTable<PartialMarker>,
+        hash_table: PartialHashTable,
         /// If `None`, partial skip was never triggered and this state will
         /// finish in `Done`. If `Some`, partial skip has triggered and the
         /// stream will move to `SkippingAggregation` after these accumulated
@@ -156,14 +157,109 @@ enum PartialHashAggregateState {
     Done,
 }
 
+enum PartialHashTable {
+    Single(AggregateHashTable<PartialMarker>),
+    Partitioned(PartitionedPartialHashAggregateTables),
+}
+
 type PartialHashAggregatePoll = Poll<Option<Result<RecordBatch>>>;
 type PartialHashAggregateStateTransition = ControlFlow<
     (PartialHashAggregatePoll, PartialHashAggregateState),
     PartialHashAggregateState,
 >;
 
+impl PartialHashTable {
+    fn new(
+        agg: &AggregateExec,
+        context: &TaskContext,
+        partition: usize,
+        schema: SchemaRef,
+        batch_size: usize,
+    ) -> Result<Self> {
+        let num_partitions = partitioned_partial_hash_num_partitions(agg, context);
+        if num_partitions == 1 {
+            return Ok(Self::Single(AggregateHashTable::<PartialMarker>::new(
+                agg, partition, schema, batch_size,
+            )?));
+        }
+
+        Ok(Self::Partitioned(
+            PartitionedPartialHashAggregateTables::new(
+                agg,
+                partition,
+                &schema,
+                batch_size,
+                num_partitions,
+            )?,
+        ))
+    }
+
+    fn aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        match self {
+            Self::Single(table) => table.aggregate_batch(batch),
+            Self::Partitioned(tables) => tables.aggregate_batch(batch),
+        }
+    }
+
+    fn start_output(&mut self) -> Result<()> {
+        match self {
+            Self::Single(table) => table.start_output(),
+            Self::Partitioned(tables) => tables.start_output(),
+        }
+    }
+
+    fn next_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        match self {
+            Self::Single(table) => table.next_output_batch(),
+            Self::Partitioned(tables) => tables.next_output_batch(),
+        }
+    }
+
+    fn can_skip_aggregation(&self) -> bool {
+        match self {
+            Self::Single(table) => table.can_skip_aggregation(),
+            Self::Partitioned(tables) => tables.can_skip_aggregation(),
+        }
+    }
+
+    fn partial_skip_table(&self) -> Result<AggregateHashTable<PartialSkipMarker>> {
+        match self {
+            Self::Single(table) => table.partial_skip_table(),
+            Self::Partitioned(tables) => tables.partial_skip_table(),
+        }
+    }
+
+    fn memory_size(&self) -> usize {
+        match self {
+            Self::Single(table) => table.memory_size(),
+            Self::Partitioned(tables) => tables.memory_size(),
+        }
+    }
+
+    fn building_group_count(&self) -> usize {
+        match self {
+            Self::Single(table) => table.building_group_count(),
+            Self::Partitioned(tables) => tables.building_group_count(),
+        }
+    }
+
+    fn is_building(&self) -> bool {
+        match self {
+            Self::Single(table) => table.is_building(),
+            Self::Partitioned(tables) => tables.is_building(),
+        }
+    }
+
+    fn is_done(&self) -> bool {
+        match self {
+            Self::Single(table) => table.is_done(),
+            Self::Partitioned(tables) => tables.is_done(),
+        }
+    }
+}
+
 impl PartialHashAggregateState {
-    fn hash_table(&self) -> &AggregateHashTable<PartialMarker> {
+    fn hash_table(&self) -> &PartialHashTable {
         match self {
             Self::ReadingInput { hash_table }
             | Self::ProducingOutput { hash_table, .. } => hash_table,
@@ -173,7 +269,7 @@ impl PartialHashAggregateState {
         }
     }
 
-    fn hash_table_mut(&mut self) -> &mut AggregateHashTable<PartialMarker> {
+    fn hash_table_mut(&mut self) -> &mut PartialHashTable {
         match self {
             Self::ReadingInput { hash_table }
             | Self::ProducingOutput { hash_table, .. } => hash_table,
@@ -267,6 +363,20 @@ impl FinalHashAggregateState {
     }
 }
 
+fn partitioned_partial_hash_num_partitions(
+    agg: &AggregateExec,
+    context: &TaskContext,
+) -> usize {
+    if agg.mode == super::AggregateMode::Partial
+        && agg.input_order_mode == InputOrderMode::Linear
+        && agg.group_by.is_single()
+    {
+        context.session_config().target_partitions()
+    } else {
+        1
+    }
+}
+
 impl PartialHashAggregateStream {
     pub fn new(
         agg: &AggregateExec,
@@ -287,8 +397,9 @@ impl PartialHashAggregateStream {
             .with_type(metrics::MetricType::Summary)
             .ratio_metrics("reduction_factor", partition);
 
-        let hash_table = AggregateHashTable::<PartialMarker>::new(
+        let hash_table = PartialHashTable::new(
             agg,
+            context.as_ref(),
             partition,
             Arc::clone(&schema),
             batch_size,
@@ -334,10 +445,7 @@ impl PartialHashAggregateStream {
     }
 
     /// See comments in [`Self::group_values_soft_limit`] for details.
-    fn hit_soft_group_limit(
-        &self,
-        hash_table: &AggregateHashTable<PartialMarker>,
-    ) -> bool {
+    fn hit_soft_group_limit(&self, hash_table: &PartialHashTable) -> bool {
         self.group_values_soft_limit
             .is_some_and(|limit| limit <= hash_table.building_group_count())
     }
@@ -359,7 +467,7 @@ impl PartialHashAggregateStream {
 
     fn start_output(
         &mut self,
-        hash_table: &mut AggregateHashTable<PartialMarker>,
+        hash_table: &mut PartialHashTable,
         close_input: bool,
     ) -> Result<()> {
         if close_input {
