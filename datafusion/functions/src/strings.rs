@@ -1333,6 +1333,7 @@ impl BulkNullStringArrayBuilder for StringViewArrayBuilder {
     }
 }
 
+// `pub(crate)` for reuse by tests outside this module.
 #[cfg(test)]
 pub(crate) struct FailingStringWriter;
 
@@ -1343,6 +1344,7 @@ impl StringWriter for FailingStringWriter {
     fn write_char(&mut self, _c: char) {}
 }
 
+// `pub(crate)` for reuse by tests outside this module.
 #[cfg(test)]
 pub(crate) struct FailingBulkNullStringArrayBuilder;
 
