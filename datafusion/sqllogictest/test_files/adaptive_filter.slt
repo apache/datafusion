@@ -1,0 +1,80 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for execution.adaptive_filter_reordering. Runtime reordering of a
+# conjunction must never change query results, only evaluation order.
+
+statement ok
+CREATE TABLE t AS
+SELECT
+  i AS a,
+  i % 7 AS b,
+  arrow_cast(i, 'Utf8') AS s
+FROM generate_series(1, 1000) AS tbl(i);
+
+# Baseline (flag off): multi-conjunct filter mixing a cheap comparison with an
+# expensive LIKE.
+query I
+SELECT count(*) FROM t WHERE b = 3 AND s LIKE '1%';
+----
+17
+
+statement ok
+SET datafusion.execution.adaptive_filter_reordering = true;
+
+# Same query with adaptive reordering on must return the same result.
+query I
+SELECT count(*) FROM t WHERE b = 3 AND s LIKE '1%';
+----
+17
+
+# A three-conjunct predicate, including an expensive-but-selective LIKE.
+query I
+SELECT count(*) FROM t WHERE a > 100 AND s LIKE '5%' AND b <> 0;
+----
+86
+
+# Full row materialization (not just count) is unchanged by reordering.
+query IIT
+SELECT a, b, s FROM t WHERE b = 1 AND a > 990 AND s LIKE '99%' ORDER BY a;
+----
+995 1 995
+
+# EXPLAIN: runtime reordering is invisible to the plan — the FilterExec
+# predicate is unchanged whether the flag is on or off.
+query TT
+EXPLAIN SELECT count(*) FROM t WHERE b = 3 AND s LIKE '1%';
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Filter: t.b = Int64(3) AND t.s LIKE Utf8("1%")
+05)--------TableScan: t projection=[b, s]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------FilterExec: b@0 = 3 AND s@1 LIKE 1%, projection=[]
+06)----------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+statement ok
+SET datafusion.execution.adaptive_filter_reordering = false;
+
+statement ok
+DROP TABLE t;
