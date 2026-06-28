@@ -672,8 +672,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // `NullHandling::PreserveAndExpandEmpty`. Mixing the two in a
             // single SELECT is a planning error because `UnnestOptions` is
             // per-`UnnestExec`, not per-column.
-            let null_handling =
-                collect_unnest_null_handling(&intermediate_expr_groups)?;
+            let null_handling = collect_unnest_null_handling(&intermediate_expr_groups)?;
             let mut unnest_options =
                 UnnestOptions::new().with_null_handling(null_handling);
             let mut unnest_col_vec = vec![];
