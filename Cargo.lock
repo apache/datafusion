@@ -1827,6 +1827,7 @@ dependencies = [
  "itertools 0.15.0",
  "log",
  "object_store",
+ "percent-encoding",
 ]
 
 [[package]]
