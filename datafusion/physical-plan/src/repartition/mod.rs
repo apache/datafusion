@@ -46,12 +46,13 @@ use crate::{
     check_if_same_properties,
 };
 
-use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
+use arrow::array::{Array, PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
+use arrow_schema::SortOptions;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::utils::transpose;
+use datafusion_common::utils::{compare_rows, transpose};
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, SplitPoint, assert_or_internal_err,
     internal_err,
@@ -877,11 +878,14 @@ impl BatchPartitioner {
                         &batch,
                     )?;
 
-                    // TODO: go through arrays and assign rows in the `batch` to a corresponding output partition in `indices`
-
                     indices.iter_mut().for_each(|v| v.clear());
 
-                    partition_reducer.partition_indices(hash_buffer, indices);
+                    Self::partition_indices_for_split_points(
+                        arrays,
+                        split_points,
+                        ordering.iter().map(|e| e.options).collect(),
+                        indices,
+                    );
 
                     // Finished building index-arrays for output partitions
                     timer.done();
@@ -894,6 +898,46 @@ impl BatchPartitioner {
             };
 
         Ok(it)
+    }
+
+    /// TODO: comment what this function does
+    fn partition_indices_for_split_points(
+        arrays: Vec<Arc<dyn Array>>,
+        split_points: &Vec<SplitPoint>,
+        sort_options: Vec<SortOptions>,
+        indices: &mut Vec<Vec<u32>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use std::cmp::Ordering;
+        for row_idx in 0..arrays[0].len() {
+            let row_key = arrays
+                .iter()
+                .map(|row_values| row_values.value(row_idx))
+                .collect();
+
+            // todo: binary search instead of linearly searching
+            let mut inserted = false;
+            for (split_idx, split_point) in split_points.iter().enumerate() {
+                let comparison =
+                    compare_rows(row_key, split_point.values(), &sort_options)?;
+                match comparison {
+                    Ordering::Less => {
+                        indices[split_idx].push(row_idx as u32);
+                        inserted = true;
+                        break;
+                    }
+                    Ordering::Equal => {
+                        indices[split_idx + 1].push(row_idx as u32);
+                        inserted = true;
+                        break;
+                    }
+                }
+            }
+            if !inserted {
+                indices[indices.len() - 1].push(row_idx as u32)
+            }
+        }
+
+        Ok(())
     }
 
     // return the number of output partitions
