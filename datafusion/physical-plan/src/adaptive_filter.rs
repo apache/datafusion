@@ -56,6 +56,8 @@
 //! top of it.
 
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array};
 use arrow::buffer::BooleanBuffer;
@@ -104,6 +106,14 @@ impl ConjunctStats {
         self.nanos += nanos;
     }
 
+    /// Fold another accumulator's counts into this one (they are plain sums, so
+    /// merging is addition). Used to pool measurements across partition streams.
+    fn merge(&mut self, other: &Self) {
+        self.rows += other.rows;
+        self.matched += other.matched;
+        self.nanos += other.nanos;
+    }
+
     /// Fraction of rows that pass, or `None` if never evaluated on any row.
     fn pass_rate(&self) -> Option<f64> {
         (self.rows > 0).then(|| self.matched as f64 / self.rows as f64)
@@ -127,19 +137,61 @@ impl ConjunctStats {
     }
 }
 
+/// State shared by every partition stream of one `FilterExec`, so the streams
+/// learn as one: per-conjunct measurements are pooled across streams and the
+/// first stream to accumulate enough samples settles the order for all of them.
+///
+/// This matters because a `FilterExec` is split across many partition streams,
+/// each seeing only a slice of the data. Without sharing, every stream pays its
+/// own warm-up — and when each stream is only a handful of batches long, that
+/// warm-up is most of its work, so the reordering win never materialises. With
+/// sharing the warm-up is paid roughly once per query, not once per stream.
+#[derive(Debug, Default)]
+pub(crate) struct AdaptiveFilterShared {
+    /// `0` until an order is published; bumped once when the first stream
+    /// settles. Streams poll it with one relaxed atomic load per batch.
+    epoch: AtomicU64,
+    inner: Mutex<SharedInner>,
+}
+
+#[derive(Debug, Default)]
+struct SharedInner {
+    /// Per-conjunct counts pooled across all streams (indexed by conjunct
+    /// position). Empty until the first measured batch sizes it.
+    stats: Vec<ConjunctStats>,
+    /// Measured batches contributed by all streams so far.
+    measured_batches: u64,
+    /// The settled evaluation order, once decided; `None` while learning.
+    settled: Option<Vec<usize>>,
+}
+
+impl AdaptiveFilterShared {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// The published settled order, or `None` if the streams are still learning.
+    fn settled_order(&self) -> Option<Vec<usize>> {
+        self.inner.lock().expect("poisoned").settled.clone()
+    }
+}
+
 /// Adaptive evaluator for a single conjunctive predicate, owned per partition
-/// stream (single-threaded, no locking).
+/// stream. Measurements are pooled into the shared [`AdaptiveFilterShared`];
+/// the per-stream state is just the current order and how far it has caught up.
 #[derive(Debug)]
 pub(crate) struct AdaptiveConjunction {
-    /// The split conjuncts. `stats`/`order` indices refer to positions here.
+    /// The split conjuncts. `order` indices refer to positions here.
     conjuncts: Vec<Arc<dyn PhysicalExpr>>,
-    /// Per-conjunct measurements, indexed by conjunct position.
-    stats: Vec<ConjunctStats>,
-    /// Evaluation order: indices into `conjuncts`. Starts as the written order
-    /// and may be permuted once after the warm-up.
+    /// Measurements and the settled order, shared by every partition stream.
+    shared: Arc<AdaptiveFilterShared>,
+    /// Evaluation order: indices into `conjuncts`. The written order until a
+    /// settled order is adopted.
     order: Vec<usize>,
-    /// Warm-up batches still to measure; `0` means the order has settled.
-    warmup_left: u64,
+    /// Shared epoch this stream has caught up to.
+    epoch_seen: u64,
+    /// Whether the order is settled (frozen): this stream no longer measures.
+    settled: bool,
 }
 
 impl AdaptiveConjunction {
@@ -149,9 +201,13 @@ impl AdaptiveConjunction {
     /// - `enabled` is false (the config flag is off);
     /// - the predicate has fewer than two `AND` conjuncts (nothing to reorder);
     /// - any conjunct is volatile (reordering could change side effects).
+    ///
+    /// `shared` is the state common to all partition streams of the owning
+    /// `FilterExec`.
     pub(crate) fn try_new(
         predicate: &Arc<dyn PhysicalExpr>,
         enabled: bool,
+        shared: Arc<AdaptiveFilterShared>,
     ) -> Option<Self> {
         if !enabled {
             return None;
@@ -163,47 +219,83 @@ impl AdaptiveConjunction {
         if conjuncts.len() < 2 || conjuncts.iter().any(is_volatile) {
             return None;
         }
-        let stats = vec![ConjunctStats::default(); conjuncts.len()];
         let order = (0..conjuncts.len()).collect();
         Some(Self {
             conjuncts,
-            stats,
+            shared,
             order,
-            warmup_left: WARMUP_BATCHES,
+            epoch_seen: 0,
+            settled: false,
         })
     }
 
     /// Evaluate the conjunction against `batch`, returning the boolean mask
     /// (over the batch's rows) of rows that passed every conjunct.
     ///
-    /// During the warm-up the conjuncts are measured (on the rows that reach
-    /// each one); once the window ends the order is settled and subsequent
-    /// batches evaluate with no instrumentation.
+    /// Until the order settles, each batch is measured and its counts pooled
+    /// into the shared registry; a stream adopts the settled order another
+    /// stream published as soon as it sees the epoch advance.
     pub(crate) fn evaluate(&mut self, batch: &RecordBatch) -> Result<ArrayRef> {
-        if self.warmup_left == 0 {
+        // Adopt a settled order another stream published since we last looked:
+        // one relaxed atomic load per batch, a lock only on the transition.
+        if !self.settled {
+            let epoch = self.shared.epoch.load(Ordering::Acquire);
+            if epoch != self.epoch_seen {
+                self.epoch_seen = epoch;
+                if let Some(order) = self.shared.settled_order() {
+                    self.order = order;
+                    self.settled = true;
+                }
+            }
+        }
+        if self.settled {
             return eval_conjuncts(&self.conjuncts, &self.order, batch, None);
         }
+
+        // Measure this batch into a local accumulator, then pool it.
+        let mut local = vec![ConjunctStats::default(); self.conjuncts.len()];
         let result =
-            eval_conjuncts(&self.conjuncts, &self.order, batch, Some(&mut self.stats))?;
-        self.warmup_left -= 1;
-        if self.warmup_left == 0 {
-            self.settle();
-        }
+            eval_conjuncts(&self.conjuncts, &self.order, batch, Some(&mut local))?;
+        self.pool_and_maybe_settle(&local);
         Ok(result)
     }
 
-    /// Rank the conjuncts by measured effectiveness and, if the resulting order
-    /// is materially cheaper than the written order, adopt it.
-    fn settle(&mut self) {
-        let candidate = rank_by_effectiveness(&self.stats);
-        if candidate == self.order {
+    /// Merge this batch's measurements into the shared pool and, once enough
+    /// batches have accrued across all streams, decide and publish the order.
+    fn pool_and_maybe_settle(&mut self, local: &[ConjunctStats]) {
+        let mut inner = self.shared.inner.lock().expect("poisoned");
+        if inner.stats.len() != local.len() {
+            inner.stats = vec![ConjunctStats::default(); local.len()];
+        }
+        for (s, l) in inner.stats.iter_mut().zip(local) {
+            s.merge(l);
+        }
+        inner.measured_batches += 1;
+        if inner.settled.is_some() || inner.measured_batches < WARMUP_BATCHES {
             return;
         }
-        let candidate_cost = expected_cost_per_row(&self.stats, &candidate);
-        let current_cost = expected_cost_per_row(&self.stats, &self.order);
-        if candidate_cost < (1.0 - TIE_COST_FRACTION) * current_cost {
-            self.order = candidate;
-        }
+        let order = settle_order(&inner.stats);
+        inner.settled = Some(order.clone());
+        drop(inner);
+        self.order = order;
+        self.settled = true;
+        self.shared.epoch.fetch_add(1, Ordering::Release);
+    }
+}
+
+/// Rank the conjuncts by effectiveness and adopt the ranking only if it is
+/// materially cheaper than the written order; otherwise keep the written order
+/// (so interchangeable conjuncts are never reshuffled).
+fn settle_order(stats: &[ConjunctStats]) -> Vec<usize> {
+    let identity: Vec<usize> = (0..stats.len()).collect();
+    let candidate = rank_by_effectiveness(stats);
+    if candidate != identity
+        && expected_cost_per_row(stats, &candidate)
+            < (1.0 - TIE_COST_FRACTION) * expected_cost_per_row(stats, &identity)
+    {
+        candidate
+    } else {
+        identity
     }
 }
 
@@ -407,10 +499,22 @@ mod tests {
         }
     }
 
+    /// `try_new` with a fresh, unshared registry.
+    fn try_new(
+        predicate: &Arc<dyn PhysicalExpr>,
+        enabled: bool,
+    ) -> Option<AdaptiveConjunction> {
+        AdaptiveConjunction::try_new(
+            predicate,
+            enabled,
+            Arc::new(AdaptiveFilterShared::new()),
+        )
+    }
+
     #[test]
     fn disabled_is_not_adaptive() {
         let schema = schema();
-        assert!(AdaptiveConjunction::try_new(&predicate(&schema), false).is_none());
+        assert!(try_new(&predicate(&schema), false).is_none());
     }
 
     #[test]
@@ -418,16 +522,16 @@ mod tests {
         let schema = schema();
         let p =
             binary(col("a", &schema).unwrap(), Operator::Gt, lit(2i32), &schema).unwrap();
-        assert!(AdaptiveConjunction::try_new(&p, true).is_none());
+        assert!(try_new(&p, true).is_none());
     }
 
     #[test]
     fn two_conjuncts_are_adaptive() {
         let schema = schema();
-        let adaptive = AdaptiveConjunction::try_new(&predicate(&schema), true).unwrap();
+        let adaptive = try_new(&predicate(&schema), true).unwrap();
         assert_eq!(adaptive.conjuncts.len(), 2);
         assert_eq!(adaptive.order, vec![0, 1]);
-        assert_eq!(adaptive.warmup_left, WARMUP_BATCHES);
+        assert!(!adaptive.settled);
     }
 
     #[test]
@@ -493,7 +597,7 @@ mod tests {
     fn evaluate_matches_predicate_across_warmup() {
         let schema = schema();
         let p = predicate(&schema);
-        let mut adaptive = AdaptiveConjunction::try_new(&p, true).unwrap();
+        let mut adaptive = try_new(&p, true).unwrap();
 
         for round in 0..(WARMUP_BATCHES as i32 + 4) {
             let base = round * 10;
@@ -509,30 +613,63 @@ mod tests {
                 "mismatch on round {round}"
             );
         }
-        assert_eq!(adaptive.warmup_left, 0);
+        assert!(adaptive.settled);
     }
 
     /// A reorder is adopted only when materially cheaper; an already-good order
     /// is left untouched.
     #[test]
     fn settle_keeps_order_when_not_materially_better() {
-        let schema = schema();
-        let mut adaptive =
-            AdaptiveConjunction::try_new(&predicate(&schema), true).unwrap();
         // Two equally cheap, equally selective conjuncts: swapping cannot help.
-        adaptive.stats = vec![stats(1000, 500, 1000), stats(1000, 500, 1000)];
-        adaptive.settle();
-        assert_eq!(adaptive.order, vec![0, 1]);
+        let s = vec![stats(1000, 500, 1000), stats(1000, 500, 1000)];
+        assert_eq!(settle_order(&s), vec![0, 1]);
     }
 
     #[test]
     fn settle_adopts_materially_cheaper_order() {
-        let schema = schema();
-        let mut adaptive =
-            AdaptiveConjunction::try_new(&predicate(&schema), true).unwrap();
         // id 1 is far more selective and equally cheap: it should move first.
-        adaptive.stats = vec![stats(1000, 900, 1000), stats(1000, 10, 1000)];
-        adaptive.settle();
-        assert_eq!(adaptive.order, vec![1, 0]);
+        let s = vec![stats(1000, 900, 1000), stats(1000, 10, 1000)];
+        assert_eq!(settle_order(&s), vec![1, 0]);
+    }
+
+    /// Two streams sharing one registry settle the order together: the pooled
+    /// warm-up is `WARMUP_BATCHES` total across both streams, and once one
+    /// stream publishes the order the other adopts it on its next batch.
+    #[test]
+    fn streams_pool_measurements_and_share_settled_order() {
+        let schema = schema();
+        let p = predicate(&schema);
+        let shared = Arc::new(AdaptiveFilterShared::new());
+        let mut s1 = AdaptiveConjunction::try_new(&p, true, Arc::clone(&shared)).unwrap();
+        let mut s2 = AdaptiveConjunction::try_new(&p, true, Arc::clone(&shared)).unwrap();
+
+        // `b < 5` (conjunct 1) is the selective one; drive both streams with
+        // batches where it keeps ~1 row in 25.
+        let mk = |round: i32| {
+            let base = round * 100;
+            let a: Vec<i32> = (base..base + 100).collect();
+            let b: Vec<i32> = (base..base + 100).map(|x| x.rem_euclid(25)).collect();
+            batch(&schema, a, b)
+        };
+
+        // Alternate the two streams for `WARMUP_BATCHES` pooled batches; the
+        // order settles partway through and both streams must end settled.
+        for round in 0..(WARMUP_BATCHES as i32) {
+            let rb = mk(round);
+            for s in [&mut s1, &mut s2] {
+                let got = s.evaluate(&rb).unwrap();
+                let want = p.evaluate(&rb).unwrap().into_array(rb.num_rows()).unwrap();
+                assert_eq!(passing_rows(&got), passing_rows(&want));
+            }
+        }
+
+        assert!(shared.settled_order().is_some());
+        // One more batch each lets a not-yet-settled stream adopt the epoch.
+        s1.evaluate(&mk(99)).unwrap();
+        s2.evaluate(&mk(99)).unwrap();
+        assert!(s1.settled && s2.settled);
+        // The selective conjunct was promoted to the front for both.
+        assert_eq!(s1.order, vec![1, 0]);
+        assert_eq!(s2.order, vec![1, 0]);
     }
 }

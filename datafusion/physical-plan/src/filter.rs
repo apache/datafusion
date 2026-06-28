@@ -28,7 +28,7 @@ use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::adaptive_filter::AdaptiveConjunction;
+use crate::adaptive_filter::{AdaptiveConjunction, AdaptiveFilterShared};
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::common::can_project;
 use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
@@ -101,6 +101,10 @@ pub struct FilterExec {
     batch_size: usize,
     /// Number of rows to fetch
     fetch: Option<usize>,
+    /// Measurements shared by all partition streams, used by adaptive conjunct
+    /// reordering (see [`AdaptiveConjunction`]) so the streams learn as one.
+    /// Fresh per plan node; never affects the plan.
+    adaptive_stats: Arc<AdaptiveFilterShared>,
 }
 
 /// Builder for [`FilterExec`] to set optional parameters
@@ -224,6 +228,7 @@ impl FilterExecBuilder {
             projection: self.projection,
             batch_size: self.batch_size,
             fetch: self.fetch,
+            adaptive_stats: Arc::new(AdaptiveFilterShared::new()),
         })
     }
 }
@@ -300,6 +305,7 @@ impl FilterExec {
             projection: self.projection.clone(),
             batch_size,
             fetch: self.fetch,
+            adaptive_stats: Arc::clone(&self.adaptive_stats),
         })
     }
 
@@ -654,6 +660,7 @@ impl ExecutionPlan for FilterExec {
                 .options()
                 .execution
                 .adaptive_filter_reordering,
+            Arc::clone(&self.adaptive_stats),
         );
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
@@ -865,6 +872,9 @@ impl ExecutionPlan for FilterExec {
                 projection: self.projection.clone(),
                 batch_size: self.batch_size,
                 fetch: self.fetch,
+                // The predicate changed; pooled per-conjunct stats no longer
+                // describe it.
+                adaptive_stats: Arc::new(AdaptiveFilterShared::new()),
             };
             Some(Arc::new(new) as _)
         };
@@ -889,6 +899,7 @@ impl ExecutionPlan for FilterExec {
             projection: self.projection.clone(),
             batch_size: self.batch_size,
             fetch,
+            adaptive_stats: Arc::clone(&self.adaptive_stats),
         }))
     }
 
@@ -925,6 +936,8 @@ impl ExecutionPlan for FilterExec {
             projection,
             batch_size,
             fetch,
+            // Per-execution adaptive measurements, not part of the plan shape.
+            adaptive_stats: _,
         } = self;
         let input_node = ctx.encode_child(input)?;
         let expr = ctx.encode_expr(predicate)?;
