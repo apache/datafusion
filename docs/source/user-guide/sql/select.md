@@ -285,11 +285,11 @@ are not currently supported).
 for compatibility with Spark and Hive dialects. They differ from plain `UNNEST`
 in how `NULL` and empty input lists are handled:
 
-| Form                  | `NULL` input list | Empty input list |
-| --------------------- | ----------------- | ---------------- |
-| `UNNEST(col)`         | dropped           | dropped          |
-| `explode(col)`        | dropped           | dropped          |
-| `explode_outer(col)`  | one `NULL` row    | one `NULL` row   |
+| Form                 | `NULL` input list | Empty input list |
+| -------------------- | ----------------- | ---------------- |
+| `UNNEST(col)`        | dropped           | dropped          |
+| `explode(col)`       | dropped           | dropped          |
+| `explode_outer(col)` | one `NULL` row    | one `NULL` row   |
 
 ```sql
 SELECT id, explode_outer(tags) AS tag FROM rows;
