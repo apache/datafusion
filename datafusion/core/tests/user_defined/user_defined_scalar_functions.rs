@@ -1970,7 +1970,12 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
         }
 
         fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-            let tz = args.config_options.execution.time_zone.clone();
+            let tz = args
+                .config_options
+                .execution
+                .time_zone
+                .as_ref()
+                .map(ToString::to_string);
             Ok(ColumnarValue::Scalar(ScalarValue::from(tz)))
         }
     }
@@ -1980,7 +1985,7 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
     });
 
     let mut config = SessionConfig::new();
-    config.options_mut().execution.time_zone = Some("AEST".into());
+    config.options_mut().execution.time_zone = Some("Australia/Sydney".parse().unwrap());
 
     let ctx = SessionContext::new_with_config(config);
 

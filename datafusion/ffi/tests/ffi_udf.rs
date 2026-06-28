@@ -135,7 +135,8 @@ mod tests {
         assert!(result[0].column(0).as_string::<i32>().is_null(0));
 
         let mut config = SessionConfig::new();
-        config.options_mut().execution.time_zone = Some("AEST".into());
+        config.options_mut().execution.time_zone =
+            Some("Australia/Sydney".parse().unwrap());
 
         let ctx = SessionContext::new_with_config(config);
 

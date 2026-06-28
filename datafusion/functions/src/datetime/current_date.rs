@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::timezone::Tz;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
 use chrono::{Datelike, NaiveDate, TimeZone};
@@ -121,7 +120,7 @@ impl ScalarUDFImpl for CurrentDateFunc {
             .execution
             .time_zone
             .as_ref()
-            .and_then(|tz| tz.parse::<Tz>().ok())
+            .map(|tz| tz.tz())
             .map_or_else(
                 || datetime_to_days(&now_ts),
                 |tz| {
