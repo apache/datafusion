@@ -32,6 +32,7 @@ use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
+use datafusion_physical_plan::StatisticsArgs;
 use datafusion_physical_plan::execution_plan::Boundedness;
 use datafusion_physical_plan::projection::{
     ProjectionExec, make_with_child, update_expr, update_ordering_requirement,
@@ -61,7 +62,9 @@ impl OutputRequirements {
     /// Create a new rule which works in `Add` mode; i.e. it simply adds a
     /// top-level [`OutputRequirementExec`] into the physical plan to keep track
     /// of global ordering and distribution requirements if there are any.
-    /// Note that this rule should run at the beginning.
+    /// Note that this rule should run at the beginning. It is idempotent: when
+    /// invoked on a plan that is already topped by an `OutputRequirementExec`,
+    /// it returns the plan unchanged.
     pub fn new_add_mode() -> Self {
         Self {
             mode: RuleMode::Add,
@@ -240,8 +243,8 @@ impl ExecutionPlan for OutputRequirementExec {
         unreachable!();
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(partition)
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        args.compute_child_statistics(&self.input, args.partition())
     }
 
     fn try_swapping_with_projection(
@@ -325,7 +328,15 @@ impl PhysicalOptimizerRule for OutputRequirements {
 
 /// This functions adds ancillary `OutputRequirementExec` to the physical plan, so that
 /// global requirements are not lost during optimization.
+///
+/// Idempotent: if the plan is already topped by an `OutputRequirementExec`, it
+/// is returned unchanged so that re-running this rule (as adaptive execution
+/// in datafusion-ballista AQE does after every completed stage, see
+/// datafusion-ballista#1359) does not stack wrappers.
 fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    if plan.downcast_ref::<OutputRequirementExec>().is_some() {
+        return Ok(plan);
+    }
     let (new_plan, is_changed) = require_top_ordering_helper(plan)?;
     if is_changed {
         Ok(new_plan)

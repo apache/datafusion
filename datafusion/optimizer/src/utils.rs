@@ -24,9 +24,10 @@ use arrow::array::{Array, RecordBatch, new_null_array};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::TableReference;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::tree_node::{TransformedResult, TreeNode};
+use datafusion_common::tree_node::{TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::{ColumnarValue, Expr, logical_plan::LogicalPlan};
 use datafusion_physical_expr::create_physical_expr;
@@ -36,6 +37,56 @@ use std::sync::Arc;
 /// Re-export of `NamesPreserver` for backwards compatibility,
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
+
+/// Invokes `f` with the index, within `schema`, of every column referenced by
+/// `expr` — including columns reached through a correlated subquery's outer
+/// references. Columns absent from `schema` are skipped.
+///
+/// A subquery's own plan is intentionally not traversed: its internal columns
+/// index into its own schema, not `schema`; only the outer (correlated) columns
+/// it references from `schema` are relevant. The comparison expression of an
+/// `IN`/set-comparison subquery is reached by the normal expression walk.
+///
+/// This is the shared primitive behind the top-down "which of a node's output
+/// columns does an ancestor still need" analyses, namely
+/// [`OptimizeProjections`](crate::optimize_projections::OptimizeProjections)
+/// and [`EliminateJoin`](crate::eliminate_join::EliminateJoin). The two keep
+/// their own required-index containers (an ordered set vs. a hash set), so this
+/// reports indices through a callback rather than populating a shared type.
+pub(crate) fn for_each_referenced_index(
+    expr: &Expr,
+    schema: &DFSchema,
+    mut f: impl FnMut(usize),
+) -> Result<()> {
+    visit_referenced_indices(expr, schema, &mut f)
+}
+
+fn visit_referenced_indices(
+    expr: &Expr,
+    schema: &DFSchema,
+    f: &mut dyn FnMut(usize),
+) -> Result<()> {
+    expr.apply(|expr| {
+        match expr {
+            Expr::Column(column) | Expr::OuterReferenceColumn(_, column) => {
+                if let Some(idx) = schema.maybe_index_of_column(column) {
+                    f(idx);
+                }
+            }
+            Expr::Exists(Exists { subquery, .. })
+            | Expr::InSubquery(InSubquery { subquery, .. })
+            | Expr::SetComparison(SetComparison { subquery, .. })
+            | Expr::ScalarSubquery(subquery) => {
+                for outer in &subquery.outer_ref_columns {
+                    visit_referenced_indices(outer, schema, f)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(())
+}
 
 /// Returns true if `expr` contains all columns in `schema_cols`
 pub(crate) fn has_all_column_refs(

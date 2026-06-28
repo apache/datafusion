@@ -119,8 +119,6 @@
 //! factor than the pair-materialization approach.
 
 use std::cmp::Ordering;
-use std::fs::File;
-use std::io::BufReader;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -134,7 +132,6 @@ use crate::{EmptyRecordBatchStream, RecordBatchStream};
 use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
 use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch, not};
 use arrow::datatypes::SchemaRef;
-use arrow::ipc::reader::StreamReader;
 use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
 use arrow::util::bit_util::apply_bitwise_binary_op;
 use datafusion_common::{
@@ -259,6 +256,13 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     inner_key_buffer: Vec<RecordBatch>,
     inner_key_spill: Option<RefCountedTempFile>,
 
+    // Track the active spill_stream
+    spill_stream: Option<SendableRecordBatchStream>,
+    // Whether the active spill stream has produced any batches yet.
+    spill_stream_has_data: bool,
+    // Prevents wiping out the buffer if we yield while evaluating the filter
+    inner_group_buffered: bool,
+
     // True when buffer_inner_key_group returned Pending after partially
     // filling inner_key_buffer. On re-entry, buffer_inner_key_group
     // must skip clear() and resume from poll_next_inner_batch (the
@@ -356,7 +360,8 @@ impl BitwiseSortMergeJoinStream {
             MetricBuilder::new(metrics).counter("input_batches", partition);
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
         let baseline_metrics = BaselineMetrics::new(metrics, partition);
-        let peak_mem_used = MetricBuilder::new(metrics).gauge("peak_mem_used", partition);
+        let peak_mem_used =
+            MetricBuilder::new(metrics).peak_memory_usage("peak_mem_used", partition);
 
         Ok(Self {
             join_type,
@@ -371,6 +376,9 @@ impl BitwiseSortMergeJoinStream {
             matched: BooleanBufferBuilder::new(0),
             inner_key_buffer: vec![],
             inner_key_spill: None,
+            spill_stream: None,
+            spill_stream_has_data: false,
+            inner_group_buffered: false,
             buffering_inner_pending: false,
             pending_boundary: None,
             on_outer,
@@ -468,6 +476,9 @@ impl BitwiseSortMergeJoinStream {
     fn clear_inner_key_group(&mut self) {
         self.inner_key_buffer.clear();
         self.inner_key_spill = None;
+        self.spill_stream = None;
+        self.spill_stream_has_data = false;
+        self.inner_group_buffered = false;
         self.inner_buffer_size = 0;
     }
 
@@ -749,7 +760,10 @@ impl BitwiseSortMergeJoinStream {
     /// Process a key match with a filter. For each inner row in the buffered
     /// key group, evaluates the filter against the outer key group and ORs
     /// the results into the matched bitset using u64-chunked bitwise ops.
-    fn process_key_match_with_filter(&mut self) -> Result<()> {
+    fn process_key_match_with_filter(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<()>> {
         self.get_outer_self_cmp()?;
         let filter = self.filter.as_ref().unwrap();
         let outer_batch = self.outer_batch.as_ref().unwrap();
@@ -785,24 +799,47 @@ impl BitwiseSortMergeJoinStream {
         )
         .count_ones();
 
-        // Process spilled inner batches first (read back from disk).
-        if let Some(spill_file) = &self.inner_key_spill {
-            let file = BufReader::new(File::open(spill_file.path())?);
-            let reader = StreamReader::try_new(file, None)?;
-            for batch_result in reader {
-                let inner_slice = batch_result?;
-                matched_count = eval_filter_for_inner_slice(
-                    self.outer_is_left,
-                    filter,
-                    &outer_slice,
-                    &inner_slice,
-                    &mut self.matched,
-                    self.outer_offset,
-                    outer_group_len,
-                    matched_count,
-                )?;
-                if matched_count == outer_group_len {
-                    break;
+        // Process spilled inner batches first asynchronously.
+        if matched_count < outer_group_len
+            && (self.inner_key_spill.is_some() || self.spill_stream.is_some())
+        {
+            if self.spill_stream.is_none()
+                && let Some(spill_file) = &self.inner_key_spill
+            {
+                let stream = self
+                    .spill_manager
+                    .read_spill_as_stream(spill_file.clone(), None)?;
+                self.spill_stream = Some(stream);
+            }
+
+            while matched_count < outer_group_len {
+                let stream = self.spill_stream.as_mut().unwrap();
+                match ready!(stream.poll_next_unpin(cx)) {
+                    Some(Ok(inner_slice)) => {
+                        self.spill_stream_has_data = true;
+                        matched_count = eval_filter_for_inner_slice(
+                            self.outer_is_left,
+                            filter,
+                            &outer_slice,
+                            &inner_slice,
+                            &mut self.matched,
+                            self.outer_offset,
+                            outer_group_len,
+                            matched_count,
+                        )?;
+                    }
+                    Some(Err(e)) => {
+                        self.spill_stream = None;
+                        self.spill_stream_has_data = false;
+                        return Poll::Ready(Err(e));
+                    }
+                    None => {
+                        self.spill_stream = None;
+                        if !self.spill_stream_has_data {
+                            return Poll::Ready(internal_err!("Spill file was empty"));
+                        }
+                        break;
+                    }
                 }
             }
         }
@@ -830,13 +867,17 @@ impl BitwiseSortMergeJoinStream {
         }
 
         self.outer_offset = outer_group_end;
-        Ok(())
+
+        self.spill_stream = None;
+        self.spill_stream_has_data = false;
+
+        Poll::Ready(Ok(()))
     }
 
     /// Continue processing an outer key group that spans multiple outer
     /// batches. Returns `true` if this outer batch was fully consumed
     /// by the key group and the caller should load another.
-    fn resume_boundary(&mut self) -> Result<bool> {
+    fn resume_boundary(&mut self, cx: &mut Context<'_>) -> Poll<Result<bool>> {
         debug_assert!(
             self.outer_batch.is_some(),
             "caller must load outer_batch first"
@@ -858,7 +899,7 @@ impl BitwiseSortMergeJoinStream {
                         });
                         self.emit_outer_batch()?;
                         self.outer_batch = None;
-                        return Ok(true);
+                        return Poll::Ready(Ok(true));
                     }
                 }
             }
@@ -874,7 +915,15 @@ impl BitwiseSortMergeJoinStream {
                     self.null_equality,
                 )?;
                 if same_key {
-                    self.process_key_match_with_filter()?;
+                    match self.process_key_match_with_filter(cx) {
+                        Poll::Ready(Ok(())) => (),
+                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                        Poll::Pending => {
+                            self.pending_boundary =
+                                Some(PendingBoundary::Filtered { saved_keys });
+                            return Poll::Pending;
+                        }
+                    }
                     let num_outer = self.outer_batch.as_ref().unwrap().num_rows();
                     if self.outer_offset >= num_outer {
                         self.pending_boundary = Some(PendingBoundary::Filtered {
@@ -882,14 +931,63 @@ impl BitwiseSortMergeJoinStream {
                         });
                         self.emit_outer_batch()?;
                         self.outer_batch = None;
-                        return Ok(true);
+                        return Poll::Ready(Ok(true));
                     }
                 }
                 self.clear_inner_key_group();
             }
             None => {}
         }
-        Ok(false)
+        Poll::Ready(Ok(false))
+    }
+
+    /// Helper to process an Equal match across potential outer batch boundaries.
+    fn process_filtered_match_loop(&mut self, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        loop {
+            ready!(self.process_key_match_with_filter(cx))?;
+
+            let outer_batch = self.outer_batch.as_ref().unwrap();
+            if self.outer_offset >= outer_batch.num_rows() {
+                let saved_keys =
+                    slice_keys(&self.outer_key_arrays, outer_batch.num_rows() - 1);
+
+                self.emit_outer_batch()?;
+                self.pending_boundary = Some(PendingBoundary::Filtered { saved_keys });
+
+                // Clear stale batch before polling
+                self.outer_batch = None;
+
+                match ready!(self.poll_next_outer_batch(cx)) {
+                    Err(e) => return Poll::Ready(Err(e)),
+                    Ok(false) => {
+                        self.pending_boundary = None;
+                        break;
+                    }
+                    Ok(true) => {
+                        let Some(PendingBoundary::Filtered { saved_keys }) =
+                            self.pending_boundary.take()
+                        else {
+                            unreachable!()
+                        };
+                        let same = keys_match(
+                            &saved_keys,
+                            &self.outer_key_arrays,
+                            &self.sort_options,
+                            self.null_equality,
+                        )?;
+                        if same {
+                            continue;
+                        }
+                        break;
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        self.clear_inner_key_group(); // This resets inner_group_buffered to false
+        Poll::Ready(Ok(()))
     }
 
     /// Main loop: drive the merge-scan to produce output batches.
@@ -911,12 +1009,19 @@ impl BitwiseSortMergeJoinStream {
                         }
                         return Poll::Ready(Ok(None));
                     }
-                    Ok(true) => {
-                        if self.resume_boundary()? {
-                            continue;
-                        }
-                    }
+                    Ok(true) => {} // Loaded batch, move on to checks
                 }
+            }
+
+            // Handles pausing while fetching a NEW outer batch.
+            if self.pending_boundary.is_some() && ready!(self.resume_boundary(cx))? {
+                continue;
+            }
+
+            // Handles pausing while reading the disk stream mid-batch.
+            if self.inner_group_buffered {
+                ready!(self.process_filtered_match_loop(cx))?;
+                continue;
             }
 
             // 2. Ensure we have an inner batch (unless inner is exhausted).
@@ -1043,65 +1148,17 @@ impl BitwiseSortMergeJoinStream {
                 }
                 Ordering::Equal => {
                     if self.filter.is_some() {
+                        debug_assert!(!self.inner_group_buffered);
                         // Buffer inner key group (may span batches)
                         match ready!(self.buffer_inner_key_group(cx)) {
                             Err(e) => return Poll::Ready(Err(e)),
-                            Ok(_inner_exhausted) => {}
-                        }
-
-                        // Process outer rows against buffered inner group
-                        // (may need to handle outer batch boundary)
-                        loop {
-                            self.process_key_match_with_filter()?;
-
-                            let outer_batch = self.outer_batch.as_ref().unwrap();
-                            if self.outer_offset >= outer_batch.num_rows() {
-                                let saved_keys = slice_keys(
-                                    &self.outer_key_arrays,
-                                    outer_batch.num_rows() - 1,
-                                );
-
-                                self.emit_outer_batch()?;
-                                debug_assert!(
-                                    !self.inner_key_buffer.is_empty()
-                                        || self.inner_key_spill.is_some(),
-                                    "Filtered pending boundary requires inner key data in buffer or spill"
-                                );
-                                self.pending_boundary =
-                                    Some(PendingBoundary::Filtered { saved_keys });
-
-                                match ready!(self.poll_next_outer_batch(cx)) {
-                                    Err(e) => return Poll::Ready(Err(e)),
-                                    Ok(false) => {
-                                        self.pending_boundary = None;
-                                        self.outer_batch = None;
-                                        break;
-                                    }
-                                    Ok(true) => {
-                                        let Some(PendingBoundary::Filtered {
-                                            saved_keys,
-                                        }) = self.pending_boundary.take()
-                                        else {
-                                            unreachable!()
-                                        };
-                                        let same = keys_match(
-                                            &saved_keys,
-                                            &self.outer_key_arrays,
-                                            &self.sort_options,
-                                            self.null_equality,
-                                        )?;
-                                        if same {
-                                            continue;
-                                        }
-                                        break;
-                                    }
-                                }
-                            } else {
-                                break;
+                            Ok(_inner_exhausted) => {
+                                self.inner_group_buffered = true;
                             }
                         }
-
-                        self.clear_inner_key_group();
+                        // Process outer rows against buffered inner group
+                        // (may need to handle outer batch boundary)
+                        ready!(self.process_filtered_match_loop(cx))?;
                     } else {
                         // No filter: advance inner past key group, then
                         // mark all outer rows with this key as matched.
@@ -1121,12 +1178,13 @@ impl BitwiseSortMergeJoinStream {
                                 self.emit_outer_batch()?;
                                 self.pending_boundary =
                                     Some(PendingBoundary::NoFilter { saved_keys });
+                                // Clear stale batch before polling
+                                self.outer_batch = None;
 
                                 match ready!(self.poll_next_outer_batch(cx)) {
                                     Err(e) => return Poll::Ready(Err(e)),
                                     Ok(false) => {
                                         self.pending_boundary = None;
-                                        self.outer_batch = None;
                                         break;
                                     }
                                     Ok(true) => {

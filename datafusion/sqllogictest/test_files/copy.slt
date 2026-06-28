@@ -326,6 +326,7 @@ OPTIONS (
 'format.compression::col1' 'zstd(5)',
 'format.compression::col2' snappy,
 'format.max_row_group_size' 12345,
+'format.max_row_group_bytes' 2048,
 'format.data_pagesize_limit' 1234,
 'format.write_batch_size' 1234,
 'format.writer_version' 2.0,

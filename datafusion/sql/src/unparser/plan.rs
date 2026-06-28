@@ -42,8 +42,8 @@ use crate::unparser::{
 };
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
-    Column, DataFusionError, Result, ScalarValue, TableReference, assert_or_internal_err,
-    internal_datafusion_err, internal_err, not_impl_err,
+    Column, DFSchema, DataFusionError, Result, ScalarValue, TableReference,
+    assert_or_internal_err, internal_datafusion_err, internal_err, not_impl_err,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion},
     utils::combine_limit,
 };
@@ -571,8 +571,9 @@ impl Unparser<'_> {
 
         let input_schema = window.input.schema();
         let mut alias_rewriter = TableAliasRewriter {
-            table_schema: input_schema.as_arrow(),
+            table_schema: input_schema.as_ref(),
             alias_name: TableReference::bare(input_alias),
+            rewrite_unqualified: true,
         };
         let window_expr = window
             .window_expr
@@ -1160,6 +1161,11 @@ impl Unparser<'_> {
                         }
                         None => Arc::clone(left_plan),
                     };
+                let left_plan = if already_projected {
+                    Self::unwrap_qualified_passthrough_join_projection(left_plan)
+                } else {
+                    left_plan
+                };
 
                 self.select_to_sql_recursively(
                     left_plan.as_ref(),
@@ -1185,13 +1191,22 @@ impl Unparser<'_> {
                     };
 
                 let mut right_relation = RelationBuilder::default();
-
-                self.select_to_sql_recursively(
-                    right_plan.as_ref(),
-                    query,
-                    select,
-                    &mut right_relation,
-                )?;
+                if already_projected
+                    && let Some(nested_relation) = self
+                        .qualified_passthrough_join_projection_to_nested_relation(
+                            right_plan.as_ref(),
+                            query,
+                        )?
+                {
+                    right_relation = nested_relation;
+                } else {
+                    self.select_to_sql_recursively(
+                        right_plan.as_ref(),
+                        query,
+                        select,
+                        &mut right_relation,
+                    )?;
+                }
 
                 let (join_filters, where_filters) = Self::split_join_on_and_where_filters(
                     join.join_type,
@@ -1910,6 +1925,68 @@ impl Unparser<'_> {
         )
     }
 
+    fn is_qualified_passthrough_projection(projection: &Projection) -> bool {
+        projection
+            .expr
+            .iter()
+            .all(|expr| matches!(expr, Expr::Column(column) if column.relation.is_some()))
+    }
+
+    fn unwrap_qualified_passthrough_join_projection(
+        plan: Arc<LogicalPlan>,
+    ) -> Arc<LogicalPlan> {
+        if let LogicalPlan::Projection(projection) = plan.as_ref()
+            && matches!(projection.input.as_ref(), LogicalPlan::Join(_))
+            && Self::is_qualified_passthrough_projection(projection)
+        {
+            Arc::clone(&projection.input)
+        } else {
+            plan
+        }
+    }
+
+    fn qualified_passthrough_join_projection_to_nested_relation(
+        &self,
+        plan: &LogicalPlan,
+        query: &mut Option<QueryBuilder>,
+    ) -> Result<Option<RelationBuilder>> {
+        let LogicalPlan::Projection(projection) = plan else {
+            return Ok(None);
+        };
+        if !matches!(projection.input.as_ref(), LogicalPlan::Join(_))
+            || !Self::is_qualified_passthrough_projection(projection)
+        {
+            return Ok(None);
+        }
+
+        let original_query = query.clone();
+        let mut nested_select = SelectBuilder::default();
+        nested_select.push_from(TableWithJoinsBuilder::default());
+        let mut nested_relation = RelationBuilder::default();
+        self.select_to_sql_recursively(
+            projection.input.as_ref(),
+            query,
+            &mut nested_select,
+            &mut nested_relation,
+        )?;
+        if nested_select.has_selection() {
+            *query = original_query;
+            return Ok(None);
+        }
+
+        let Some(mut nested_from) = nested_select.pop_from() else {
+            return internal_err!("Failed to build nested join relation");
+        };
+        nested_from.relation(nested_relation);
+        let Some(table_with_joins) = nested_from.build()? else {
+            return internal_err!("Failed to build nested join relation");
+        };
+
+        let mut relation = RelationBuilder::default();
+        relation.nested_join(table_with_joins, None);
+        Ok(Some(relation))
+    }
+
     /// Try to unparse a table scan with pushdown operations into a new subquery plan.
     /// If the table scan is without any pushdown operations, return None.
     fn unparse_table_scan_pushdown(
@@ -1924,10 +2001,15 @@ impl Unparser<'_> {
                     return Ok(None);
                 }
                 let table_schema = table_scan.source.schema();
+                let filter_schema = DFSchema::try_from_qualified_schema(
+                    table_scan.table_name.clone(),
+                    table_schema.as_ref(),
+                )?;
                 let mut filter_alias_rewriter =
                     alias.as_ref().map(|alias_name| TableAliasRewriter {
-                        table_schema: &table_schema,
+                        table_schema: &filter_schema,
                         alias_name: alias_name.clone(),
+                        rewrite_unqualified: true,
                     });
 
                 let mut builder = LogicalPlanBuilder::scan(
@@ -2037,8 +2119,9 @@ impl Unparser<'_> {
                     let exprs = if alias.is_some() {
                         let mut alias_rewriter =
                             alias.as_ref().map(|alias_name| TableAliasRewriter {
-                                table_schema: plan.schema().as_arrow(),
+                                table_schema: plan.schema().as_ref(),
                                 alias_name: alias_name.clone(),
+                                rewrite_unqualified: false,
                             });
                         projection
                             .expr

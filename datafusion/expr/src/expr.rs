@@ -662,7 +662,7 @@ pub fn intersect_metadata_for_union<'a>(
             }
             Some(current) => {
                 // Only keep keys that exist in both with the same value
-                current.retain(|k, v| metadata.get(k) == Some(v));
+                current.retain(|k, v| metadata.get(k) == Some(&*v));
             }
         }
     }
@@ -2307,6 +2307,7 @@ impl Expr {
     pub fn spans(&self) -> Option<&Spans> {
         match self {
             Expr::Column(col) => Some(&col.spans),
+            Expr::Not(inner) | Expr::Negative(inner) => inner.spans(),
             _ => None,
         }
     }
