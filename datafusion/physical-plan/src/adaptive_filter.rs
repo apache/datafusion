@@ -45,15 +45,31 @@
 //! independent conjuncts), and if the ranked order is *materially* cheaper than
 //! the written one it is adopted. The order then stays fixed.
 //!
+//! Compact-once is used **only in service of a reorder**: if the warm-up does
+//! not reorder the conjuncts (e.g. they are interchangeable), the written
+//! predicate is evaluated as-is, so a conjunction that does not benefit from
+//! reordering pays no compact-once overhead and behaves exactly as it would
+//! with the feature off.
+//!
+//! ## How it shares
+//!
+//! A `FilterExec` is split across many partition streams, each seeing only a
+//! slice of the data. Measurements are pooled into a shared
+//! [`AdaptiveFilterShared`] so the streams learn as one: the first stream to
+//! accumulate enough samples settles the order and publishes it, and the others
+//! adopt it (one relaxed atomic load per batch) without each re-paying the
+//! warm-up — which is what makes the win materialise when each stream is only a
+//! handful of batches long.
+//!
 //! It is **off by default**
 //! (`datafusion.execution.adaptive_filter_reordering`) and never changes query
 //! results: a conjunction's value is independent of evaluation order. Predicates
 //! containing volatile expressions are never reordered (their observable side
 //! effects depend on order).
 //!
-//! This is the minimal core of the adaptive evaluator. Richer policies
-//! (A/B-validated adoption, cross-stream sharing, drift re-measurement) build on
-//! top of it.
+//! This is the core of the adaptive evaluator. Further policies (drift
+//! re-measurement, confidence-interval statistics, A/B-validated adoption for
+//! the cases a cost model cannot separate) can build on top of it.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -161,8 +177,19 @@ struct SharedInner {
     stats: Vec<ConjunctStats>,
     /// Measured batches contributed by all streams so far.
     measured_batches: u64,
-    /// The settled evaluation order, once decided; `None` while learning.
-    settled: Option<Vec<usize>>,
+    /// The settled decision, once made; `None` while learning.
+    settled: Option<Settled>,
+}
+
+/// The settled outcome of the warm-up: the evaluation order, and whether to run
+/// it through the compact-once loop or the plain predicate.
+#[derive(Debug, Clone)]
+struct Settled {
+    /// Evaluation order: indices into the conjunct list.
+    order: Vec<usize>,
+    /// `true` to run `order` through the compact-once loop; `false` to evaluate
+    /// the written predicate as-is (see [`settle`]).
+    compact: bool,
 }
 
 impl AdaptiveFilterShared {
@@ -170,8 +197,8 @@ impl AdaptiveFilterShared {
         Self::default()
     }
 
-    /// The published settled order, or `None` if the streams are still learning.
-    fn settled_order(&self) -> Option<Vec<usize>> {
+    /// The published settled decision, or `None` if streams are still learning.
+    fn settled(&self) -> Option<Settled> {
         self.inner.lock().expect("poisoned").settled.clone()
     }
 }
@@ -183,11 +210,18 @@ impl AdaptiveFilterShared {
 pub(crate) struct AdaptiveConjunction {
     /// The split conjuncts. `order` indices refer to positions here.
     conjuncts: Vec<Arc<dyn PhysicalExpr>>,
-    /// Measurements and the settled order, shared by every partition stream.
+    /// The written predicate, evaluated as-is when the settled order does not
+    /// reorder it (so a settled non-reorder costs exactly what the flag-off path
+    /// costs — no compact-once overhead).
+    predicate: Arc<dyn PhysicalExpr>,
+    /// Measurements and the settled decision, shared by every partition stream.
     shared: Arc<AdaptiveFilterShared>,
     /// Evaluation order: indices into `conjuncts`. The written order until a
     /// settled order is adopted.
     order: Vec<usize>,
+    /// Whether the settled order runs through the compact-once loop; `false`
+    /// means evaluate [`predicate`](Self::predicate) directly.
+    compact: bool,
     /// Shared epoch this stream has caught up to.
     epoch_seen: u64,
     /// Whether the order is settled (frozen): this stream no longer measures.
@@ -222,8 +256,10 @@ impl AdaptiveConjunction {
         let order = (0..conjuncts.len()).collect();
         Some(Self {
             conjuncts,
+            predicate: Arc::clone(predicate),
             shared,
             order,
+            compact: false,
             epoch_seen: 0,
             settled: false,
         })
@@ -242,14 +278,13 @@ impl AdaptiveConjunction {
             let epoch = self.shared.epoch.load(Ordering::Acquire);
             if epoch != self.epoch_seen {
                 self.epoch_seen = epoch;
-                if let Some(order) = self.shared.settled_order() {
-                    self.order = order;
-                    self.settled = true;
+                if let Some(decision) = self.shared.settled() {
+                    self.adopt(decision);
                 }
             }
         }
         if self.settled {
-            return eval_conjuncts(&self.conjuncts, &self.order, batch, None);
+            return self.evaluate_settled(batch);
         }
 
         // Measure this batch into a local accumulator, then pool it.
@@ -258,6 +293,23 @@ impl AdaptiveConjunction {
             eval_conjuncts(&self.conjuncts, &self.order, batch, Some(&mut local))?;
         self.pool_and_maybe_settle(&local);
         Ok(result)
+    }
+
+    /// Evaluate the settled arrangement with no instrumentation: the
+    /// compact-once loop when the order was reordered, or the written predicate
+    /// directly otherwise (identical to the feature being off).
+    fn evaluate_settled(&self, batch: &RecordBatch) -> Result<ArrayRef> {
+        if self.compact {
+            eval_conjuncts(&self.conjuncts, &self.order, batch, None)
+        } else {
+            self.predicate.evaluate(batch)?.into_array(batch.num_rows())
+        }
+    }
+
+    fn adopt(&mut self, decision: Settled) {
+        self.order = decision.order;
+        self.compact = decision.compact;
+        self.settled = true;
     }
 
     /// Merge this batch's measurements into the shared pool and, once enough
@@ -274,28 +326,40 @@ impl AdaptiveConjunction {
         if inner.settled.is_some() || inner.measured_batches < WARMUP_BATCHES {
             return;
         }
-        let order = settle_order(&inner.stats);
-        inner.settled = Some(order.clone());
+        let decision = settle(&inner.stats);
+        inner.settled = Some(decision.clone());
         drop(inner);
-        self.order = order;
-        self.settled = true;
+        self.adopt(decision);
         self.shared.epoch.fetch_add(1, Ordering::Release);
     }
 }
 
+/// Decide the settled arrangement from the pooled measurements.
+///
 /// Rank the conjuncts by effectiveness and adopt the ranking only if it is
-/// materially cheaper than the written order; otherwise keep the written order
-/// (so interchangeable conjuncts are never reshuffled).
-fn settle_order(stats: &[ConjunctStats]) -> Vec<usize> {
+/// materially cheaper than the written order. A genuine reorder runs through the
+/// compact-once loop (the source of the win); otherwise the written predicate is
+/// kept and evaluated as-is. This is the guard: compact-once is only ever used
+/// in service of a reorder, so a conjunction that does not benefit from
+/// reordering (interchangeable conjuncts, e.g. several equally expensive
+/// unselective predicates) pays no compact-once overhead and behaves exactly as
+/// it would with the feature off.
+fn settle(stats: &[ConjunctStats]) -> Settled {
     let identity: Vec<usize> = (0..stats.len()).collect();
     let candidate = rank_by_effectiveness(stats);
     if candidate != identity
         && expected_cost_per_row(stats, &candidate)
             < (1.0 - TIE_COST_FRACTION) * expected_cost_per_row(stats, &identity)
     {
-        candidate
+        Settled {
+            order: candidate,
+            compact: true,
+        }
     } else {
-        identity
+        Settled {
+            order: identity,
+            compact: false,
+        }
     }
 }
 
@@ -617,19 +681,55 @@ mod tests {
     }
 
     /// A reorder is adopted only when materially cheaper; an already-good order
-    /// is left untouched.
+    /// is left untouched and runs the plain predicate (no compact-once).
     #[test]
     fn settle_keeps_order_when_not_materially_better() {
-        // Two equally cheap, equally selective conjuncts: swapping cannot help.
+        // Two equally cheap, equally selective conjuncts: swapping cannot help,
+        // so the written order stands and compact-once is not used.
         let s = vec![stats(1000, 500, 1000), stats(1000, 500, 1000)];
-        assert_eq!(settle_order(&s), vec![0, 1]);
+        let d = settle(&s);
+        assert_eq!(d.order, vec![0, 1]);
+        assert!(!d.compact);
     }
 
     #[test]
-    fn settle_adopts_materially_cheaper_order() {
-        // id 1 is far more selective and equally cheap: it should move first.
+    fn settle_adopts_materially_cheaper_order_with_compaction() {
+        // id 1 is far more selective and equally cheap: it should move first and
+        // run through the compact-once loop.
         let s = vec![stats(1000, 900, 1000), stats(1000, 10, 1000)];
-        assert_eq!(settle_order(&s), vec![1, 0]);
+        let d = settle(&s);
+        assert_eq!(d.order, vec![1, 0]);
+        assert!(d.compact);
+    }
+
+    /// When the order does not change, the settled evaluator runs the plain
+    /// predicate (compact-once is only used in service of a reorder), so an
+    /// interchangeable conjunction costs exactly what the flag-off path costs.
+    #[test]
+    fn no_reorder_evaluates_plain_predicate() {
+        let schema = schema();
+        // Both conjuncts equally cheap and selective: nothing to reorder.
+        let left =
+            binary(col("a", &schema).unwrap(), Operator::Gt, lit(2i32), &schema).unwrap();
+        let right =
+            binary(col("b", &schema).unwrap(), Operator::Gt, lit(2i32), &schema).unwrap();
+        let p = binary(left, Operator::And, right, &schema).unwrap();
+        let mut adaptive = try_new(&p, true).unwrap();
+
+        for round in 0..(WARMUP_BATCHES as i32 + 2) {
+            let base = round * 10;
+            let a: Vec<i32> = (base..base + 10).collect();
+            let b: Vec<i32> = (base..base + 10).collect();
+            let rb = batch(&schema, a, b);
+            let got = adaptive.evaluate(&rb).unwrap();
+            let want = p.evaluate(&rb).unwrap().into_array(rb.num_rows()).unwrap();
+            assert_eq!(passing_rows(&got), passing_rows(&want));
+        }
+        assert!(adaptive.settled);
+        assert!(
+            !adaptive.compact,
+            "interchangeable conjuncts stay on the plain predicate"
+        );
     }
 
     /// Two streams sharing one registry settle the order together: the pooled
@@ -663,13 +763,15 @@ mod tests {
             }
         }
 
-        assert!(shared.settled_order().is_some());
+        assert!(shared.settled().is_some());
         // One more batch each lets a not-yet-settled stream adopt the epoch.
         s1.evaluate(&mk(99)).unwrap();
         s2.evaluate(&mk(99)).unwrap();
         assert!(s1.settled && s2.settled);
-        // The selective conjunct was promoted to the front for both.
+        // The selective conjunct was promoted to the front for both, and the
+        // reorder runs through the compact-once loop.
         assert_eq!(s1.order, vec![1, 0]);
         assert_eq!(s2.order, vec![1, 0]);
+        assert!(s1.compact && s2.compact);
     }
 }
