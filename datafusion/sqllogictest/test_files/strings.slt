@@ -82,6 +82,11 @@ p2
 p2e1
 p2m1e1
 
+query B
+SELECT 'abc' SIMILAR TO 'a%';
+----
+true
+
 # NOT SIMILAR TO
 query T rowsort
 SELECT s FROM test WHERE s NOT SIMILAR TO 'p[12].*';
