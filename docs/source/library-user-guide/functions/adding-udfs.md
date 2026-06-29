@@ -1229,6 +1229,39 @@ The `create_udaf` has six arguments to check:
 - The fifth argument is the function implementation. This is the function that we defined above.
 - The sixth argument is the description of the state, which will by passed between execution stages.
 
+### Returning multiple values from an Aggregate UDF
+
+An aggregate UDF can return a `DataType::Struct` when one aggregate result needs
+to carry multiple values. This is useful for selector-style functions and for
+time-windowing extensions that need to return metadata such as the window start,
+window end, and the aggregate value together.
+
+Prefer passing the relevant input columns to the aggregate instead of using a
+zero-argument aggregate. The input columns give the accumulator enough
+information to update and merge state normally in multi-stage aggregate plans.
+For example, a windowing extension can group rows with a scalar UDF and return
+metadata from a struct-returning aggregate:
+
+```sql
+SELECT
+  result['window_start'] AS window_start,
+  result['window_end'] AS window_end,
+  result['window_duration'] AS window_duration,
+  result['avg_value'] AS avg_value
+FROM (
+  SELECT augmented_avg(time, value) AS result
+  FROM t
+  GROUP BY session_window(time, INTERVAL '30 seconds')
+)
+ORDER BY window_start;
+```
+
+In this pattern `session_window(...)` assigns rows to a group, while
+`augmented_avg(time, value)` is a normal aggregate UDF whose accumulator stores
+mergeable state such as `window_start`, `window_end`, `sum`, and `count`.
+The aggregate's `evaluate` method returns a `ScalarValue::Struct`, and callers
+can project individual fields from that struct.
+
 ```rust
 
 # use datafusion::arrow::array::ArrayRef;

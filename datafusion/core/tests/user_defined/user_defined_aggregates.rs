@@ -55,8 +55,9 @@ use datafusion_common::{cast::as_primitive_array, exec_err};
 
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{
-    AggregateUDFImpl, Expr, GroupsAccumulator, LogicalPlanBuilder, SimpleAggregateUDF,
-    WindowFunctionDefinition, col, create_udaf, function::AccumulatorArgs,
+    AggregateUDFImpl, ColumnarValue, Expr, GroupsAccumulator, LogicalPlanBuilder,
+    SimpleAggregateUDF, WindowFunctionDefinition, col, create_udaf, create_udf,
+    function::AccumulatorArgs,
 };
 use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -246,6 +247,52 @@ async fn test_augmented_avg_returning_window_metadata_struct() -> Result<()> {
     | 1         | 1970-01-01T00:00:00.000001 | 1970-01-01T00:00:00.000002 | 1000            | 15.0      |
     | 2         | 1970-01-01T00:00:00.000005 | 1970-01-01T00:00:00.000009 | 4000            | 3.0       |
     +-----------+----------------------------+----------------------------+-----------------+-----------+
+    ");
+
+    Ok(())
+}
+
+/// Demonstrates the SQL shape suggested in #16453: group by a window-like UDF
+/// and return the window metadata from a struct-returning aggregate that still
+/// receives real input columns.
+#[tokio::test]
+async fn test_augmented_avg_with_window_grouping_udf() -> Result<()> {
+    let time = TimestampNanosecondArray::from(vec![1000, 2000, 5000, 7000, 9000]);
+    let value = Float64Array::from(vec![10.0, 20.0, 1.0, 3.0, 5.0]);
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("time", Arc::new(time) as ArrayRef),
+        ("value", Arc::new(value) as ArrayRef),
+    ])?;
+
+    let mut ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    register_session_window(&mut ctx);
+    AugmentedAvg::register(&mut ctx);
+
+    let sql = "
+        SELECT
+            result['window_start'] AS window_start,
+            result['window_end'] AS window_end,
+            result['window_duration'] AS window_duration,
+            result['avg_value'] AS avg_value
+        FROM (
+            SELECT augmented_avg(time, value) AS result
+            FROM t
+            GROUP BY session_window(time, arrow_cast(5000, 'UInt64'))
+        )
+        ORDER BY window_start
+    ";
+
+    let actual = execute(&ctx, sql).await?;
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +----------------------------+----------------------------+-----------------+-----------+
+    | window_start               | window_end                 | window_duration | avg_value |
+    +----------------------------+----------------------------+-----------------+-----------+
+    | 1970-01-01T00:00:00.000001 | 1970-01-01T00:00:00.000002 | 1000            | 15.0      |
+    | 1970-01-01T00:00:00.000005 | 1970-01-01T00:00:00.000009 | 4000            | 3.0       |
+    +----------------------------+----------------------------+-----------------+-----------+
     ");
 
     Ok(())
@@ -831,6 +878,50 @@ impl Accumulator for FirstSelector {
     fn size(&self) -> usize {
         size_of_val(self)
     }
+}
+
+fn register_session_window(ctx: &mut SessionContext) {
+    let session_window = create_udf(
+        "session_window",
+        vec![
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::UInt64,
+        ],
+        DataType::UInt64,
+        Volatility::Immutable,
+        Arc::new(|args: &[ColumnarValue]| {
+            assert_eq!(args.len(), 2);
+            let ColumnarValue::Array(times) = &args[0] else {
+                return exec_err!("session_window expected timestamp array input");
+            };
+            let times = as_primitive_array::<TimestampNanosecondType>(times)?;
+
+            let width = match &args[1] {
+                ColumnarValue::Scalar(ScalarValue::UInt64(Some(width))) => *width,
+                ColumnarValue::Array(widths) => {
+                    let widths = widths
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .ok_or(exec_datafusion_err!("Expected UInt64Array"))?;
+                    widths.value(0)
+                }
+                other => {
+                    return exec_err!(
+                        "session_window expected UInt64 width, got {other:?}"
+                    );
+                }
+            };
+
+            let window_ids = times
+                .iter()
+                .map(|time| time.map(|time| (time as u64 / width) + 1))
+                .collect::<UInt64Array>();
+
+            Ok(ColumnarValue::Array(Arc::new(window_ids) as ArrayRef))
+        }),
+    );
+
+    ctx.register_udf(session_window);
 }
 
 /// Models a struct-returning aggregate that receives the timestamp/order input
