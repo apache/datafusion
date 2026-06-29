@@ -39,6 +39,7 @@ use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, avg_distinct, count, count_distinct, max, median, min, sum,
     sum_distinct,
 };
+use datafusion_functions_nested::expr_fn::{array_filter, array_transform, make_array};
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, lead, row_number};
 use insta::assert_snapshot;
@@ -78,8 +79,8 @@ use datafusion_expr::{
     CreateMemoryTable, CreateView, DdlStatement, Expr, ExprFunctionExt, ExprSchemable,
     LogicalPlan, LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, TableType,
     WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, cast, col,
-    create_udf, exists, in_subquery, lit, out_ref_col, placeholder, scalar_subquery,
-    when, wildcard,
+    create_udf, exists, in_subquery, lambda, lambda_var, lit, out_ref_col, placeholder,
+    scalar_subquery, when, wildcard,
 };
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -90,7 +91,9 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::empty::EmptyExec;
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
+use datafusion_physical_plan::{
+    ExecutionPlan, ExecutionPlanProperties, collect, displayable,
+};
 
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::options::JsonReadOptions;
@@ -7238,6 +7241,48 @@ async fn test_grouping_with_alias() -> Result<()> {
         .sort(vec![Sort::new(col("a"), true, false)])?;
 
     let results = df.collect().await?;
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_unresolved_lambda_variable() -> Result<()> {
+    let plan = table_with_mixed_lists()
+        .await?
+        .with_column(
+            "c",
+            array_transform(
+                make_array(vec![col("list")]),
+                lambda(
+                    ["x"],
+                    array_filter(
+                        lambda_var("x"),
+                        lambda(["y"], lambda_var("y").gt_eq(lit(2))),
+                    ),
+                ),
+            ),
+        )?
+        .select_columns(&["list", "c"])?
+        .into_unoptimized_plan()
+        .resolve_lambda_variables()?
+        .data;
+
+    let session = SessionContext::new();
+    let exec = session.state().create_physical_plan(&plan).await?;
+    let context = session.task_ctx();
+    let results = collect(exec, context).await?;
+
+    let expected = [
+        "+-----------+----------+",
+        "| list      | c        |",
+        "+-----------+----------+",
+        "| [1, 2, 3] | [[2, 3]] |",
+        "|           | []       |",
+        "| []        | [[]]     |",
+        "|           | []       |",
+        "+-----------+----------+",
+    ];
     assert_batches_eq!(expected, &results);
 
     Ok(())
