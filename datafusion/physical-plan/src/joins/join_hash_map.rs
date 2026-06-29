@@ -633,4 +633,31 @@ mod tests {
         assert_eq!(input_indices, vec![1, 1]);
         assert_eq!(match_indices, vec![3, 1]);
     }
+
+    #[test]
+    fn test_has_key_collisions_same_key() -> Result<()> {
+        // 5 build rows all with key 10 chained in the same bucket — no collision.
+        // next: [0, 1, 2, 3, 4] → chain 4→3→2→1→0→end
+        use arrow::array::Int32Array;
+        use std::sync::Arc;
+        let next: Vec<u32> = vec![0, 1, 2, 3, 4];
+        let map = JoinHashMapU32::new(HashTable::new(), next);
+        let keys: ArrayRef = Arc::new(Int32Array::from(vec![10, 10, 10, 10, 10]));
+        assert!(!map.has_key_collisions(&[keys], NullEquality::NullEqualsNothing)?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_has_key_collisions_distinct_keys() -> Result<()> {
+        // 5 build rows, 4 with key 10 and 1 with key 20 buried in the chain.
+        // next: [0, 1, 2, 3, 4] → chain 4→3→2→1→0→end
+        // Row 2 has key 20 — adjacent pair (row 2, row 1) differs → collision.
+        use arrow::array::Int32Array;
+        use std::sync::Arc;
+        let next: Vec<u32> = vec![0, 1, 2, 3, 4];
+        let map = JoinHashMapU32::new(HashTable::new(), next);
+        let keys: ArrayRef = Arc::new(Int32Array::from(vec![10, 10, 20, 10, 10]));
+        assert!(map.has_key_collisions(&[keys], NullEquality::NullEqualsNothing)?);
+        Ok(())
+    }
 }
