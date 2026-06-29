@@ -39,11 +39,29 @@ SELECT encode('AB'::string, 'utf-16be'::string);
 ----
 00410042
 
+# UTF-16LE encoding
+query ?
+SELECT encode('AB'::string, 'utf-16le'::string);
+----
+41004200
+
+# UTF-16 with BOM (FEFF prefix followed by UTF-16BE bytes)
+query ?
+SELECT encode('Spark SQL'::string, 'utf-16'::string);
+----
+feff0053007000610072006b002000530051004c
+
 # UTF-32BE encoding
 query ?
 SELECT encode('A'::string, 'utf-32be'::string);
 ----
 00000041
+
+# UTF-32LE encoding
+query ?
+SELECT encode('AB'::string, 'utf-32le'::string);
+----
+4100000042000000
 
 # UTF-32 (Spark 3.5 / 4.1: no BOM, identical to UTF-32BE)
 query ?
@@ -56,6 +74,84 @@ query ?
 SELECT encode('hello'::string, 'Utf-8'::string);
 ----
 68656c6c6f
+
+# US-ASCII: unmappable characters are silently replaced with '?' (Spark 3.5 behavior)
+query ?
+SELECT encode('é'::string, 'us-ascii'::string);
+----
+3f
+
+# ISO-8859-1: code points above U+00FF are replaced with '?' (Ā is U+0100)
+query ?
+SELECT encode('Ā'::string, 'iso-8859-1'::string);
+----
+3f
+
+# Multi-byte input (emoji 😀 = U+1F600) across charsets
+query ?
+SELECT encode('😀'::string, 'utf-8'::string);
+----
+f09f9880
+
+query ?
+SELECT encode('😀'::string, 'utf-16be'::string);
+----
+d83dde00
+
+query ?
+SELECT encode('😀'::string, 'utf-16le'::string);
+----
+3dd800de
+
+query ?
+SELECT encode('😀'::string, 'utf-16'::string);
+----
+feffd83dde00
+
+query ?
+SELECT encode('😀'::string, 'utf-32be'::string);
+----
+0001f600
+
+query ?
+SELECT encode('😀'::string, 'utf-32le'::string);
+----
+00f60100
+
+query ?
+SELECT encode('😀'::string, 'utf-32'::string);
+----
+0001f600
+
+# Utf8View column input
+query ?
+SELECT encode(arrow_cast(s, 'Utf8View'), 'utf-8'::string) FROM (VALUES ('foo'::string), ('bar'::string)) AS t(s);
+----
+666f6f
+626172
+
+# Binary input is decoded as UTF-8 (lossily), then re-encoded with the charset
+query ?
+SELECT encode(arrow_cast('Hello', 'Binary'), 'utf-8'::string);
+----
+48656c6c6f
+
+query ?
+SELECT encode(arrow_cast('Hello', 'LargeBinary'), 'utf-8'::string);
+----
+48656c6c6f
+
+query ?
+SELECT encode(arrow_cast('Hello', 'BinaryView'), 'utf-8'::string);
+----
+48656c6c6f
+
+# Binary input with invalid UTF-8 bytes: each invalid byte becomes U+FFFD (ef bf bd).
+# Bytes FE and FF are not valid UTF-8 and are replaced; 00 61 00 73 decode as NUL a NUL s.
+query ?
+SELECT encode(X'FEFF00610073', 'utf-8'::string);
+----
+efbfbdefbfbd00610073
 
 # NULL input
 query ?
@@ -76,5 +172,5 @@ statement error Unsupported charset for encode
 SELECT encode('hello'::string, 'EBCDIC'::string);
 
 # Error: no arguments
-statement error 'encode' does not support zero arguments
+statement error encode function requires 2 arguments
 SELECT encode();
