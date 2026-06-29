@@ -203,6 +203,54 @@ async fn test_udaf_returning_struct_subquery() {
     ");
 }
 
+/// Demonstrates the alternative shape suggested in #16453: pass real input
+/// columns to an aggregate and return window metadata plus the aggregate value
+/// as a struct.
+#[tokio::test]
+async fn test_augmented_avg_returning_window_metadata_struct() -> Result<()> {
+    let window_id = UInt64Array::from(vec![1, 1, 2, 2, 2]);
+    let time = TimestampNanosecondArray::from(vec![1000, 2000, 5000, 7000, 9000]);
+    let value = Float64Array::from(vec![10.0, 20.0, 1.0, 3.0, 5.0]);
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("window_id", Arc::new(window_id) as ArrayRef),
+        ("time", Arc::new(time) as ArrayRef),
+        ("value", Arc::new(value) as ArrayRef),
+    ])?;
+
+    let mut ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    AugmentedAvg::register(&mut ctx);
+
+    let sql = "
+        SELECT
+            window_id,
+            result['window_start'] AS window_start,
+            result['window_end'] AS window_end,
+            result['window_duration'] AS window_duration,
+            result['avg_value'] AS avg_value
+        FROM (
+            SELECT window_id, augmented_avg(time, value) AS result
+            FROM t
+            GROUP BY window_id
+        )
+        ORDER BY window_id
+    ";
+
+    let actual = execute(&ctx, sql).await?;
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +-----------+----------------------------+----------------------------+-----------------+-----------+
+    | window_id | window_start               | window_end                 | window_duration | avg_value |
+    +-----------+----------------------------+----------------------------+-----------------+-----------+
+    | 1         | 1970-01-01T00:00:00.000001 | 1970-01-01T00:00:00.000002 | 1000            | 15.0      |
+    | 2         | 1970-01-01T00:00:00.000005 | 1970-01-01T00:00:00.000009 | 4000            | 3.0       |
+    +-----------+----------------------------+----------------------------+-----------------+-----------+
+    ");
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_udaf_shadows_builtin_fn() {
     let TestContext {
@@ -778,6 +826,177 @@ impl Accumulator for FirstSelector {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // same logic is needed as in update_batch
         self.update_batch(states)
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+}
+
+/// Models a struct-returning aggregate that receives the timestamp/order input
+/// explicitly, rather than relying on a zero-argument aggregate to infer it.
+#[derive(Debug, Clone)]
+struct AugmentedAvg {
+    window_start: Option<i64>,
+    window_end: Option<i64>,
+    sum: f64,
+    count: u64,
+}
+
+impl AugmentedAvg {
+    fn new() -> Self {
+        Self {
+            window_start: None,
+            window_end: None,
+            sum: 0.0,
+            count: 0,
+        }
+    }
+
+    fn register(ctx: &mut SessionContext) {
+        let accumulator: AccumulatorFactoryFunction =
+            Arc::new(|_| Ok(Box::new(Self::new())));
+
+        let augmented_avg = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
+            "augmented_avg",
+            Signature::one_of(
+                vec![TypeSignature::Exact(Self::input_datatypes())],
+                Volatility::Immutable,
+            ),
+            Self::output_datatype(),
+            accumulator,
+            Self::state_fields(),
+        ));
+
+        ctx.register_udaf(augmented_avg)
+    }
+
+    fn timestamp_datatype() -> DataType {
+        DataType::Timestamp(TimeUnit::Nanosecond, None)
+    }
+
+    fn fields() -> Fields {
+        vec![
+            Field::new("window_start", Self::timestamp_datatype(), true),
+            Field::new("window_end", Self::timestamp_datatype(), true),
+            Field::new("window_duration", DataType::Int64, true),
+            Field::new("avg_value", DataType::Float64, true),
+        ]
+        .into()
+    }
+
+    fn output_datatype() -> DataType {
+        DataType::Struct(Self::fields())
+    }
+
+    fn input_datatypes() -> Vec<DataType> {
+        vec![Self::timestamp_datatype(), DataType::Float64]
+    }
+
+    fn state_fields() -> Vec<FieldRef> {
+        vec![
+            Field::new("window_start", Self::timestamp_datatype(), true).into(),
+            Field::new("window_end", Self::timestamp_datatype(), true).into(),
+            Field::new("sum", DataType::Float64, true).into(),
+            Field::new("count", DataType::UInt64, true).into(),
+        ]
+    }
+
+    fn update_one(&mut self, time: i64, value: f64) {
+        self.window_start = Some(self.window_start.map_or(time, |start| start.min(time)));
+        self.window_end = Some(self.window_end.map_or(time, |end| end.max(time)));
+        self.sum += value;
+        self.count += 1;
+    }
+
+    fn to_struct(&self) -> Result<ScalarValue> {
+        let duration = self
+            .window_start
+            .zip(self.window_end)
+            .map(|(start, end)| end - start);
+        let avg = (self.count > 0).then_some(self.sum / self.count as f64);
+
+        let start_array =
+            Arc::new(TimestampNanosecondArray::from(vec![self.window_start])) as ArrayRef;
+        let end_array =
+            Arc::new(TimestampNanosecondArray::from(vec![self.window_end])) as ArrayRef;
+        let duration_array =
+            Arc::new(arrow::array::Int64Array::from(vec![duration])) as ArrayRef;
+        let avg_array = Arc::new(Float64Array::from(vec![avg])) as ArrayRef;
+
+        let struct_array = StructArray::try_new(
+            Self::fields(),
+            vec![start_array, end_array, duration_array, avg_array],
+            None,
+        )?;
+
+        Ok(ScalarValue::Struct(Arc::new(struct_array)))
+    }
+}
+
+impl Accumulator for AugmentedAvg {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![
+            ScalarValue::TimestampNanosecond(self.window_start, None),
+            ScalarValue::TimestampNanosecond(self.window_end, None),
+            ScalarValue::Float64(Some(self.sum)),
+            ScalarValue::UInt64(Some(self.count)),
+        ])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        assert_eq!(values.len(), 2);
+        let times = as_primitive_array::<TimestampNanosecondType>(&values[0])?;
+        let values = as_primitive_array::<Float64Type>(&values[1])?;
+
+        for (time, value) in times.iter().zip(values.iter()) {
+            if let (Some(time), Some(value)) = (time, value) {
+                self.update_one(time, value);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        assert_eq!(states.len(), 4);
+        let starts = as_primitive_array::<TimestampNanosecondType>(&states[0])?;
+        let ends = as_primitive_array::<TimestampNanosecondType>(&states[1])?;
+        let sums = as_primitive_array::<Float64Type>(&states[2])?;
+        let counts = states[3]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or(exec_datafusion_err!("Expected UInt64Array"))?;
+
+        for (((start, end), sum), count) in starts
+            .iter()
+            .zip(ends.iter())
+            .zip(sums.iter())
+            .zip(counts.iter())
+        {
+            let Some(count) = count else {
+                continue;
+            };
+            if count == 0 {
+                continue;
+            }
+            if let (Some(start), Some(end), Some(sum)) = (start, end, sum) {
+                self.window_start = Some(
+                    self.window_start
+                        .map_or(start, |current| current.min(start)),
+                );
+                self.window_end =
+                    Some(self.window_end.map_or(end, |current| current.max(end)));
+                self.sum += sum;
+                self.count += count;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        self.to_struct()
     }
 
     fn size(&self) -> usize {
