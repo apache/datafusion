@@ -302,3 +302,33 @@ SELECT * FROM (SELECT 1) WHERE CAST(STARTS_WITH() AS STRING) = 'x';
 
 query error does not support zero arguments
 SELECT * FROM (SELECT 1) WHERE TRY_CAST(STARTS_WITH() AS INT) = 1;
+
+################################################################
+## SIMILAR TO operand type coercion
+## https://github.com/apache/datafusion/issues/22886
+################################################################
+
+statement ok
+CREATE TABLE similar_to_t AS
+SELECT arrow_cast(s, 'Utf8View') AS v, p FROM (VALUES
+  ('abc', 'abc'),
+  ('xyz', 'abc')
+) AS t(s, p);
+
+# Utf8View column matched against a non-literal Utf8 pattern column used to panic
+# with "failed to downcast array"; both operands now coerce to a common type.
+query B
+SELECT v SIMILAR TO p FROM similar_to_t ORDER BY v;
+----
+true
+false
+
+# A NULL pattern used to panic during constant folding; it now evaluates to NULL.
+query B
+SELECT v SIMILAR TO NULL FROM similar_to_t ORDER BY v;
+----
+NULL
+NULL
+
+statement ok
+DROP TABLE similar_to_t;
