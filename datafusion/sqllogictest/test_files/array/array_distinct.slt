@@ -137,6 +137,12 @@ select array_compact(arrow_cast([NULL, NULL, NULL], 'List(Int64)'));
 ----
 []
 
+# all nulls with untyped NULLs (List(Null) inner values are a NullArray)
+query ?
+select array_compact(make_array(NULL, NULL, NULL));
+----
+[]
+
 # empty array
 query ?
 select array_compact([]);
@@ -166,6 +172,17 @@ query ?
 select array_compact([make_array(1, 2), NULL, make_array(3, 4)]);
 ----
 [[1, 2], [3, 4]]
+
+# nested array of all-null inner lists: outer elements are non-null, kept as-is
+query ?
+select array_compact(make_array(make_array(NULL, NULL, NULL), make_array(NULL, NULL)));
+----
+[[NULL, NULL, NULL], [NULL, NULL]]
+
+query ?
+select array_compact(make_array(make_array(NULL, NULL, NULL), make_array(NULL, NULL, NULL)));
+----
+[[NULL, NULL, NULL], [NULL, NULL, NULL]]
 
 # LargeList
 query ?
