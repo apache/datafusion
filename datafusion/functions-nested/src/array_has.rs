@@ -505,7 +505,8 @@ where
             }
             let start = offsets[i] - first_offset - elem_start;
             let end = offsets[i + 1] - first_offset - elem_start;
-            result.append(matched.slice(start, end - start).has_true());
+            // `BooleanBuffer::has_true()` is arrow >= 59 only; use count_set_bits.
+            result.append(matched.slice(start, end - start).count_set_bits() > 0);
         }
     }
     result.finish()
