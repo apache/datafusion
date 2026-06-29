@@ -109,6 +109,41 @@ impl AggregateHashTable<PartialMarker> {
                 .all(|acc| acc.supports_convert_to_state())
     }
 
+    pub(in crate::aggregates) fn can_repartition_in_partial(&self) -> bool {
+        self.state
+            .building()
+            .group_values
+            .support_partial_repartition()
+    }
+
+    pub(in crate::aggregates) fn append_new_groups_to_partitions(
+        &self,
+        partitions: &mut [Vec<usize>],
+    ) -> Result<()> {
+        if partitions.is_empty() {
+            return Ok(());
+        }
+
+        let state = self.state.building();
+        for &row in &state.new_group_rows {
+            let Some(&group_index) = state.batch_group_indices.get(row) else {
+                return internal_err!(
+                    "new group row index {row} does not have a group index"
+                );
+            };
+            let Some(&hash) = state.batch_hashes.get(row) else {
+                return internal_err!(
+                    "new group row index {row} does not have a hash value"
+                );
+            };
+
+            let partition = partition_for_hash(hash, partitions.len());
+            partitions[partition].push(group_index);
+        }
+
+        Ok(())
+    }
+
     /// In skip-partial-aggregation optimization, when a decision has been made to skip
     /// partial stage, build a typed hash table only for aggregation state conversion
     /// row-by-row.
@@ -249,6 +284,15 @@ impl AggregateHashTable<PartialMarker> {
         }
 
         Ok(())
+    }
+}
+
+fn partition_for_hash(hash: u64, num_partitions: usize) -> usize {
+    debug_assert!(num_partitions > 0);
+    if num_partitions.is_power_of_two() {
+        (hash as usize) & (num_partitions - 1)
+    } else {
+        (hash as usize) % num_partitions
     }
 }
 

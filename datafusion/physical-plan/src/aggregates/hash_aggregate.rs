@@ -33,6 +33,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
@@ -126,6 +127,9 @@ pub(crate) struct PartialHashAggregateStream {
     /// Tracks whether partial aggregation should switch to direct state conversion.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
+    /// Target final partition for newly created groups.
+    repartition_state: Option<PartialRepartitionState>,
+
     /// Optional soft limit on the number of groups to accumulate before output.
     ///
     /// Invariant: when this is `Some(..)`, the accumulators inside `hash_table` must
@@ -135,6 +139,27 @@ pub(crate) struct PartialHashAggregateStream {
     /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
     /// state for emitting output batches.
     state: Option<PartialHashAggregateState>,
+}
+
+struct PartialRepartitionState {
+    partitions: Vec<Vec<usize>>,
+}
+
+impl PartialRepartitionState {
+    fn new(num_partitions: usize) -> Self {
+        Self {
+            partitions: vec![vec![]; num_partitions],
+        }
+    }
+
+    fn memory_size(&self) -> usize {
+        self.partitions.allocated_size()
+            + self
+                .partitions
+                .iter()
+                .map(VecAllocExt::allocated_size)
+                .sum::<usize>()
+    }
 }
 
 /// States for partial hash aggregation processing.
@@ -182,6 +207,18 @@ impl PartialHashAggregateState {
             }
         }
     }
+}
+
+fn can_repartition_in_partial(
+    agg: &AggregateExec,
+    context: &TaskContext,
+    hash_table: &AggregateHashTable<PartialMarker>,
+) -> bool {
+    agg.group_by.is_single()
+        && !agg.group_by.is_empty()
+        && context.session_config().repartition_aggregations()
+        && context.session_config().target_partitions() > 1
+        && hash_table.can_repartition_in_partial()
 }
 
 /// Hash aggregation is implemented in two stages: partial and final. This
@@ -293,6 +330,14 @@ impl PartialHashAggregateStream {
             Arc::clone(&schema),
             batch_size,
         )?;
+        let repartition_state =
+            if can_repartition_in_partial(agg, context.as_ref(), &hash_table) {
+                Some(PartialRepartitionState::new(
+                    context.session_config().target_partitions(),
+                ))
+            } else {
+                None
+            };
         let can_skip_aggregation =
             agg.group_by.is_single() && hash_table.can_skip_aggregation();
         let skip_aggregation_probe = if can_skip_aggregation {
@@ -328,6 +373,7 @@ impl PartialHashAggregateStream {
             reservation,
             reduction_factor,
             skip_aggregation_probe,
+            repartition_state,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             state: Some(PartialHashAggregateState::ReadingInput { hash_table }),
         })
@@ -355,6 +401,32 @@ impl PartialHashAggregateStream {
         self.skip_aggregation_probe
             .as_ref()
             .is_some_and(|probe| probe.should_skip())
+    }
+
+    fn append_new_groups_to_partitions(
+        &mut self,
+        hash_table: &AggregateHashTable<PartialMarker>,
+    ) -> Result<()> {
+        let Some(repartition_state) = self.repartition_state.as_mut() else {
+            return Ok(());
+        };
+
+        hash_table.append_new_groups_to_partitions(&mut repartition_state.partitions)
+    }
+
+    fn memory_size(&self, hash_table: &AggregateHashTable<PartialMarker>) -> usize {
+        hash_table.memory_size()
+            + self
+                .repartition_state
+                .as_ref()
+                .map_or(0, PartialRepartitionState::memory_size)
+    }
+
+    fn resize_reservation(
+        &self,
+        hash_table: &AggregateHashTable<PartialMarker>,
+    ) -> Result<()> {
+        self.reservation.try_resize(self.memory_size(hash_table))
     }
 
     fn start_output(
@@ -396,6 +468,15 @@ impl PartialHashAggregateStream {
                 timer.done();
 
                 if let Err(e) = result {
+                    return ControlFlow::Break((
+                        Poll::Ready(Some(Err(e))),
+                        original_state,
+                    ));
+                }
+
+                if let Err(e) =
+                    self.append_new_groups_to_partitions(original_state.hash_table())
+                {
                     return ControlFlow::Break((
                         Poll::Ready(Some(Err(e))),
                         original_state,
@@ -472,10 +553,7 @@ impl PartialHashAggregateStream {
 
                 // TODO: impl memory-limited aggr, when OOM directly send
                 // partial state to final aggregate stage
-                if let Err(e) = self
-                    .reservation
-                    .try_resize(original_state.hash_table().memory_size())
-                {
+                if let Err(e) = self.resize_reservation(original_state.hash_table()) {
                     return ControlFlow::Break((
                         Poll::Ready(Some(Err(e))),
                         original_state,
@@ -537,9 +615,7 @@ impl PartialHashAggregateStream {
 
         match result {
             Ok(Some(batch)) => {
-                let _ = self
-                    .reservation
-                    .try_resize(original_state.hash_table().memory_size());
+                let _ = self.resize_reservation(original_state.hash_table());
                 self.reduction_factor.add_part(batch.num_rows());
                 debug_assert!(batch.num_rows() > 0);
                 let next_state = if original_state.hash_table().is_done() {
