@@ -118,8 +118,8 @@ fn stronger_distribution(a: &Distribution, b: &Distribution) -> Distribution {
         (Distribution::SinglePartition, _) | (_, Distribution::SinglePartition) => {
             Distribution::SinglePartition
         }
-        (Distribution::HashPartitioned(_), _) => a.clone(),
-        (_, Distribution::HashPartitioned(_)) => b.clone(),
+        (Distribution::KeyPartitioned(_), _) => a.clone(),
+        (_, Distribution::KeyPartitioned(_)) => b.clone(),
         _ => Distribution::UnspecifiedDistribution,
     }
 }

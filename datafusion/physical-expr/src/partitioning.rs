@@ -485,10 +485,10 @@ impl Partitioning {
                 PartitioningSatisfaction::Exact
             }
             // When partition count is 1, hash requirement is satisfied.
-            Distribution::HashPartitioned(_) if self.partition_count() == 1 => {
+            Distribution::KeyPartitioned(_) if self.partition_count() == 1 => {
                 PartitioningSatisfaction::Exact
             }
-            Distribution::HashPartitioned(required_exprs) => match self {
+            Distribution::KeyPartitioned(required_exprs) => match self {
                 // Here we do not check the partition count for hash partitioning and assumes the partition count
                 // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
                 // then we need to have the partition count and hash functions validation.
@@ -595,7 +595,7 @@ pub enum Distribution {
     SinglePartition,
     /// Requires children to be distributed in such a way that the same
     /// values of the keys end up in the same partition
-    HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
+    KeyPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
 impl Distribution {
@@ -606,7 +606,7 @@ impl Distribution {
                 Partitioning::UnknownPartitioning(partition_count)
             }
             Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
-            Distribution::HashPartitioned(expr) => {
+            Distribution::KeyPartitioned(expr) => {
                 Partitioning::Hash(expr, partition_count)
             }
         }
@@ -618,8 +618,8 @@ impl Display for Distribution {
         match self {
             Distribution::UnspecifiedDistribution => write!(f, "Unspecified"),
             Distribution::SinglePartition => write!(f, "SinglePartition"),
-            Distribution::HashPartitioned(exprs) => {
-                write!(f, "HashPartitioned[{}])", format_physical_expr_list(exprs))
+            Distribution::KeyPartitioned(exprs) => {
+                write!(f, "KeyPartitioned[{}])", format_physical_expr_list(exprs))
             }
         }
     }
@@ -693,7 +693,7 @@ mod tests {
             &self,
             indices: impl IntoIterator<Item = usize>,
         ) -> Distribution {
-            Distribution::HashPartitioned(self.cols(indices))
+            Distribution::KeyPartitioned(self.cols(indices))
         }
 
         fn range_sort_expr(
@@ -790,7 +790,7 @@ mod tests {
                 Distribution::SinglePartition => {
                     assert_eq!(result, (true, false, false, false, false))
                 }
-                Distribution::HashPartitioned(_) => {
+                Distribution::KeyPartitioned(_) => {
                     assert_eq!(result, (true, false, false, true, false))
                 }
             }
@@ -1034,14 +1034,14 @@ mod tests {
             (
                 "Hash([a, b]) vs Hash([unknown])",
                 fixture.hash_partitioning([0, 1], 4),
-                Distribution::HashPartitioned(vec![Arc::clone(&unknown)]),
+                Distribution::KeyPartitioned(vec![Arc::clone(&unknown)]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
                 "Hash([unknown]) vs Hash([unknown])",
                 Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
-                Distribution::HashPartitioned(vec![Arc::clone(&unknown)]),
+                Distribution::KeyPartitioned(vec![Arc::clone(&unknown)]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -1081,14 +1081,14 @@ mod tests {
             (
                 "Hash([a]) vs Hash([])",
                 fixture.hash_partitioning([0], 4),
-                Distribution::HashPartitioned(vec![]),
+                Distribution::KeyPartitioned(vec![]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
                 "Hash([]) vs Hash([])",
                 Partitioning::Hash(vec![], 4),
-                Distribution::HashPartitioned(vec![]),
+                Distribution::KeyPartitioned(vec![]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
