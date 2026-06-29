@@ -52,10 +52,10 @@ use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow_schema::SortOptions;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::utils::{compare_rows, transpose};
+use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, transpose};
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, HashMap, SplitPoint, assert_or_internal_err,
-    internal_err,
+    ColumnStatistics, DataFusionError, HashMap, ScalarValue, SplitPoint,
+    assert_or_internal_err, internal_err,
 };
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -577,9 +577,11 @@ enum BatchPartitionerState {
         ordering: LexOrdering,
         /// Boundaries between adjacent partitions.
         split_points: Vec<SplitPoint>,
-        // Collection of arrays, where the index of each array is associated w/ that corresponding output partition, and the values in that array
-        // correspond to the rows that will make up the RecordBatch being sent to the corresponding output partition
+        /// Collection of arrays, where the index of each array is associated w/ that corresponding output partition, and the values in that array
+        /// correspond to the rows that will make up the RecordBatch being sent to the corresponding output partition
         indices: Vec<Vec<u32>>,
+        /// Buffer of `ScalarValue` used to represent the values for a row - based on the `LexOrdering` ordering - to compare against split points
+        partition_buffer: Vec<ScalarValue>,
     },
 }
 
@@ -733,6 +735,7 @@ impl BatchPartitioner {
     ) -> Self {
         Self {
             state: BatchPartitionerState::Range {
+                partition_buffer: Vec::with_capacity(ordering.len()),
                 ordering,
                 split_points,
                 indices: vec![vec![]; num_partitions],
@@ -869,6 +872,7 @@ impl BatchPartitioner {
                     ordering,
                     split_points,
                     indices,
+                    partition_buffer,
                 } => {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
@@ -879,13 +883,16 @@ impl BatchPartitioner {
                     )?;
 
                     indices.iter_mut().for_each(|v| v.clear());
+                    let sort_options: Vec<SortOptions> =
+                        ordering.iter().map(|e| e.options).collect();
 
                     Self::partition_indices_for_split_points(
-                        arrays,
+                        &arrays,
                         split_points,
-                        ordering.iter().map(|e| e.options).collect(),
+                        &sort_options,
+                        partition_buffer,
                         indices,
-                    );
+                    )?;
 
                     // Finished building index-arrays for output partitions
                     timer.done();
@@ -900,41 +907,35 @@ impl BatchPartitioner {
         Ok(it)
     }
 
-    /// TODO: comment what this function does
+    /// This function takes the `arrays` associated with the evaluated expressions for the ordering, split points and sort options, and indices array
+    /// Then for every row, creates the "row key" based on the given ordering for the range, and binary searches through the split points to find the appropriate split point index
+    /// That split point index is associated with the array in `indices`, which is given the row index, meaning that the row is sent to the partition at that index
     fn partition_indices_for_split_points(
-        arrays: Vec<Arc<dyn Array>>,
-        split_points: &Vec<SplitPoint>,
-        sort_options: Vec<SortOptions>,
-        indices: &mut Vec<Vec<u32>>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+        arrays: &[Arc<dyn Array>],
+        split_points: &[SplitPoint],
+        sort_options: &[SortOptions],
+        row_key: &mut Vec<ScalarValue>,
+        indices: &mut [Vec<u32>],
+    ) -> Result<()> {
         use std::cmp::Ordering;
-        for row_idx in 0..arrays[0].len() {
-            let row_key = arrays
-                .iter()
-                .map(|row_values| row_values.value(row_idx))
-                .collect();
+        let num_rows = arrays.first().map(|a| a.len()).unwrap_or(0);
+        for row_idx in 0..num_rows {
+            // Note that `extract_row_at_idx_to_buf` clears the buffer `row_key` on each invocation, creating a new row key for comparison for each row
+            extract_row_at_idx_to_buf(arrays, row_idx, row_key)?;
 
-            // todo: binary search instead of linearly searching
-            let mut inserted = false;
-            for (split_idx, split_point) in split_points.iter().enumerate() {
+            let mut low = 0;
+            let mut high = split_points.len();
+            while low < high {
+                let mid = low + (high - low) / 2;
                 let comparison =
-                    compare_rows(row_key, split_point.values(), &sort_options)?;
+                    compare_rows(row_key, split_points[mid].values(), sort_options)?;
                 match comparison {
-                    Ordering::Less => {
-                        indices[split_idx].push(row_idx as u32);
-                        inserted = true;
-                        break;
-                    }
-                    Ordering::Equal => {
-                        indices[split_idx + 1].push(row_idx as u32);
-                        inserted = true;
-                        break;
-                    }
+                    Ordering::Less => high = mid,
+                    Ordering::Equal | Ordering::Greater => low = mid + 1,
                 }
             }
-            if !inserted {
-                indices[indices.len() - 1].push(row_idx as u32)
-            }
+
+            indices[low].push(row_idx as u32)
         }
 
         Ok(())
@@ -1757,12 +1758,13 @@ impl RepartitionExec {
                     num_input_partitions,
                 )
             }
-            Partitioning::Range(_) => {
-                // Range repartition execution is tracked in
-                // https://github.com/apache/datafusion/issues/22397
-                return not_impl_err!(
-                    "Range partitioning execution is not implemented by RepartitionExec"
-                );
+            Partitioning::Range(range_partitioning) => {
+                BatchPartitioner::new_range_partitioner(
+                    range_partitioning.ordering().clone(),
+                    range_partitioning.split_points().to_vec(),
+                    range_partitioning.partition_count(),
+                    metrics.repartition_time.clone(),
+                )
             }
             other => {
                 return not_impl_err!("Unsupported repartitioning scheme {other:?}");
