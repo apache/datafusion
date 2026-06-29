@@ -76,6 +76,17 @@ pub(crate) enum ExecutionState {
     Done,
 }
 
+/// Selects the final emission strategy for groups remaining after all input
+/// has been consumed.
+fn final_emit_to(num_groups: usize, batch_size: usize) -> EmitTo {
+    debug_assert!(batch_size > 0);
+    if num_groups > batch_size {
+        EmitTo::First(batch_size)
+    } else {
+        EmitTo::All
+    }
+}
+
 /// This encapsulates the spilling state
 struct SpillState {
     // ========================================================================
@@ -774,13 +785,15 @@ impl Stream for GroupedHashAggregateStream {
                 }
 
                 ExecutionState::ProducingOutput(batch) => {
+                    let batch = batch.clone();
+
                     // slice off a part of the batch, if needed
                     let output_batch;
                     let size = self.batch_size;
                     (self.exec_state, output_batch) = if batch.num_rows() <= size {
                         (
                             if self.input_done {
-                                ExecutionState::Done
+                                self.final_output_state()?
                             }
                             // In Partial aggregation, we also need to check
                             // if we should trigger partial skipping
@@ -791,7 +804,7 @@ impl Stream for GroupedHashAggregateStream {
                             } else {
                                 ExecutionState::ReadingInput
                             },
-                            batch.clone(),
+                            batch,
                         )
                     } else {
                         // output first batch_size rows
@@ -1059,6 +1072,20 @@ impl GroupedHashAggregateStream {
         Ok(Some(batch))
     }
 
+    /// Emits the next final output chunk after input is complete.
+    fn emit_final(&mut self) -> Result<Option<RecordBatch>> {
+        let emit_to = final_emit_to(self.group_values.len(), self.batch_size);
+        self.emit(emit_to, false)
+    }
+
+    /// Returns the next execution state after an output batch has been returned
+    /// while input is complete.
+    fn final_output_state(&mut self) -> Result<ExecutionState> {
+        Ok(self
+            .emit_final()?
+            .map_or(ExecutionState::Done, ExecutionState::ProducingOutput))
+    }
+
     /// Registers groups for empty grouping sets when no input rows were seen.
     ///
     /// `GROUP BY GROUPING SETS (())` must always produce one row even when there
@@ -1273,7 +1300,7 @@ impl GroupedHashAggregateStream {
             self.init_empty_grouping_sets()?;
 
             // Flush any remaining group values.
-            let batch = self.emit(EmitTo::All, false)?;
+            let batch = self.emit_final()?;
 
             // If there are none, we're done; otherwise switch to emitting them
             batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
@@ -1413,6 +1440,13 @@ mod tests {
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
 
+    #[test]
+    fn test_final_emit_to_chunks_large_final_output() {
+        assert_eq!(final_emit_to(0, 3), EmitTo::All);
+        assert_eq!(final_emit_to(3, 3), EmitTo::All);
+        assert_eq!(final_emit_to(4, 3), EmitTo::First(3));
+    }
+
     // Migrated to PartialHashAggregateStream coverage in hash_aggregate.rs;
     // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
@@ -1517,6 +1551,81 @@ mod tests {
             total_output_groups, num_groups,
             "Unexpected number of groups",
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_final_emit_keeps_remaining_groups_for_next_batch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let batch_size = 3;
+        let num_groups = 10;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1; num_groups])),
+                Arc::new(Int32Array::from((0..num_groups as i32).collect::<Vec<_>>())),
+            ],
+        )?;
+
+        let mut task_ctx = TaskContext::default();
+        let mut session_config = task_ctx.session_config().clone();
+        session_config = session_config.set(
+            "datafusion.execution.batch_size",
+            &datafusion_common::ScalarValue::UInt64(Some(batch_size as u64)),
+        );
+        task_ctx = task_ctx.with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
+
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
+            Column::new("a", 0),
+        )
+            as _)])
+        .unwrap();
+        let exec = TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
+
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::SinglePartitioned,
+            PhysicalGroupBy::new_single(vec![
+                (col("a", &schema)?, "a".to_string()),
+                (col("b", &schema)?, "b".to_string()),
+            ]),
+            vec![],
+            vec![],
+            exec,
+            Arc::clone(&schema),
+        )?;
+        assert!(matches!(
+            aggregate_exec.input_order_mode(),
+            InputOrderMode::PartiallySorted(_)
+        ));
+
+        let mut stream = GroupedHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?;
+
+        let first_batch = stream.next().await.expect("expected first output batch")?;
+        assert_eq!(first_batch.num_rows(), batch_size);
+        assert!(
+            !stream.group_values.is_empty(),
+            "final emission should keep later groups in the hash table"
+        );
+
+        let mut total_rows = first_batch.num_rows();
+        let mut output_batches = 1;
+        while let Some(result) = stream.next().await {
+            let batch = result?;
+            assert!(batch.num_rows() <= batch_size);
+            total_rows += batch.num_rows();
+            output_batches += 1;
+        }
+
+        assert_eq!(total_rows, num_groups);
+        assert_eq!(output_batches, 4);
 
         Ok(())
     }

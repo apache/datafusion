@@ -202,4 +202,20 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_remove_groups_after_input_done_is_noop() -> Result<()> {
+        let mut partial = partial_ordering(vec![1, 1, 1])?;
+        partial.input_done();
+        partial.remove_groups(2);
+        assert_eq!(partial.emit_to(), Some(EmitTo::All));
+
+        let mut full = GroupOrdering::Full(GroupOrderingFull::new());
+        full.new_groups(&[], &[], 3)?;
+        full.input_done();
+        full.remove_groups(2);
+        assert_eq!(full.emit_to(), Some(EmitTo::All));
+
+        Ok(())
+    }
 }

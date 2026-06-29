@@ -106,7 +106,7 @@ impl GroupOrderingFull {
                 assert!(*current >= n);
                 *current -= n;
             }
-            State::Complete => panic!("invalid state: complete"),
+            State::Complete => {}
         }
     }
 
