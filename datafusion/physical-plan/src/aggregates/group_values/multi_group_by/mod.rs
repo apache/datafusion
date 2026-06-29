@@ -1288,7 +1288,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     }
 
     fn support_partial_repartition(&self) -> bool {
-        !self.group_values.is_empty()
+        true
     }
 
     fn skip_hash_group_by(&mut self) -> Result<()> {
