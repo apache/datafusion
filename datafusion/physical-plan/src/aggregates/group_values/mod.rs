@@ -24,7 +24,7 @@ use arrow::array::types::{
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 
 use datafusion_expr::EmitTo;
 
@@ -118,6 +118,16 @@ pub trait GroupValues: Send {
 
     /// Emits the group values
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
+
+    /// Returns true if this group value storage supports partial repartition.
+    fn support_partial_repartition(&self) -> bool {
+        false
+    }
+
+    /// Enable append-only grouping for partial repartition.
+    fn skip_hash_group_by(&mut self) -> Result<()> {
+        internal_err!("GroupValues does not support skip hash group by")
+    }
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, num_rows: usize);

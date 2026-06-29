@@ -23,6 +23,7 @@ use arrow::array::{ArrayRef, BooleanArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
+use datafusion_expr::EmitTo;
 
 use crate::aggregates::group_values::new_group_values;
 use crate::aggregates::order::GroupOrdering;
@@ -100,11 +101,12 @@ impl AggregateHashTable<PartialMarker> {
     }
 
     pub(in crate::aggregates) fn can_skip_aggregation(&self) -> bool {
-        self.state
-            .building()
-            .accumulators
-            .iter()
-            .all(|acc| acc.supports_convert_to_state())
+        let state = self.state.building();
+        state.group_values.support_partial_repartition()
+            && state
+                .accumulators
+                .iter()
+                .all(|acc| acc.supports_convert_to_state())
     }
 
     /// In skip-partial-aggregation optimization, when a decision has been made to skip
@@ -115,7 +117,8 @@ impl AggregateHashTable<PartialMarker> {
     ) -> Result<AggregateHashTable<PartialSkipMarker>> {
         let state = self.state.building();
         let group_schema = state.group_by.group_schema(&self.input_schema)?;
-        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        let mut group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        group_values.skip_hash_group_by()?;
         let accumulators = state
             .accumulators
             .iter()
@@ -259,19 +262,32 @@ impl AggregateHashTable<PartialSkipMarker> {
             1,
             "group_values expected to have single element"
         );
-        let mut output = evaluated_batch
+        let state = self.state.building_mut();
+        let group_values = evaluated_batch
             .grouping_set_args
             .into_iter()
             .next()
             .unwrap_or_default();
+        state.group_values.intern(
+            &group_values,
+            &mut state.batch_group_indices,
+            &mut state.batch_hashes,
+            &mut state.new_group_rows,
+        )?;
 
-        let state = self.state.building_mut();
+        let group_indices = &state.batch_group_indices;
+        let total_num_groups = state.group_values.len();
         for (acc, values) in state
             .accumulators
             .iter_mut()
             .zip(evaluated_batch.accumulator_args.iter())
         {
-            output.extend(acc.convert_to_state(values)?);
+            acc.update_batch(values, group_indices, total_num_groups)?;
+        }
+
+        let mut output = state.group_values.emit(EmitTo::All)?;
+        for acc in state.accumulators.iter_mut() {
+            output.extend(acc.state(EmitTo::All)?);
         }
 
         Ok(RecordBatch::try_new(

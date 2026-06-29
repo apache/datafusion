@@ -41,7 +41,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{Result, internal_datafusion_err, internal_err, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -220,6 +220,9 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
 
     /// Random state for creating hashes
     random_state: RandomState,
+
+    /// Whether each input row should be appended as a new group directly.
+    skip_hash_group_by: bool,
 }
 
 /// Buffers to store intermediate results in `vectorized_append`
@@ -283,6 +286,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             group_values,
             hashes_buffer: Default::default(),
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
+            skip_hash_group_by: false,
         })
     }
 
@@ -299,6 +303,40 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             v.push(make_group_column(f.as_ref())?);
         }
         Ok(v)
+    }
+
+    fn append_all_group_values(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hashes: &mut Vec<u64>,
+        new_group_rows: &mut Vec<usize>,
+    ) -> Result<()> {
+        let num_rows = cols.first().map_or(0, |array| array.len());
+        let first_group_idx = self.len();
+
+        groups.clear();
+        groups.extend(first_group_idx..first_group_idx + num_rows);
+
+        hashes.clear();
+        hashes.resize(num_rows, 0);
+        create_hashes(cols, &self.random_state, hashes)?;
+
+        new_group_rows.clear();
+        new_group_rows.extend(0..num_rows);
+
+        self.vectorized_operation_buffers.append_row_indices.clear();
+        self.vectorized_operation_buffers
+            .append_row_indices
+            .extend(0..num_rows);
+        for (group_value, col) in self.group_values.iter_mut().zip(cols.iter()) {
+            group_value.vectorized_append(
+                col,
+                &self.vectorized_operation_buffers.append_row_indices,
+            )?;
+        }
+
+        Ok(())
     }
 
     // ========================================================================
@@ -1084,6 +1122,10 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         hashes: &mut Vec<u64>,
         new_group_rows: &mut Vec<usize>,
     ) -> Result<()> {
+        if self.skip_hash_group_by {
+            return self.append_all_group_values(cols, groups, hashes, new_group_rows);
+        }
+
         let n_rows = cols[0].len();
         hashes.clear();
         hashes.resize(n_rows, 0);
@@ -1113,6 +1155,10 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        if self.skip_hash_group_by && matches!(emit_to, EmitTo::First(_)) {
+            return internal_err!("skip hash group by does not support EmitTo::First");
+        }
+
         let mut output = match emit_to {
             EmitTo::All => {
                 // Replace the column builders with a fresh set so the
@@ -1239,6 +1285,15 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
             self.emit_group_index_list_buffer.clear();
             self.vectorized_operation_buffers.clear();
         }
+    }
+
+    fn support_partial_repartition(&self) -> bool {
+        !self.group_values.is_empty()
+    }
+
+    fn skip_hash_group_by(&mut self) -> Result<()> {
+        self.skip_hash_group_by = true;
+        Ok(())
     }
 }
 

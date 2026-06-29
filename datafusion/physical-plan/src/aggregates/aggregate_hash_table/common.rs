@@ -457,15 +457,6 @@ impl HashAggregateAccumulator {
         self.accumulator.supports_convert_to_state()
     }
 
-    pub(super) fn convert_to_state(
-        &mut self,
-        values: &EvaluatedAccumulatorArgs,
-    ) -> Result<Vec<ArrayRef>> {
-        let opt_filter = values.filter.as_ref().map(|filter| filter.as_boolean());
-        self.accumulator
-            .convert_to_state(&values.arguments, opt_filter)
-    }
-
     pub(super) fn null_arguments(
         &self,
         input_schema: &SchemaRef,
