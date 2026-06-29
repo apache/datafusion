@@ -129,49 +129,6 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         }
     }
-
-    fn intern_impl(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>
-    where
-        T::Native: HashValue,
-    {
-        assert_eq!(cols.len(), 1);
-        groups.clear();
-
-        for value in cols[0].as_primitive::<T>() {
-            let group_id = match value {
-                None => *self.null_group.get_or_insert_with(|| {
-                    let group_id = self.values.len();
-                    self.values.push(Default::default());
-                    group_id
-                }),
-                Some(key) => {
-                    let key = key.canonicalize();
-                    let state = &self.random_state;
-                    let hash = key.hash(state);
-                    let insert = self.map.entry(
-                        hash,
-                        |&(group_id, exist_hash)| unsafe {
-                            hash == exist_hash
-                                && self.values.get_unchecked(group_id).is_eq(key)
-                        },
-                        |&(_, exist_hash)| exist_hash,
-                    );
-
-                    match insert {
-                        hashbrown::hash_table::Entry::Occupied(entry) => entry.get().0,
-                        hashbrown::hash_table::Entry::Vacant(entry) => {
-                            let group_id = self.values.len();
-                            entry.insert((group_id, hash));
-                            self.values.push(key);
-                            group_id
-                        }
-                    }
-                }
-            };
-            groups.push(group_id)
-        }
-        Ok(())
-    }
 }
 
 impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
@@ -185,7 +142,45 @@ where
         _hashes: &mut Vec<u64>,
         _new_group_rows: &mut Vec<usize>,
     ) -> Result<()> {
-        self.intern_impl(cols, groups)
+        assert_eq!(cols.len(), 1);
+        groups.clear();
+
+        for v in cols[0].as_primitive::<T>() {
+            let group_id = match v {
+                None => *self.null_group.get_or_insert_with(|| {
+                    let group_id = self.values.len();
+                    self.values.push(Default::default());
+                    group_id
+                }),
+                Some(key) => {
+                    // Fold equivalence-class duplicates (e.g. `-0.0` → `+0.0`)
+                    // so the bit-equal `is_eq` matches and the stored value is
+                    // the canonical representative.
+                    let key = key.canonicalize();
+                    let state = &self.random_state;
+                    let hash = key.hash(state);
+                    let insert = self.map.entry(
+                        hash,
+                        |&(g, h)| unsafe {
+                            hash == h && self.values.get_unchecked(g).is_eq(key)
+                        },
+                        |&(_, h)| h,
+                    );
+
+                    match insert {
+                        hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
+                        hashbrown::hash_table::Entry::Vacant(v) => {
+                            let g = self.values.len();
+                            v.insert((g, hash));
+                            self.values.push(key);
+                            g
+                        }
+                    }
+                }
+            };
+            groups.push(group_id)
+        }
+        Ok(())
     }
 
     fn size(&self) -> usize {
