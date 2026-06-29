@@ -131,6 +131,8 @@ impl AggregateHashTable<PartialMarker> {
                 group_by: Arc::clone(&state.group_by),
                 group_values,
                 batch_group_indices: Default::default(),
+                batch_hashes: Default::default(),
+                new_group_rows: Default::default(),
                 accumulators,
             }),
             _mode: PhantomData,
@@ -146,9 +148,12 @@ impl AggregateHashTable<PartialMarker> {
 
         let _timer = self.group_by_metrics.aggregation_time.timer();
         for group_values in &evaluated_batch.grouping_set_args {
-            state
-                .group_values
-                .intern(group_values, &mut state.batch_group_indices)?;
+            state.group_values.intern(
+                group_values,
+                &mut state.batch_group_indices,
+                &mut state.batch_hashes,
+                &mut state.new_group_rows,
+            )?;
             let group_indices = &state.batch_group_indices;
             let total_num_groups = state.group_values.len();
 
@@ -216,9 +221,12 @@ impl AggregateHashTable<PartialMarker> {
                 .collect();
             cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
 
-            state
-                .group_values
-                .intern(&cols, &mut state.batch_group_indices)?;
+            state.group_values.intern(
+                &cols,
+                &mut state.batch_group_indices,
+                &mut state.batch_hashes,
+                &mut state.new_group_rows,
+            )?;
             any_interned = true;
         }
 

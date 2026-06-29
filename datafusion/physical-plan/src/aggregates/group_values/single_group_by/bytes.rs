@@ -45,29 +45,44 @@ impl<O: OffsetSizeTrait> GroupValuesBytes<O> {
 }
 
 impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hashes: &mut Vec<u64>,
+        new_group_rows: &mut Vec<usize>,
+    ) -> Result<()> {
         assert_eq!(cols.len(), 1);
-
-        // look up / add entries in the table
         let arr = &cols[0];
 
+        hashes.clear();
+        hashes.resize(arr.len(), 0);
+        datafusion_common::hash_utils::create_hashes(
+            cols,
+            &crate::aggregates::AGGREGATION_HASH_SEED,
+            hashes,
+        )?;
+
         groups.clear();
-        self.map.insert_if_new(
+        new_group_rows.clear();
+        let mut next_new_group = self.num_groups;
+        self.map.insert_if_new_with_hashes(
             arr,
-            // called for each new group
+            hashes,
             |_value| {
-                // assign new group index on each insert
                 let group_idx = self.num_groups;
                 self.num_groups += 1;
                 group_idx
             },
-            // called for each group
             |group_idx| {
+                if group_idx == next_new_group {
+                    new_group_rows.push(groups.len());
+                    next_new_group += 1;
+                }
                 groups.push(group_idx);
             },
         );
 
-        // ensure we assigned a group to for each row
         assert_eq!(groups.len(), arr.len());
         Ok(())
     }
@@ -108,7 +123,13 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
 
                 self.num_groups = 0;
                 let mut group_indexes = vec![];
-                self.intern(&[remaining_group_values], &mut group_indexes)?;
+                let mut hashes = vec![];
+                self.intern(
+                    &[remaining_group_values],
+                    &mut group_indexes,
+                    &mut hashes,
+                    &mut vec![],
+                )?;
 
                 // Verify that the group indexes were assigned in the correct order
                 assert_eq!(0, group_indexes[0]);

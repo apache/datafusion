@@ -113,65 +113,48 @@ impl GroupValuesRows {
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         })
     }
-}
 
-impl GroupValues for GroupValuesRows {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        // Normalize -0.0 → +0.0 so RowConverter (IEEE 754 totalOrder) and
-        // primitive hashing both group ±0 together. No-op for non-float
-        // columns.
-        let normalized_cols: Vec<ArrayRef> =
-            cols.iter().map(normalize_float_zero).collect();
-        let cols = normalized_cols.as_slice();
+    fn intern_impl(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hashes: &mut Vec<u64>,
+        new_group_rows: &mut Vec<usize>,
+    ) -> Result<()> {
+        hashes.clear();
+        hashes.resize(cols.first().map_or(0, |array| array.len()), 0);
+        create_hashes(cols, &self.random_state, hashes)?;
 
-        // Convert the group keys into the row format
         let group_rows = &mut self.rows_buffer;
         group_rows.clear();
         self.row_converter.append(group_rows, cols)?;
-        let n_rows = group_rows.num_rows();
+        debug_assert_eq!(hashes.len(), group_rows.num_rows());
 
         let mut group_values = match self.group_values.take() {
             Some(group_values) => group_values,
             None => self.row_converter.empty_rows(0, 0),
         };
 
-        // tracks to which group each of the input rows belongs
         groups.clear();
+        new_group_rows.clear();
 
-        // 1.1 Calculate the group keys for the group values
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(n_rows, 0);
-        create_hashes(cols, &self.random_state, batch_hashes)?;
-
-        for (row, &target_hash) in batch_hashes.iter().enumerate() {
+        for (row, &target_hash) in hashes.iter().enumerate() {
             let entry = self.map.find_mut(target_hash, |(exist_hash, group_idx)| {
-                // Somewhat surprisingly, this closure can be called even if the
-                // hash doesn't match, so check the hash first with an integer
-                // comparison first avoid the more expensive comparison with
-                // group value. https://github.com/apache/datafusion/pull/11718
                 target_hash == *exist_hash
-                    // verify that the group that we are inserting with hash is
-                    // actually the same key value as the group in
-                    // existing_idx  (aka group_values @ row)
                     && group_rows.row(row) == group_values.row(*group_idx)
             });
 
             let group_idx = match entry {
-                // Existing group_index for this group value
                 Some((_hash, group_idx)) => *group_idx,
-                //  1.2 Need to create new entry for the group
                 None => {
-                    // Add new entry to aggr_state and save newly created index
                     let group_idx = group_values.num_rows();
                     group_values.push(group_rows.row(row));
-
-                    // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
                         (target_hash, group_idx),
                         |(hash, _group_index)| *hash,
                         &mut self.map_size,
                     );
+                    new_group_rows.push(row);
                     group_idx
                 }
             };
@@ -181,6 +164,21 @@ impl GroupValues for GroupValuesRows {
         self.group_values = Some(group_values);
 
         Ok(())
+    }
+}
+
+impl GroupValues for GroupValuesRows {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hashes: &mut Vec<u64>,
+        new_group_rows: &mut Vec<usize>,
+    ) -> Result<()> {
+        let normalized_cols: Vec<ArrayRef> =
+            cols.iter().map(normalize_float_zero).collect();
+        let cols = normalized_cols.as_slice();
+        self.intern_impl(cols, groups, hashes, new_group_rows)
     }
 
     fn size(&self) -> usize {

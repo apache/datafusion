@@ -122,9 +122,12 @@ impl AggregateHashTable<FinalMarker> {
 
         let timer = self.group_by_metrics.aggregation_time.timer();
         for group_values in &evaluated_batch.grouping_set_args {
-            state
-                .group_values
-                .intern(group_values, &mut state.batch_group_indices)?;
+            state.group_values.intern(
+                group_values,
+                &mut state.batch_group_indices,
+                &mut state.batch_hashes,
+                &mut state.new_group_rows,
+            )?;
             let group_indices = &state.batch_group_indices;
             let total_num_groups = state.group_values.len();
 

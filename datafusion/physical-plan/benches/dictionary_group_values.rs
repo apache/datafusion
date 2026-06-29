@@ -109,10 +109,17 @@ fn bench_intern_emit(c: &mut Criterion) {
                                 new_group_values(schema.clone(), &GroupOrdering::None)
                                     .unwrap(),
                                 Vec::<usize>::with_capacity(size),
+                                Vec::<u64>::with_capacity(size),
                             )
                         },
-                        |(gv, groups)| {
-                            gv.intern(std::slice::from_ref(&array), groups).unwrap();
+                        |(gv, groups, hashes)| {
+                            gv.intern(
+                                std::slice::from_ref(&array),
+                                groups,
+                                hashes,
+                                &mut vec![],
+                            )
+                            .unwrap();
                             black_box(&*groups);
                             black_box(gv.emit(EmitTo::All).unwrap());
                         },
@@ -154,11 +161,18 @@ fn bench_repeated_intern_emit(c: &mut Criterion) {
                                 new_group_values(schema.clone(), &GroupOrdering::None)
                                     .unwrap(),
                                 Vec::<usize>::with_capacity(size),
+                                Vec::<u64>::with_capacity(size),
                             )
                         },
-                        |(gv, groups)| {
+                        |(gv, groups, hashes)| {
                             for arr in &batches {
-                                gv.intern(std::slice::from_ref(arr), groups).unwrap();
+                                gv.intern(
+                                    std::slice::from_ref(arr),
+                                    groups,
+                                    hashes,
+                                    &mut vec![],
+                                )
+                                .unwrap();
                                 black_box(&*groups);
                             }
                             black_box(gv.emit(EmitTo::All).unwrap());

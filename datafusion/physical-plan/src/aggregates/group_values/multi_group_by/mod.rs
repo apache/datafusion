@@ -344,23 +344,20 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///
     /// `Group indices` order are against with their input order, and this will lead to error
     /// in `streaming aggregation`.
-    fn scalarized_intern(
+    fn scalarized_intern_impl(
         &mut self,
         cols: &[ArrayRef],
+        hashes: &[u64],
         groups: &mut Vec<usize>,
+        new_group_rows: &mut Vec<usize>,
     ) -> Result<()> {
-        let n_rows = cols[0].len();
+        debug_assert_eq!(hashes.len(), cols.first().map_or(0, |array| array.len()));
 
         // tracks to which group each of the input rows belongs
         groups.clear();
+        new_group_rows.clear();
 
-        // 1.1 Calculate the group keys for the group values
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(n_rows, 0);
-        create_hashes(cols, &self.random_state, batch_hashes)?;
-
-        for (row, &target_hash) in batch_hashes.iter().enumerate() {
+        for (row, &target_hash) in hashes.iter().enumerate() {
             let entry = self
                 .map
                 .find_mut(target_hash, |(exist_hash, group_idx_view)| {
@@ -425,6 +422,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                         |(hash, _group_index)| *hash,
                         &mut self.map_size,
                     );
+                    new_group_rows.push(row);
                     group_idx
                 }
             };
@@ -445,21 +443,20 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///
     /// The vectorized approach can offer higher performance for avoiding row by row
     /// downcast for `cols` and being able to implement even more optimizations(like simd).
-    fn vectorized_intern(
+    fn vectorized_intern_impl(
         &mut self,
         cols: &[ArrayRef],
+        hashes: &[u64],
         groups: &mut Vec<usize>,
+        new_group_rows: &mut Vec<usize>,
     ) -> Result<()> {
         let n_rows = cols[0].len();
+        debug_assert_eq!(hashes.len(), n_rows);
 
         // tracks to which group each of the input rows belongs
         groups.clear();
         groups.resize(n_rows, usize::MAX);
-
-        let mut batch_hashes = mem::take(&mut self.hashes_buffer);
-        batch_hashes.clear();
-        batch_hashes.resize(n_rows, 0);
-        create_hashes(cols, &self.random_state, &mut batch_hashes)?;
+        new_group_rows.clear();
 
         // General steps for one round `vectorized equal_to & append`:
         //   1. Collect vectorized context by checking hash values of `cols` in `map`,
@@ -482,7 +479,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         //
 
         // 1. Collect vectorized context by checking hash values of `cols` in `map`
-        self.collect_vectorized_process_context(&batch_hashes, groups);
+        self.collect_vectorized_process_context(hashes, groups, new_group_rows);
 
         // 2. Perform `vectorized_append`
         self.vectorized_append(cols)?;
@@ -492,9 +489,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
         // 4. Perform scalarized inter for remaining rows
         // (about remaining rows, can see comments for `remaining_row_indices`)
-        self.scalarized_intern_remaining(cols, &batch_hashes, groups)?;
-
-        self.hashes_buffer = batch_hashes;
+        self.scalarized_intern_remaining(cols, hashes, groups, new_group_rows)?;
 
         Ok(())
     }
@@ -514,8 +509,9 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///     Otherwise get all group indices from `group_index_lists`, and add them.
     fn collect_vectorized_process_context(
         &mut self,
-        batch_hashes: &[u64],
+        hashes: &[u64],
         groups: &mut [usize],
+        new_group_rows: &mut Vec<usize>,
     ) {
         self.vectorized_operation_buffers.append_row_indices.clear();
         self.vectorized_operation_buffers
@@ -525,7 +521,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             .equal_to_group_indices
             .clear();
 
-        for (row, &target_hash) in batch_hashes.iter().enumerate() {
+        for (row, &target_hash) in hashes.iter().enumerate() {
             let entry = self
                 .map
                 .find(target_hash, |(exist_hash, _)| target_hash == *exist_hash);
@@ -553,6 +549,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
                 // Set group index to row in `groups`
                 groups[row] = current_group_idx;
+                new_group_rows.push(row);
 
                 continue;
             };
@@ -741,8 +738,9 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     fn scalarized_intern_remaining(
         &mut self,
         cols: &[ArrayRef],
-        batch_hashes: &[u64],
+        hashes: &[u64],
         groups: &mut [usize],
+        new_group_rows: &mut Vec<usize>,
     ) -> Result<()> {
         if self
             .vectorized_operation_buffers
@@ -755,7 +753,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         let mut map = mem::take(&mut self.map);
 
         for &row in &self.vectorized_operation_buffers.remaining_row_indices {
-            let target_hash = batch_hashes[row];
+            let target_hash = hashes[row];
             let entry = map.find_mut(target_hash, |(exist_hash, _)| {
                 // Somewhat surprisingly, this closure can be called even if the
                 // hash doesn't match, so check the hash first with an integer
@@ -816,6 +814,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             }
 
             groups[row] = group_idx;
+            new_group_rows.push(row);
         }
 
         self.map = map;
@@ -1078,14 +1077,21 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
 }
 
 impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        // `try_new` and the reset points in `emit` / `clear_shrink` keep
-        // `self.group_values` populated with one builder per schema field,
-        // so no lazy initialization is needed here.
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hashes: &mut Vec<u64>,
+        new_group_rows: &mut Vec<usize>,
+    ) -> Result<()> {
+        let n_rows = cols[0].len();
+        hashes.clear();
+        hashes.resize(n_rows, 0);
+        create_hashes(cols, &self.random_state, hashes)?;
         if !STREAMING {
-            self.vectorized_intern(cols, groups)
+            self.vectorized_intern_impl(cols, hashes, groups, new_group_rows)
         } else {
-            self.scalarized_intern(cols, groups)
+            self.scalarized_intern_impl(cols, hashes, groups, new_group_rows)
         }
     }
 
@@ -1878,7 +1884,11 @@ mod tests {
 
         fn load_to_group_values(&self, group_values: &mut impl GroupValues) {
             for batch in self.test_batches.iter() {
-                group_values.intern(batch, &mut vec![]).unwrap();
+                let mut groups = vec![];
+                let mut hashes = vec![];
+                group_values
+                    .intern(batch, &mut groups, &mut hashes, &mut vec![])
+                    .unwrap();
             }
         }
 

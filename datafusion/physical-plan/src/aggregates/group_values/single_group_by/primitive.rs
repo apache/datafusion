@@ -116,6 +116,8 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     values: Vec<T::Native>,
     /// The random state used to generate hashes
     random_state: RandomState,
+    /// Reused buffer to store hashes
+    hashes_buffer: Vec<u64>,
 }
 
 impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
@@ -127,47 +129,66 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             values: Vec::with_capacity(128),
             null_group: None,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
+            hashes_buffer: Default::default(),
         }
     }
-}
 
-impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
-where
-    T::Native: HashValue,
-{
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern_impl(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hashes: &mut Vec<u64>,
+        new_group_rows: &mut Vec<usize>,
+    ) -> Result<()>
+    where
+        T::Native: HashValue,
+    {
         assert_eq!(cols.len(), 1);
-        groups.clear();
+        let array = cols[0].as_primitive::<T>();
+        hashes.clear();
+        hashes.resize(array.len(), 0);
+        for (row, value) in array.iter().enumerate() {
+            hashes[row] = value
+                .map(|key| key.canonicalize().hash(&self.random_state))
+                .unwrap_or(0);
+        }
 
-        for v in cols[0].as_primitive::<T>() {
-            let group_id = match v {
-                None => *self.null_group.get_or_insert_with(|| {
-                    let group_id = self.values.len();
-                    self.values.push(Default::default());
-                    group_id
-                }),
+        groups.clear();
+        new_group_rows.clear();
+
+        for (row, value) in array.iter().enumerate() {
+            let group_id = match value {
+                None => {
+                    if let Some(group_id) = self.null_group {
+                        group_id
+                    } else {
+                        let group_id = self.values.len();
+                        self.null_group = Some(group_id);
+                        self.values.push(Default::default());
+                        new_group_rows.push(row);
+                        group_id
+                    }
+                }
                 Some(key) => {
-                    // Fold equivalence-class duplicates (e.g. `-0.0` → `+0.0`)
-                    // so the bit-equal `is_eq` matches and the stored value is
-                    // the canonical representative.
                     let key = key.canonicalize();
-                    let state = &self.random_state;
-                    let hash = key.hash(state);
+                    let hash = hashes[row];
                     let insert = self.map.entry(
                         hash,
-                        |&(g, h)| unsafe {
-                            hash == h && self.values.get_unchecked(g).is_eq(key)
+                        |&(group_id, exist_hash)| unsafe {
+                            hash == exist_hash
+                                && self.values.get_unchecked(group_id).is_eq(key)
                         },
-                        |&(_, h)| h,
+                        |&(_, exist_hash)| exist_hash,
                     );
 
                     match insert {
-                        hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
-                        hashbrown::hash_table::Entry::Vacant(v) => {
-                            let g = self.values.len();
-                            v.insert((g, hash));
+                        hashbrown::hash_table::Entry::Occupied(entry) => entry.get().0,
+                        hashbrown::hash_table::Entry::Vacant(entry) => {
+                            let group_id = self.values.len();
+                            entry.insert((group_id, hash));
                             self.values.push(key);
-                            g
+                            new_group_rows.push(row);
+                            group_id
                         }
                     }
                 }
@@ -176,9 +197,26 @@ where
         }
         Ok(())
     }
+}
+
+impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
+where
+    T::Native: HashValue,
+{
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hashes: &mut Vec<u64>,
+        new_group_rows: &mut Vec<usize>,
+    ) -> Result<()> {
+        self.intern_impl(cols, groups, hashes, new_group_rows)
+    }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<(usize, u64)>() + self.values.allocated_size()
+        self.map.capacity() * size_of::<(usize, u64)>()
+            + self.values.allocated_size()
+            + self.hashes_buffer.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -244,6 +282,8 @@ where
         self.values.shrink_to(num_rows);
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
+        self.hashes_buffer.clear();
+        self.hashes_buffer.shrink_to(num_rows);
     }
 }
 
@@ -273,7 +313,8 @@ mod tests {
         // Intern 20 distinct values; `new()` pre-allocates capacity 128 for `values`.
         let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..20i32));
         let mut groups = vec![];
-        gv.intern(&[arr], &mut groups)?;
+        let mut hashes = vec![];
+        gv.intern(&[arr], &mut groups, &mut hashes, &mut vec![])?;
         let capacity_before = gv.values.capacity(); // 128
 
         // n=4, n*2=8 <= len=20 -> drain branch

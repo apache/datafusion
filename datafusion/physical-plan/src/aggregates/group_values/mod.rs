@@ -91,13 +91,21 @@ pub trait GroupValues: Send {
     /// Calculates the group id for each input row of `cols`, assigning new
     /// group ids as necessary.
     ///
-    /// When the function returns, `groups`  must contain the group id for each
-    /// row in `cols`.
+    /// When the function returns, `groups` must contain the group id for each
+    /// row in `cols`, and `hashes` must contain the hash for each row in `cols`.
+    /// `new_group_rows` is filled with the input row index that first created
+    /// each new group in this call.
     ///
     /// If a row has the same value as a previous row, the same group id is
     /// assigned. If a row has a new value, the next available group id is
     /// assigned.
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hashes: &mut Vec<u64>,
+        new_group_rows: &mut Vec<usize>,
+    ) -> Result<()>;
 
     /// Returns the number of bytes of memory used by this [`GroupValues`]
     fn size(&self) -> usize;

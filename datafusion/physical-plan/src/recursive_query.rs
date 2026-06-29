@@ -436,6 +436,7 @@ struct DistinctDeduplicator {
     group_values: Box<dyn GroupValues>,
     reservation: MemoryReservation,
     intern_output_buffer: Vec<usize>,
+    hash_buffer: Vec<u64>,
 }
 
 impl DistinctDeduplicator {
@@ -447,6 +448,7 @@ impl DistinctDeduplicator {
             group_values,
             reservation,
             intern_output_buffer: Vec::new(),
+            hash_buffer: Vec::new(),
         })
     }
 
@@ -466,8 +468,12 @@ impl DistinctDeduplicator {
                     "failed to reserve {additional} recursive query group ids: {e}"
                 )
             })?;
-        self.group_values
-            .intern(batch.columns(), &mut self.intern_output_buffer)?;
+        self.group_values.intern(
+            batch.columns(),
+            &mut self.intern_output_buffer,
+            &mut self.hash_buffer,
+            &mut vec![],
+        )?;
         let mask = new_groups_mask(&self.intern_output_buffer, size_before);
         self.intern_output_buffer.clear();
         // We update the reservation to reflect the new size of the hash table.

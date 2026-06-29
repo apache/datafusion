@@ -134,6 +134,8 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 group_by: Arc::clone(&agg.group_by),
                 group_values,
                 batch_group_indices: Default::default(),
+                batch_hashes: Default::default(),
+                new_group_rows: Default::default(),
                 accumulators,
             }),
             _mode: PhantomData,
@@ -181,6 +183,8 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
                 acc + state.group_values.size()
                     + state.batch_group_indices.allocated_size()
+                    + state.batch_hashes.allocated_size()
+                    + state.new_group_rows.allocated_size()
             }
             AggregateHashTableState::OutputtingMaterializedFinal(output) => {
                 output.memory_size()
@@ -291,6 +295,12 @@ pub(super) struct AggregateHashTableBuffer {
     /// Each value indexes into `group_values`, and the same index is used by every
     /// accumulator to update that group's aggregate state.
     pub(super) batch_group_indices: Vec<usize>,
+
+    /// Hash for each row in the current input batch.
+    pub(super) batch_hashes: Vec<u64>,
+
+    /// Input rows that created new groups in the current input batch.
+    pub(super) new_group_rows: Vec<usize>,
 
     /// One item per aggregate expression.
     ///

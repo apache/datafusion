@@ -95,9 +95,10 @@ fn bench_intern(
     batches: &[Vec<ArrayRef>],
     groups: &mut Vec<usize>,
 ) {
+    let mut hashes = vec![];
     for batch in batches {
         groups.clear();
-        gv.intern(batch, groups).unwrap();
+        gv.intern(batch, groups, &mut hashes, &mut vec![]).unwrap();
     }
     black_box(&*groups);
 }

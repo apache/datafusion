@@ -334,6 +334,12 @@ pub(crate) struct GroupedHashAggregateStream {
     /// processed. Reused across batches here to avoid reallocations
     current_group_indices: Vec<usize>,
 
+    /// Hash for each row in the current input batch.
+    current_hashes: Vec<u64>,
+
+    /// Input rows that created new groups in the current input batch.
+    new_group_rows: Vec<usize>,
+
     /// Accumulators, one for each `AggregateFunctionExpr` in the query
     ///
     /// For example, if the query has aggregates, `SUM(x)`,
@@ -601,6 +607,8 @@ impl GroupedHashAggregateStream {
             oom_mode,
             group_values,
             current_group_indices: Default::default(),
+            current_hashes: Default::default(),
+            new_group_rows: Default::default(),
             exec_state,
             baseline_metrics,
             group_by_metrics,
@@ -883,8 +891,12 @@ impl GroupedHashAggregateStream {
 
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
-            self.group_values
-                .intern(group_values, &mut self.current_group_indices)?;
+            self.group_values.intern(
+                group_values,
+                &mut self.current_group_indices,
+                &mut self.current_hashes,
+                &mut self.new_group_rows,
+            )?;
             let group_indices = &self.current_group_indices;
 
             // Update ordering information if necessary
@@ -991,7 +1003,9 @@ impl GroupedHashAggregateStream {
         let groups_and_acc_size = acc
             + self.group_values.size()
             + self.group_ordering.size()
-            + self.current_group_indices.allocated_size();
+            + self.current_group_indices.allocated_size()
+            + self.current_hashes.allocated_size()
+            + self.new_group_rows.allocated_size();
 
         // Reserve extra headroom for sorting during potential spill.
         // When OOM triggers, group_aggregate_batch has already processed the
@@ -1103,8 +1117,12 @@ impl GroupedHashAggregateStream {
             cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
 
             let starting_groups = self.group_values.len();
-            self.group_values
-                .intern(&cols, &mut self.current_group_indices)?;
+            self.group_values.intern(
+                &cols,
+                &mut self.current_group_indices,
+                &mut self.current_hashes,
+                &mut self.new_group_rows,
+            )?;
             let total_groups = self.group_values.len();
             if total_groups > starting_groups {
                 self.group_ordering.new_groups(
@@ -1238,6 +1256,10 @@ impl GroupedHashAggregateStream {
         self.group_values.clear_shrink(num_rows);
         self.current_group_indices.clear();
         self.current_group_indices.shrink_to(num_rows);
+        self.current_hashes.clear();
+        self.current_hashes.shrink_to(num_rows);
+        self.new_group_rows.clear();
+        self.new_group_rows.shrink_to(num_rows);
     }
 
     /// Clear memory and shrink capacities to zero.
