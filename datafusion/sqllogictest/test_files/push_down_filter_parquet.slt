@@ -1065,6 +1065,72 @@ statement ok
 drop table nej_probe;
 
 
+########
+# Regression test for build-NULL + emptied-probe interaction in null-aware LeftAnti joins.
+#
+# `x NOT IN (subquery)` plans as a null-aware LeftAnti hash join where `x` is
+# the build (left) side. The dynamic-filter pushdown derives a bounds/membership
+# filter from the build keys and pushes it onto the probe scan. When the build
+# contains a NULL key and the filter prunes every probe row, the probe looks
+# empty to the join. A null-aware LeftAnti treats an empty probe as a genuinely-
+# absent subquery, so it emits the build-side NULL as a matching row. That is
+# wrong: `NULL NOT IN (non-empty set)` must be UNKNOWN, not TRUE.
+#
+# The fix: suppress dynamic-filter pushdown whenever the build key is nullable
+# and the join is null-aware, so the probe is never artificially emptied.
+########
+
+statement ok
+set datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+# Build side: `ao` has a nullable `id` column; the NULL row is the one that
+# must NOT appear in the output.
+query I
+COPY (SELECT * FROM (VALUES (5), (NULL)) v(id))
+TO 'test_files/scratch/push_down_filter_parquet/ao_p.parquet'
+STORED AS PARQUET;
+----
+2
+
+# Probe / subquery side: `i_disj` has two non-NULL values that don't match 5,
+# and no NULLs. The subquery is non-empty, so `NULL NOT IN (...)` is UNKNOWN.
+query I
+COPY (SELECT * FROM (VALUES (2), (3)) v(eid))
+TO 'test_files/scratch/push_down_filter_parquet/i_disj_p.parquet'
+STORED AS PARQUET;
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE ao_p (id INT) STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/ao_p.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE i_disj_p (eid INT) STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/i_disj_p.parquet';
+
+# Must return only `5`. `NULL NOT IN (2, 3)` is UNKNOWN — that row is dropped.
+query I
+SELECT id FROM ao_p WHERE id NOT IN (SELECT eid FROM i_disj_p) ORDER BY id;
+----
+5
+
+statement ok
+drop table ao_p;
+
+statement ok
+drop table i_disj_p;
+
+statement ok
+RESET datafusion.optimizer.enable_join_dynamic_filter_pushdown;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
+
+
 # Config reset
 statement ok
 RESET datafusion.explain.physical_plan_only;
