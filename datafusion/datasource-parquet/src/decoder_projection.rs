@@ -20,7 +20,8 @@
 //! [`DecoderProjection`] owns the two halves of "project a decoded parquet
 //! batch onto the scan's output schema":
 //!
-//! * the [`ProjectionMask`] installed on every parquet decoder run, and
+//! * the [`ProjectionMask`] installed on the parquet decoder (and on any
+//!   rebuild performed via `into_builder` at a row-group boundary), and
 //! * the per-batch transform ([`DecoderProjection::map`]) that applies the
 //!   projector and, when needed, rebuilds the batch with the user's
 //!   `output_schema` to recover metadata / nullability the file schema does
@@ -46,13 +47,14 @@ use parquet::schema::types::SchemaDescriptor;
 use crate::opener::{VirtualColumnsState, append_fields};
 use crate::row_filter::build_projection_read_plan;
 
-/// Per-file decoder projection: the [`ProjectionMask`] installed on every
-/// parquet decoder run, plus the per-batch transform that maps the decoder's
+/// Per-file decoder projection: the [`ProjectionMask`] installed on the
+/// parquet decoder, plus the per-batch transform that maps the decoder's
 /// output onto the scan's `output_schema`.
 ///
 /// Built once per file by the opener via [`Self::try_new`]; the
-/// push-decoder stream installs [`Self::projection_mask`] on each decoder
-/// and calls [`Self::map`] on every decoded batch.
+/// push-decoder stream installs [`Self::projection_mask`] on the decoder
+/// (and on any rebuild performed via `into_builder` at a row-group
+/// boundary) and calls [`Self::map`] on every decoded batch.
 pub(crate) struct DecoderProjection {
     projection_mask: ProjectionMask,
     projector: Projector,

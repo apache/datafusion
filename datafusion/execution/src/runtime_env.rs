@@ -18,8 +18,7 @@
 //! Execution [`RuntimeEnv`] environment that manages access to object
 //! store, memory manager, disk manager.
 
-#[expect(deprecated)]
-use crate::disk_manager::{DiskManagerConfig, SpillingProgress};
+use crate::disk_manager::SpillingProgress;
 use crate::{
     disk_manager::{DiskManager, DiskManagerBuilder, DiskManagerMode},
     memory_pool::{
@@ -333,9 +332,8 @@ impl Default for RuntimeEnv {
 /// See example on [`RuntimeEnv`]
 #[derive(Clone)]
 pub struct RuntimeEnvBuilder {
-    #[expect(deprecated)]
     /// DiskManager to manage temporary disk file usage
-    pub disk_manager: DiskManagerConfig,
+    pub disk_manager: Option<Arc<DiskManager>>,
     /// DiskManager builder to manager temporary disk file usage
     pub disk_manager_builder: Option<DiskManagerBuilder>,
     /// [`MemoryPool`] from which to allocate memory
@@ -369,14 +367,6 @@ impl RuntimeEnvBuilder {
             #[cfg(feature = "parquet_encryption")]
             parquet_encryption_factory_registry: Default::default(),
         }
-    }
-
-    #[expect(deprecated)]
-    #[deprecated(since = "48.0.0", note = "Use with_disk_manager_builder instead")]
-    /// Customize disk manager
-    pub fn with_disk_manager(mut self, disk_manager: DiskManagerConfig) -> Self {
-        self.disk_manager = disk_manager;
-        self
     }
 
     /// Customize the disk manager builder
@@ -472,14 +462,15 @@ impl RuntimeEnvBuilder {
         let memory_pool =
             memory_pool.unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
 
+        let disk_manager: Arc<DiskManager> = match (disk_manager, disk_manager_builder) {
+            (_, Some(builder)) => Arc::new(builder.build()?),
+            (Some(manager), None) => manager,
+            (None, None) => Arc::new(DiskManagerBuilder::default().build()?),
+        };
+
         Ok(RuntimeEnv {
             memory_pool,
-            disk_manager: if let Some(builder) = disk_manager_builder {
-                Arc::new(builder.build()?)
-            } else {
-                #[expect(deprecated)]
-                DiskManager::try_new(disk_manager)?
-            },
+            disk_manager,
             cache_manager: CacheManager::try_new(&cache_manager)?,
             object_store_registry,
             #[cfg(feature = "parquet_encryption")]
@@ -511,10 +502,7 @@ impl RuntimeEnvBuilder {
         };
 
         Self {
-            #[expect(deprecated)]
-            disk_manager: DiskManagerConfig::Existing(Arc::clone(
-                &runtime_env.disk_manager,
-            )),
+            disk_manager: Some(Arc::clone(&runtime_env.disk_manager)),
             disk_manager_builder: None,
             memory_pool: Some(Arc::clone(&runtime_env.memory_pool)),
             cache_manager: cache_config,

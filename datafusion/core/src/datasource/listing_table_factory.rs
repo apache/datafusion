@@ -228,9 +228,9 @@ mod tests {
         datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
         test_util::parquet_test_data,
     };
-    use datafusion_execution::cache::CacheAccessor;
-    use datafusion_execution::cache::cache_manager::CacheManagerConfig;
-    use datafusion_execution::cache::file_statistics_cache::DefaultFileStatisticsCache;
+    use datafusion_execution::cache::cache_manager::{
+        CacheManagerConfig, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
+    };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use glob::Pattern;
@@ -241,6 +241,8 @@ mod tests {
 
     use datafusion_common::parsers::CompressionTypeVariant;
     use datafusion_common::{DFSchema, TableReference};
+    use datafusion_execution::cache::Cache;
+    use datafusion_execution::cache::default_cache::DefaultCache;
     use datafusion_expr::registry::ExtensionTypeRegistryRef;
 
     #[tokio::test]
@@ -483,7 +485,8 @@ mod tests {
             .to_string();
 
         // Test with collect_statistics enabled
-        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+        let file_statistics_cache =
+            Arc::new(DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT));
         let cache_config = CacheManagerConfig::default()
             .with_file_statistics_cache(Some(file_statistics_cache.clone()));
         let runtime = RuntimeEnvBuilder::new()
@@ -513,7 +516,8 @@ mod tests {
         );
 
         // Test with collect_statistics disabled
-        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+        let file_statistics_cache =
+            Arc::new(DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT));
         let cache_config = CacheManagerConfig::default()
             .with_file_statistics_cache(Some(file_statistics_cache.clone()));
         let runtime = RuntimeEnvBuilder::new()
