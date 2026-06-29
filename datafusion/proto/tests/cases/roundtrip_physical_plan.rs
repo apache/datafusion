@@ -89,8 +89,8 @@ use datafusion::physical_plan::windows::{
 };
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
-    PhysicalExpr, RangePartitioning, SendableRecordBatchStream, SplitPoint, Statistics,
-    displayable,
+    PhysicalExpr, PlanProperties, RangePartitioning, SendableRecordBatchStream,
+    SplitPoint, Statistics, displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -229,6 +229,74 @@ fn roundtrip_empty() -> Result<()> {
     roundtrip_test(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))))
 }
 
+#[derive(Debug)]
+struct DowncastDelegatingExec {
+    inner: Arc<dyn ExecutionPlan>,
+}
+
+impl DowncastDelegatingExec {
+    fn new(inner: Arc<dyn ExecutionPlan>) -> Self {
+        Self { inner }
+    }
+}
+
+impl DisplayAs for DowncastDelegatingExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        self.inner.fmt_as(t, f)
+    }
+}
+
+impl ExecutionPlan for DowncastDelegatingExec {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        self.inner.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.inner.children()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let inner = Arc::clone(&self.inner).with_new_children(children)?;
+        Ok(Arc::new(Self::new(inner)))
+    }
+
+    fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
+        Some(self.inner.as_ref())
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.inner.execute(partition, context)
+    }
+}
+
+#[test]
+fn serialize_uses_downcast_delegate() -> Result<()> {
+    let inner: Arc<dyn ExecutionPlan> =
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(DowncastDelegatingExec::new(inner));
+    let codec = DefaultPhysicalExtensionCodec {};
+
+    let proto = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+
+    assert!(matches!(
+        proto.physical_plan_type,
+        Some(protobuf::physical_plan_node::PhysicalPlanType::Empty(_))
+    ));
+
+    Ok(())
+}
+
 #[test]
 fn roundtrip_date_time_interval() -> Result<()> {
     let schema = Schema::new(vec![
@@ -343,6 +411,59 @@ fn roundtrip_nested_loop_join() -> Result<()> {
             None,
             join_type,
             Some(vec![0]),
+        )?))?;
+    }
+    Ok(())
+}
+
+/// Regression: proto3 `repeated` fields cannot distinguish "absent" from "empty",
+/// so a naive encoding collapses `Some(vec![])` and `None` into the same wire
+/// representation. `try_embed_projection` (DataFusion 53+) produces
+/// `HashJoinExec.projection = Some(vec![])` for `SELECT count(1) … JOIN …`,
+/// which previously round-tripped to `None` and caused downstream consumers (e.g.
+/// distributed Flight executors) to receive a different number of output
+/// columns than the planner declared. Verify all three states preserve.
+#[test]
+fn roundtrip_hash_join_projection_states() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Arc::new(Schema::new(vec![field_a.clone()]));
+    let schema_right = Arc::new(Schema::new(vec![field_a]));
+    let on = vec![(
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
+    )];
+
+    for projection in [None, Some(vec![]), Some(vec![0]), Some(vec![1])] {
+        roundtrip_test(Arc::new(HashJoinExec::try_new(
+            Arc::new(EmptyExec::new(schema_left.clone())),
+            Arc::new(EmptyExec::new(schema_right.clone())),
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            projection,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?))?;
+    }
+    Ok(())
+}
+
+/// Same regression coverage for `NestedLoopJoinExec`, which shares the
+/// `repeated uint32 projection` proto field shape with `HashJoinExec`.
+#[test]
+fn roundtrip_nested_loop_join_projection_states() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Arc::new(Schema::new(vec![field_a.clone()]));
+    let schema_right = Arc::new(Schema::new(vec![field_a]));
+
+    for projection in [None, Some(vec![]), Some(vec![0]), Some(vec![1])] {
+        roundtrip_test(Arc::new(NestedLoopJoinExec::try_new(
+            Arc::new(EmptyExec::new(schema_left.clone())),
+            Arc::new(EmptyExec::new(schema_right.clone())),
+            None,
+            &JoinType::Inner,
+            projection,
         )?))?;
     }
     Ok(())

@@ -1021,6 +1021,13 @@ impl AggregateExec {
             ));
         }
 
+        // `GroupedHashAggregateStream` is being incrementally refactored. See the
+        // tracking issue for details.
+        //
+        // New features and improvements should go directly into the new implementation.
+        // Please coordinate through the tracking issue.
+        //
+        // Issue: <https://github.com/apache/datafusion/issues/22710>
         if context
             .session_config()
             .options()
@@ -1052,7 +1059,7 @@ impl AggregateExec {
             }
         }
 
-        // grouping by something else and we need to just materialize all results
+        // Execution paths that have not been migrated use the fallback implementation
         Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
             self, context, partition,
         )?))

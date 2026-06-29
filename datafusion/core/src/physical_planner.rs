@@ -373,13 +373,13 @@ impl DefaultPhysicalPlanner {
         &self,
         logical_schema: &DFSchemaRef,
         physical_plan: &Arc<dyn ExecutionPlan>,
-        context: &str,
+        context_factory: impl FnOnce() -> String,
     ) -> Result<()> {
         if !logical_schema.matches_arrow_schema(&physical_plan.schema()) {
             return plan_err!(
                 "{} created an ExecutionPlan with mismatched schema. \
                     LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
-                context,
+                context_factory(),
                 logical_schema,
                 physical_plan.schema()
             );
@@ -700,9 +700,11 @@ impl DefaultPhysicalPlanner {
                             );
                         }
                     };
-                    let context =
-                        format!("Extension planner for table scan {}", scan.table_name);
-                    self.ensure_schema_matches(projected_schema, &plan, &context)?;
+
+                    self.ensure_schema_matches(projected_schema, &plan, || {
+                        format!("Extension planner for table scan {}", scan.table_name)
+                    })?;
+
                     plan
                 }
             }
@@ -1830,8 +1832,10 @@ impl DefaultPhysicalPlanner {
                     ),
                 }?;
 
-                let context = format!("Extension planner for {node:?}");
-                self.ensure_schema_matches(node.schema(), &plan, &context)?;
+                self.ensure_schema_matches(node.schema(), &plan, || {
+                    format!("Extension planner for {node:?}")
+                })?;
+
                 plan
             }
 
