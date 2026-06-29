@@ -106,10 +106,27 @@ fn is_valid_integer_base(base: f64) -> bool {
     base.trunc() == base && base >= 2.0 && base <= u32::MAX as f64
 }
 
+#[inline]
+fn negative_log_error() -> ArrowError {
+    ArrowError::ComputeError("Cannot take logarithm of a negative number".to_string())
+}
+
+#[inline]
+fn checked_log<T: Float>(value: T, base: T) -> Result<T, ArrowError> {
+    if value < T::zero() {
+        Err(negative_log_error())
+    } else {
+        Ok(value.log(base))
+    }
+}
+
 /// Calculate logarithm for Decimal32 values.
 /// For integer bases >= 2 with zero scale, return an exact integer log when the
 /// value is a perfect power of the base. Otherwise falls back to f64 computation.
 fn log_decimal32(value: i32, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if value < 0 {
+        return Err(negative_log_error());
+    }
     if scale == 0
         && is_valid_integer_base(base)
         && let Ok(unscaled) = u32::try_from(value)
@@ -128,6 +145,9 @@ fn log_decimal32(value: i32, scale: i8, base: f64) -> Result<f64, ArrowError> {
 /// For integer bases >= 2 with zero scale, return an exact integer log when the
 /// value is a perfect power of the base. Otherwise falls back to f64 computation.
 fn log_decimal64(value: i64, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if value < 0 {
+        return Err(negative_log_error());
+    }
     if scale == 0
         && is_valid_integer_base(base)
         && let Ok(unscaled) = u64::try_from(value)
@@ -146,6 +166,9 @@ fn log_decimal64(value: i64, scale: i8, base: f64) -> Result<f64, ArrowError> {
 /// For integer bases >= 2 with zero scale, return an exact integer log when the
 /// value is a perfect power of the base. Otherwise falls back to f64 computation.
 fn log_decimal128(value: i128, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if value < 0 {
+        return Err(negative_log_error());
+    }
     if scale == 0
         && is_valid_integer_base(base)
         && let Ok(unscaled) = u128::try_from(value)
@@ -171,6 +194,9 @@ fn decimal_to_f64<T: ToPrimitive + Copy>(value: T, scale: i8) -> Result<f64, Arr
 }
 
 fn log_decimal256(value: i256, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if value < i256::ZERO {
+        return Err(negative_log_error());
+    }
     // Try to convert to i128 for the optimized path
     match value.to_i128() {
         Some(v) => log_decimal128(v, scale, base),
@@ -247,27 +273,24 @@ impl ScalarUDFImpl for LogFunc {
         let value = value.to_array(args.number_rows)?;
 
         let output: ArrayRef = match value.data_type() {
-            DataType::Float16 => {
-                calculate_binary_math::<Float16Type, Float16Type, Float16Type, _>(
-                    &value,
-                    &base,
-                    |value, base| Ok(value.log(base)),
-                )?
-            }
-            DataType::Float32 => {
-                calculate_binary_math::<Float32Type, Float32Type, Float32Type, _>(
-                    &value,
-                    &base,
-                    |value, base| Ok(value.log(base)),
-                )?
-            }
-            DataType::Float64 => {
-                calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
-                    &value,
-                    &base,
-                    |value, base| Ok(value.log(base)),
-                )?
-            }
+            DataType::Float16 => calculate_binary_math::<
+                Float16Type,
+                Float16Type,
+                Float16Type,
+                _,
+            >(&value, &base, checked_log)?,
+            DataType::Float32 => calculate_binary_math::<
+                Float32Type,
+                Float32Type,
+                Float32Type,
+                _,
+            >(&value, &base, checked_log)?,
+            DataType::Float64 => calculate_binary_math::<
+                Float64Type,
+                Float64Type,
+                Float64Type,
+                _,
+            >(&value, &base, checked_log)?,
             DataType::Decimal32(_, scale) => {
                 calculate_binary_math::<Decimal32Type, Float64Type, Float64Type, _>(
                     &value,
@@ -672,14 +695,14 @@ mod tests {
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(Float64Array::from(vec![
-                    2.0, 2.0, 3.0, 5.0, 5.0,
+                    2.0, 2.0, 3.0, 5.0,
                 ]))), // base
                 ColumnarValue::Array(Arc::new(Float64Array::from(vec![
-                    8.0, 4.0, 81.0, 625.0, -123.0,
+                    8.0, 4.0, 81.0, 625.0,
                 ]))), // num
             ],
             arg_fields,
-            number_rows: 5,
+            number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
@@ -692,17 +715,36 @@ mod tests {
                 let floats = as_float64_array(&arr)
                     .expect("failed to convert result to a Float64Array");
 
-                assert_eq!(floats.len(), 5);
+                assert_eq!(floats.len(), 4);
                 assert!((floats.value(0) - 3.0).abs() < 1e-10);
                 assert!((floats.value(1) - 2.0).abs() < 1e-10);
                 assert!((floats.value(2) - 4.0).abs() < 1e-10);
                 assert!((floats.value(3) - 4.0).abs() < 1e-10);
-                assert!(floats.value(4).is_nan());
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
             }
         }
+    }
+
+    #[test]
+    fn test_log_f64_rejects_negative_input() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Float64, false).into(),
+            Field::new("a", DataType::Float64, false).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![2.0]))), // base
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![-123.0]))), // num
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        assert_negative_log_error(LogFunc::new().invoke_with_args(args));
     }
 
     #[test]
@@ -957,13 +999,13 @@ mod tests {
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(
-                    Decimal128Array::from(vec![10, 100, 1000, 10000, 12600, -123])
+                    Decimal128Array::from(vec![10, 100, 1000, 10000, 12600])
                         .with_precision_and_scale(38, 0)
                         .unwrap(),
                 )), // num
             ],
             arg_fields: vec![arg_field],
-            number_rows: 6,
+            number_rows: 5,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
@@ -976,19 +1018,23 @@ mod tests {
                 let floats = as_float64_array(&arr)
                     .expect("failed to convert result to a Float64Array");
 
-                assert_eq!(floats.len(), 6);
+                assert_eq!(floats.len(), 5);
                 assert!((floats.value(0) - 1.0).abs() < 1e-10);
                 assert!((floats.value(1) - 2.0).abs() < 1e-10);
                 assert!((floats.value(2) - 3.0).abs() < 1e-10);
                 assert!((floats.value(3) - 4.0).abs() < 1e-10);
                 let expected = 12600_f64.log(10.0);
                 assert!((floats.value(4) - expected).abs() < 1e-10);
-                assert!(floats.value(5).is_nan());
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
             }
         }
+    }
+
+    #[test]
+    fn test_log_decimal128_rejects_negative_input() {
+        assert_negative_log_error(log_decimal128(-123, 0, 10.0));
     }
 
     #[test]
@@ -1090,15 +1136,13 @@ mod tests {
                         Some(i256::from(12600)),
                         // Slightly lower than i128 max - can calculate
                         Some(i256::from_i128(i128::MAX) - i256::from(1000)),
-                        // Give NaN for incorrect inputs, as in f64::log
-                        Some(i256::from(-123)),
                     ])
                     .with_precision_and_scale(DECIMAL256_MAX_PRECISION, 0)
                     .unwrap(),
                 )), // num
             ],
             arg_fields: vec![arg_field],
-            number_rows: 7,
+            number_rows: 6,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
@@ -1111,7 +1155,7 @@ mod tests {
                 let floats = as_float64_array(&arr)
                     .expect("failed to convert result to a Float64Array");
 
-                assert_eq!(floats.len(), 7);
+                assert_eq!(floats.len(), 6);
                 assert!((floats.value(0) - 1.0).abs() < 1e-10);
                 assert!((floats.value(1) - 2.0).abs() < 1e-10);
                 assert!((floats.value(2) - 3.0).abs() < 1e-10);
@@ -1120,12 +1164,16 @@ mod tests {
                 assert!((floats.value(4) - expected).abs() < 1e-10);
                 let expected = ((i128::MAX - 1000) as f64).log(10.0);
                 assert!((floats.value(5) - expected).abs() < 1e-10);
-                assert!(floats.value(6).is_nan());
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
             }
         }
+    }
+
+    #[test]
+    fn test_log_decimal256_rejects_negative_input() {
+        assert_negative_log_error(log_decimal256(i256::from(-123), 0, 10.0));
     }
 
     #[test]
@@ -1204,5 +1252,17 @@ mod tests {
                 panic!("Expected an array value")
             }
         }
+    }
+
+    fn assert_negative_log_error<T: std::fmt::Debug, E: std::fmt::Display>(
+        result: std::result::Result<T, E>,
+    ) {
+        let error = result.expect_err("expected negative logarithm error");
+        assert!(
+            error
+                .to_string()
+                .contains("Cannot take logarithm of a negative number"),
+            "{error}"
+        );
     }
 }
