@@ -201,7 +201,7 @@ impl Range {
     }
 
     /// Generate `generate_series()` function which includes upper bound.
-    fn generate_series() -> Self {
+    pub fn generate_series() -> Self {
         Self {
             signature: Self::defined_signature(),
             include_upper_bound: true,
@@ -295,7 +295,7 @@ impl Range {
     /// gen_range(3) => [0, 1, 2]
     /// gen_range(1, 4) => [1, 2, 3]
     /// gen_range(1, 7, 2) => [1, 3, 5]
-    fn gen_range_inner(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+    pub fn gen_range_inner(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         let (start_array, stop_array, step_array) = match args {
             [stop_array] => (None, as_int64_array(stop_array)?, None),
             [start_array, stop_array] => (
@@ -349,7 +349,7 @@ impl Range {
         Ok(arr)
     }
 
-    fn gen_range_date(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+    pub fn gen_range_date(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         let [start, stop, step] = take_function_args(self.name(), args)?;
         let step = as_interval_mdn_array(step)?;
 
@@ -413,7 +413,7 @@ impl Range {
         Ok(arr)
     }
 
-    fn gen_range_timestamp(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+    pub fn gen_range_timestamp(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         let [start, stop, step] = take_function_args(self.name(), args)?;
         let step = as_interval_mdn_array(step)?;
 
