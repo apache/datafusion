@@ -2155,11 +2155,7 @@ impl Unparser<'_> {
                 relation: Some(relation),
                 name,
                 ..
-            }) if relation
-                .table()
-                .strip_prefix(LogicalPlanBuilder::MERGED_KEY_NAME_PREFIX)
-                == Some(name.as_str()) =>
-            {
+            }) if relation.table() == LogicalPlanBuilder::MERGED_KEY_QUALIFIER => {
                 Ok(ast::SelectItem::UnnamedExpr(ast::Expr::Identifier(
                     self.new_ident_quoted_if_needs(name.to_string()),
                 )))

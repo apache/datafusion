@@ -1952,7 +1952,7 @@ mod tests {
         assert_snapshot!(
             optimized_plan.clone(),
             @r"
-        Projection: test.a, test.b
+        Projection: test.a AS a, test.b
           Left Join: Using test.a = test2.a
             TableScan: test projection=[a, b]
             TableScan: test2 projection=[a]

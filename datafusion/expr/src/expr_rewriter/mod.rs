@@ -91,11 +91,13 @@ pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     .data()
 }
 
-fn merged_key_qualifier(name: &str) -> TableReference {
-    TableReference::bare(format!(
-        "{}{name}",
-        LogicalPlanBuilder::MERGED_KEY_NAME_PREFIX
-    ))
+fn alias_merged_key(expr: Expr, name: &str) -> Expr {
+    expr.alias_qualified(
+        Some(TableReference::bare(
+            LogicalPlanBuilder::MERGED_KEY_QUALIFIER,
+        )),
+        name,
+    )
 }
 
 /// Resolve a normalized column to itself, or -- when it is the merged key of a
@@ -134,7 +136,7 @@ pub fn merged_using_key_or_column(
             .end()?,
             _ => Expr::Column(l.clone()),
         };
-        return Ok(expr.alias_qualified(Some(merged_key_qualifier(&name)), name));
+        return Ok(alias_merged_key(expr, &name));
     }
     Ok(Expr::Column(col))
 }
