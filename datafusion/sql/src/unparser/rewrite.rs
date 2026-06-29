@@ -201,7 +201,8 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         .enumerate()
         .map(|(i, f)| match f {
             Expr::Alias(alias) => {
-                let a = Expr::Column(alias.name.clone().into());
+                let a =
+                    Expr::Column(Column::new(alias.relation.clone(), alias.name.clone()));
                 map.insert(a.clone(), f.clone());
                 a
             }

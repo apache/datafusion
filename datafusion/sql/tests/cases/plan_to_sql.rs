@@ -263,56 +263,31 @@ fn roundtrip_statement() -> Result<()> {
 
 /// Regression for https://github.com/apache/datafusion/issues/22881.
 ///
-/// A FULL JOIN USING / NATURAL merged key is `COALESCE(left, right)`, exposed
-/// as an *unqualified* column. Selecting that merged key while ordering by a
-/// *qualified* key of the same join (`ORDER BY ta.id`) must both plan and
-/// survive an unparser round-trip (`plan -> SQL -> plan`). Earlier fixes either
-/// errored at plan time or produced SQL that could not be re-planned. `USING`
-/// and `NATURAL` are covered separately since the unparser renders them
-/// differently.
+/// A `USING` / `NATURAL` merged key is exposed as an unqualified column, while
+/// the original side keys remain addressable through qualified references. The
+/// merged key and qualified side keys may appear together because the user
+/// selected them, or because `ORDER BY` folds a non-projected side key into the
+/// plan. Both shapes must survive an unparser round-trip (`plan -> SQL -> plan`).
 #[rstest]
-#[case::full_join_using(
+#[case::order_by_qualified_side_key_using(
     "SELECT id FROM (SELECT j1_id AS id FROM j1) ta \
      FULL JOIN (SELECT j2_id AS id FROM j2) tb USING (id) \
      ORDER BY ta.id"
 )]
-#[case::natural_full_join(
+#[case::order_by_qualified_side_key_natural(
     "SELECT id FROM (SELECT j1_id AS id FROM j1) ta \
      NATURAL FULL JOIN (SELECT j2_id AS id FROM j2) tb \
      ORDER BY ta.id"
 )]
-fn roundtrip_full_join_merged_key_order_by_qualified(#[case] query: &str) -> Result<()> {
-    let dialect = GenericDialect {};
-    let statement = Parser::new(&dialect)
-        .try_with_sql(query)?
-        .parse_statement()?;
-
-    let context = MockContextProvider {
-        state: MockSessionState::default(),
-    };
-    let sql_to_rel = SqlToRel::new(&context);
-    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
-
-    let roundtrip_statement = plan_to_sql(&plan)?;
-    let plan_roundtrip = sql_to_rel
-        .sql_statement_to_plan(roundtrip_statement)
-        .unwrap();
-
-    assert_eq!(plan, plan_roundtrip);
-
-    Ok(())
-}
-
-#[rstest]
-#[case::left_join_using(
+#[case::select_merged_and_left_side_key(
     "SELECT id, ta.id FROM (SELECT j1_id AS id FROM j1) ta \
      LEFT JOIN (SELECT j2_id AS id FROM j2) tb USING (id)"
 )]
-#[case::right_join_using(
+#[case::select_merged_and_right_side_key(
     "SELECT id, tb.id FROM (SELECT j1_id AS id FROM j1) ta \
      RIGHT JOIN (SELECT j2_id AS id FROM j2) tb USING (id)"
 )]
-#[case::full_join_using(
+#[case::select_merged_and_both_side_keys(
     "SELECT id, ta.id, tb.id FROM (SELECT j1_id AS id FROM j1) ta \
      FULL JOIN (SELECT j2_id AS id FROM j2) tb USING (id)"
 )]

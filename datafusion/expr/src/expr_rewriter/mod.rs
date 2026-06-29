@@ -68,12 +68,11 @@ pub trait FunctionRewrite: Debug {
 /// Recursively call `LogicalPlanBuilder::normalize` on all [`Column`] expressions
 /// in the `expr` expression tree.
 ///
-/// An unqualified reference to the merged key of a `RIGHT` / `FULL`
-/// `USING` / `NATURAL` join is resolved to the never-NULL-padded side -- the
-/// right key for `RIGHT`, `COALESCE(left, right)` for `FULL` -- via
+/// An unqualified reference to the merged key of a `USING` / `NATURAL` join is
+/// resolved to a reserved internal merged-key expression via
 /// [`merged_using_key_or_column`].
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
-    let merged_keys = plan.right_or_full_using_key_pairs()?;
+    let merged_keys = plan.using_key_pairs()?;
     expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = expr {
@@ -92,18 +91,23 @@ pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     .data()
 }
 
+fn merged_key_qualifier(name: &str) -> TableReference {
+    TableReference::bare(format!(
+        "{}{name}",
+        LogicalPlanBuilder::MERGED_KEY_NAME_PREFIX
+    ))
+}
+
 /// Resolve a normalized column to itself, or -- when it is the merged key of a
-/// `RIGHT` / `FULL` `USING` / `NATURAL` join referenced *unqualified* -- to the
-/// value of the side that is never NULL-padded.
+/// `USING` / `NATURAL` join referenced *unqualified* -- to the merged key
+/// expression with a reserved internal qualifier.
 ///
 /// `merged_keys` carries the `(left, right, join_type)` triples of the plan's
-/// `RIGHT` / `FULL` USING / NATURAL joins. The merged key resolves to the right
-/// key for `RIGHT`, and to `COALESCE(left, right)` for `FULL`. The COALESCE is
-/// built as `CASE WHEN left IS NOT NULL THEN left ELSE right END` (the form
-/// `coalesce` is simplified to, buildable here without depending on the
-/// functions crate), aliased to the key name so the output column keeps its
-/// name. `LEFT` / `INNER` never reach here -- their merged key is the left
-/// column the normalization already produced.
+/// USING / NATURAL joins. The merged key resolves to the left key for
+/// left-preserving joins, the right key for right-preserving joins, and
+/// `COALESCE(left, right)` for `FULL`. The COALESCE is built as
+/// `CASE WHEN left IS NOT NULL THEN left ELSE right END` (the form `coalesce`
+/// is simplified to, buildable here without depending on the functions crate).
 pub fn merged_using_key_or_column(
     col: Column,
     was_unqualified: bool,
@@ -113,23 +117,24 @@ pub fn merged_using_key_or_column(
         && let Some((l, r, join_type)) =
             merged_keys.iter().find(|(l, r, _)| l == &col || r == &col)
     {
-        match join_type {
+        let name = col.name.clone();
+        let expr = match join_type {
             // The left key is NULL-padded on right-only rows; the right key is
             // always present, so the merged key is just the right column.
-            JoinType::Right => return Ok(Expr::Column(r.clone())),
-            // Either side may be NULL-padded; coalesce to the present one.
-            JoinType::Full => {
-                let case = CaseBuilder::new(
-                    None,
-                    vec![Expr::Column(l.clone()).is_not_null()],
-                    vec![Expr::Column(l.clone())],
-                    Some(Box::new(Expr::Column(r.clone()))),
-                )
-                .end()?;
-                return Ok(case.alias(col.name.clone()));
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                Expr::Column(r.clone())
             }
-            _ => {}
-        }
+            // Either side may be NULL-padded; coalesce to the present one.
+            JoinType::Full => CaseBuilder::new(
+                None,
+                vec![Expr::Column(l.clone()).is_not_null()],
+                vec![Expr::Column(l.clone())],
+                Some(Box::new(Expr::Column(r.clone()))),
+            )
+            .end()?,
+            _ => Expr::Column(l.clone()),
+        };
+        return Ok(expr.alias_qualified(Some(merged_key_qualifier(&name)), name));
     }
     Ok(Expr::Column(col))
 }

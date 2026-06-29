@@ -53,7 +53,6 @@ use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue,
     TableReference, ToDFSchema, UnnestOptions, exec_err,
@@ -824,97 +823,6 @@ impl LogicalPlanBuilder {
         self.sort_with_limit(sorts, None)
     }
 
-    /// Internal name for a FULL USING / NATURAL join merged key that has been
-    /// renamed to dodge an unqualified/qualified schema collision during sort
-    /// push-down. See [`Self::sort_with_limit`].
-    fn synthetic_merged_name(name: &str) -> String {
-        format!("{}{name}", Self::MERGED_KEY_NAME_PREFIX)
-    }
-
-    /// Unqualified projection output fields that collide with a *qualified*
-    /// missing sort column of the same name. In practice these are the
-    /// `COALESCE` merged keys of FULL USING / NATURAL joins, exposed
-    /// unqualified, which `ORDER BY <qualified key>` would otherwise drag into
-    /// an illegal `{ k, a.k }` projection schema. They are renamed to a
-    /// synthetic name before folding; any unqualified reference to them in the
-    /// sort itself is rewritten to match (see [`Self::rewrite_sort_merged_keys`]).
-    fn renamable_merged_keys(
-        schema: &DFSchemaRef,
-        missing_cols: &IndexSet<Column>,
-    ) -> HashSet<String> {
-        let qualified_missing: HashSet<&str> = missing_cols
-            .iter()
-            .filter(|c| c.relation.is_some())
-            .map(|c| c.name.as_str())
-            .collect();
-        if qualified_missing.is_empty() {
-            return HashSet::new();
-        }
-
-        schema
-            .columns()
-            .into_iter()
-            .filter(|c| {
-                c.relation.is_none() && qualified_missing.contains(c.name.as_str())
-            })
-            .map(|c| c.name)
-            .collect()
-    }
-
-    /// Re-alias a renamable merged key output field to its
-    /// [`Self::synthetic_merged_name`] so it no longer collides with the
-    /// qualified sort column folded alongside it.
-    fn rename_merged_key(expr: Expr, renamable: &HashSet<String>) -> Expr {
-        match expr {
-            Expr::Alias(mut alias)
-                if alias.relation.is_none() && renamable.contains(&alias.name) =>
-            {
-                alias.name = Self::synthetic_merged_name(&alias.name);
-                Expr::Alias(alias)
-            }
-            Expr::Column(column)
-                if column.relation.is_none() && renamable.contains(&column.name) =>
-            {
-                let name = Self::synthetic_merged_name(&column.name);
-                Expr::Column(column).alias(name)
-            }
-            other => other,
-        }
-    }
-
-    /// Rewrite unqualified references to a renamed merged key inside the sort
-    /// expressions to its [`Self::synthetic_merged_name`], so a sort that also
-    /// orders by the merged key (e.g. `ORDER BY a.k, k`) keeps resolving after
-    /// the projection field has been renamed.
-    fn rewrite_sort_merged_keys(
-        sorts: Vec<SortExpr>,
-        renamable: &HashSet<String>,
-    ) -> Result<Vec<SortExpr>> {
-        sorts
-            .into_iter()
-            .map(|sort| {
-                let expr = sort
-                    .expr
-                    .clone()
-                    .transform(|e| {
-                        Ok(match e {
-                            Expr::Column(c)
-                                if c.relation.is_none()
-                                    && renamable.contains(&c.name) =>
-                            {
-                                Transformed::yes(Expr::Column(Column::new_unqualified(
-                                    Self::synthetic_merged_name(&c.name),
-                                )))
-                            }
-                            other => Transformed::no(other),
-                        })
-                    })
-                    .data()?;
-                Ok(sort.with_expr(expr))
-            })
-            .collect()
-    }
-
     /// Apply a sort
     pub fn sort_with_limit(
         self,
@@ -948,60 +856,10 @@ impl LogicalPlanBuilder {
             })));
         }
 
-        // A qualified sort column folded into the projection can collide with an
-        // unqualified output field of the same name: the COALESCE merged key of a
-        // FULL USING / NATURAL join is exposed unqualified, so `ORDER BY a.k`
-        // dragging the qualified `a.k` into the `SELECT k` projection would build
-        // an illegal `{ k, a.k }` schema. Rename such merged keys to a unique
-        // internal name before folding, and restore the original name below in
-        // the wrapper projection.
-        let renamable = match self.plan.as_ref() {
-            LogicalPlan::Projection(_) => {
-                Self::renamable_merged_keys(schema, &missing_cols)
-            }
-            _ => HashSet::new(),
-        };
-
-        // Keep the sort's own references to a renamed merged key resolving by
-        // rewriting them to the same synthetic name (e.g. `ORDER BY a.k, k`,
-        // where `k` is the merged key being renamed to dodge the `a.k` clash).
-        let sorts = if renamable.is_empty() {
-            sorts
-        } else {
-            Self::rewrite_sort_merged_keys(sorts, &renamable)?
-        };
-
         // remove pushed down sort columns
-        let new_expr = schema
-            .columns()
-            .into_iter()
-            .map(|c| {
-                if c.relation.is_none() && renamable.contains(&c.name) {
-                    Expr::Column(Column::new_unqualified(Self::synthetic_merged_name(
-                        &c.name,
-                    )))
-                    .alias(c.name)
-                } else {
-                    Expr::Column(c)
-                }
-            })
-            .collect();
+        let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
 
-        let input = if renamable.is_empty() {
-            Arc::unwrap_or_clone(self.plan)
-        } else {
-            match Arc::unwrap_or_clone(self.plan) {
-                LogicalPlan::Projection(Projection { expr, input, .. }) => {
-                    let expr = expr
-                        .into_iter()
-                        .map(|e| Self::rename_merged_key(e, &renamable))
-                        .collect::<Vec<_>>();
-                    LogicalPlan::Projection(Projection::try_new(expr, input)?)
-                }
-                // `renamable` is only non-empty for a Projection (checked above).
-                other => other,
-            }
-        };
+        let input = Arc::unwrap_or_clone(self.plan);
 
         let is_distinct = false;
         let plan = Self::add_missing_columns(input, &missing_cols, is_distinct)?;

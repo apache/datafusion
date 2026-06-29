@@ -19,9 +19,7 @@ use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use crate::planner::{
-    ContextProvider, PlannerContext, SqlToRel, idents_to_table_reference,
-};
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
     CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
@@ -37,8 +35,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, JoinType, Result, TableReference, not_impl_err,
-    plan_err,
+    Column, DFSchema, DFSchemaRef, JoinType, Result, not_impl_err, plan_err,
 };
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
@@ -97,16 +94,9 @@ fn flatten_expr_groups(expr_groups: Vec<Vec<Expr>>) -> Vec<Expr> {
     expr_groups.into_iter().flatten().collect()
 }
 
-fn merged_key_qualifier(name: &str) -> TableReference {
-    TableReference::bare(format!(
-        "{}{name}",
-        LogicalPlanBuilder::MERGED_KEY_NAME_PREFIX
-    ))
-}
-
 /// Normalize unqualified column references in `expr` against `schemas`, then
-/// resolve the merged key of any RIGHT / FULL USING / NATURAL join to the side
-/// that is never NULL-padded (see [`merged_using_key_or_column`]).
+/// resolve any USING / NATURAL merged key to its internally qualified merged-key
+/// expression (see [`merged_using_key_or_column`]).
 ///
 /// This is a single pass on purpose: only references written *unqualified* are
 /// merged keys, and that distinction is lost once normalization has qualified
@@ -935,11 +925,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
 
                 // Resolve unqualified references against the real USING / NATURAL
-                // join columns so the merged key is recognized (and, for
-                // RIGHT / FULL, resolved to the preserved side) rather than
+                // join columns so the merged key is recognized rather than
                 // reported as ambiguous.
                 let using_columns = plan.using_columns()?;
-                let merged_keys = plan.right_or_full_using_key_pairs()?;
+                let merged_keys = plan.using_key_pairs()?;
                 let mut schema_stack: Vec<Vec<&DFSchema>> =
                     vec![vec![plan.schema()], fallback_schemas];
                 for sc in planner_context.outer_schemas_iter() {
@@ -1012,85 +1001,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Vec<SelectExpr>> {
         let mut prepared_select_exprs = vec![];
         let mut error_builder = DataFusionErrorBuilder::new();
-        let internally_qualified_merged_keys =
-            self.internally_qualified_merged_keys(&projection, plan)?;
-
         for expr in projection {
-            match self.sql_select_to_rex(
-                expr,
-                plan,
-                empty_from,
-                planner_context,
-                &internally_qualified_merged_keys,
-            ) {
+            match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
                 Ok(expr) => prepared_select_exprs.push(expr),
                 Err(err) => error_builder.add_error(err),
             }
         }
         error_builder.error_or(prepared_select_exprs)
-    }
-
-    /// Returns the direct column reference from an unaliased SQL projection item.
-    /// `SelectItem` is the sqlparser AST node for one `SELECT` item; this helper
-    /// only extracts simple references such as `k` or `a.k`.
-    fn direct_select_column(&self, select_item: &SelectItem) -> Result<Option<Column>> {
-        let SelectItem::UnnamedExpr(expr) = select_item else {
-            return Ok(None);
-        };
-
-        match expr {
-            SQLExpr::Identifier(ident) => Ok(Some(Column::new_unqualified(
-                self.ident_normalizer.normalize(ident.clone()),
-            ))),
-            SQLExpr::CompoundIdentifier(idents) if idents.len() >= 2 => {
-                let mut qualifier_idents = idents.clone();
-                let name = self
-                    .ident_normalizer
-                    .normalize(qualifier_idents.pop().expect("checked len"));
-                let relation = idents_to_table_reference(
-                    qualifier_idents,
-                    self.options.enable_ident_normalization,
-                )?;
-                Ok(Some(Column::new(Some(relation), name)))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    fn internally_qualified_merged_keys(
-        &self,
-        projection: &[SelectItem],
-        plan: &LogicalPlan,
-    ) -> Result<HashSet<String>> {
-        let using_key_pairs = plan.using_key_pairs()?;
-        if using_key_pairs.is_empty() {
-            return Ok(HashSet::new());
-        }
-
-        let mut unqualified_select_keys = HashSet::new();
-        let mut qualified_select_key_names = HashSet::new();
-        for select_item in projection {
-            if let Some(column) = self.direct_select_column(select_item)? {
-                if column.relation.is_none() {
-                    unqualified_select_keys.insert(column.name);
-                } else {
-                    qualified_select_key_names.insert(column.name);
-                }
-            }
-        }
-
-        let mut conflicting_merged_keys = HashSet::new();
-        for (left, _right) in using_key_pairs {
-            // `USING` / `NATURAL` join keys have the same visible merged-key
-            // name on both sides. Keep `left.name` as the canonical output name.
-            if unqualified_select_keys.contains(&left.name)
-                && qualified_select_key_names.contains(&left.name)
-            {
-                conflicting_merged_keys.insert(left.name);
-            }
-        }
-
-        Ok(conflicting_merged_keys)
     }
 
     /// Generate a relational expression from a select SQL expression
@@ -1100,33 +1017,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         plan: &LogicalPlan,
         empty_from: bool,
         planner_context: &mut PlannerContext,
-        internally_qualified_merged_keys: &HashSet<String>,
     ) -> Result<SelectExpr> {
         match sql {
             SelectItem::UnnamedExpr(expr) => {
                 let expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
-                let internal_merged_key_name = match &expr {
-                    Expr::Column(column)
-                        if column.relation.is_none()
-                            && internally_qualified_merged_keys
-                                .contains(&column.name) =>
-                    {
-                        Some(column.name.clone())
-                    }
-                    _ => None,
-                };
                 let col = normalize_col_resolving_merged_using_key(
                     expr,
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
-                    &plan.right_or_full_using_key_pairs()?,
+                    &plan.using_key_pairs()?,
                 )?;
-                let col = if let Some(name) = internal_merged_key_name {
-                    col.unalias()
-                        .alias_qualified(Some(merged_key_qualifier(&name)), name)
-                } else {
-                    col
-                };
 
                 Ok(SelectExpr::Expression(col))
             }
@@ -1137,7 +1037,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     select_expr,
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
-                    &plan.right_or_full_using_key_pairs()?,
+                    &plan.using_key_pairs()?,
                 )?;
                 let name = self.ident_normalizer.normalize(alias);
                 // avoiding adding an alias if the column name is the same.
@@ -1238,7 +1138,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         plan,
                         empty_from,
                         planner_context,
-                        &HashSet::new(),
                     )
                 })
                 .collect::<Result<Vec<_>>>()?
