@@ -214,8 +214,7 @@ fn can_repartition_in_partial(
     context: &TaskContext,
     hash_table: &AggregateHashTable<PartialMarker>,
 ) -> bool {
-    agg.group_by.is_single()
-        && !agg.group_by.is_empty()
+    !agg.group_by.is_empty()
         && context.session_config().repartition_aggregations()
         && context.session_config().target_partitions() > 1
         && hash_table.can_repartition_in_partial()
