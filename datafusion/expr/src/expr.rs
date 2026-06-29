@@ -771,8 +771,16 @@ impl Alias {
 /// A `Box<Expr>` for the recursive children of [`BinaryExpr`]. A long binary-operator chain
 /// (e.g. `a OR b OR c OR ...`) builds an `Expr` as deep as the chain, and dropping it
 /// recursively would overflow the stack. This wrapper's `Drop` tears the chain down iteratively.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct BoxedExpr(Box<Expr>);
+
+impl fmt::Debug for BoxedExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // Stay transparent like the `Box<Expr>` this replaced, so a `BinaryExpr`'s debug
+        // output keeps showing its children directly rather than wrapped.
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
 
 impl BoxedExpr {
     pub fn new(expr: Expr) -> Self {
