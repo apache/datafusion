@@ -4542,7 +4542,7 @@ query TT
 explain SELECT * FROM person a join person b using (id, age);
 ----
 logical_plan
-01)Projection: a.id AS id, a.age AS age, a.state, b.state
+01)Projection: a.id, a.age, a.state, b.state
 02)--Inner Join: a.id = b.id, a.age = b.age
 03)----SubqueryAlias: a
 04)------TableScan: person projection=[id, age, state]
@@ -4557,7 +4557,7 @@ query TT
 explain SELECT age FROM (SELECT * FROM person a join person b using (id, age, state));
 ----
 logical_plan
-01)Projection: a.age AS age
+01)Projection: a.age
 02)--Inner Join: a.id = b.id, a.age = b.age, a.state = b.state
 03)----SubqueryAlias: a
 04)------TableScan: person projection=[id, age, state]
@@ -4601,7 +4601,7 @@ query TT
 explain SELECT * FROM person a join person b using (id, age, state) join person c using (id, age, state);
 ----
 logical_plan
-01)Projection: a.id AS id, a.age AS age, a.state AS state
+01)Projection: a.id, a.age, a.state
 02)--Inner Join: a.id = c.id, a.age = c.age, a.state = c.state
 03)----Projection: a.id, a.age, a.state
 04)------Inner Join: a.id = b.id, a.age = b.age, a.state = b.state
@@ -4636,7 +4636,7 @@ query TT
 explain SELECT * FROM lineitem JOIN lineitem as lineitem2 USING (c1)
 ----
 logical_plan
-01)Projection: lineitem.c1 AS c1
+01)Projection: lineitem.c1
 02)--Inner Join: lineitem.c1 = lineitem2.c1
 03)----TableScan: lineitem projection=[c1]
 04)----SubqueryAlias: lineitem2

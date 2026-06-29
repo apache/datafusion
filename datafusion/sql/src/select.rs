@@ -40,7 +40,7 @@ use datafusion_common::{
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
 use datafusion_expr::builder::get_struct_unnested_columns;
-use datafusion_expr::expr::{PlannedReplaceSelectItem, Unnest, WildcardOptions};
+use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, Unnest, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     merged_using_key_or_column, normalize_col, normalize_sorts,
 };
@@ -133,6 +133,40 @@ fn normalize_col_resolving_merged_using_key(
         })
     })
     .data()
+}
+
+fn unalias_internal_merged_key(expr: Expr, select_exprs: &[Expr]) -> Expr {
+    match expr {
+        Expr::Alias(Alias {
+            expr,
+            relation: Some(relation),
+            ..
+        }) if relation.table() == LogicalPlanBuilder::MERGED_KEY_QUALIFIER => *expr,
+        Expr::Column(column)
+            if column.relation.as_ref().is_some_and(|relation| {
+                relation.table() == LogicalPlanBuilder::MERGED_KEY_QUALIFIER
+            }) =>
+        {
+            select_exprs
+                .iter()
+                .find_map(|select_expr| match select_expr {
+                    Expr::Alias(Alias {
+                        expr,
+                        relation: Some(relation),
+                        name,
+                        ..
+                    }) if relation.table()
+                        == LogicalPlanBuilder::MERGED_KEY_QUALIFIER
+                        && name == &column.name =>
+                    {
+                        Some(*expr.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or(Expr::Column(column))
+        }
+        other => other,
+    }
 }
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -288,6 +322,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let group_by_expr =
                         resolve_positions_to_exprs(group_by_expr, &select_exprs)?;
                     let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
+                    let group_by_expr =
+                        unalias_internal_merged_key(group_by_expr, &select_exprs);
                     self.validate_schema_satisfies_exprs(
                         base_plan.schema(),
                         std::slice::from_ref(&group_by_expr),

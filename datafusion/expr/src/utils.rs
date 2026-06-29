@@ -21,8 +21,10 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
+use crate::conditional_expressions::CaseBuilder;
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
-use crate::expr_rewriter::{merged_using_key_or_column, strip_outer_reference};
+use crate::expr_rewriter::strip_outer_reference;
+use crate::logical_plan::JoinType;
 use crate::{
     BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator, and,
 };
@@ -442,6 +444,38 @@ fn exclude_using_columns(plan: &LogicalPlan) -> Result<HashSet<Column>> {
     Ok(excluded)
 }
 
+fn merged_using_key_for_wildcard(
+    col: Column,
+    merged_keys: &[(Column, Column, JoinType)],
+) -> Result<Expr> {
+    let Some((l, r, join_type)) =
+        merged_keys.iter().find(|(l, r, _)| l == &col || r == &col)
+    else {
+        return Ok(Expr::Column(col));
+    };
+
+    let (expr, visible_col) = match join_type {
+        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+            (Expr::Column(r.clone()), r.clone())
+        }
+        JoinType::Full => CaseBuilder::new(
+            None,
+            vec![Expr::Column(l.clone()).is_not_null()],
+            vec![Expr::Column(l.clone())],
+            Some(Box::new(Expr::Column(r.clone()))),
+        )
+        .end()
+        .map(|expr| (expr, col.clone()))?,
+        _ => (Expr::Column(l.clone()), l.clone()),
+    };
+
+    if expr == Expr::Column(visible_col.clone()) {
+        Ok(expr)
+    } else {
+        Ok(expr.alias_qualified(visible_col.relation, visible_col.name))
+    }
+}
+
 /// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
 pub fn expand_wildcard(
     schema: &DFSchema,
@@ -463,8 +497,8 @@ pub fn expand_wildcard(
     columns_to_skip.extend(excluded_columns);
     let exprs = get_exprs_except_skipped(schema, &columns_to_skip);
 
-    // Resolve the surviving USING / NATURAL key column to the internally named
-    // merged key expression.
+    // Resolve the surviving USING / NATURAL key column to the merged key value,
+    // while preserving the wildcard-visible field qualifier.
     let merged_keys = plan.using_key_pairs()?;
     if merged_keys.is_empty() {
         return Ok(exprs);
@@ -472,7 +506,7 @@ pub fn expand_wildcard(
     exprs
         .into_iter()
         .map(|expr| match expr {
-            Expr::Column(col) => merged_using_key_or_column(col, true, &merged_keys),
+            Expr::Column(col) => merged_using_key_for_wildcard(col, &merged_keys),
             other => Ok(other),
         })
         .collect()
