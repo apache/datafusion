@@ -15,9 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, BinaryBuilder, StringArrayType};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BinaryBuilder, StringArray, StringArrayType,
+};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
@@ -131,100 +134,99 @@ fn encode_string(s: &str, charset: &str) -> Result<Vec<u8>> {
     }
 }
 
-/// Encodes a string array using the given charset, producing a BinaryArray.
-fn encode_array<'a, S: StringArrayType<'a>>(
-    string_array: &S,
-    charset: &str,
-) -> Result<ArrayRef> {
-    let mut builder =
-        BinaryBuilder::with_capacity(string_array.len(), string_array.len() * 4);
-    for i in 0..string_array.len() {
-        if string_array.is_null(i) {
-            builder.append_null();
-        } else {
-            let s = string_array.value(i);
-            let encoded = encode_string(s, charset)?;
-            builder.append_value(&encoded);
-        }
-    }
-    Ok(Arc::new(builder.finish()))
+/// The charset for each row. `Constant` is a single uppercased charset; `PerRow`
+/// uppercases each row on demand, yielding `None` for null entries.
+enum Charsets<'a> {
+    Constant(&'a str),
+    PerRow(&'a StringArray),
 }
 
-/// Encodes a binary array using lossy UTF-8 conversion, then re-encodes with the given charset.
-/// Invalid UTF-8 bytes become U+FFFD (replacement character), matching Spark behavior.
-fn encode_binary_array<'a, B: arrow::array::BinaryArrayType<'a>>(
-    binary_array: &'a B,
-    charset: &str,
-) -> Result<ArrayRef> {
-    let mut builder =
-        BinaryBuilder::with_capacity(binary_array.len(), binary_array.len() * 4);
-    for i in 0..binary_array.len() {
-        if binary_array.is_null(i) {
-            builder.append_null();
-        } else {
-            let s = String::from_utf8_lossy(binary_array.value(i));
-            let encoded = encode_string(&s, charset)?;
-            builder.append_value(&encoded);
-        }
-    }
-    Ok(Arc::new(builder.finish()))
-}
-
-/// Dispatches to the correct typed array encoder based on the DataType.
-fn encode_dispatch(arr: &ArrayRef, charset: &str) -> Result<ArrayRef> {
-    match arr.data_type() {
-        DataType::Utf8 => encode_array(&arr.as_string::<i32>(), charset),
-        DataType::LargeUtf8 => encode_array(&arr.as_string::<i64>(), charset),
-        DataType::Utf8View => encode_array(&arr.as_string_view(), charset),
-        DataType::Binary => encode_binary_array(&arr.as_binary::<i32>(), charset),
-        DataType::LargeBinary => encode_binary_array(&arr.as_binary::<i64>(), charset),
-        DataType::BinaryView => encode_binary_array(&arr.as_binary_view(), charset),
-        DataType::Null => {
-            let mut builder = BinaryBuilder::new();
-            for _ in 0..arr.len() {
-                builder.append_null();
+impl Charsets<'_> {
+    fn get(&self, i: usize) -> Option<Cow<'_, str>> {
+        match self {
+            Charsets::Constant(charset) => Some(Cow::Borrowed(charset)),
+            Charsets::PerRow(array) => {
+                (!array.is_null(i)).then(|| Cow::Owned(array.value(i).to_uppercase()))
             }
-            Ok(Arc::new(builder.finish()))
         }
+    }
+}
+
+fn null_binary_array(len: usize) -> ArrayRef {
+    let mut builder = BinaryBuilder::new();
+    for _ in 0..len {
+        builder.append_null();
+    }
+    Arc::new(builder.finish())
+}
+
+/// Encodes each row to binary. A row is null if its value or charset is null;
+/// otherwise it is `encode_string(decode(i), charset)`. `decode` yields the row's
+/// value as text — a borrow for string input, or lossy UTF-8 for binary input
+/// (invalid bytes become U+FFFD, matching Spark).
+fn encode_rows<'a>(
+    len: usize,
+    is_null: impl Fn(usize) -> bool,
+    decode: impl Fn(usize) -> Cow<'a, str>,
+    charsets: &Charsets,
+) -> Result<ArrayRef> {
+    let mut builder = BinaryBuilder::with_capacity(len, len * 4);
+    for i in 0..len {
+        match (is_null(i), charsets.get(i)) {
+            (false, Some(charset)) => {
+                builder.append_value(&encode_string(&decode(i), &charset)?)
+            }
+            _ => builder.append_null(),
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
+fn encode_array<'a, S: StringArrayType<'a>>(
+    array: &S,
+    charsets: &Charsets,
+) -> Result<ArrayRef> {
+    encode_rows(
+        array.len(),
+        |i| array.is_null(i),
+        |i| Cow::Borrowed(array.value(i)),
+        charsets,
+    )
+}
+
+fn encode_binary_array<'a, B: arrow::array::BinaryArrayType<'a>>(
+    array: &'a B,
+    charsets: &Charsets,
+) -> Result<ArrayRef> {
+    encode_rows(
+        array.len(),
+        |i| array.is_null(i),
+        |i| String::from_utf8_lossy(array.value(i)),
+        charsets,
+    )
+}
+
+fn encode_dispatch(arr: &ArrayRef, charsets: &Charsets) -> Result<ArrayRef> {
+    match arr.data_type() {
+        DataType::Utf8 => encode_array(&arr.as_string::<i32>(), charsets),
+        DataType::LargeUtf8 => encode_array(&arr.as_string::<i64>(), charsets),
+        DataType::Utf8View => encode_array(&arr.as_string_view(), charsets),
+        DataType::Binary => encode_binary_array(&arr.as_binary::<i32>(), charsets),
+        DataType::LargeBinary => encode_binary_array(&arr.as_binary::<i64>(), charsets),
+        DataType::BinaryView => encode_binary_array(&arr.as_binary_view(), charsets),
+        DataType::Null => Ok(null_binary_array(arr.len())),
         dt => exec_err!("encode expects a string or binary argument, got {dt:?}"),
     }
 }
 
-/// Extracts a charset string from a ColumnarValue, normalizing to uppercase.
-fn extract_charset(charset_arg: &ColumnarValue) -> Result<String> {
-    match charset_arg {
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(Some(s))
-            | ScalarValue::LargeUtf8(Some(s))
-            | ScalarValue::Utf8View(Some(s)) => Ok(s.to_uppercase()),
-            _ => exec_err!("encode charset argument must be a non-null string"),
-        },
-        ColumnarValue::Array(arr) => {
-            fn validate_constant_charset<'a, S: StringArrayType<'a>>(
-                arr: &'a S,
-            ) -> Result<String> {
-                if arr.is_null(0) {
-                    return exec_err!(
-                        "encode charset argument must be a non-null string"
-                    );
-                }
-                let charset = arr.value(0).to_uppercase();
-                for i in 1..arr.len() {
-                    if arr.is_null(i) || arr.value(i).to_uppercase() != charset {
-                        return exec_err!(
-                            "encode charset argument must be constant across all rows"
-                        );
-                    }
-                }
-                Ok(charset)
-            }
-            match arr.data_type() {
-                DataType::Utf8 => validate_constant_charset(&arr.as_string::<i32>()),
-                DataType::LargeUtf8 => validate_constant_charset(&arr.as_string::<i64>()),
-                DataType::Utf8View => validate_constant_charset(&arr.as_string_view()),
-                dt => exec_err!("encode charset argument must be a string, got {dt:?}"),
-            }
+/// The uppercased charset from a scalar, or `None` if it is null.
+fn scalar_charset(scalar: &ScalarValue) -> Result<Option<String>> {
+    match scalar {
+        ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) | ScalarValue::Utf8View(s) => {
+            Ok(s.as_ref().map(|s| s.to_uppercase()))
         }
+        ScalarValue::Null => Ok(None),
+        other => exec_err!("encode charset argument must be a string, got {other:?}"),
     }
 }
 
@@ -255,7 +257,6 @@ impl ScalarUDFImpl for SparkEncode {
             }
         };
 
-        // Second argument: the charset name, normalized to Utf8.
         match charset_type {
             DataType::Utf8
             | DataType::LargeUtf8
@@ -289,9 +290,6 @@ impl ScalarUDFImpl for SparkEncode {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [value, charset_arg] = take_function_args(self.name(), args.args)?;
 
-        let charset = extract_charset(&charset_arg)?;
-
-        // Determine if the result should be scalar or array
         let len = [&value, &charset_arg]
             .into_iter()
             .find_map(|arg| match arg {
@@ -301,12 +299,24 @@ impl ScalarUDFImpl for SparkEncode {
         let inferred_length = len.unwrap_or(1);
         let is_scalar = len.is_none();
 
-        let string_arr = match value {
+        let value_arr = match value {
             ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(inferred_length)?,
             ColumnarValue::Array(array) => array,
         };
 
-        let result = encode_dispatch(&string_arr, &charset)?;
+        // A null charset yields a null result for that row (Spark NullIntolerant).
+        let result = match &charset_arg {
+            ColumnarValue::Scalar(scalar) => match scalar_charset(scalar)? {
+                Some(charset) => {
+                    encode_dispatch(&value_arr, &Charsets::Constant(&charset))?
+                }
+                None => null_binary_array(value_arr.len()),
+            },
+            ColumnarValue::Array(charset_array) => encode_dispatch(
+                &value_arr,
+                &Charsets::PerRow(charset_array.as_string::<i32>()),
+            )?,
+        };
 
         if is_scalar {
             ScalarValue::try_from_array(&result, 0).map(ColumnarValue::Scalar)

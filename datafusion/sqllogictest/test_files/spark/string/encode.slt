@@ -167,6 +167,26 @@ SELECT encode(s, 'utf-8'::string) FROM (VALUES ('hello'::string), (NULL::string)
 NULL
 776f726c64
 
+# NULL charset returns NULL (Spark is NullIntolerant)
+query ?
+SELECT encode('hello'::string, NULL::string);
+----
+NULL
+
+# Charset varies per row, and a NULL charset yields NULL for that row
+query ?
+SELECT encode(a, b) FROM VALUES (X'0a', 'US-ASCII'), (X'deadbeef', NULL) AS t(a, b);
+----
+0a
+NULL
+
+# Per-row charsets: each row encoded with its own charset
+query ?
+SELECT encode(a, b) FROM VALUES (X'0a', 'US-ASCII'), (X'deadbeef', 'UTF-16be') AS t(a, b);
+----
+0a
+07adfffdfffd
+
 # Error: unsupported charset
 statement error Unsupported charset for encode
 SELECT encode('hello'::string, 'EBCDIC'::string);
