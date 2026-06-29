@@ -131,10 +131,9 @@ pub struct LogicalPlanBuilder {
 }
 
 impl LogicalPlanBuilder {
-    /// Reserved name prefix for a FULL USING / NATURAL join merged key that has
-    /// been renamed to dodge an unqualified/qualified schema collision during
-    /// sort push-down. A real column carrying this prefix would clash.
-    const MERGED_KEY_NAME_PREFIX: &str = "__datafusion_merged_key_";
+    /// Reserved prefix for an internal FULL USING / NATURAL join merged key name
+    /// or qualifier. A real column or relation carrying this prefix would clash.
+    pub const MERGED_KEY_NAME_PREFIX: &str = "__datafusion_merged_key_";
 
     /// Create a builder from an existing plan
     pub fn new(plan: LogicalPlan) -> Self {
