@@ -24,6 +24,7 @@ use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
     hash_aggregate::{FinalHashAggregateStream, PartialHashAggregateStream},
     no_grouping::AggregateStream,
+    partial_reduce_stream::PartialReduceHashAggregateStream,
     row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
@@ -77,6 +78,7 @@ pub mod group_values;
 mod hash_aggregate;
 mod no_grouping;
 pub mod order;
+mod partial_reduce_stream;
 mod row_hash;
 mod skip_partial;
 mod topk;
@@ -527,6 +529,9 @@ enum StreamType {
     /// Partial stage of the hash aggregation
     /// Input output scheme: initial input -> partial state
     PartialHash(PartialHashAggregateStream),
+    /// Partial-reduce stage of the hash aggregation
+    /// Input output scheme: partial state -> partial state
+    PartialReduceHash(PartialReduceHashAggregateStream),
     /// Final stage of the hash aggregation
     /// Input output scheme: partial state -> final result
     FinalHash(FinalHashAggregateStream),
@@ -550,6 +555,7 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::PartialHash(stream) => Box::pin(stream),
+            StreamType::PartialReduceHash(stream) => Box::pin(stream),
             StreamType::FinalHash(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
@@ -1028,6 +1034,12 @@ impl AggregateExec {
                 )?));
             }
 
+            if self.should_use_partial_reduce_hash_stream() {
+                return Ok(StreamType::PartialReduceHash(
+                    PartialReduceHashAggregateStream::new(self, context, partition)?,
+                ));
+            }
+
             if self.should_use_final_hash_stream(context) {
                 return Ok(StreamType::FinalHash(FinalHashAggregateStream::new(
                     self, context, partition,
@@ -1064,6 +1076,14 @@ impl AggregateExec {
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
         ) && self.limit_options_supported_by_hash_stream()
+            && self.input_order_mode == InputOrderMode::Linear
+            && !self.group_by.is_true_no_grouping()
+            && self.group_by.is_single()
+    }
+
+    fn should_use_partial_reduce_hash_stream(&self) -> bool {
+        self.mode == AggregateMode::PartialReduce
+            && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()

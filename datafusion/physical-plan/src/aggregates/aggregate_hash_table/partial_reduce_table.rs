@@ -25,12 +25,12 @@ use datafusion_expr::EmitTo;
 use crate::aggregates::AggregateExec;
 
 use super::common::{
-    AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState, FinalMarker,
-    MaterializedOutput,
+    AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
+    MaterializedOutput, PartialReduceMarker,
 };
 
-/// Methods specific to the aggregate hash table used in the final aggregation stage.
-impl AggregateHashTable<FinalMarker> {
+/// Methods specific to the aggregate hash table used in the partial-reduce stage.
+impl AggregateHashTable<PartialReduceMarker> {
     pub(in crate::aggregates) fn new(
         agg: &AggregateExec,
         partition: usize,
@@ -46,7 +46,7 @@ impl AggregateHashTable<FinalMarker> {
         )
     }
 
-    /// Emits the next batch of aggregated group keys and final aggregate values.
+    /// Emits the next batch of aggregated group keys and aggregate states.
     ///
     /// The output batch size is determined by `self.batch_size`.
     ///
@@ -65,7 +65,8 @@ impl AggregateHashTable<FinalMarker> {
                     return Ok(None);
                 }
 
-                let output = self.materialize_final_output(state, output_schema)?;
+                let output =
+                    self.materialize_partial_reduce_output(state, output_schema)?;
                 Ok(self.emit_next_materialized_batch(output, batch_size))
             }
             AggregateHashTableState::OutputtingMaterialized(output) => {
@@ -78,19 +79,19 @@ impl AggregateHashTable<FinalMarker> {
         }
     }
 
-    fn materialize_final_output(
+    fn materialize_partial_reduce_output(
         &self,
         mut state: AggregateHashTableBuffer,
         output_schema: SchemaRef,
     ) -> Result<MaterializedOutput> {
-        // Final aggregate evaluation consumes accumulator state. Evaluate all
-        // groups once, then slice the materialized batch on subsequent polls.
-        let emit_to = EmitTo::All;
+        // `state(EmitTo::All)` consumes accumulator state. Emit all groups once,
+        // then slice the materialized batch on subsequent polls.
+        let emit_to_all = EmitTo::All;
         let timer = self.group_by_metrics.emitting_time.timer();
-        let mut output = state.group_values.emit(emit_to)?;
+        let mut output = state.group_values.emit(emit_to_all)?;
 
         for acc in state.accumulators.iter_mut() {
-            output.push(acc.evaluate(emit_to)?);
+            output.extend(acc.state(emit_to_all)?);
         }
         drop(timer);
 
