@@ -336,11 +336,6 @@ impl NestedLoopJoinExec {
             .build()
     }
 
-    /// column indices
-    pub fn column_indices(&self) -> &Vec<ColumnIndex> {
-        &self.column_indices
-    }
-
     /// left side
     pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
         &self.left
@@ -751,7 +746,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             &[],
             &schema,
             self.filter(),
-            self.column_indices(),
+            self.column_indices.as_slice(),
         )? {
             Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
                 Arc::new(projected_left_child),

@@ -885,11 +885,6 @@ impl HashJoinExec {
         true
     }
 
-    /// column indices
-    pub fn column_indices(&self) -> &Vec<ColumnIndex> {
-        &self.column_indices
-    }
-
     /// left (build) side which gets hashed
     pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
         &self.left
@@ -1575,7 +1570,7 @@ impl ExecutionPlan for HashJoinExec {
             self.on(),
             &schema,
             self.filter(),
-            self.column_indices(),
+            self.column_indices.as_slice(),
         )? {
             self.builder()
                 .with_new_children(vec![
