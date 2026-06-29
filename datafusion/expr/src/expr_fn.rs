@@ -936,26 +936,34 @@ impl ExprFunctionExt for Expr {
         builder
     }
     fn filter(self, filter: Expr) -> ExprFuncBuilder {
-        match self {
+        let mut builder = match self {
             Expr::AggregateFunction(udaf) => {
-                let mut builder =
-                    ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)));
-                builder.filter = Some(filter);
-                builder
+                ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
+            }
+            Expr::WindowFunction(udwf) => {
+                ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
             }
             _ => ExprFuncBuilder::new(None),
+        };
+        if builder.fun.is_some() {
+            builder.filter = Some(filter);
         }
+        builder
     }
     fn distinct(self) -> ExprFuncBuilder {
-        match self {
+        let mut builder = match self {
             Expr::AggregateFunction(udaf) => {
-                let mut builder =
-                    ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)));
-                builder.distinct = true;
-                builder
+                ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
+            }
+            Expr::WindowFunction(udwf) => {
+                ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
             }
             _ => ExprFuncBuilder::new(None),
+        };
+        if builder.fun.is_some() {
+            builder.distinct = true;
         }
+        builder
     }
     fn null_treatment(
         self,
@@ -1002,6 +1010,10 @@ impl ExprFunctionExt for Expr {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::WindowFunctionDefinition;
+    use crate::expr::{AggregateFunction, WindowFunction};
+    use crate::lit;
+    use crate::test::function_stub::sum_udaf;
 
     #[test]
     fn filter_is_null_and_is_not_null() {
@@ -1012,5 +1024,92 @@ mod test {
             format!("{}", col_not_null.is_not_null()),
             "col2 IS NOT NULL"
         );
+    }
+
+    /// Create a window function expression for testing
+    fn test_window_expr() -> Expr {
+        Expr::WindowFunction(Box::new(WindowFunction::new(
+            WindowFunctionDefinition::AggregateUDF(sum_udaf()),
+            vec![col("x")],
+        )))
+    }
+
+    #[test]
+    fn test_window_filter_first() {
+        let result = test_window_expr().filter(col("a").gt_eq(lit(5))).build();
+        assert!(
+            result.is_ok(),
+            "filter as first call on WindowFunction should succeed"
+        );
+        let expr = result.unwrap();
+        match expr {
+            Expr::WindowFunction(wf) => {
+                assert!(wf.params.filter.is_some(), "filter should be set");
+            }
+            other => panic!("expected WindowFunction, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_window_distinct_first() {
+        let result = test_window_expr().distinct().build();
+        assert!(
+            result.is_ok(),
+            "distinct as first call on WindowFunction should succeed"
+        );
+        let expr = result.unwrap();
+        match expr {
+            Expr::WindowFunction(wf) => {
+                assert!(wf.params.distinct, "distinct should be true");
+            }
+            other => panic!("expected WindowFunction, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_window_filter_then_partition_by() {
+        let result = test_window_expr()
+            .filter(col("a").gt_eq(lit(5)))
+            .partition_by(vec![col("y")])
+            .build();
+        assert!(
+            result.is_ok(),
+            "filter then partition_by on WindowFunction should succeed"
+        );
+        let expr = result.unwrap();
+        match expr {
+            Expr::WindowFunction(wf) => {
+                assert!(wf.params.filter.is_some(), "filter should be set");
+                assert_eq!(
+                    wf.params.partition_by.len(),
+                    1,
+                    "partition_by should have one entry"
+                );
+            }
+            other => panic!("expected WindowFunction, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_aggregate_filter_still_works() {
+        let agg = Expr::AggregateFunction(AggregateFunction::new_udf(
+            sum_udaf(),
+            vec![col("x")],
+            false,
+            None,
+            vec![],
+            None,
+        ));
+        let result = agg.filter(col("a").gt_eq(lit(5))).build();
+        assert!(
+            result.is_ok(),
+            "filter on AggregateFunction should still work"
+        );
+        match result.unwrap() {
+            Expr::AggregateFunction(af) => {
+                assert!(af.params.filter.is_some(), "filter should be set");
+            }
+            other => panic!("expected AggregateFunction, got {other:?}"),
+        }
     }
 }
