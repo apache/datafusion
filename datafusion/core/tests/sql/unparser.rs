@@ -374,8 +374,27 @@ async fn optimized_duckdb_unparse_qualifies_nested_passthrough_column() -> Resul
     // `order_id` must be unqualified there, not rebased to the subquery alias
     // `o` (which is only the base-table alias one level deeper). The bug emitted
     // `"o"."order_id"` inside that derived table; the fix emits a bare column.
-    assert!(sql.contains(r#"(SELECT "order_id", CASE WHEN"#));
-    assert!(!sql.contains(r#"(SELECT "o"."order_id", CASE WHEN"#));
+    let discount_alias = r#" AS "discount_pct_2""#;
+    let alias_pos = sql
+        .find(discount_alias)
+        .expect("unparsed SQL should contain discount_pct_2 alias");
+    let select_start = sql[..alias_pos]
+        .rfind("(SELECT ")
+        .expect("discount_pct_2 should be in a derived SELECT");
+    let from_start = alias_pos
+        + sql[alias_pos..]
+            .find(" FROM ")
+            .expect("discount_pct_2 SELECT should contain FROM");
+    let derived_projection = &sql[select_start..from_start];
+
+    assert!(
+        derived_projection.contains(r#""order_id""#),
+        "pass-through order_id should be unqualified in derived table: {sql}"
+    );
+    assert!(
+        !derived_projection.contains(r#""o"."order_id""#),
+        "derived table must not reference out-of-scope alias o: {sql}"
+    );
 
     Ok(())
 }
