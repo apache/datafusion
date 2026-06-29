@@ -83,9 +83,6 @@ pub struct FFI_ScalarUDF {
     /// See [`ScalarUDFImpl`] for details on short_circuits
     pub short_circuits: bool,
 
-    /// See [`ScalarUDFImpl`] for details on is_strict.
-    pub is_strict: bool,
-
     /// Performs type coercion. To simply this interface, all UDFs are treated as having
     /// user defined signatures, which will in turn call coerce_types to be called. This
     /// call should be transparent to most users as the internal function performs the
@@ -263,7 +260,6 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
         let aliases = udf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let volatility = udf.signature().volatility.into();
         let short_circuits = udf.short_circuits();
-        let is_strict = udf.is_strict();
 
         let private_data = Box::new(ScalarUDFPrivateData { udf });
 
@@ -272,7 +268,6 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             aliases,
             volatility,
             short_circuits,
-            is_strict,
             invoke_with_args: invoke_with_args_fn_wrapper,
             return_field_from_args: return_field_from_args_fn_wrapper,
             coerce_types: coerce_types_fn_wrapper,
@@ -447,10 +442,6 @@ impl ScalarUDFImpl for ForeignScalarUDF {
         self.udf.short_circuits
     }
 
-    fn is_strict(&self) -> bool {
-        self.udf.is_strict
-    }
-
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         unsafe {
             let arg_types = vec_datatype_to_rvec_wrapped(arg_types)?;
@@ -580,25 +571,6 @@ mod tests {
             ExpressionPlacement::KeepInPlace
         );
         assert_eq!(foreign_udf.placement(&[]), ExpressionPlacement::KeepInPlace);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_ffi_udf_is_strict_round_trip() -> Result<()> {
-        use datafusion::functions::math::abs::AbsFunc;
-
-        let original_udf = Arc::new(ScalarUDF::from(AbsFunc::new()));
-        assert!(original_udf.is_strict());
-
-        let mut ffi_udf = FFI_ScalarUDF::from(original_udf);
-
-        // Force the foreign path so the strictness metadata must cross the FFI
-        // boundary instead of coming from the original local type.
-        ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
-        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
-        assert!(foreign_udf.is::<ForeignScalarUDF>());
-        assert!(foreign_udf.is_strict());
 
         Ok(())
     }

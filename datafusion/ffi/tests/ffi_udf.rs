@@ -40,7 +40,6 @@ mod tests {
 
         let ffi_abs_func = (module.create_scalar_udf)();
         let foreign_abs_func: Arc<dyn ScalarUDFImpl> = (&ffi_abs_func).into();
-        assert!(foreign_abs_func.is_strict());
 
         let udf = ScalarUDF::new_from_shared_impl(foreign_abs_func);
 
