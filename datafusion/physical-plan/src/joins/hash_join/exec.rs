@@ -217,7 +217,7 @@ pub(super) struct JoinLeftData {
     /// Shared atomic flag indicating if any probe partition saw NULL in join keys (for null-aware anti joins)
     pub(super) probe_side_has_null: AtomicBool,
     /// `true` if any hash bucket holds build rows with differing join keys
-    /// (real hash collisions). When `false`, every chain is "pure" and the
+    /// (hash collisions). When `false`, every chain is "pure" and the
     /// probe side can validate a chain with a single key check at its head
     /// instead of re-checking every duplicate. Computed once at build time.
     has_key_collisions: bool,
@@ -2103,9 +2103,7 @@ async fn collect_left_input(
     // Detect whether the build side has real hash collisions (a bucket with
     // differing keys). When it doesn't, the probe side can validate each chain
     // with a single key check at its head instead of re-checking every
-    // duplicate — a large win for high-fanout joins. The ArrayMap (perfect
-    // hash) never collides and never reaches the recheck path, so it is always
-    // collision-free here.
+    // duplicate.
     let has_key_collisions = match &join_hash_map {
         Map::HashMap(hashmap) => {
             hashmap.has_key_collisions(&left_values, null_equality)?

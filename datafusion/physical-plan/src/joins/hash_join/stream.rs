@@ -448,10 +448,7 @@ pub(super) fn lookup_join_hashmap(
         let mut start = 0;
         while start < probes.len() {
             let probe_idx = probes[start];
-            let mut end = start + 1;
-            while end < probes.len() && probes[end] == probe_idx {
-                end += 1;
-            }
+            let end = start + probes[start..].partition_point(|&p| p == probe_idx);
             if comparator.is_equal(builds[start] as usize, probe_idx as usize) {
                 build_out.extend_from_slice(&builds[start..end]);
                 probe_out.extend_from_slice(&probes[start..end]);

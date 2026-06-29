@@ -133,18 +133,9 @@ pub trait JoinHashMapType: Send + Sync {
         match_indices: &mut Vec<u64>,
     ) -> Option<MapOffset>;
 
-    /// Detects whether any hash bucket holds build rows with differing join
-    /// keys — i.e. real hash collisions.
-    ///
-    /// Returns `false` only when every chain is "pure": all rows sharing a
-    /// bucket also share the same join key. In that case the probe side can
-    /// check the key once per chain head and emit the rest of the chain
-    /// without re-checking each duplicate (see `lookup_join_hashmap`). When
-    /// `true`, callers must fall back to a per-pair recheck.
-    ///
-    /// `left_values` are the build-side join key columns. The default is the
-    /// conservative `true` (always recheck); the concrete chained maps
-    /// override it with an O(build_rows) scan.
+    /// Returns `true` if any bucket holds build rows with differing join keys
+    /// (real hash collisions). When `false`, the probe can check once per
+    /// chain head and accept the whole run. Scanned once at build time.
     fn has_key_collisions(
         &self,
         left_values: &[ArrayRef],
@@ -530,15 +521,14 @@ pub fn contain_hashes<T>(map: &HashTable<(u64, T)>, hash_values: &[u64]) -> Bool
     BooleanArray::new(buffer, None)
 }
 
-/// Scans the collision chain to detect whether any bucket holds rows with
-/// differing join keys (real hash collisions).
+/// Scans the `next` chain to detect real hash collisions (two build rows in
+/// the same bucket with different keys). `next[i]` stores `prev_row + 1`
+/// (`0` = end of chain). Checking every adjacent linked pair is sufficient:
+/// any two distinct keys in the same bucket must appear as neighbors somewhere.
 ///
-/// Each entry of `next` links a build row to the previous row inserted into
-/// the same bucket (`next[i]` stores `prev_row + 1`, `0` marks the end of a
-/// chain). Two rows joined by a link share a hash, so comparing the keys
-/// across every link covers every chain: if all linked pairs are equal, no
-/// bucket mixes keys and the map is collision-free. Returns `true` on the
-/// first differing link. O(build_rows) comparisons, run once at build time.
+/// Example — keys `["cat", "cat", "dog"]`, next `[0, 1, 2]`:
+///   row 1 → prev 0: "cat"=="cat" ✓
+///   row 2 → prev 1: "dog"!="cat" → return true (collision found)
 fn detect_key_collisions<T>(
     next: &[T],
     left_values: &[ArrayRef],
