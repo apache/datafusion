@@ -49,36 +49,21 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
-        hashes: &mut Vec<u64>,
-        new_group_rows: &mut Vec<usize>,
+        _hashes: &mut Vec<u64>,
+        _new_group_rows: &mut Vec<usize>,
     ) -> Result<()> {
         assert_eq!(cols.len(), 1);
         let arr = &cols[0];
 
-        hashes.clear();
-        hashes.resize(arr.len(), 0);
-        datafusion_common::hash_utils::create_hashes(
-            cols,
-            &crate::aggregates::AGGREGATION_HASH_SEED,
-            hashes,
-        )?;
-
         groups.clear();
-        new_group_rows.clear();
-        let mut next_new_group = self.num_groups;
-        self.map.insert_if_new_with_hashes(
+        self.map.insert_if_new(
             arr,
-            hashes,
             |_value| {
                 let group_idx = self.num_groups;
                 self.num_groups += 1;
                 group_idx
             },
             |group_idx| {
-                if group_idx == next_new_group {
-                    new_group_rows.push(groups.len());
-                    next_new_group += 1;
-                }
                 groups.push(group_idx);
             },
         );

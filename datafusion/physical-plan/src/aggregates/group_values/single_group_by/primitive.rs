@@ -116,8 +116,6 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     values: Vec<T::Native>,
     /// The random state used to generate hashes
     random_state: RandomState,
-    /// Reused buffer to store hashes
-    hashes_buffer: Vec<u64>,
 }
 
 impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
@@ -129,49 +127,27 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             values: Vec::with_capacity(128),
             null_group: None,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
-            hashes_buffer: Default::default(),
         }
     }
 
-    fn intern_impl(
-        &mut self,
-        cols: &[ArrayRef],
-        groups: &mut Vec<usize>,
-        hashes: &mut Vec<u64>,
-        new_group_rows: &mut Vec<usize>,
-    ) -> Result<()>
+    fn intern_impl(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>
     where
         T::Native: HashValue,
     {
         assert_eq!(cols.len(), 1);
-        let array = cols[0].as_primitive::<T>();
-        hashes.clear();
-        hashes.resize(array.len(), 0);
-        for (row, value) in array.iter().enumerate() {
-            hashes[row] = value
-                .map(|key| key.canonicalize().hash(&self.random_state))
-                .unwrap_or(0);
-        }
-
         groups.clear();
-        new_group_rows.clear();
 
-        for (row, value) in array.iter().enumerate() {
+        for value in cols[0].as_primitive::<T>() {
             let group_id = match value {
-                None => {
-                    if let Some(group_id) = self.null_group {
-                        group_id
-                    } else {
-                        let group_id = self.values.len();
-                        self.null_group = Some(group_id);
-                        self.values.push(Default::default());
-                        new_group_rows.push(row);
-                        group_id
-                    }
-                }
+                None => *self.null_group.get_or_insert_with(|| {
+                    let group_id = self.values.len();
+                    self.values.push(Default::default());
+                    group_id
+                }),
                 Some(key) => {
                     let key = key.canonicalize();
-                    let hash = hashes[row];
+                    let state = &self.random_state;
+                    let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
                         |&(group_id, exist_hash)| unsafe {
@@ -187,7 +163,6 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
                             let group_id = self.values.len();
                             entry.insert((group_id, hash));
                             self.values.push(key);
-                            new_group_rows.push(row);
                             group_id
                         }
                     }
@@ -207,16 +182,14 @@ where
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
-        hashes: &mut Vec<u64>,
-        new_group_rows: &mut Vec<usize>,
+        _hashes: &mut Vec<u64>,
+        _new_group_rows: &mut Vec<usize>,
     ) -> Result<()> {
-        self.intern_impl(cols, groups, hashes, new_group_rows)
+        self.intern_impl(cols, groups)
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<(usize, u64)>()
-            + self.values.allocated_size()
-            + self.hashes_buffer.allocated_size()
+        self.map.capacity() * size_of::<(usize, u64)>() + self.values.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -282,8 +255,6 @@ where
         self.values.shrink_to(num_rows);
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
-        self.hashes_buffer.clear();
-        self.hashes_buffer.shrink_to(num_rows);
     }
 }
 

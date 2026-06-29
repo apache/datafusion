@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use datafusion_common::hash_utils::create_hashes;
 
 use arrow::array::{
     ArrayRef, AsArray as _, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
@@ -47,18 +46,13 @@ impl GroupValues for GroupValuesBoolean {
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
-        hashes: &mut Vec<u64>,
-        new_group_rows: &mut Vec<usize>,
+        _hashes: &mut Vec<u64>,
+        _new_group_rows: &mut Vec<usize>,
     ) -> Result<()> {
-        hashes.clear();
-        hashes.resize(cols.first().map_or(0, |array| array.len()), 0);
-        create_hashes(cols, &crate::aggregates::AGGREGATION_HASH_SEED, hashes)?;
-
         let array = cols[0].as_boolean();
         groups.clear();
-        new_group_rows.clear();
 
-        for (row, value) in array.iter().enumerate() {
+        for value in array.iter() {
             let index = match value {
                 Some(false) => {
                     if let Some(index) = self.false_group {
@@ -66,7 +60,6 @@ impl GroupValues for GroupValuesBoolean {
                     } else {
                         let index = self.len();
                         self.false_group = Some(index);
-                        new_group_rows.push(row);
                         index
                     }
                 }
@@ -76,7 +69,6 @@ impl GroupValues for GroupValuesBoolean {
                     } else {
                         let index = self.len();
                         self.true_group = Some(index);
-                        new_group_rows.push(row);
                         index
                     }
                 }
@@ -86,7 +78,6 @@ impl GroupValues for GroupValuesBoolean {
                     } else {
                         let index = self.len();
                         self.null_group = Some(index);
-                        new_group_rows.push(row);
                         index
                     }
                 }

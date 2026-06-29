@@ -114,21 +114,11 @@ impl GroupValuesRows {
         })
     }
 
-    fn intern_impl(
-        &mut self,
-        cols: &[ArrayRef],
-        groups: &mut Vec<usize>,
-        hashes: &mut Vec<u64>,
-        new_group_rows: &mut Vec<usize>,
-    ) -> Result<()> {
-        hashes.clear();
-        hashes.resize(cols.first().map_or(0, |array| array.len()), 0);
-        create_hashes(cols, &self.random_state, hashes)?;
-
+    fn intern_impl(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         let group_rows = &mut self.rows_buffer;
         group_rows.clear();
         self.row_converter.append(group_rows, cols)?;
-        debug_assert_eq!(hashes.len(), group_rows.num_rows());
+        let n_rows = group_rows.num_rows();
 
         let mut group_values = match self.group_values.take() {
             Some(group_values) => group_values,
@@ -136,9 +126,13 @@ impl GroupValuesRows {
         };
 
         groups.clear();
-        new_group_rows.clear();
 
-        for (row, &target_hash) in hashes.iter().enumerate() {
+        let batch_hashes = &mut self.hashes_buffer;
+        batch_hashes.clear();
+        batch_hashes.resize(n_rows, 0);
+        create_hashes(cols, &self.random_state, batch_hashes)?;
+
+        for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self.map.find_mut(target_hash, |(exist_hash, group_idx)| {
                 target_hash == *exist_hash
                     && group_rows.row(row) == group_values.row(*group_idx)
@@ -154,7 +148,6 @@ impl GroupValuesRows {
                         |(hash, _group_index)| *hash,
                         &mut self.map_size,
                     );
-                    new_group_rows.push(row);
                     group_idx
                 }
             };
@@ -172,13 +165,13 @@ impl GroupValues for GroupValuesRows {
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
-        hashes: &mut Vec<u64>,
-        new_group_rows: &mut Vec<usize>,
+        _hashes: &mut Vec<u64>,
+        _new_group_rows: &mut Vec<usize>,
     ) -> Result<()> {
         let normalized_cols: Vec<ArrayRef> =
             cols.iter().map(normalize_float_zero).collect();
         let cols = normalized_cols.as_slice();
-        self.intern_impl(cols, groups, hashes, new_group_rows)
+        self.intern_impl(cols, groups)
     }
 
     fn size(&self) -> usize {
