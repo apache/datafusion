@@ -72,9 +72,9 @@ use itertools::Itertools;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
+mod aggregate_hash_table;
 pub mod group_values;
 mod hash_aggregate;
-mod hash_table;
 mod no_grouping;
 pub mod order;
 mod row_hash;
@@ -1009,6 +1009,13 @@ impl AggregateExec {
             ));
         }
 
+        // `GroupedHashAggregateStream` is being incrementally refactored. See the
+        // tracking issue for details.
+        //
+        // New features and improvements should go directly into the new implementation.
+        // Please coordinate through the tracking issue.
+        //
+        // Issue: <https://github.com/apache/datafusion/issues/22710>
         if context
             .session_config()
             .options()
@@ -1028,7 +1035,7 @@ impl AggregateExec {
             }
         }
 
-        // grouping by something else and we need to just materialize all results
+        // Execution paths that have not been migrated use the fallback implementation
         Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
             self, context, partition,
         )?))

@@ -23,7 +23,7 @@ use arrow::datatypes::{DataType, Field, Fields};
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, GenericListArray, NullBufferBuilder,
-    OffsetBufferBuilder, OffsetSizeTrait, Scalar,
+    OffsetSizeTrait, Scalar,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion_common::cast::{
@@ -361,11 +361,12 @@ where
 
     let mut out_values: Vec<f64> = Vec::with_capacity(lhs_values.len());
     let mut out_inner_nulls = NullBufferBuilder::new(lhs_values.len());
-    let mut out_offsets = OffsetBufferBuilder::<O>::new(lhs.len());
+    let mut out_offsets = Vec::<O>::with_capacity(lhs.len() + 1);
+    out_offsets.push(O::zero());
 
     for row in 0..lhs.len() {
         if row_nulls.as_ref().is_some_and(|nb| nb.is_null(row)) {
-            out_offsets.push_length(0);
+            out_offsets.push(out_offsets[row]);
             continue;
         }
 
@@ -395,7 +396,7 @@ where
             None => out_inner_nulls.append_n_non_nulls(len1),
         }
 
-        out_offsets.push_length(len1);
+        out_offsets.push(out_offsets[row] + O::usize_as(len1));
     }
 
     let values_array = Arc::new(Float64Array::new(
@@ -406,7 +407,7 @@ where
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
         field,
-        out_offsets.finish(),
+        OffsetBuffer::new(out_offsets.into()),
         values_array,
         row_nulls,
     )?))
