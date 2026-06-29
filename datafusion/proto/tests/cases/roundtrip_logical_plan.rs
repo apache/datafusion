@@ -2573,6 +2573,18 @@ fn roundtrip_inlist() {
 fn roundtrip_unnest() {
     let test_expr = Expr::Unnest(Unnest {
         expr: Box::new(col("col")),
+        outer: false,
+    });
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
+}
+
+#[test]
+fn roundtrip_unnest_outer() {
+    let test_expr = Expr::Unnest(Unnest {
+        expr: Box::new(col("col")),
+        outer: true,
     });
 
     let ctx = SessionContext::new();

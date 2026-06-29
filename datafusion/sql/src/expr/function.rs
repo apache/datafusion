@@ -546,15 +546,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        // Build Unnest expression
-        if name.eq("unnest") {
+        // Build Unnest expression.
+        //
+        // `unnest` is DataFusion's native SQL name. `explode` and
+        // `explode_outer` are Spark/Hive aliases — `explode` matches plain
+        // `unnest` (drops NULL and empty input lists), while `explode_outer`
+        // sets `outer = true` so the downstream planner picks
+        // `NullHandling::PreserveAndExpandEmpty`.
+        if name.eq("unnest") || name.eq("explode") || name.eq("explode_outer") {
+            let outer = name.eq("explode_outer");
             let mut exprs = self.function_args_to_expr(args, schema, planner_context)?;
             if exprs.len() != 1 {
-                return plan_err!("unnest() requires exactly one argument");
+                return plan_err!("{name}() requires exactly one argument");
             }
             let expr = exprs.swap_remove(0);
             Self::check_unnest_arg(&expr, schema)?;
-            return Ok(Expr::Unnest(Unnest::new(expr)));
+            return Ok(Expr::Unnest(Unnest {
+                expr: Box::new(expr),
+                outer,
+            }));
         }
 
         if !order_by.is_empty() && is_function_window {

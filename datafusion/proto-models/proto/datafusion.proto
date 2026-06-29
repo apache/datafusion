@@ -402,7 +402,22 @@ message ColumnUnnestListRecursion {
 }
 
 message UnnestOptions {
-  bool preserve_nulls = 1;
+  // Reserved for the historical `bool preserve_nulls = 1;` field.
+  // Use `null_handling` instead.
+  reserved 1;
+  reserved "preserve_nulls";
+
+  enum NullHandling {
+    // Preserve nulls; empty lists produce no rows. The historical default.
+    PRESERVE = 0;
+    // Drop both null and empty lists from the output.
+    DROP = 1;
+    // Preserve nulls, and additionally expand empty lists into a single
+    // NULL output row (Spark `explode_outer` semantics).
+    PRESERVE_AND_EXPAND_EMPTY = 2;
+  }
+
+  NullHandling null_handling = 3;
   repeated RecursionUnnestOption recursions = 2;
 }
 
@@ -613,6 +628,9 @@ message NegativeNode {
 
 message Unnest {
   repeated LogicalExprNode exprs = 1;
+  // When true, this Unnest expression has Spark `explode_outer` semantics:
+  // NULL and empty input lists both produce a single NULL output row.
+  bool outer = 2;
 }
 
 message InListNode {

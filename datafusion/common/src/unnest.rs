@@ -19,23 +19,38 @@
 
 use crate::Column;
 
+/// How [`UnnestOptions`] handles `NULL` and empty list values in the input column.
+///
+/// The variants enumerate the three observable behaviors so that callers do
+/// not have to compose multiple boolean flags to express what they want.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Hash)]
+pub enum NullHandling {
+    /// Drop rows where the input list is `NULL` or empty. Matches the
+    /// default behavior of systems such as DuckDB and ClickHouse.
+    Drop,
+    /// Preserve `NULL` input rows as a single output row containing `NULL`.
+    /// Empty lists still produce zero output rows. This is the default and
+    /// matches DataFusion's historical `preserve_nulls = true` behavior.
+    #[default]
+    Preserve,
+    /// Like [`Self::Preserve`], and additionally treat an empty list
+    /// identically to a `NULL` list, producing a single output row
+    /// containing `NULL`. Matches Spark's `explode_outer` semantics.
+    PreserveAndExpandEmpty,
+}
+
 /// Options for unnesting a column that contains a list type,
 /// replicating values in the other, non nested rows.
 ///
 /// Conceptually this operation is like joining each row with all the
 /// values in the list column.
 ///
-/// If `preserve_nulls` is false, nulls and empty lists
-/// from the input column are not carried through to the output. This
-/// is the default behavior for other systems such as ClickHouse and
-/// DuckDB
-///
-/// If `preserve_nulls` is true (the default), nulls from the input
-/// column are carried through to the output.
+/// The behavior with `NULL` and empty input lists is controlled by
+/// [`NullHandling`]. See its variants for full details.
 ///
 /// # Examples
 ///
-/// ## `Unnest(c1)`, preserve_nulls: false
+/// ## `Unnest(c1)`, null_handling: NullHandling::Drop
 /// ```text
 ///      ┌─────────┐ ┌─────┐                ┌─────────┐ ┌─────┐
 ///      │ {1, 2}  │ │  A  │   Unnest       │    1    │ │  A  │
@@ -49,7 +64,7 @@ use crate::Column;
 ///        c1         c2
 /// ```
 ///
-/// ## `Unnest(c1)`, preserve_nulls: true
+/// ## `Unnest(c1)`, null_handling: NullHandling::Preserve
 /// ```text
 ///      ┌─────────┐ ┌─────┐                ┌─────────┐ ┌─────┐
 ///      │ {1, 2}  │ │  A  │   Unnest       │    1    │ │  A  │
@@ -63,13 +78,30 @@ use crate::Column;
 ///        c1         c2                        c1        c2
 /// ```
 ///
+/// ## `Unnest(c1)`, null_handling: NullHandling::PreserveAndExpandEmpty
+/// ```text
+///      ┌─────────┐ ┌─────┐                ┌─────────┐ ┌─────┐
+///      │ {1, 2}  │ │  A  │   Unnest       │    1    │ │  A  │
+///      ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
+///      │  null   │ │  B  │                │    2    │ │  A  │
+///      ├─────────┤ ├─────┤ ────────────▶  ├─────────┤ ├─────┤
+///      │   {}    │ │  D  │                │  null   │ │  B  │
+///      ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
+///      │   {3}   │ │  E  │                │  null   │ │  D  │
+///      └─────────┘ └─────┘                ├─────────┤ ├─────┤
+///        c1         c2                    │    3    │ │  E  │
+///                                         └─────────┘ └─────┘
+///                                             c1        c2
+/// ```
+///
 /// `recursions` instruct how a column should be unnested (e.g unnesting a column multiple
 /// time, with depth = 1 and depth = 2). Any unnested column not being mentioned inside this
 /// options is inferred to be unnested with depth = 1
 #[derive(Debug, Clone, PartialEq, PartialOrd, Hash, Eq)]
 pub struct UnnestOptions {
-    /// Should nulls in the input be preserved? Defaults to true
-    pub preserve_nulls: bool,
+    /// How to handle `NULL` and empty list values in the input column.
+    /// Defaults to [`NullHandling::Preserve`].
+    pub null_handling: NullHandling,
     /// If specific columns need to be unnested multiple times (e.g at different depth),
     /// declare them here. Any unnested columns not being mentioned inside this option
     /// will be unnested with depth = 1
@@ -88,8 +120,7 @@ pub struct RecursionUnnestOption {
 impl Default for UnnestOptions {
     fn default() -> Self {
         Self {
-            // default to true to maintain backwards compatible behavior
-            preserve_nulls: true,
+            null_handling: NullHandling::Preserve,
             recursions: vec![],
         }
     }
@@ -101,11 +132,39 @@ impl UnnestOptions {
         Default::default()
     }
 
-    /// Set the behavior with nulls in the input as described on
-    /// [`Self`]
-    pub fn with_preserve_nulls(mut self, preserve_nulls: bool) -> Self {
-        self.preserve_nulls = preserve_nulls;
+    /// Set the [`NullHandling`] mode used when unnesting `NULL` or empty
+    /// input lists.
+    pub fn with_null_handling(mut self, null_handling: NullHandling) -> Self {
+        self.null_handling = null_handling;
         self
+    }
+
+    /// Backward-compatible setter that maps the previous boolean
+    /// `preserve_nulls` flag onto [`NullHandling`].
+    ///
+    /// `true` maps to [`NullHandling::Preserve`]; `false` maps to
+    /// [`NullHandling::Drop`]. To opt into Spark `explode_outer`
+    /// semantics, call [`Self::with_null_handling`] directly with
+    /// [`NullHandling::PreserveAndExpandEmpty`].
+    pub fn with_preserve_nulls(self, preserve_nulls: bool) -> Self {
+        let null_handling = if preserve_nulls {
+            NullHandling::Preserve
+        } else {
+            NullHandling::Drop
+        };
+        self.with_null_handling(null_handling)
+    }
+
+    /// Returns true if `NULL` input rows produce a single output row
+    /// containing `NULL`.
+    pub fn preserve_nulls(&self) -> bool {
+        !matches!(self.null_handling, NullHandling::Drop)
+    }
+
+    /// Returns true if empty input lists should produce a single
+    /// output row containing `NULL` (Spark `explode_outer` semantics).
+    pub fn expand_empty_as_null(&self) -> bool {
+        matches!(self.null_handling, NullHandling::PreserveAndExpandEmpty)
     }
 
     /// Set the recursions for the unnest operation

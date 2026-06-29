@@ -62,8 +62,20 @@ use super::{AsLogicalPlan, LogicalExtensionCodec};
 
 impl FromProto<&protobuf::UnnestOptions> for UnnestOptions {
     fn from_proto(opts: &protobuf::UnnestOptions) -> Self {
+        use datafusion_common::NullHandling;
+        use protobuf::unnest_options::NullHandling as ProtoNullHandling;
+        let null_handling = match ProtoNullHandling::try_from(opts.null_handling) {
+            Ok(ProtoNullHandling::Preserve) => NullHandling::Preserve,
+            Ok(ProtoNullHandling::Drop) => NullHandling::Drop,
+            Ok(ProtoNullHandling::PreserveAndExpandEmpty) => {
+                NullHandling::PreserveAndExpandEmpty
+            }
+            // Unknown enum values fall back to the default (Preserve), which
+            // matches DataFusion's historical behavior.
+            Err(_) => NullHandling::Preserve,
+        };
         Self {
-            preserve_nulls: opts.preserve_nulls,
+            null_handling,
             recursions: opts
                 .recursions
                 .iter()
@@ -679,7 +691,10 @@ pub fn parse_expr(
             if exprs.len() != 1 {
                 return Err(proto_error("Unnest must have exactly one expression"));
             }
-            Ok(Expr::Unnest(Unnest::new(exprs.swap_remove(0))))
+            Ok(Expr::Unnest(Unnest {
+                expr: Box::new(exprs.swap_remove(0)),
+                outer: unnest.outer,
+            }))
         }
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
             Box::new(parse_required_expr(
