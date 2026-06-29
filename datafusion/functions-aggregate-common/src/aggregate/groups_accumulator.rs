@@ -147,21 +147,14 @@ impl GroupsAccumulatorAdapter {
         }
     }
 
-    /// Create a new adapter with explicit control over whether row-to-state
-    /// conversion is supported.
-    pub fn new_with_convert_to_state<F>(
-        factory: F,
+    /// Set whether this adapter can convert raw input rows directly to
+    /// aggregate state.
+    pub fn with_supports_convert_to_state(
+        mut self,
         supports_convert_to_state: bool,
-    ) -> Self
-    where
-        F: Fn() -> Result<Box<dyn Accumulator>> + Send + 'static,
-    {
-        Self {
-            factory: Box::new(factory),
-            states: vec![],
-            allocation_bytes: 0,
-            supports_convert_to_state,
-        }
+    ) -> Self {
+        self.supports_convert_to_state = supports_convert_to_state;
+        self
     }
 
     /// Ensure that self.accumulators has total_num_groups
@@ -221,6 +214,11 @@ impl GroupsAccumulatorAdapter {
         self.make_accumulators_if_needed(total_num_groups)?;
 
         if values.is_empty() {
+            // Empty values can happen for nullary aggregates, where there are
+            // no input expressions to evaluate but each input row still belongs
+            // to a group. In this path, there are no value arrays to filter
+            // later with `slice_and_maybe_filter`, so filter out rows while
+            // assigning row indices to their groups.
             for (idx, group_index) in group_indices.iter().enumerate() {
                 if opt_filter
                     .is_some_and(|filter| !filter.is_valid(idx) || !filter.value(idx))
@@ -234,7 +232,9 @@ impl GroupsAccumulatorAdapter {
 
             // figure out which input rows correspond to which groups.
             // Note that self.state.indices starts empty for all groups
-            // (it is cleared out below)
+            // (it is cleared out below). If `opt_filter` is present, it is
+            // applied after reordering the values so each accumulator receives
+            // only the rows it should see.
             for (idx, group_index) in group_indices.iter().enumerate() {
                 self.states[*group_index].indices.push(idx as u32);
             }

@@ -463,6 +463,12 @@ fn aggregate_batch(
             // 1.3
             let values = evaluate_expressions_to_arrays(expr, batch.as_ref())?;
 
+            // Nullary raw aggregates have no input expressions, so `values` is
+            // empty. If a filter removed all rows, skip `update_batch` because
+            // there are no rows to accumulate and no value array to carry that
+            // cardinality. This check is limited to raw input: partial mode
+            // merges aggregate state arrays and should continue through
+            // `merge_batch`.
             if values.is_empty()
                 && batch.num_rows() == 0
                 && mode.input_mode() == AggregateInputMode::Raw
