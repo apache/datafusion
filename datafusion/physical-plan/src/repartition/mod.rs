@@ -750,7 +750,7 @@ impl BatchPartitioner {
     /// hash or round-robin or range constructors depending on the partitioning variant.
     ///
     /// # Parameters
-    /// - `partitioning`: Partitioning scheme to apply (hash or round-robin).
+    /// - `partitioning`: Partitioning scheme to apply (hash or round-robin or range).
     /// - `timer`: Metric used to record time spent during repartitioning.
     /// - `input_partition`: Index of the current input partition.
     /// - `num_input_partitions`: Total number of input partitions.
