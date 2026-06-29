@@ -30,7 +30,7 @@ use arrow::array::{
     Array, AsArray, Int32Array, PrimitiveArray, StringArray, StructArray, UInt64Array,
     record_batch, types::UInt64Type,
 };
-use arrow::datatypes::{Fields, Schema};
+use arrow::datatypes::{Fields, IntervalMonthDayNano, IntervalUnit, Schema};
 use arrow_schema::FieldRef;
 use datafusion::common::test_util::batches_to_string;
 use datafusion::dataframe::DataFrame;
@@ -277,7 +277,7 @@ async fn test_augmented_avg_with_window_grouping_udf() -> Result<()> {
             augmented_avg(time, value)['window_duration'] AS window_duration,
             augmented_avg(time, value)['avg_value'] AS avg_value
         FROM t
-        GROUP BY session_window(time, arrow_cast(5000, 'UInt64'))
+        GROUP BY session_window(time, INTERVAL '5 microseconds')
         ORDER BY window_start
     ";
 
@@ -882,7 +882,7 @@ fn register_session_window(ctx: &mut SessionContext) {
         "session_window",
         vec![
             DataType::Timestamp(TimeUnit::Nanosecond, None),
-            DataType::UInt64,
+            DataType::Interval(IntervalUnit::MonthDayNano),
         ],
         DataType::UInt64,
         Volatility::Immutable,
@@ -894,17 +894,21 @@ fn register_session_window(ctx: &mut SessionContext) {
             let times = as_primitive_array::<TimestampNanosecondType>(times)?;
 
             let width = match &args[1] {
-                ColumnarValue::Scalar(ScalarValue::UInt64(Some(width))) => *width,
+                ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(width))) => {
+                    interval_width_nanos(*width)?
+                }
                 ColumnarValue::Array(widths) => {
                     let widths = widths
                         .as_any()
-                        .downcast_ref::<UInt64Array>()
-                        .ok_or(exec_datafusion_err!("Expected UInt64Array"))?;
-                    widths.value(0)
+                        .downcast_ref::<arrow::array::IntervalMonthDayNanoArray>()
+                        .ok_or(exec_datafusion_err!(
+                            "Expected IntervalMonthDayNanoArray"
+                        ))?;
+                    interval_width_nanos(widths.value(0))?
                 }
                 other => {
                     return exec_err!(
-                        "session_window expected UInt64 width, got {other:?}"
+                        "session_window expected MonthDayNano interval width, got {other:?}"
                     );
                 }
             };
@@ -919,6 +923,15 @@ fn register_session_window(ctx: &mut SessionContext) {
     );
 
     ctx.register_udf(session_window);
+}
+
+fn interval_width_nanos(width: IntervalMonthDayNano) -> Result<u64> {
+    if width.months != 0 || width.days != 0 || width.nanoseconds <= 0 {
+        return exec_err!(
+            "session_window expected a positive sub-day interval, got {width:?}"
+        );
+    }
+    Ok(width.nanoseconds as u64)
 }
 
 /// Models a struct-returning aggregate that receives the timestamp/order input
