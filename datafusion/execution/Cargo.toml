@@ -55,6 +55,7 @@ sql = []
 arrow = { workspace = true }
 arrow-buffer = { workspace = true }
 async-trait = { workspace = true }
+bytes = { workspace = true }
 dashmap = { workspace = true }
 datafusion-common = { workspace = true, default-features = false }
 datafusion-expr = { workspace = true, default-features = false }
@@ -66,7 +67,11 @@ parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true }
 rand = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true, features = ["io"] }
 url = { workspace = true }
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 chrono = { workspace = true }
