@@ -91,6 +91,11 @@ impl AggregateHashTable<PartialMarker> {
             AggregateHashTableState::Building(_) => {
                 internal_err!("next_output_batch must be called in the outputting state")
             }
+            AggregateHashTableState::OutputtingMaterializedFinal(_) => {
+                internal_err!(
+                    "partial aggregate output should not materialize final output"
+                )
+            }
         }
     }
 

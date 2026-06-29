@@ -359,7 +359,8 @@ impl BitwiseSortMergeJoinStream {
             MetricBuilder::new(metrics).counter("input_batches", partition);
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
         let baseline_metrics = BaselineMetrics::new(metrics, partition);
-        let peak_mem_used = MetricBuilder::new(metrics).gauge("peak_mem_used", partition);
+        let peak_mem_used =
+            MetricBuilder::new(metrics).peak_memory_usage("peak_mem_used", partition);
 
         Ok(Self {
             join_type,

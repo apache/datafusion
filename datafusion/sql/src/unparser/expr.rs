@@ -122,6 +122,39 @@ impl Unparser<'_> {
         Ok(root_expr)
     }
 
+    fn distinct_from_to_sql(
+        &self,
+        left: ast::Expr,
+        right: ast::Expr,
+        is_distinct: bool,
+    ) -> Result<ast::Expr> {
+        match self.dialect.distinct_from_style() {
+            DistinctFromStyle::FullText => {
+                let expr = if is_distinct {
+                    ast::Expr::IsDistinctFrom(Box::new(left), Box::new(right))
+                } else {
+                    ast::Expr::IsNotDistinctFrom(Box::new(left), Box::new(right))
+                };
+                Ok(ast::Expr::Nested(Box::new(expr)))
+            }
+            DistinctFromStyle::Spaceship => {
+                let expr = ast::Expr::Nested(Box::new(ast::Expr::BinaryOp {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    op: BinaryOperator::Spaceship,
+                }));
+                if is_distinct {
+                    Ok(ast::Expr::Nested(Box::new(ast::Expr::UnaryOp {
+                        op: UnaryOperator::Not,
+                        expr: Box::new(expr),
+                    })))
+                } else {
+                    Ok(expr)
+                }
+            }
+        }
+    }
+
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn expr_to_sql_inner(&self, expr: &Expr) -> Result<ast::Expr> {
         match expr {
@@ -176,24 +209,7 @@ impl Unparser<'_> {
             }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
-
-                match self.dialect.distinct_from_style() {
-                    DistinctFromStyle::FullText => Ok(ast::Expr::Nested(Box::new(
-                        ast::Expr::IsDistinctFrom(Box::new(l), Box::new(r)),
-                    ))),
-                    DistinctFromStyle::Spaceship => {
-                        Ok(ast::Expr::Nested(Box::new(ast::Expr::UnaryOp {
-                            op: UnaryOperator::Not,
-                            expr: Box::new(ast::Expr::Nested(Box::new(
-                                ast::Expr::BinaryOp {
-                                    left: Box::new(l),
-                                    right: Box::new(r),
-                                    op: BinaryOperator::Spaceship,
-                                },
-                            ))),
-                        })))
-                    }
-                }
+                self.distinct_from_to_sql(l, r, true)
             }
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -202,19 +218,7 @@ impl Unparser<'_> {
             }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
-
-                match self.dialect.distinct_from_style() {
-                    DistinctFromStyle::FullText => Ok(ast::Expr::Nested(Box::new(
-                        ast::Expr::IsNotDistinctFrom(Box::new(l), Box::new(r)),
-                    ))),
-                    DistinctFromStyle::Spaceship => {
-                        Ok(ast::Expr::Nested(Box::new(ast::Expr::BinaryOp {
-                            left: Box::new(l),
-                            right: Box::new(r),
-                            op: BinaryOperator::Spaceship,
-                        })))
-                    }
-                }
+                self.distinct_from_to_sql(l, r, false)
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
