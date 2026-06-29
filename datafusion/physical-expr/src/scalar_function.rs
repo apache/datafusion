@@ -302,7 +302,17 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        self.fun.evaluate_bounds(children)
+        // The `ScalarUDFImpl::evaluate_bounds` default cannot know the actual
+        // return type and falls back to an unbounded `Null` interval. Re-type it
+        // here using the resolved return type so downstream solvers receive a
+        // well-typed interval. UDFs that override `evaluate_bounds` with a real
+        // (non-Null) return are passed through untouched.
+        let result = self.fun.evaluate_bounds(children)?;
+        if result.data_type() == DataType::Null {
+            Interval::make_unbounded(self.return_type())
+        } else {
+            Ok(result)
+        }
     }
 
     fn propagate_constraints(
