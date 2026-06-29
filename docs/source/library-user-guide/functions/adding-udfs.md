@@ -1244,15 +1244,12 @@ metadata from a struct-returning aggregate:
 
 ```sql
 SELECT
-  result['window_start'] AS window_start,
-  result['window_end'] AS window_end,
-  result['window_duration'] AS window_duration,
-  result['avg_value'] AS avg_value
-FROM (
-  SELECT augmented_avg(time, value) AS result
-  FROM t
-  GROUP BY session_window(time, INTERVAL '30 seconds')
-)
+  augmented_avg(time, value)['window_start'] AS window_start,
+  augmented_avg(time, value)['window_end'] AS window_end,
+  augmented_avg(time, value)['window_duration'] AS window_duration,
+  augmented_avg(time, value)['avg_value'] AS avg_value
+FROM t
+GROUP BY session_window(time, INTERVAL '30 seconds')
 ORDER BY window_start;
 ```
 
