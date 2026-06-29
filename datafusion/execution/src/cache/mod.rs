@@ -237,17 +237,18 @@ impl DFHeapSize for SchemaFingerprint {
 pub struct FileStatisticsCacheKey {
     pub table: Option<TableReference>,
     pub path: Path,
-    // `Arc` so building a key per file is a cheap refcount bump rather than a
-    // deep clone of the fingerprint. `Arc`'s `Eq`/`Hash` compare the inner value,
-    // so keying remains by schema contents (not pointer identity).
+    /// `Arc` so building a key per file is a cheap refcount bump rather than a
+    /// deep clone of the fingerprint. `Arc`'s `Eq`/`Hash` compare the inner value,
+    /// so keying remains by schema contents (not pointer identity).
     pub schema: Arc<SchemaFingerprint>,
 }
 
 impl DFHeapSize for FileStatisticsCacheKey {
+    /// The schema fingerprint is shared by all file-statistics keys for a
+    /// ListingTable. Do not deep-count it per key, as that would charge the same
+    /// allocation once per file and overstate cache memory.
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        self.path.as_ref().heap_size(ctx)
-            + self.table.heap_size(ctx)
-            + self.schema.as_ref().heap_size(ctx)
+        self.path.as_ref().heap_size(ctx) + self.table.heap_size(ctx)
     }
 }
 
@@ -308,5 +309,30 @@ mod schema_fingerprint_tests {
                 .with_metadata([("k".to_string(), "v".to_string())].into()),
         );
         assert_eq!(plain, schema_md, "schema metadata must be ignored");
+    }
+
+    #[test]
+    fn file_statistics_cache_key_size_excludes_schema_fingerprint() {
+        let path = Path::from("file.parquet");
+        let table = Some(TableReference::bare("t"));
+        let narrow_schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let wide_schema = Schema::new(
+            (0..100)
+                .map(|i| Field::new(format!("col_{i}"), DataType::Utf8, true))
+                .collect::<Vec<_>>(),
+        );
+
+        let narrow_key = FileStatisticsCacheKey {
+            table: table.clone(),
+            path: path.clone(),
+            schema: Arc::new(SchemaFingerprint::from_schema(&narrow_schema)),
+        };
+        let wide_key = FileStatisticsCacheKey {
+            table,
+            path,
+            schema: Arc::new(SchemaFingerprint::from_schema(&wide_schema)),
+        };
+
+        assert_eq!(narrow_key.size(), wide_key.size());
     }
 }
