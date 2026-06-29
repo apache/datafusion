@@ -1240,7 +1240,8 @@ Prefer passing the relevant input columns to the aggregate instead of using a
 zero-argument aggregate. The input columns give the accumulator enough
 information to update and merge state normally in multi-stage aggregate plans.
 For example, a windowing extension can group rows with a scalar UDF and return
-metadata from a struct-returning aggregate:
+metadata from a struct-returning aggregate. In this example, `session_window`
+is supplied by the extension:
 
 ```sql
 SELECT
