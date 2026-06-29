@@ -1072,11 +1072,6 @@ impl AggregateExec {
     }
 
     fn should_use_ordered_partial_aggregate_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
         self.mode == AggregateMode::Partial
             && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
@@ -1100,11 +1095,6 @@ impl AggregateExec {
     }
 
     fn should_use_ordered_final_aggregate_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
