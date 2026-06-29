@@ -103,7 +103,7 @@ impl AggregateHashTable<PartialMarker> {
     pub(in crate::aggregates) fn can_skip_aggregation(&self) -> bool {
         let state = self.state.building();
         state.group_values.support_partial_repartition()
-            && state
+            || state
                 .accumulators
                 .iter()
                 .all(|acc| acc.supports_convert_to_state())
@@ -118,7 +118,9 @@ impl AggregateHashTable<PartialMarker> {
         let state = self.state.building();
         let group_schema = state.group_by.group_schema(&self.input_schema)?;
         let mut group_values = new_group_values(group_schema, &GroupOrdering::None)?;
-        group_values.skip_hash_group_by()?;
+        if group_values.support_partial_repartition() {
+            group_values.skip_hash_group_by()?;
+        }
         let accumulators = state
             .accumulators
             .iter()
@@ -268,6 +270,23 @@ impl AggregateHashTable<PartialSkipMarker> {
             .into_iter()
             .next()
             .unwrap_or_default();
+
+        if !state.group_values.support_partial_repartition() {
+            let mut output = group_values;
+            for (acc, values) in state
+                .accumulators
+                .iter_mut()
+                .zip(evaluated_batch.accumulator_args.iter())
+            {
+                output.extend(acc.convert_to_state(values)?);
+            }
+
+            return Ok(RecordBatch::try_new(
+                Arc::clone(&self.output_schema),
+                output,
+            )?);
+        }
+
         state.group_values.intern(
             &group_values,
             &mut state.batch_group_indices,
