@@ -362,7 +362,7 @@ impl SessionState {
                     resolved_ref.catalog
                 )
             })?
-            .schema(&resolved_ref.schema)
+            .schema(&resolved_ref.schema)?
             .ok_or_else(|| {
                 plan_datafusion_err!("failed to resolve schema: {}", resolved_ref.schema)
             })
@@ -2476,20 +2476,24 @@ mod tests {
         let is_exist = session_state
             .catalog_list()
             .catalog(default_catalog.as_str())
-            .unwrap()
+            .expect("default catalog should exist")
             .schema(default_schema.as_str())
-            .unwrap()
-            .table_exist("employee");
+            .expect("schema lookup should succeed")
+            .expect("default schema should exist")
+            .table_exist("employee")
+            .expect("table existence lookup should succeed");
         assert!(is_exist);
         let new_state = SessionStateBuilder::new_from_existing(session_state).build();
         assert!(
             new_state
                 .catalog_list()
                 .catalog(default_catalog.as_str())
-                .unwrap()
+                .expect("default catalog should exist")
                 .schema(default_schema.as_str())
-                .unwrap()
+                .expect("schema lookup should succeed")
+                .expect("default schema should exist")
                 .table_exist("employee")
+                .expect("table existence lookup should succeed")
         );
 
         // if `with_create_default_catalog_and_schema` is disabled, the new one shouldn't create default catalog and schema
