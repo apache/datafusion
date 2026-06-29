@@ -2332,6 +2332,19 @@ impl JoinKeyComparator {
         Ok(Self { first, rest })
     }
 
+    /// Build equality-only comparators for each join key column pair.
+    ///
+    /// Unlike [`Self::new`], no `SortOptions` are required — `SortOptions::default()`
+    /// is used internally, which is correct because callers only test `== Equal`.
+    pub fn for_equality(
+        left_arrays: &[ArrayRef],
+        right_arrays: &[ArrayRef],
+        null_equality: NullEquality,
+    ) -> Result<Self> {
+        let sort_options = vec![SortOptions::default(); left_arrays.len()];
+        Self::new(left_arrays, right_arrays, &sort_options, null_equality)
+    }
+
     /// Compare row `left` (in the left arrays) with row `right` (in the right
     /// arrays). Returns the lexicographic ordering across all key columns.
     #[inline]

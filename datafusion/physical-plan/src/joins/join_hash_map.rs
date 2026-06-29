@@ -22,9 +22,11 @@
 use std::fmt::{self, Debug};
 use std::ops::Sub;
 
-use arrow::array::BooleanArray;
+use crate::joins::utils::JoinKeyComparator;
+use arrow::array::{ArrayRef, BooleanArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::ArrowNativeType;
+use datafusion_common::{NullEquality, Result};
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry::{Occupied, Vacant};
 
@@ -131,6 +133,27 @@ pub trait JoinHashMapType: Send + Sync {
         match_indices: &mut Vec<u64>,
     ) -> Option<MapOffset>;
 
+    /// Detects whether any hash bucket holds build rows with differing join
+    /// keys — i.e. real hash collisions.
+    ///
+    /// Returns `false` only when every chain is "pure": all rows sharing a
+    /// bucket also share the same join key. In that case the probe side can
+    /// check the key once per chain head and emit the rest of the chain
+    /// without re-checking each duplicate (see `lookup_join_hashmap`). When
+    /// `true`, callers must fall back to a per-pair recheck.
+    ///
+    /// `left_values` are the build-side join key columns. The default is the
+    /// conservative `true` (always recheck); the concrete chained maps
+    /// override it with an O(build_rows) scan.
+    fn has_key_collisions(
+        &self,
+        left_values: &[ArrayRef],
+        null_equality: NullEquality,
+    ) -> Result<bool> {
+        let _ = (left_values, null_equality);
+        Ok(true)
+    }
+
     /// Returns a BooleanArray indicating which of the provided hashes exist in the map.
     fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray;
 
@@ -206,6 +229,14 @@ impl JoinHashMapType for JoinHashMapU32 {
             input_indices,
             match_indices,
         )
+    }
+
+    fn has_key_collisions(
+        &self,
+        left_values: &[ArrayRef],
+        null_equality: NullEquality,
+    ) -> Result<bool> {
+        detect_key_collisions(&self.next, left_values, null_equality)
     }
 
     fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
@@ -286,6 +317,14 @@ impl JoinHashMapType for JoinHashMapU64 {
             input_indices,
             match_indices,
         )
+    }
+
+    fn has_key_collisions(
+        &self,
+        left_values: &[ArrayRef],
+        null_equality: NullEquality,
+    ) -> Result<bool> {
+        detect_key_collisions(&self.next, left_values, null_equality)
     }
 
     fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
@@ -489,6 +528,41 @@ pub fn contain_hashes<T>(map: &HashTable<(u64, T)>, hash_values: &[u64]) -> Bool
         map.find(hash, |(h, _)| hash == *h).is_some()
     });
     BooleanArray::new(buffer, None)
+}
+
+/// Scans the collision chain to detect whether any bucket holds rows with
+/// differing join keys (real hash collisions).
+///
+/// Each entry of `next` links a build row to the previous row inserted into
+/// the same bucket (`next[i]` stores `prev_row + 1`, `0` marks the end of a
+/// chain). Two rows joined by a link share a hash, so comparing the keys
+/// across every link covers every chain: if all linked pairs are equal, no
+/// bucket mixes keys and the map is collision-free. Returns `true` on the
+/// first differing link. O(build_rows) comparisons, run once at build time.
+fn detect_key_collisions<T>(
+    next: &[T],
+    left_values: &[ArrayRef],
+    null_equality: NullEquality,
+) -> Result<bool>
+where
+    T: ArrowNativeType + Into<u64>,
+{
+    if next.is_empty() {
+        return Ok(false);
+    }
+    let comparator =
+        JoinKeyComparator::for_equality(left_values, left_values, null_equality)?;
+    for (row, &link) in next.iter().enumerate() {
+        let link: u64 = link.into();
+        if link != 0 {
+            // `link` is `prev_row + 1`; both rows live in the same bucket.
+            let prev = (link - 1) as usize;
+            if !comparator.is_equal(row, prev) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]

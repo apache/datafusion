@@ -33,7 +33,7 @@ use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::utils::{
-    OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap, matchable_join_keys,
+    JoinKeyComparator, OnceFut, get_final_indices_from_shared_bitmap, matchable_join_keys,
 };
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
@@ -402,6 +402,7 @@ pub(super) fn lookup_join_hashmap(
     valid_keys: Option<&NullBuffer>,
     limit: usize,
     offset: MapOffset,
+    has_key_collisions: bool,
     probe_indices_buffer: &mut Vec<u32>,
     build_indices_buffer: &mut Vec<u64>,
 ) -> Result<(UInt64Array, UInt32Array, Option<MapOffset>)> {
@@ -414,26 +415,56 @@ pub(super) fn lookup_join_hashmap(
         build_indices_buffer,
     );
 
-    let build_indices_unfiltered: UInt64Array =
-        std::mem::take(build_indices_buffer).into();
-    let probe_indices_unfiltered: UInt32Array =
-        std::mem::take(probe_indices_buffer).into();
-
-    // TODO: optimize equal_rows_arr to avoid allocation of intermediate arrays
-    // https://github.com/apache/datafusion/issues/12131
-    let (build_indices, probe_indices) = equal_rows_arr(
-        &build_indices_unfiltered,
-        &probe_indices_unfiltered,
+    // Validate the candidate (build, probe) pairs against the join key to drop
+    // hash collisions. We compare values in place via a prebuilt comparator,
+    // avoiding the take() + eq_dyn_null() + FilterBuilder allocations that
+    // equal_rows_arr performs at O(matched_pairs) scale.
+    // See: https://github.com/apache/datafusion/issues/12131
+    let comparator = JoinKeyComparator::for_equality(
         build_side_values,
         probe_side_values,
         null_equality,
     )?;
 
-    // Reclaim buffers
-    *build_indices_buffer = build_indices_unfiltered.into_parts().1.into();
-    *probe_indices_buffer = probe_indices_unfiltered.into_parts().1.into();
+    let mut build_out: Vec<u64> = Vec::with_capacity(build_indices_buffer.len());
+    let mut probe_out: Vec<u32> = Vec::with_capacity(probe_indices_buffer.len());
 
-    Ok((build_indices, probe_indices, next_offset))
+    if has_key_collisions {
+        // A bucket may mix keys, so every candidate pair must be rechecked.
+        for (b, p) in build_indices_buffer.iter().zip(probe_indices_buffer.iter()) {
+            if comparator.is_equal(*b as usize, *p as usize) {
+                build_out.push(*b);
+                probe_out.push(*p);
+            }
+        }
+    } else {
+        // Collision-free build side: every bucket holds a single key, so all
+        // pairs sharing one probe row (a contiguous run, since the chain walk
+        // emits a probe row's matches consecutively) have identical build
+        // keys. Check the key once per run at its head and accept or reject
+        // the whole run — turning F key comparisons per probe row into 1.
+        let builds = build_indices_buffer.as_slice();
+        let probes = probe_indices_buffer.as_slice();
+        let mut start = 0;
+        while start < probes.len() {
+            let probe_idx = probes[start];
+            let mut end = start + 1;
+            while end < probes.len() && probes[end] == probe_idx {
+                end += 1;
+            }
+            if comparator.is_equal(builds[start] as usize, probe_idx as usize) {
+                build_out.extend_from_slice(&builds[start..end]);
+                probe_out.extend_from_slice(&probes[start..end]);
+            }
+            start = end;
+        }
+    }
+
+    // Reclaim buffers for the next call
+    build_indices_buffer.clear();
+    probe_indices_buffer.clear();
+
+    Ok((build_out.into(), probe_out.into(), next_offset))
 }
 
 /// Counts the number of distinct elements in the input array.
@@ -808,6 +839,7 @@ impl HashJoinStream {
                 state.valid_keys.as_ref(),
                 self.batch_size,
                 state.offset,
+                build_side.left_data.has_key_collisions(),
                 &mut self.probe_indices_buffer,
                 &mut self.build_indices_buffer,
             )?,

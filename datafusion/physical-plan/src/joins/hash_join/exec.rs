@@ -216,9 +216,21 @@ pub(super) struct JoinLeftData {
     pub(super) probe_side_non_empty: AtomicBool,
     /// Shared atomic flag indicating if any probe partition saw NULL in join keys (for null-aware anti joins)
     pub(super) probe_side_has_null: AtomicBool,
+    /// `true` if any hash bucket holds build rows with differing join keys
+    /// (real hash collisions). When `false`, every chain is "pure" and the
+    /// probe side can validate a chain with a single key check at its head
+    /// instead of re-checking every duplicate. Computed once at build time.
+    has_key_collisions: bool,
 }
 
 impl JoinLeftData {
+    /// Returns `true` if the build side has any real hash collisions (a bucket
+    /// holding rows with differing join keys). When `false`, the probe side can
+    /// skip the per-duplicate key recheck. See [`Self::has_key_collisions`].
+    pub(super) fn has_key_collisions(&self) -> bool {
+        self.has_key_collisions
+    }
+
     /// return a reference to the map
     pub(super) fn map(&self) -> &Map {
         &self.map
@@ -2088,6 +2100,19 @@ async fn collect_left_input(
             (Map::HashMap(hashmap), batch, left_values)
         };
 
+    // Detect whether the build side has real hash collisions (a bucket with
+    // differing keys). When it doesn't, the probe side can validate each chain
+    // with a single key check at its head instead of re-checking every
+    // duplicate — a large win for high-fanout joins. The ArrayMap (perfect
+    // hash) never collides and never reaches the recheck path, so it is always
+    // collision-free here.
+    let has_key_collisions = match &join_hash_map {
+        Map::HashMap(hashmap) => {
+            hashmap.has_key_collisions(&left_values, null_equality)?
+        }
+        Map::ArrayMap(_) => false,
+    };
+
     // Reserve additional memory for visited indices bitmap and create shared builder
     let visited_indices_bitmap = if with_visited_indices_bitmap {
         let bitmap_size = bit_util::ceil(batch.num_rows(), 8);
@@ -2144,6 +2169,7 @@ async fn collect_left_input(
         membership,
         probe_side_non_empty: AtomicBool::new(false),
         probe_side_has_null: AtomicBool::new(false),
+        has_key_collisions,
     };
 
     Ok(data)
@@ -4688,6 +4714,8 @@ mod tests {
             None,
             8192,
             (0, None),
+            // Exercise the per-pair recheck path.
+            true,
             &mut probe_indices_buffer,
             &mut build_indices_buffer,
         )?;
@@ -4750,6 +4778,8 @@ mod tests {
             None,
             8192,
             (0, None),
+            // Exercise the per-pair recheck path.
+            true,
             &mut probe_indices_buffer,
             &mut build_indices_buffer,
         )?;
