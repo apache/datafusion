@@ -275,6 +275,34 @@ fn round_integer(value: i64, scale: i32, enable_ansi_mode: bool) -> Result<i64> 
     Ok(result)
 }
 
+fn round_unsigned_integer(value: u64, scale: i32, enable_ansi_mode: bool) -> Result<u64> {
+    if scale >= 0 {
+        return Ok(value);
+    }
+    let abs_scale = (-scale) as u32;
+    let Some(factor) = 10_u64.checked_pow(abs_scale) else {
+        return Ok(0);
+    };
+    let remainder = value % factor;
+    let result = if remainder >= factor / 2 {
+        if enable_ansi_mode {
+            value
+                .checked_sub(remainder)
+                .and_then(|v| v.checked_add(factor))
+                .ok_or_else(|| {
+                    (exec_err!("UInt64 overflow on round({value}, {scale})")
+                        as Result<(), _>)
+                        .unwrap_err()
+                })?
+        } else {
+            value.wrapping_sub(remainder).wrapping_add(factor)
+        }
+    } else {
+        value - remainder
+    };
+    Ok(result)
+}
+
 // ---------------------------------------------------------------------------
 // Decimal rounding using ArrowNativeTypeOp (HALF_UP)
 // ---------------------------------------------------------------------------
@@ -463,16 +491,8 @@ fn spark_round(args: &[ColumnarValue], enable_ansi_mode: bool) -> Result<Columna
             }
             DataType::UInt64 => {
                 let array = array.as_primitive::<UInt64Type>();
-                let result: PrimitiveArray<UInt64Type> = array.try_unary(|x| {
-                    let v_i64 = i64::try_from(x).map_err(|_| {
-                        (exec_err!(
-                            "round: UInt64 value {x} exceeds i64::MAX and cannot be rounded"
-                        ) as Result<(), _>)
-                            .unwrap_err()
-                    })?;
-                    round_integer(v_i64, scale, enable_ansi_mode)
-                        .map(|v| v as u64)
-                })?;
+                let result: PrimitiveArray<UInt64Type> = array
+                    .try_unary(|x| round_unsigned_integer(x, scale, enable_ansi_mode))?;
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
 
@@ -588,16 +608,8 @@ fn spark_round(args: &[ColumnarValue], enable_ansi_mode: bool) -> Result<Columna
                 Ok(ColumnarValue::Scalar(ScalarValue::UInt32(Some(result))))
             }
             ScalarValue::UInt64(Some(v)) => {
-                let v_i64 = i64::try_from(*v).map_err(|_| {
-                    (exec_err!(
-                        "round: UInt64 value {v} exceeds i64::MAX and cannot be rounded"
-                    ) as Result<(), _>)
-                        .unwrap_err()
-                })?;
-                let result = round_integer(v_i64, scale, enable_ansi_mode)?;
-                Ok(ColumnarValue::Scalar(ScalarValue::UInt64(Some(
-                    result as u64,
-                ))))
+                let result = round_unsigned_integer(*v, scale, enable_ansi_mode)?;
+                Ok(ColumnarValue::Scalar(ScalarValue::UInt64(Some(result))))
             }
 
             // Float scalars
@@ -650,5 +662,28 @@ fn spark_round(args: &[ColumnarValue], enable_ansi_mode: bool) -> Result<Columna
 
             dt => not_impl_err!("Unsupported data type for Spark round(): {dt}"),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::round_unsigned_integer;
+
+    #[test]
+    fn round_large_unsigned_integer() {
+        assert_eq!(
+            round_unsigned_integer(u64::MAX, 0, false).unwrap(),
+            u64::MAX
+        );
+        assert_eq!(
+            round_unsigned_integer(10_000_000_000_000_000_001, -1, false).unwrap(),
+            10_000_000_000_000_000_000
+        );
+    }
+
+    #[test]
+    fn round_unsigned_integer_overflow() {
+        assert!(round_unsigned_integer(u64::MAX, -1, true).is_err());
+        assert_eq!(round_unsigned_integer(u64::MAX, -1, false).unwrap(), 4);
     }
 }
