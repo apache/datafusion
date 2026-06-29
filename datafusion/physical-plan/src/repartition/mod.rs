@@ -61,7 +61,7 @@ use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, RangePartitioning};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use crate::filter_pushdown::{
@@ -908,8 +908,8 @@ impl BatchPartitioner {
     }
 
     /// This function takes the `arrays` associated with the evaluated expressions for the ordering, split points and sort options, and indices array
-    /// Then for every row, creates the "row key" based on the given ordering for the range, and binary searches through the split points to find the appropriate split point index
-    /// That split point index is associated with the array in `indices`, which is given the row index, meaning that the row is sent to the partition at that index
+    /// Then for every row, creates the "row key" based on the given ordering for the range, and binary searches through the split points to find the appropriate partition index
+    /// That partition index is associated with the array in `indices`, which is given the row index, meaning that the row is sent to the partition at that index
     fn partition_indices_for_split_points(
         arrays: &[Arc<dyn Array>],
         split_points: &[SplitPoint],
@@ -1547,7 +1547,7 @@ impl ExecutionPlan for RepartitionExec {
             }
             Partitioning::Range(_) => {
                 // Range partitioning optimizer propagation is tracked in
-                // https://github.com/apache/datafusion/issues/22395
+                // https://github.com/apache/datafusion/issues/23230
                 return not_impl_err!(
                     "Projection pushdown through RepartitionExec with range partitioning is not implemented"
                 );
@@ -1591,7 +1591,7 @@ impl ExecutionPlan for RepartitionExec {
         match self.partitioning() {
             Partitioning::Range(_) => {
                 // Range partitioning optimizer propagation is tracked in
-                // https://github.com/apache/datafusion/issues/22395
+                // https://github.com/apache/datafusion/issues/23230
                 return not_impl_err!(
                     "Sort pushdown through RepartitionExec with range partitioning is not implemented"
                 );
@@ -1624,8 +1624,8 @@ impl ExecutionPlan for RepartitionExec {
             Hash(hash, _) => Hash(hash, target_partitions),
             UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
             Range(_) => {
-                // Range repartition execution is tracked in
-                // https://github.com/apache/datafusion/issues/22397
+                // Range repartition optimizations are tracked in
+                // https://github.com/apache/datafusion/issues/23230
                 return not_impl_err!(
                     "Changing RepartitionExec partition counts with range partitioning is not implemented"
                 );
@@ -2118,7 +2118,7 @@ mod tests {
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
-    use datafusion_common::cast::as_string_array;
+    use datafusion_common::cast::{as_string_array, as_uint32_array};
     use datafusion_common::exec_err;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_common_runtime::JoinSet;
@@ -2306,6 +2306,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn many_to_many_range_partition() -> Result<()> {
+        let schema = test_schema();
+        let partition = create_vec_batches(50);
+        let partitions = vec![partition.clone(), partition.clone(), partition.clone()];
+
+        // create_batch values are [1, 2, 3, 4, 5, 6, 7, 8]; split at 3 and 6 yields
+        // 2, 3, and 3 rows per batch respectively
+        let partitioning =
+            u32_range_partitioning(&schema, SortOptions::default(), vec![3, 6])?;
+
+        let output_partitions = repartition(&schema, partitions, partitioning).await?;
+
+        assert_eq!(3, output_partitions.len());
+        assert_eq!(300, partition_row_count(&output_partitions[0]));
+        assert_eq!(450, partition_row_count(&output_partitions[1]));
+        assert_eq!(450, partition_row_count(&output_partitions[2]));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn range_repartition_routes_rows_asc() -> Result<()> {
+        let schema = test_schema();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![5, 10, 15, 25]))],
+        )?;
+        let partitioning =
+            u32_range_partitioning(&schema, SortOptions::default(), vec![10, 20])?;
+
+        let output_partitions =
+            repartition(&schema, vec![vec![batch]], partitioning).await?;
+
+        assert_eq!(3, output_partitions.len());
+        assert_eq!(vec![5], collect_partition_u32_values(&output_partitions[0]));
+        assert_eq!(
+            vec![10, 15],
+            collect_partition_u32_values(&output_partitions[1])
+        );
+        assert_eq!(
+            vec![25],
+            collect_partition_u32_values(&output_partitions[2])
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn range_repartition_routes_rows_desc() -> Result<()> {
+        let schema = test_schema();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![5, 15, 25]))],
+        )?;
+        let partitioning =
+            u32_range_partitioning(&schema, SortOptions::new(true, false), vec![20, 10])?;
+
+        let output_partitions =
+            repartition(&schema, vec![vec![batch]], partitioning).await?;
+
+        assert_eq!(3, output_partitions.len());
+        assert_eq!(
+            vec![25],
+            collect_partition_u32_values(&output_partitions[0])
+        );
+        assert_eq!(
+            vec![15],
+            collect_partition_u32_values(&output_partitions[1])
+        );
+        assert_eq!(vec![5], collect_partition_u32_values(&output_partitions[2]));
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_repartition_with_coalescing() -> Result<()> {
         let schema = test_schema();
         // create 50 batches, each having 8 rows
@@ -2333,6 +2408,51 @@ mod tests {
 
     fn test_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
+    }
+
+    fn u32_range_partitioning(
+        schema: &SchemaRef,
+        sort_options: SortOptions,
+        split_values: Vec<u32>,
+    ) -> Result<Partitioning> {
+        let expr = col("c0", schema)?;
+        Ok(Partitioning::Range(RangePartitioning::try_new(
+            [PhysicalSortExpr::new(expr, sort_options)].into(),
+            split_values
+                .into_iter()
+                .map(|value| SplitPoint::new(vec![ScalarValue::UInt32(Some(value))]))
+                .collect(),
+        )?))
+    }
+
+    fn partition_row_count(batches: &[RecordBatch]) -> usize {
+        batches.iter().map(|batch| batch.num_rows()).sum()
+    }
+
+    fn collect_partition_u32_values(batches: &[RecordBatch]) -> Vec<u32> {
+        batches
+            .iter()
+            .flat_map(|batch| {
+                let array =
+                    as_uint32_array(batch.column(0)).expect("expected UInt32 column");
+                (0..array.len())
+                    .map(|idx| array.value(idx))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn collect_partition_string_values(batches: &[RecordBatch]) -> Vec<&str> {
+        batches
+            .iter()
+            .flat_map(|batch| {
+                let array =
+                    as_string_array(batch.column(0)).expect("expected Utf8 column");
+                (0..array.len())
+                    .map(|idx| array.value(idx))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
     }
 
     async fn repartition(
@@ -2418,34 +2538,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsupported_range_partitioning() -> Result<()> {
+    async fn range_repartition_routes_string_rows() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let batch = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["bar", "baz", "foo", "qux"])) as ArrayRef,
         )])?;
 
         let schema = batch.schema();
         let expr = col("my_awesome_field", &schema)?;
         let input = MockExec::new(vec![Ok(batch)], Arc::clone(&schema));
-        let partitioning = Partitioning::Range(RangePartitioning::new(
+        let partitioning = Partitioning::Range(RangePartitioning::try_new(
             [PhysicalSortExpr::new_default(expr)].into(),
             vec![SplitPoint::new(vec![ScalarValue::Utf8(Some(
                 "foo".to_string(),
             ))])],
-        ));
+        )?);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning)?;
-        let output_stream = exec.execute(0, task_ctx)?;
 
-        let result_string = crate::common::collect(output_stream)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(
-            result_string.contains(
-                "Range partitioning execution is not implemented by RepartitionExec"
-            ),
-            "actual: {result_string}"
+        let mut partition_0 = Vec::new();
+        let mut stream = exec.execute(0, Arc::clone(&task_ctx))?;
+        while let Some(result) = stream.next().await {
+            partition_0.push(result?);
+        }
+
+        let mut partition_1 = Vec::new();
+        let mut stream = exec.execute(1, task_ctx)?;
+        while let Some(result) = stream.next().await {
+            partition_1.push(result?);
+        }
+
+        assert_eq!(
+            vec!["bar", "baz"],
+            collect_partition_string_values(&partition_0)
+        );
+        assert_eq!(
+            vec!["foo", "qux"],
+            collect_partition_string_values(&partition_1)
         );
 
         Ok(())
