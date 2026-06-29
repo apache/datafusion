@@ -950,9 +950,9 @@ impl BatchPartitioner {
         }
     }
 
-    /// Build repartitioned hash output batches using one `take` per input batch.
+    /// Build repartitioned hash/range output batches using one `take` per input batch.
     ///
-    /// The hash router first fills one index vector per output partition. This method
+    /// The hash and range routers first fills one index vector per output partition. This method
     /// concatenates those index vectors, performs one grouped `take_arrays`, and
     /// then returns each output partition as a slice of the reordered batch.
     ///
