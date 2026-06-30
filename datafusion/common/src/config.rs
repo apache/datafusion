@@ -1648,6 +1648,12 @@ config_namespace! {
         /// branches share the same source and compatible wrapper nodes such as identical
         /// projections or aliases.
         pub enable_unions_to_filter: bool, default = false
+
+        /// When set to true, enables experimental logical query fusion rewrites
+        /// that combine UNION ALL branches over the same source into a single
+        /// source plus a small branch-tag relation. This is currently a
+        /// conservative proof of concept and is disabled by default.
+        pub enable_query_fusion: bool, default = false
     }
 }
 
