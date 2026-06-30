@@ -519,7 +519,6 @@ impl PartialEq for PhysicalGroupBy {
 /// partial state:              [g, AVG(x) state columns, e.g. sum/count]
 /// final result:               [g, AVG(x)]
 /// ```
-#[expect(clippy::large_enum_variant)]
 enum StreamType {
     /// Single group (no group by) aggregate stream.
     /// Input output scheme: initial input -> final result

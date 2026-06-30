@@ -22,7 +22,9 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, BooleanArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
+use datafusion_common::{
+    Result, assert_eq_or_internal_err, internal_datafusion_err, internal_err,
+};
 use datafusion_expr::EmitTo;
 
 use crate::aggregates::group_values::new_group_values;
@@ -61,7 +63,6 @@ impl AggregateHashTable<PartialMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        let output_schema = Arc::clone(&self.output_schema);
         let batch_size = self.batch_size;
         match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
             AggregateHashTableState::Outputting(state) => {
@@ -69,8 +70,11 @@ impl AggregateHashTable<PartialMarker> {
                     return Ok(None);
                 }
 
-                let output = self.materialize_partial_output(state, output_schema)?;
-                Ok(self.emit_next_materialized_batch(output, batch_size))
+                let batch = self.materialize_partial_batch(state)?;
+                Ok(self.emit_next_materialized_batch(
+                    MaterializedOutput::new(batch),
+                    batch_size,
+                ))
             }
             AggregateHashTableState::OutputtingMaterialized(output) => {
                 Ok(self.emit_next_materialized_batch(output, batch_size))
@@ -82,11 +86,34 @@ impl AggregateHashTable<PartialMarker> {
         }
     }
 
-    fn materialize_partial_output(
+    pub(in crate::aggregates) fn materialize_output_batch(
+        &mut self,
+    ) -> Result<Option<RecordBatch>> {
+        match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
+            AggregateHashTableState::Outputting(state) => {
+                if state.group_values.is_empty() {
+                    return Ok(None);
+                }
+
+                self.materialize_partial_batch(state).map(Some)
+            }
+            AggregateHashTableState::Done => Ok(None),
+            AggregateHashTableState::Building(_) => {
+                internal_err!(
+                    "materialize_output_batch must be called in the outputting state"
+                )
+            }
+            AggregateHashTableState::OutputtingMaterialized(_) => {
+                internal_err!("partial aggregate output is already materialized")
+            }
+        }
+    }
+
+    fn materialize_partial_batch(
         &self,
         mut state: AggregateHashTableBuffer,
-        output_schema: SchemaRef,
-    ) -> Result<MaterializedOutput> {
+    ) -> Result<RecordBatch> {
+        let output_schema = Arc::clone(&self.output_schema);
         let emit_to = EmitTo::All;
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = state.group_values.emit(emit_to)?;
@@ -98,7 +125,7 @@ impl AggregateHashTable<PartialMarker> {
 
         let batch = RecordBatch::try_new(output_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
-        Ok(MaterializedOutput::new(batch))
+        Ok(batch)
     }
 
     pub(in crate::aggregates) fn can_skip_aggregation(&self) -> bool {
@@ -117,14 +144,35 @@ impl AggregateHashTable<PartialMarker> {
             .support_partial_repartition()
     }
 
-    pub(in crate::aggregates) fn append_new_groups_to_partitions(
+    pub(in crate::aggregates) fn append_new_group_partitions(
         &self,
-        partitions: &mut [Vec<usize>],
+        partition_group_indices: &mut [Vec<u32>],
     ) -> Result<()> {
-        if partitions.is_empty() {
+        let num_partitions = partition_group_indices.len();
+        if num_partitions == 0 {
             return Ok(());
         }
 
+        if num_partitions.is_power_of_two() {
+            let mask = num_partitions - 1;
+            self.append_new_groups_with_partition(partition_group_indices, |hash| {
+                (hash as usize) & mask
+            })
+        } else {
+            self.append_new_groups_with_partition(partition_group_indices, |hash| {
+                (hash as usize) % num_partitions
+            })
+        }
+    }
+
+    fn append_new_groups_with_partition<F>(
+        &self,
+        partition_group_indices: &mut [Vec<u32>],
+        compute_partition: F,
+    ) -> Result<()>
+    where
+        F: Fn(u64) -> usize,
+    {
         let state = self.state.building();
         for &row in &state.new_group_rows {
             let Some(&group_index) = state.batch_group_indices.get(row) else {
@@ -138,8 +186,12 @@ impl AggregateHashTable<PartialMarker> {
                 );
             };
 
-            let partition = partition_for_hash(hash, partitions.len());
-            partitions[partition].push(group_index);
+            let group_index = u32::try_from(group_index).map_err(|_| {
+                internal_datafusion_err!(
+                    "partitioned aggregate output index exceeds u32::MAX"
+                )
+            })?;
+            partition_group_indices[compute_partition(hash)].push(group_index);
         }
 
         Ok(())
@@ -290,15 +342,6 @@ impl AggregateHashTable<PartialMarker> {
         }
 
         Ok(())
-    }
-}
-
-fn partition_for_hash(hash: u64, num_partitions: usize) -> usize {
-    debug_assert!(num_partitions > 0);
-    if num_partitions.is_power_of_two() {
-        (hash as usize) & (num_partitions - 1)
-    } else {
-        (hash as usize) % num_partitions
     }
 }
 

@@ -29,8 +29,10 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use arrow::array::{PrimitiveArray, RecordBatch};
+use arrow::compute::take_arrays;
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::UInt32Type;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -44,6 +46,9 @@ use super::aggregate_hash_table::{
 use super::skip_partial::SkipAggregationProbe;
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
+};
+use crate::repartition::{
+    PARTITIONED_AGGREGATION_NUM_PARTITIONS_KEY, PARTITIONED_AGGREGATION_PARTITION_KEY,
 };
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metrics};
@@ -127,7 +132,7 @@ pub(crate) struct PartialHashAggregateStream {
     /// Tracks whether partial aggregation should switch to direct state conversion.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
-    /// Target final partition for newly created groups.
+    /// Group indices for each target final partition.
     repartition_state: Option<PartialRepartitionState>,
 
     /// Optional soft limit on the number of groups to accumulate before output.
@@ -142,24 +147,116 @@ pub(crate) struct PartialHashAggregateStream {
 }
 
 struct PartialRepartitionState {
-    partitions: Vec<Vec<usize>>,
+    partition_group_indices: Vec<Vec<u32>>,
+    partition_batches: Vec<RecordBatch>,
+    offsets: Vec<usize>,
+    remaining_rows: usize,
+    batch_size: usize,
+    num_partitions: usize,
+    next_partition: usize,
 }
 
 impl PartialRepartitionState {
-    fn new(num_partitions: usize) -> Self {
+    fn new(num_partitions: usize, batch_size: usize) -> Self {
         Self {
-            partitions: vec![vec![]; num_partitions],
+            partition_group_indices: vec![vec![]; num_partitions],
+            partition_batches: Vec::with_capacity(num_partitions),
+            offsets: vec![0; num_partitions],
+            remaining_rows: 0,
+            batch_size,
+            num_partitions,
+            next_partition: 0,
         }
     }
 
+    fn start_output(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.partition_batches.clear();
+        self.remaining_rows = 0;
+
+        for group_indices in &self.partition_group_indices {
+            let indices: PrimitiveArray<UInt32Type> = group_indices.clone().into();
+            let columns = take_arrays(batch.columns(), &indices, None)?;
+            let partition_batch =
+                RecordBatch::try_new(Arc::clone(&batch.schema()), columns)?;
+            self.remaining_rows += partition_batch.num_rows();
+            self.partition_batches.push(partition_batch);
+        }
+
+        self.offsets.clear();
+        self.offsets.resize(self.num_partitions, 0);
+        self.next_partition = 0;
+        Ok(())
+    }
+
+    fn next_batch(&mut self) -> Option<RecordBatch> {
+        if self.partition_batches.is_empty() {
+            return None;
+        }
+
+        for _ in 0..self.num_partitions {
+            let partition = self.next_partition;
+            self.next_partition = (self.next_partition + 1) % self.num_partitions;
+
+            let batch = &self.partition_batches[partition];
+            let offset = self.offsets[partition];
+            let partition_rows = batch.num_rows();
+            if offset >= partition_rows {
+                continue;
+            }
+
+            let len = self.batch_size.min(partition_rows - offset);
+            let output = add_partitioned_aggregation_metadata(
+                batch.slice(offset, len),
+                partition,
+                self.num_partitions,
+            );
+            self.offsets[partition] += len;
+            self.remaining_rows -= len;
+            if self.remaining_rows == 0 {
+                self.partition_batches.clear();
+            }
+            return Some(output);
+        }
+
+        self.partition_batches.clear();
+        None
+    }
+
+    fn is_done(&self) -> bool {
+        self.partition_batches.is_empty()
+    }
+
     fn memory_size(&self) -> usize {
-        self.partitions.allocated_size()
+        self.partition_group_indices.allocated_size()
             + self
-                .partitions
+                .partition_group_indices
                 .iter()
                 .map(VecAllocExt::allocated_size)
                 .sum::<usize>()
+            + self
+                .partition_batches
+                .iter()
+                .map(RecordBatch::get_array_memory_size)
+                .sum::<usize>()
+            + self.offsets.allocated_size()
     }
+}
+
+fn add_partitioned_aggregation_metadata(
+    mut batch: RecordBatch,
+    partition: usize,
+    num_partitions: usize,
+) -> RecordBatch {
+    let metadata = batch.schema_metadata_mut();
+    metadata.insert(
+        PARTITIONED_AGGREGATION_PARTITION_KEY.to_string(),
+        partition.to_string(),
+    );
+    metadata.insert(
+        PARTITIONED_AGGREGATION_NUM_PARTITIONS_KEY.to_string(),
+        num_partitions.to_string(),
+    );
+    batch
 }
 
 /// States for partial hash aggregation processing.
@@ -333,6 +430,7 @@ impl PartialHashAggregateStream {
             if can_repartition_in_partial(agg, context.as_ref(), &hash_table) {
                 Some(PartialRepartitionState::new(
                     context.session_config().target_partitions(),
+                    batch_size,
                 ))
             } else {
                 None
@@ -410,7 +508,8 @@ impl PartialHashAggregateStream {
             return Ok(());
         };
 
-        hash_table.append_new_groups_to_partitions(&mut repartition_state.partitions)
+        hash_table
+            .append_new_group_partitions(&mut repartition_state.partition_group_indices)
     }
 
     fn memory_size(&self, hash_table: &AggregateHashTable<PartialMarker>) -> usize {
@@ -426,6 +525,32 @@ impl PartialHashAggregateStream {
         hash_table: &AggregateHashTable<PartialMarker>,
     ) -> Result<()> {
         self.reservation.try_resize(self.memory_size(hash_table))
+    }
+
+    fn next_output_batch(
+        &mut self,
+        hash_table: &mut AggregateHashTable<PartialMarker>,
+    ) -> Result<Option<RecordBatch>> {
+        let Some(repartition_state) = self.repartition_state.as_mut() else {
+            return hash_table.next_output_batch();
+        };
+
+        if repartition_state.is_done() {
+            let Some(batch) = hash_table.materialize_output_batch()? else {
+                return Ok(None);
+            };
+            repartition_state.start_output(&batch)?;
+        }
+
+        Ok(repartition_state.next_batch())
+    }
+
+    fn is_output_done(&self, hash_table: &AggregateHashTable<PartialMarker>) -> bool {
+        hash_table.is_done()
+            && self
+                .repartition_state
+                .as_ref()
+                .is_none_or(PartialRepartitionState::is_done)
     }
 
     fn start_output(
@@ -632,7 +757,7 @@ impl PartialHashAggregateStream {
 
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
-        let result = original_state.hash_table_mut().next_output_batch();
+        let result = self.next_output_batch(original_state.hash_table_mut());
         timer.done();
 
         match result {
@@ -640,7 +765,7 @@ impl PartialHashAggregateStream {
                 let _ = self.resize_reservation(original_state.hash_table());
                 self.reduction_factor.add_part(batch.num_rows());
                 debug_assert!(batch.num_rows() > 0);
-                let next_state = if original_state.hash_table().is_done() {
+                let next_state = if self.is_output_done(original_state.hash_table()) {
                     match original_state {
                         PartialHashAggregateState::ProducingOutput {
                             skip_hash_table: Some(hash_table),
