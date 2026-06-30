@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::registry::ExtensionTypeRegistry;
 use crate::var_provider::{VarProvider, VarType};
 use chrono::{DateTime, Utc};
 use datafusion_common::HashMap;
@@ -74,6 +75,7 @@ pub struct ExecutionProps {
     /// during physical planning. Populated by the physical planner for
     /// each lambda before calling `create_physical_expr`.
     pub lambda_variable_qualifier: HashMap<String, TableReference>,
+    pub extension_types: Option<Arc<dyn ExtensionTypeRegistry>>,
 }
 
 impl Default for ExecutionProps {
@@ -93,6 +95,7 @@ impl ExecutionProps {
             subquery_indexes: HashMap::new(),
             subquery_results: ScalarSubqueryResults::default(),
             lambda_variable_qualifier: HashMap::new(),
+            extension_types: None,
         }
     }
 
@@ -274,7 +277,7 @@ mod test {
     fn debug() {
         let props = ExecutionProps::new();
         assert_eq!(
-            "ExecutionProps { query_execution_start_time: None, alias_generator: AliasGenerator { next_id: 1 }, config_options: None, var_providers: None, subquery_indexes: {}, subquery_results: [], lambda_variable_qualifier: {} }",
+            "ExecutionProps { query_execution_start_time: None, alias_generator: AliasGenerator { next_id: 1 }, config_options: None, var_providers: None, subquery_indexes: {}, subquery_results: [], lambda_variable_qualifier: {}, extension_types: None }",
             format!("{props:?}")
         );
     }

@@ -163,6 +163,7 @@ pub fn project_plan_to_schema(
                 Arc::new(CastExpr::new_with_target_field(
                     column,
                     Arc::clone(expected_field),
+                    None, // TODO: can we get a cast extension here?
                     None,
                 )) as _
             } else {

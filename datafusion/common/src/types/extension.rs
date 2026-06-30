@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::Result;
-use arrow::array::Array;
+use crate::error::{_exec_err, _internal_err, Result};
+use crate::metadata::format_type_and_metadata;
+use crate::nested_struct::CastExtension;
+use arrow::array::{Array, ArrayRef, StringBuilder};
+use arrow::compute::CastOptions;
 use arrow::util::display::{ArrayFormatter, FormatOptions};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -86,5 +89,152 @@ pub trait DFExtensionType: Debug + Send + Sync {
         _options: &FormatOptions<'fmt>,
     ) -> Result<Option<ArrayFormatter<'fmt>>> {
         Ok(None)
+    }
+}
+
+#[derive(Debug)]
+pub struct DefaultExtensionCast {
+    extension_name: &'static str,
+    instance: Option<Arc<dyn DFExtensionType>>,
+    can_cast_to_storage: bool,
+    can_cast_from_storage: bool,
+    use_default_cast_to_string: bool,
+}
+
+impl DefaultExtensionCast {
+    pub fn new(extension_name: &'static str) -> Self {
+        Self {
+            extension_name,
+            instance: None,
+            can_cast_to_storage: true,
+            can_cast_from_storage: true,
+            use_default_cast_to_string: false,
+        }
+    }
+
+    pub fn with_default_cast_to_string(
+        mut self,
+        instance: Option<Arc<dyn DFExtensionType>>,
+    ) -> Self {
+        self.use_default_cast_to_string = true;
+        self.instance = instance;
+        self
+    }
+
+    fn is_cast_to_storage(&self, from: &Field, to: &Field) -> bool {
+        self.is_this_extension(from)
+            && !Self::is_any_extension(to)
+            && to.data_type() == from.data_type()
+    }
+
+    fn is_cast_from_storage(&self, from: &Field, to: &Field) -> bool {
+        self.is_this_extension(to)
+            && !Self::is_any_extension(from)
+            && from.data_type() == to.data_type()
+    }
+
+    fn is_cast_to_string(&self, from: &Field, to: &Field) -> bool {
+        self.is_this_extension(from)
+            && !Self::is_any_extension(to)
+            && matches!(
+                to.data_type(),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            )
+    }
+
+    fn is_this_extension(&self, field: &Field) -> bool {
+        if let Some(from_extension_name) = field.extension_type_name()
+            && from_extension_name == self.extension_name
+        {
+            true
+        } else {
+            false
+        }
+    }
+
+    fn is_any_extension(field: &Field) -> bool {
+        field.extension_type_name().is_some()
+    }
+
+    fn default_cast_to_string(
+        &self,
+        value: &ArrayRef,
+        to: &DataType,
+    ) -> Result<ArrayRef> {
+        let format_options = FormatOptions::default();
+
+        // Try to get a custom formatter from the extension type instance,
+        // otherwise fall back to the default formatter for the storage type
+        let formatter = if let Some(instance) = &self.instance {
+            match instance.create_array_formatter(value.as_ref(), &format_options)? {
+                Some(f) => f,
+                None => ArrayFormatter::try_new(value.as_ref(), &format_options)?,
+            }
+        } else {
+            ArrayFormatter::try_new(value.as_ref(), &format_options)?
+        };
+
+        // Format each value into a string type and cast to the target
+        let len = value.len();
+        let mut builder = StringBuilder::with_capacity(len, len * 16);
+        for i in 0..len {
+            if value.is_null(i) {
+                builder.append_null();
+            } else {
+                builder.append_value(formatter.value(i).to_string());
+            }
+        }
+
+        Ok(arrow::compute::cast(&builder.finish(), to)?)
+    }
+}
+
+impl CastExtension for DefaultExtensionCast {
+    fn can_cast_fields(&self, from: &Field, to: &Field) -> Result<bool> {
+        if self.can_cast_to_storage && self.is_cast_to_storage(from, to) {
+            return Ok(true);
+        }
+
+        if self.can_cast_from_storage && self.is_cast_from_storage(from, to) {
+            return Ok(true);
+        }
+
+        if self.use_default_cast_to_string && self.is_cast_to_string(from, to) {
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    fn cast_array_fields(
+        &self,
+        value: &ArrayRef,
+        from: &Field,
+        to: &Field,
+        options: &CastOptions,
+    ) -> Result<ArrayRef> {
+        if options.safe {
+            let from_display =
+                format_type_and_metadata(from.data_type(), Some(from.metadata()));
+            let to_display =
+                format_type_and_metadata(to.data_type(), Some(to.metadata()));
+            return _exec_err!(
+                "Can't cast from {from_display} to {to_display} with safe = true"
+            );
+        }
+
+        if self.can_cast_to_storage && self.is_cast_to_storage(from, to) {
+            return Ok(Arc::clone(value));
+        }
+
+        if self.can_cast_from_storage && self.is_cast_from_storage(from, to) {
+            return Ok(Arc::clone(value));
+        }
+
+        if self.use_default_cast_to_string && self.is_cast_to_string(from, to) {
+            return self.default_cast_to_string(value, to.data_type());
+        }
+
+        _internal_err!("Unhandled cast from {from} to {to} in default extension cast")
     }
 }

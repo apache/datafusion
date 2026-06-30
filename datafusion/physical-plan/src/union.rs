@@ -1277,4 +1277,108 @@ mod tests {
         ));
         Ok(())
     }
+
+    #[test]
+    fn test_union_schema_metadata_preservation() {
+        use crate::empty::EmptyExec;
+        use std::collections::HashMap;
+
+        // Create schemas - one with metadata, one without
+        let mut metadata = HashMap::new();
+        metadata.insert("key".to_string(), "value".to_string());
+
+        let schema_with_metadata = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, true).with_metadata(metadata.clone()),
+        ]));
+
+        let schema_without_metadata =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)]));
+
+        // Create two EmptyExec plans with different schemas
+        let input1 = Arc::new(EmptyExec::new(Arc::clone(&schema_with_metadata)));
+        let input2 = Arc::new(EmptyExec::new(Arc::clone(&schema_without_metadata)));
+
+        // Test both orderings
+        let inputs_with_first = vec![
+            Arc::clone(&input1) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&input2) as Arc<dyn ExecutionPlan>,
+        ];
+        let inputs_without_first = vec![
+            Arc::clone(&input2) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&input1) as Arc<dyn ExecutionPlan>,
+        ];
+
+        // Call union_schema directly
+        let result1 = union_schema(&inputs_with_first).unwrap();
+        let result2 = union_schema(&inputs_without_first).unwrap();
+
+        // Both should have the metadata
+        assert!(
+            !result1.field(0).metadata().is_empty(),
+            "Expected metadata in result1 (with metadata first), got empty"
+        );
+        assert!(
+            !result2.field(0).metadata().is_empty(),
+            "Expected metadata in result2 (without metadata first), got empty"
+        );
+        assert_eq!(
+            result1.field(0).metadata().get("key"),
+            Some(&"value".to_string())
+        );
+        assert_eq!(
+            result2.field(0).metadata().get("key"),
+            Some(&"value".to_string())
+        );
+    }
+
+    #[test]
+    fn test_union_schema_metadata_with_non_nullable() {
+        use crate::empty::EmptyExec;
+        use std::collections::HashMap;
+
+        // Test case that matches the failing test:
+        // input 0: nonnull_name (NOT nullable, has metadata)
+        // input 1: NULL::string (nullable, no metadata)
+
+        let mut metadata = HashMap::new();
+        metadata.insert("key".to_string(), "value".to_string());
+
+        // input 0: NOT nullable, has metadata
+        let schema_with_metadata = Arc::new(Schema::new(vec![
+            Field::new(
+                "name",
+                DataType::Utf8,
+                false, // NOT nullable
+            )
+            .with_metadata(metadata.clone()),
+        ]));
+
+        // input 1: nullable, no metadata
+        let schema_without_metadata =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)])); // nullable
+
+        let input1 = Arc::new(EmptyExec::new(Arc::clone(&schema_with_metadata)));
+        let input2 = Arc::new(EmptyExec::new(Arc::clone(&schema_without_metadata)));
+
+        let inputs = vec![
+            Arc::clone(&input1) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&input2) as Arc<dyn ExecutionPlan>,
+        ];
+
+        let result = union_schema(&inputs).unwrap();
+
+        // The result should be nullable (since one input is nullable) and have metadata
+        assert!(
+            result.field(0).is_nullable(),
+            "Expected nullable field in union result"
+        );
+        assert!(
+            !result.field(0).metadata().is_empty(),
+            "Expected metadata preserved from non-nullable input, got empty"
+        );
+        assert_eq!(
+            result.field(0).metadata().get("key"),
+            Some(&"value".to_string())
+        );
+    }
 }

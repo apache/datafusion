@@ -16,13 +16,21 @@
 // under the License.
 
 use crate::Result;
-use crate::error::_internal_err;
+use crate::cast::as_string_array;
+use crate::error::{_exec_err, _internal_err};
+use crate::nested_struct::CastExtension;
+use crate::types::DefaultExtensionCast;
 use crate::types::extension::DFExtensionType;
-use arrow::array::{Array, FixedSizeBinaryArray};
+use arrow::array::{
+    Array, ArrayRef, FixedSizeBinaryArray, builder::FixedSizeBinaryBuilder,
+};
+use arrow::compute::{CastOptions, cast};
 use arrow::datatypes::DataType;
 use arrow::util::display::{ArrayFormatter, DisplayIndex, FormatOptions, FormatResult};
+use arrow_schema::Field;
 use arrow_schema::extension::{ExtensionType, Uuid};
 use std::fmt::Write;
+use std::sync::Arc;
 use uuid::Bytes;
 
 /// Defines the extension type logic for the canonical `arrow.uuid` extension type. This extension
@@ -44,6 +52,16 @@ impl DFUuid {
         metadata: <Uuid as ExtensionType>::Metadata,
     ) -> Result<Self> {
         Ok(Self(<Uuid as ExtensionType>::try_new(data_type, metadata)?))
+    }
+
+    pub fn cast_extensions() -> Vec<Arc<dyn CastExtension>> {
+        vec![
+            Arc::new(
+                DefaultExtensionCast::new(Uuid::NAME)
+                    .with_default_cast_to_string(Some(Arc::new(DFUuid(Uuid)))),
+            ),
+            Arc::new(ParseUuid),
+        ]
     }
 }
 
@@ -95,6 +113,72 @@ impl DisplayIndex for UuidValueDisplayIndex<'_> {
         let uuid = uuid::Uuid::from_bytes(bytes);
         write!(f, "{uuid}")?;
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct ParseUuid;
+
+impl CastExtension for ParseUuid {
+    fn can_cast_fields(&self, from: &Field, to: &Field) -> Result<bool> {
+        if from.extension_type_name().is_some() {
+            return Ok(false);
+        }
+
+        if let Some(to_extension_name) = to.extension_type_name()
+            && to_extension_name == Uuid::NAME
+        {
+            Ok(matches!(
+                from.data_type(),
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+            ))
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn cast_array_fields(
+        &self,
+        value: &ArrayRef,
+        from: &Field,
+        to: &Field,
+        options: &CastOptions,
+    ) -> Result<ArrayRef> {
+        if !self.can_cast_fields(from, to)? {
+            return _internal_err!("Unhandled cast");
+        }
+
+        match from.data_type() {
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
+                if options.safe {
+                    return _exec_err!("Cast from UUID to string must be explicit");
+                }
+
+                let string_array_ref = cast(&value, &DataType::Utf8)?;
+                let string_array = as_string_array(&string_array_ref)?;
+                let mut builder = FixedSizeBinaryBuilder::new(16);
+                for string_opt in string_array {
+                    match string_opt {
+                        Some(string) => {
+                            let uuid = uuid::Uuid::try_parse(string).map_err(|_| {
+                                crate::DataFusionError::Execution(format!(
+                                    "Failed to parsed string '{string}' as UUID"
+                                ))
+                            })?;
+                            builder.append_value(uuid.as_bytes())?;
+                        }
+                        None => {
+                            builder.append_null();
+                        }
+                    }
+                }
+
+                return Ok(Arc::new(builder.finish()));
+            }
+            _ => {}
+        }
+
+        _internal_err!("Unexpected difference between can_cast_from()")
     }
 }
 

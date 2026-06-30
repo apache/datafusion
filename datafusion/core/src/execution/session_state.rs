@@ -59,8 +59,8 @@ use datafusion_expr::planner::ExprPlanner;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
 use datafusion_expr::registry::{
-    ExtensionTypeRegistryRef, FunctionRegistry, MemoryExtensionTypeRegistry,
-    SerializerRegistry,
+    ExtensionTypeRegistry, ExtensionTypeRegistryRef, FunctionRegistry,
+    MemoryExtensionTypeRegistry, SerializerRegistry,
 };
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
@@ -1397,7 +1397,7 @@ impl SessionStateBuilder {
         self
     }
 
-    /// Sets the [`ExtensionTypeRegistry`](datafusion_expr::registry::ExtensionTypeRegistry).
+    /// Sets the [`ExtensionTypeRegistry`]
     pub fn with_extension_type_registry(
         mut self,
         registry: ExtensionTypeRegistryRef,
@@ -1729,6 +1729,10 @@ impl SessionStateBuilder {
                     .push(physical_optimizer_rule);
             }
         }
+
+        // Temporary hack while we figure out how to get the extension types where they
+        // need to go
+        state.execution_props.extension_types = Some(Arc::clone(&state.extension_types));
 
         state
     }
@@ -2281,6 +2285,10 @@ impl OptimizerConfig for SessionState {
 
     fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
         Some(self)
+    }
+
+    fn extension_types(&self) -> Option<Arc<dyn ExtensionTypeRegistry>> {
+        Some(Arc::clone(&self.extension_types))
     }
 }
 

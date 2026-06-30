@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::{_plan_err, Result};
+use crate::{
+    datatype::DataTypeExt,
+    error::{_internal_err, _plan_err, Result},
+    metadata::format_type_and_metadata,
+};
 use arrow::{
     array::{
         Array, ArrayRef, DictionaryArray, GenericListArray, GenericListViewArray,
@@ -56,6 +60,7 @@ use std::{collections::HashSet, sync::Arc};
 fn cast_struct_column(
     source_col: &ArrayRef,
     target_fields: &[Arc<Field>],
+    cast_extension: Option<&dyn CastExtension>,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     if source_col.data_type() == &DataType::Null
@@ -78,14 +83,20 @@ fn cast_struct_column(
         for target_child_field in target_fields.iter() {
             fields.push(Arc::clone(target_child_field));
 
-            let source_child_opt =
-                source_struct.column_by_name(target_child_field.name());
+            let source_child_index_opt = source_struct
+                .column_names()
+                .iter()
+                .position(|name| *name == target_child_field.name());
+            // let source_child_opt =
+            //     source_struct.column_by_name(target_child_field.name());
 
-            match source_child_opt {
-                Some(source_child_col) => {
-                    let adapted_child = cast_column(
-                        source_child_col,
-                        target_child_field.data_type(),
+            match source_child_index_opt {
+                Some(source_child_index) => {
+                    let adapted_child = cast_column_fields(
+                        source_struct.column(source_child_index),
+                        source_struct.fields()[source_child_index].as_ref(),
+                        target_child_field.as_ref(),
+                        cast_extension,
                         cast_options,
                     )
                     .map_err(|e| {
@@ -173,22 +184,74 @@ pub fn cast_column(
     target_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
-    match (source_col.data_type(), target_type) {
+    cast_column_fields(
+        source_col,
+        &source_col.data_type().clone().into_nullable_field(),
+        &target_type.clone().into_nullable_field(),
+        None,
+        cast_options,
+    )
+}
+
+pub fn cast_column_fields(
+    source_col: &ArrayRef,
+    source_field: &Field,
+    target_field: &Field,
+    cast_extension: Option<&dyn CastExtension>,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    if let Some(cast_extension) = cast_extension
+        && cast_extension.can_cast_fields(source_field, target_field)?
+    {
+        return cast_extension.cast_array_fields(
+            source_col,
+            source_field,
+            target_field,
+            cast_options,
+        );
+    }
+
+    match (source_field.data_type(), target_field.data_type()) {
         (_, Struct(target_fields)) => {
-            cast_struct_column(source_col, target_fields, cast_options)
+            cast_struct_column(source_col, target_fields, cast_extension, cast_options)
         }
-        (DataType::List(_), DataType::List(target_inner)) => {
-            cast_list_column::<i32>(source_col, target_inner, cast_options)
+        (DataType::List(source_inner), DataType::List(target_inner)) => {
+            cast_list_column::<i32>(
+                source_col,
+                source_inner,
+                target_inner,
+                cast_extension,
+                cast_options,
+            )
         }
-        (DataType::LargeList(_), DataType::LargeList(target_inner)) => {
-            cast_list_column::<i64>(source_col, target_inner, cast_options)
+        (DataType::LargeList(source_inner), DataType::LargeList(target_inner)) => {
+            cast_list_column::<i64>(
+                source_col,
+                source_inner,
+                target_inner,
+                cast_extension,
+                cast_options,
+            )
         }
-        (DataType::ListView(_), DataType::ListView(target_inner)) => {
-            cast_list_view_column::<i32>(source_col, target_inner, cast_options)
+        (DataType::ListView(source_inner), DataType::ListView(target_inner)) => {
+            cast_list_view_column::<i32>(
+                source_col,
+                source_inner,
+                target_inner,
+                cast_extension,
+                cast_options,
+            )
         }
-        (DataType::LargeListView(_), DataType::LargeListView(target_inner)) => {
-            cast_list_view_column::<i64>(source_col, target_inner, cast_options)
-        }
+        (
+            DataType::LargeListView(source_inner),
+            DataType::LargeListView(target_inner),
+        ) => cast_list_view_column::<i64>(
+            source_col,
+            source_inner,
+            target_inner,
+            cast_extension,
+            cast_options,
+        ),
         (
             DataType::Dictionary(source_key_type, _),
             DataType::Dictionary(target_key_type, target_value_type),
@@ -197,15 +260,22 @@ pub fn cast_column(
             source_key_type,
             target_key_type,
             target_value_type,
+            cast_extension,
             cast_options,
         ),
-        _ => Ok(cast_with_options(source_col, target_type, cast_options)?),
+        _ => Ok(cast_with_options(
+            source_col,
+            target_field.data_type(),
+            cast_options,
+        )?),
     }
 }
 
 fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
     source_col: &ArrayRef,
+    source_inner_field: &FieldRef,
     target_inner_field: &FieldRef,
+    cast_extension: Option<&dyn CastExtension>,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     let source_list = source_col
@@ -218,9 +288,11 @@ fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
             ))
         })?;
 
-    let cast_values = cast_column(
+    let cast_values = cast_column_fields(
         source_list.values(),
-        target_inner_field.data_type(),
+        source_inner_field.as_ref(),
+        target_inner_field.as_ref(),
+        cast_extension,
         cast_options,
     )?;
 
@@ -235,7 +307,9 @@ fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
 
 fn cast_list_view_column<O: arrow::array::OffsetSizeTrait>(
     source_col: &ArrayRef,
+    source_inner_field: &FieldRef,
     target_inner_field: &FieldRef,
+    cast_extension: Option<&dyn CastExtension>,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     let source_list = source_col
@@ -248,9 +322,11 @@ fn cast_list_view_column<O: arrow::array::OffsetSizeTrait>(
             ))
         })?;
 
-    let cast_values = cast_column(
+    let cast_values = cast_column_fields(
         source_list.values(),
-        target_inner_field.data_type(),
+        source_inner_field.as_ref(),
+        target_inner_field.as_ref(),
+        cast_extension,
         cast_options,
     )?;
 
@@ -269,6 +345,7 @@ fn cast_dictionary_column(
     source_key_type: &DataType,
     target_key_type: &DataType,
     target_value_type: &DataType,
+    cast_extension: Option<&dyn CastExtension>,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     // Dispatch on source key type to access keys/values, then recursively
@@ -279,8 +356,13 @@ fn cast_dictionary_column(
                 .as_any()
                 .downcast_ref::<DictionaryArray<$t>>()
                 .expect("downcast must succeed");
-            let cast_values =
-                cast_column(source_dict.values(), target_value_type, cast_options)?;
+            let cast_values = cast_column_fields(
+                source_dict.values(),
+                &source_dict.data_type().clone().into_nullable_field(),
+                &target_value_type.clone().into_nullable_field(),
+                cast_extension,
+                cast_options,
+            )?;
             Ok(Arc::new(DictionaryArray::<$t>::new(
                 source_dict.keys().clone(),
                 cast_values,
@@ -346,6 +428,14 @@ pub fn validate_struct_compatibility(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
 ) -> Result<()> {
+    validate_struct_compatibility_with_extension(source_fields, target_fields, None)
+}
+
+pub fn validate_struct_compatibility_with_extension(
+    source_fields: &[FieldRef],
+    target_fields: &[FieldRef],
+    cast_extension: Option<&dyn CastExtension>,
+) -> Result<()> {
     let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
     if !has_overlap {
         return _plan_err!(
@@ -362,7 +452,7 @@ pub fn validate_struct_compatibility(
             .iter()
             .find(|f| f.name() == target_field.name())
         {
-            validate_field_compatibility(source_field, target_field)?;
+            validate_field_compatibility(source_field, target_field, cast_extension)?;
         } else {
             // Target field is missing from source
             // If it's non-nullable, we cannot fill it with NULL
@@ -383,6 +473,7 @@ pub fn validate_struct_compatibility(
 fn validate_field_compatibility(
     source_field: &Field,
     target_field: &Field,
+    cast_extension: Option<&dyn CastExtension>,
 ) -> Result<()> {
     if source_field.data_type() == &DataType::Null {
         // Validate that target allows nulls before returning early.
@@ -407,10 +498,17 @@ fn validate_field_compatibility(
         );
     }
 
+    if let Some(cast_extension) = cast_extension
+        && cast_extension.can_cast_fields(source_field, target_field)?
+    {
+        return Ok(());
+    }
+
     validate_data_type_compatibility(
         target_field.name(),
         source_field.data_type(),
         target_field.data_type(),
+        cast_extension,
     )
 }
 
@@ -420,6 +518,7 @@ pub fn validate_data_type_compatibility(
     field_name: &str,
     source_type: &DataType,
     target_type: &DataType,
+    cast_extension: Option<&dyn CastExtension>,
 ) -> Result<()> {
     match (source_type, target_type) {
         (Struct(source_nested), Struct(target_nested)) => {
@@ -429,7 +528,7 @@ pub fn validate_data_type_compatibility(
         | (DataType::LargeList(s), DataType::LargeList(t))
         | (DataType::ListView(s), DataType::ListView(t))
         | (DataType::LargeListView(s), DataType::LargeListView(t)) => {
-            validate_field_compatibility(s, t)?;
+            validate_field_compatibility(s, t, cast_extension)?;
         }
         (DataType::Dictionary(s_key, s_val), DataType::Dictionary(t_key, t_val)) => {
             if !can_cast_types(s_key, t_key) {
@@ -440,7 +539,7 @@ pub fn validate_data_type_compatibility(
                     field_name
                 );
             }
-            validate_data_type_compatibility(field_name, s_val, t_val)?;
+            validate_data_type_compatibility(field_name, s_val, t_val, cast_extension)?;
         }
         _ => {
             if !can_cast_types(source_type, target_type) {
@@ -500,6 +599,77 @@ pub fn has_one_of_more_common_fields(
     target_fields
         .iter()
         .any(|field| source_names.contains(field.name().as_str()))
+}
+
+pub trait CastExtension: std::fmt::Debug + Send + Sync {
+    fn can_cast_fields(&self, source_field: &Field, target_field: &Field)
+    -> Result<bool>;
+
+    fn cast_array_fields(
+        &self,
+        array: &ArrayRef,
+        source_field: &Field,
+        target_field: &Field,
+        cast_options: &CastOptions,
+    ) -> Result<ArrayRef>;
+}
+
+#[derive(Debug)]
+pub struct VecCastExtension {
+    extensions: Vec<Arc<dyn CastExtension>>,
+}
+
+impl VecCastExtension {
+    pub fn new(extensions: Vec<Arc<dyn CastExtension>>) -> Self {
+        Self { extensions }
+    }
+}
+
+impl CastExtension for VecCastExtension {
+    fn can_cast_fields(
+        &self,
+        source_field: &Field,
+        target_field: &Field,
+    ) -> Result<bool> {
+        for extension in &self.extensions {
+            if extension.can_cast_fields(source_field, target_field)? {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn cast_array_fields(
+        &self,
+        array: &ArrayRef,
+        source_field: &Field,
+        target_field: &Field,
+        cast_options: &CastOptions,
+    ) -> Result<ArrayRef> {
+        for extension in &self.extensions {
+            if extension.can_cast_fields(source_field, target_field)? {
+                return extension.cast_array_fields(
+                    array,
+                    source_field,
+                    target_field,
+                    cast_options,
+                );
+            }
+        }
+
+        let source_display = format_type_and_metadata(
+            source_field.data_type(),
+            Some(source_field.metadata()),
+        );
+        let target_display = format_type_and_metadata(
+            target_field.data_type(),
+            Some(target_field.metadata()),
+        );
+        _internal_err!(
+            "Can't resolve extension to cast from {source_display} to {target_display}"
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1214,7 +1384,7 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(source_inner));
         let target =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(target_inner));
-        assert!(validate_data_type_compatibility("col", &source, &target).is_ok());
+        assert!(validate_data_type_compatibility("col", &source, &target, None).is_ok());
     }
 
     #[test]

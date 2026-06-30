@@ -437,6 +437,7 @@ impl DefaultPhysicalExprAdapterRewriter {
             resolved_column.name(),
             physical_field.data_type(),
             logical_field.data_type(),
+            None // TODO: can we get a cast extension here?
         )
         .map_err(|e| {
             DataFusionError::Execution(format!(
@@ -450,6 +451,7 @@ impl DefaultPhysicalExprAdapterRewriter {
         Ok(Transformed::yes(Arc::new(CastExpr::new_with_target_field(
             Arc::new(resolved_column),
             Arc::new(logical_field.clone()),
+            None, // TODO: can we get a cast extension here?
             None,
         ))))
     }
@@ -852,6 +854,7 @@ mod tests {
         let expected = Arc::new(CastExpr::new_with_target_field(
             Arc::new(Column::new("data", 0)),
             logical_field,
+            None,
             None,
         )) as Arc<dyn PhysicalExpr>;
 

@@ -17,10 +17,16 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::{
+    compute::CastOptions,
+    datatypes::{DataType, Field, FieldRef},
+};
 use hashbrown::HashMap;
 
-use crate::{DataFusionError, ScalarValue, error::_plan_err};
+use crate::{
+    DataFusionError, ScalarValue, datatype::DataTypeExt, error::_plan_err,
+    nested_struct::CastExtension,
+};
 
 /// A [`ScalarValue`] with optional [`FieldMetadata`]
 #[derive(Debug, Clone)]
@@ -61,6 +67,38 @@ impl ScalarAndMetadata {
     ) -> Result<Self, DataFusionError> {
         let new_value = self.value().cast_to(target_type)?;
         Ok(Self::new(new_value, self.metadata.clone()))
+    }
+
+    /// Try to cast this value to a ScalarValue of type `target_field` with [`CastOptions`]
+    pub fn cast_to_with_options(
+        &self,
+        target_field: &Field,
+        cast_extension: Option<&dyn CastExtension>,
+        cast_options: &CastOptions,
+    ) -> Result<Self, DataFusionError> {
+        let mut source_field = self.value.data_type().into_nullable_field();
+        if let Some(metadata) = &self.metadata {
+            source_field = metadata.add_to_field(source_field);
+        }
+
+        if let Some(cast_extension) = cast_extension
+            && cast_extension.can_cast_fields(&source_field, target_field)?
+        {
+            let cast_arr = cast_extension.cast_array_fields(
+                &self.value.to_array()?,
+                &source_field,
+                target_field,
+                cast_options,
+            )?;
+            let storage = ScalarValue::try_from_array(&cast_arr, 0)?;
+            let metadata = FieldMetadata::new_from_field(target_field);
+            return Ok(Self {
+                value: storage,
+                metadata: Some(metadata),
+            });
+        }
+
+        self.cast_storage_to(target_field.data_type())
     }
 }
 

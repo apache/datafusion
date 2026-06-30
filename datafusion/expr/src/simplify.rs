@@ -24,6 +24,7 @@ use chrono::{DateTime, Utc};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 
+use crate::registry::ExtensionTypeRegistry;
 use crate::{Expr, ExprSchemable};
 
 /// Provides simplification information based on schema, query execution time,
@@ -38,6 +39,7 @@ pub struct SimplifyContext {
     schema: DFSchemaRef,
     query_execution_start_time: Option<DateTime<Utc>>,
     config_options: Arc<ConfigOptions>,
+    extension_types: Option<Arc<dyn ExtensionTypeRegistry>>,
 }
 
 /// Builder for [`SimplifyContext`].
@@ -46,6 +48,7 @@ pub struct SimplifyContextBuilder {
     schema: Option<DFSchemaRef>,
     query_execution_start_time: Option<DateTime<Utc>>,
     config_options: Option<Arc<ConfigOptions>>,
+    extension_types: Option<Arc<dyn ExtensionTypeRegistry>>,
 }
 
 impl Default for SimplifyContext {
@@ -54,6 +57,7 @@ impl Default for SimplifyContext {
             schema: Arc::new(DFSchema::empty()),
             query_execution_start_time: None,
             config_options: Arc::new(ConfigOptions::default()),
+            extension_types: None,
         }
     }
 }
@@ -137,6 +141,10 @@ impl SimplifyContext {
     pub fn config_options(&self) -> &Arc<ConfigOptions> {
         &self.config_options
     }
+
+    pub fn extension_types(&self) -> Option<&Arc<dyn ExtensionTypeRegistry>> {
+        self.extension_types.as_ref()
+    }
 }
 
 impl SimplifyContextBuilder {
@@ -167,6 +175,14 @@ impl SimplifyContextBuilder {
         self
     }
 
+    pub fn with_extension_types(
+        mut self,
+        extension_types: Option<Arc<dyn ExtensionTypeRegistry>>,
+    ) -> Self {
+        self.extension_types = extension_types;
+        self
+    }
+
     /// Build a [`SimplifyContext`], filling in any unspecified fields with defaults.
     pub fn build(self) -> SimplifyContext {
         SimplifyContext {
@@ -175,6 +191,7 @@ impl SimplifyContextBuilder {
             config_options: self
                 .config_options
                 .unwrap_or_else(|| Arc::new(ConfigOptions::default())),
+            extension_types: self.extension_types,
         }
     }
 }

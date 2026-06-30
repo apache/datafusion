@@ -73,17 +73,21 @@ pub trait ExprSchemable {
 /// For `TryCast`, `force_nullable` is `true` since a failed cast returns NULL.
 fn cast_output_field(
     source_field: &FieldRef,
-    target_type: &DataType,
+    target_field: &FieldRef,
     force_nullable: bool,
 ) -> Arc<Field> {
-    let mut f = source_field
+    // Do not propagate metadata through casts because extension metadata (1)
+    // should be derived from the target_field and (2) source extension metadata
+    // may become non-sensical if applied to an unrelated storage output type.
+    let mut f = target_field
         .as_ref()
         .clone()
-        .with_data_type(target_type.clone())
-        .with_metadata(source_field.metadata().clone());
+        .with_nullable(source_field.is_nullable());
+
     if force_nullable {
         f = f.with_nullable(true);
     }
+
     Arc::new(f)
 }
 
@@ -594,21 +598,16 @@ impl ExprSchemable for Expr {
 
                 func.return_field_from_args(args)
             }
-            // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, field }) => {
-                expr.to_field(schema).map(|(_table_ref, src)| {
-                    cast_output_field(&src, field.data_type(), false)
-                })
-            }
+            Expr::Cast(Cast { expr, field }) => expr
+                .to_field(schema)
+                .map(|(_table_ref, src)| cast_output_field(&src, field, false)),
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
-            Expr::TryCast(TryCast { expr, field }) => {
-                expr.to_field(schema).map(|(_table_ref, src)| {
-                    cast_output_field(&src, field.data_type(), true)
-                })
-            }
+            Expr::TryCast(TryCast { expr, field }) => expr
+                .to_field(schema)
+                .map(|(_table_ref, src)| cast_output_field(&src, field, true)),
             Expr::LambdaVariable(LambdaVariable {
                 field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
@@ -1043,17 +1042,9 @@ mod tests {
             .with_data_type(DataType::Int32)
             .with_metadata(meta.clone());
 
-        // col, alias, and cast should be metadata-preserving
+        // col and alias should be metadata-preserving
         assert_eq!(meta, expr.metadata(&schema).unwrap());
         assert_eq!(meta, expr.clone().alias("bar").metadata(&schema).unwrap());
-        assert_eq!(
-            meta,
-            expr.clone()
-                .cast_to(&DataType::Int64, &schema)
-                .unwrap()
-                .metadata(&schema)
-                .unwrap()
-        );
 
         let schema = DFSchema::from_unqualified_fields(
             vec![meta.add_to_field(Field::new("foo", DataType::Int32, true))].into(),
