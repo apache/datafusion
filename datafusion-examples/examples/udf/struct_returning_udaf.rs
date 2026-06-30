@@ -18,25 +18,20 @@
 //! See `main.rs` for how to run it.
 //!
 //! This example shows how an extension can return window metadata from an
-//! aggregate without using zero-argument aggregate functions.
+//! aggregate by passing the relevant input columns directly to the aggregate.
 
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, Float64Array, IntervalMonthDayNanoArray, StructArray,
-    TimestampNanosecondArray, UInt64Array,
+    ArrayRef, Float64Array, StructArray, TimestampNanosecondArray, UInt64Array,
 };
-use arrow::datatypes::{
-    DataType, Field, Fields, IntervalMonthDayNano, IntervalUnit, Schema, TimeUnit,
-};
+use arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use datafusion::assert_batches_eq;
 use datafusion::common::{cast::as_primitive_array, exec_err};
 use datafusion::datasource::MemTable;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_expr::{
-    AccumulatorFactoryFunction, ColumnarValue, Volatility, create_udaf, create_udf,
-};
+use datafusion::logical_expr::{AccumulatorFactoryFunction, Volatility, create_udaf};
 use datafusion::physical_plan::Accumulator;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
@@ -44,9 +39,10 @@ use datafusion::scalar::ScalarValue;
 pub async fn struct_returning_udaf() -> Result<()> {
     let ctx = create_context()?;
 
-    register_session_window(&ctx);
     register_augmented_avg(&ctx);
 
+    // The `augmented_avg` aggregate returns both the average and metadata about
+    // the time window from which the average was computed.
     let sql = "
         SELECT
             augmented_avg(time, value)['window_start'] AS window_start,
@@ -54,7 +50,7 @@ pub async fn struct_returning_udaf() -> Result<()> {
             augmented_avg(time, value)['window_duration'] AS window_duration,
             augmented_avg(time, value)['avg_value'] AS avg_value
         FROM t
-        GROUP BY session_window(time, INTERVAL '5 microseconds')
+        GROUP BY date_bin(INTERVAL '5 microseconds', time)
         ORDER BY window_start
     ";
 
@@ -99,69 +95,6 @@ fn create_context() -> Result<SessionContext> {
     let provider = MemTable::try_new(schema, vec![vec![batch]])?;
     ctx.register_table("t", Arc::new(provider))?;
     Ok(ctx)
-}
-
-fn register_session_window(ctx: &SessionContext) {
-    // Minimal stand-in for extension-specific window assignment. Real
-    // extensions can replace this with session, hopping, or other grouping
-    // logic while keeping the aggregate shape shown below.
-    let session_window = create_udf(
-        "session_window",
-        vec![
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ],
-        DataType::UInt64,
-        Volatility::Immutable,
-        Arc::new(|args: &[ColumnarValue]| {
-            let [ColumnarValue::Array(times), width] = args else {
-                return exec_err!(
-                    "session_window expects timestamp array and interval width"
-                );
-            };
-            let times =
-                as_primitive_array::<arrow::datatypes::TimestampNanosecondType>(times)?;
-            let width = match width {
-                ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(width))) => {
-                    interval_width_nanos(*width)?
-                }
-                ColumnarValue::Array(widths) => {
-                    let widths = widths
-                        .as_any()
-                        .downcast_ref::<IntervalMonthDayNanoArray>()
-                        .ok_or_else(|| {
-                            DataFusionError::Execution(
-                                "Expected IntervalMonthDayNanoArray".to_string(),
-                            )
-                        })?;
-                    interval_width_nanos(widths.value(0))?
-                }
-                other => {
-                    return exec_err!(
-                        "session_window expected MonthDayNano interval width, got {other:?}"
-                    );
-                }
-            };
-
-            let window_ids = times
-                .iter()
-                .map(|time| time.map(|time| (time as u64 / width) + 1))
-                .collect::<UInt64Array>();
-
-            Ok(ColumnarValue::Array(Arc::new(window_ids) as ArrayRef))
-        }),
-    );
-
-    ctx.register_udf(session_window);
-}
-
-fn interval_width_nanos(width: IntervalMonthDayNano) -> Result<u64> {
-    if width.months != 0 || width.days != 0 || width.nanoseconds <= 0 {
-        return exec_err!(
-            "session_window expected a positive sub-day interval, got {width:?}"
-        );
-    }
-    Ok(width.nanoseconds as u64)
 }
 
 fn register_augmented_avg(ctx: &SessionContext) {
@@ -242,6 +175,9 @@ impl AugmentedAvg {
 
 impl Accumulator for AugmentedAvg {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // DataFusion can merge partial aggregate results across execution
+        // stages, so all values needed to reconstruct the final struct are
+        // included in the state.
         Ok(vec![
             ScalarValue::TimestampNanosecond(self.window_start, None),
             ScalarValue::TimestampNanosecond(self.window_end, None),
@@ -258,6 +194,8 @@ impl Accumulator for AugmentedAvg {
             as_primitive_array::<arrow::datatypes::TimestampNanosecondType>(times)?;
         let values = as_primitive_array::<arrow::datatypes::Float64Type>(values)?;
 
+        // Track the window bounds and aggregate values directly from the input
+        // rows assigned to each group by `date_bin`.
         for (time, value) in times.iter().zip(values.iter()) {
             if let (Some(time), Some(value)) = (time, value) {
                 self.update_one(time, value);
@@ -282,6 +220,8 @@ impl Accumulator for AugmentedAvg {
                 DataFusionError::Execution("Expected UInt64Array".to_string())
             })?;
 
+        // Combine partial states by preserving the earliest start, latest end,
+        // and additive average components.
         for (((start, end), sum), count) in starts
             .iter()
             .zip(ends.iter())
@@ -316,6 +256,8 @@ impl Accumulator for AugmentedAvg {
             .map(|(start, end)| end - start);
         let avg = (self.count > 0).then_some(self.sum / self.count as f64);
 
+        // Return one Struct scalar whose fields can be projected from SQL with
+        // expressions like `augmented_avg(time, value)['window_start']`.
         let struct_array = StructArray::try_new(
             AugmentedAvg::fields(),
             vec![

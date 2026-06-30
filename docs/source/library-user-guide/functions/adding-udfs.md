@@ -1232,16 +1232,15 @@ The `create_udaf` has six arguments to check:
 ### Returning multiple values from an Aggregate UDF
 
 An aggregate UDF can return a `DataType::Struct` when one aggregate result needs
-to carry multiple values. This is useful for selector-style functions and for
-time-windowing extensions that need to return metadata such as the window start,
-window end, and the aggregate value together.
+to carry multiple values. This is useful for time-windowing extensions that
+need to return metadata such as the window start, window end, and the aggregate
+value together.
 
-Prefer passing the relevant input columns to the aggregate instead of using a
-zero-argument aggregate. The input columns give the accumulator enough
+Pass the relevant input columns to the aggregate so the accumulator has enough
 information to update and merge state normally in multi-stage aggregate plans.
-For example, a windowing extension can group rows with a scalar UDF and return
-metadata from a struct-returning aggregate. In this example, `session_window`
-is supplied by the extension:
+For example, rows can be grouped into time buckets with the built-in `date_bin`
+function, while a struct-returning aggregate computes the value and carries
+metadata about each bucket:
 
 ```sql
 SELECT
@@ -1250,11 +1249,11 @@ SELECT
   augmented_avg(time, value)['window_duration'] AS window_duration,
   augmented_avg(time, value)['avg_value'] AS avg_value
 FROM t
-GROUP BY session_window(time, INTERVAL '30 seconds')
+GROUP BY date_bin(INTERVAL '30 seconds', time)
 ORDER BY window_start;
 ```
 
-In this pattern `session_window(...)` assigns rows to a group, while
+In this pattern `date_bin(...)` assigns rows to a time bucket, while
 `augmented_avg(time, value)` is a normal aggregate UDF whose accumulator stores
 mergeable state such as `window_start`, `window_end`, `sum`, and `count`.
 The aggregate's `evaluate` method returns a `ScalarValue::Struct`, and callers
