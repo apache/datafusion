@@ -22,6 +22,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, BooleanArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_expr::EmitTo;
 
@@ -149,14 +150,10 @@ impl AggregateHashTable<PartialMarker> {
     /// row-by-row.
     pub(in crate::aggregates) fn partial_skip_table(
         &self,
-        skip_hash_group_by: bool,
     ) -> Result<AggregateHashTable<PartialSkipMarker>> {
         let state = self.state.building();
         let group_schema = state.group_by.group_schema(&self.input_schema)?;
-        let mut group_values = new_group_values(group_schema, &GroupOrdering::None)?;
-        if skip_hash_group_by && group_values.support_partial_repartition() {
-            group_values.skip_hash_group_by()?;
-        }
+        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
         let accumulators = state
             .accumulators
             .iter()
@@ -322,21 +319,21 @@ impl AggregateHashTable<PartialSkipMarker> {
         )?)
     }
 
-    pub(in crate::aggregates) fn convert_batch_to_state_with_hashes(
-        &mut self,
+    pub(in crate::aggregates) fn convert_batch_to_state_with_hashes<'a>(
+        &'a mut self,
         batch: &RecordBatch,
-    ) -> Result<(RecordBatch, Vec<u64>)> {
+    ) -> Result<(RecordBatch, &'a [u64])> {
         let evaluated_batch = self.evaluate_batch(batch)?;
         let output_group_values = Self::output_group_values(&evaluated_batch)?;
 
         let state = self.state.building_mut();
-        state.group_values.intern(
+        state.batch_hashes.clear();
+        state.batch_hashes.resize(batch.num_rows(), 0);
+        create_hashes(
             &output_group_values,
-            &mut state.batch_group_indices,
+            &crate::aggregates::AGGREGATION_HASH_SEED,
             &mut state.batch_hashes,
-            &mut state.new_group_rows,
         )?;
-        let hashes = state.batch_hashes.clone();
 
         let mut output = output_group_values;
         for (acc, values) in state
@@ -349,7 +346,7 @@ impl AggregateHashTable<PartialSkipMarker> {
 
         Ok((
             RecordBatch::try_new(Arc::clone(&self.output_schema), output)?,
-            hashes,
+            &state.batch_hashes,
         ))
     }
 

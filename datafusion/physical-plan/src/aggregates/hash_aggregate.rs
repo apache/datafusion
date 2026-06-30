@@ -30,10 +30,9 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{PrimitiveArray, RecordBatch, UInt32Builder};
+use arrow::array::{RecordBatch, UInt32Builder};
 use arrow::compute::take_arrays;
 use arrow::datatypes::SchemaRef;
-use arrow::datatypes::UInt32Type;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -202,30 +201,43 @@ impl PartialRepartitionState {
             );
         }
 
+        if hashes.is_empty() {
+            return Ok(());
+        }
+
         for indices in &mut self.partition_indices {
             indices.clear();
         }
 
         if self.num_partitions.is_power_of_two() {
             let mask = self.num_partitions - 1;
-            self.push_partition_indices(hashes, |hash| (hash as usize) & mask)?;
+            Self::push_partition_indices(hashes, &mut self.partition_indices, |hash| {
+                (hash as usize) & mask
+            })?;
         } else {
             let num_partitions = self.num_partitions;
-            self.push_partition_indices(hashes, |hash| (hash as usize) % num_partitions)?;
+            Self::push_partition_indices(hashes, &mut self.partition_indices, |hash| {
+                (hash as usize) % num_partitions
+            })?;
         }
 
+        let mut indices_builder = UInt32Builder::with_capacity(hashes.len());
+        for indices in &self.partition_indices {
+            indices_builder.append_slice(indices);
+        }
+        let indices = indices_builder.finish();
+        let columns = take_arrays(batch.columns(), &indices, None)?;
+        let reordered_batch = RecordBatch::try_new(Arc::clone(&batch.schema()), columns)?;
+
+        let mut offset = 0;
         for partition in 0..self.num_partitions {
-            let indices = &self.partition_indices[partition];
-            if indices.is_empty() {
+            let len = self.partition_indices[partition].len();
+            if len == 0 {
                 continue;
             }
 
-            let mut indices_builder = UInt32Builder::with_capacity(indices.len());
-            indices_builder.append_slice(indices);
-            let indices: PrimitiveArray<UInt32Type> = indices_builder.finish();
-            let columns = take_arrays(batch.columns(), &indices, None)?;
-            let partition_batch =
-                RecordBatch::try_new(Arc::clone(&batch.schema()), columns)?;
+            let partition_batch = reordered_batch.slice(offset, len);
+            offset += len;
             self.coalescers[partition].push_batch(partition_batch)?;
             while let Some(batch) = self.coalescers[partition].next_completed_batch() {
                 self.pending.push_back(add_partitioned_aggregation_metadata(
@@ -240,8 +252,8 @@ impl PartialRepartitionState {
     }
 
     fn push_partition_indices<F>(
-        &mut self,
         hashes: &[u64],
+        partition_indices: &mut [Vec<u32>],
         compute_partition: F,
     ) -> Result<()>
     where
@@ -253,7 +265,7 @@ impl PartialRepartitionState {
                     "partitioned aggregate row index exceeds u32::MAX"
                 )
             })?;
-            self.partition_indices[compute_partition(*hash)].push(row);
+            partition_indices[compute_partition(*hash)].push(row);
         }
         Ok(())
     }
@@ -269,14 +281,15 @@ impl PartialRepartitionState {
             return Ok(false);
         }
 
-        let len = self
-            .batch_size
-            .min(source_batch.num_rows() - self.source_offset);
-        let batch = source_batch.slice(self.source_offset, len);
-        let hashes =
-            self.source_hashes[self.source_offset..self.source_offset + len].to_vec();
+        let offset = self.source_offset;
+        let len = self.batch_size.min(source_batch.num_rows() - offset);
+        let batch = source_batch.slice(offset, len);
         self.source_offset += len;
-        self.push_batch(&batch, &hashes)?;
+
+        let source_hashes = std::mem::take(&mut self.source_hashes);
+        let result = self.push_batch(&batch, &source_hashes[offset..offset + len]);
+        self.source_hashes = source_hashes;
+        result?;
         Ok(true)
     }
 
@@ -728,10 +741,7 @@ impl PartialHashAggregateStream {
                 // True branch: a decision has been made to skip partial aggregation.
                 if self.should_skip_aggregation() {
                     let timer = elapsed_compute.timer();
-                    let result = match original_state
-                        .hash_table()
-                        .partial_skip_table(self.repartition_state.is_some())
-                    {
+                    let result = match original_state.hash_table().partial_skip_table() {
                         Ok(skip_hash_table) => self
                             .start_output(original_state.hash_table_mut(), false)
                             .map(|()| skip_hash_table),
@@ -941,20 +951,21 @@ impl PartialHashAggregateStream {
                     timer.done();
 
                     match result {
-                        Ok((batch, hashes)) => match self.push_skip_batch(batch, &hashes)
-                        {
-                            Ok(Some(batch)) => ControlFlow::Break((
-                                Poll::Ready(Some(Ok(
-                                    batch.record_output(&self.baseline_metrics)
-                                ))),
-                                original_state,
-                            )),
-                            Ok(None) => ControlFlow::Continue(original_state),
-                            Err(e) => ControlFlow::Break((
-                                Poll::Ready(Some(Err(e))),
-                                original_state,
-                            )),
-                        },
+                        Ok((batch, hashes)) => {
+                            match self.push_skip_batch(batch, hashes) {
+                                Ok(Some(batch)) => ControlFlow::Break((
+                                    Poll::Ready(Some(Ok(
+                                        batch.record_output(&self.baseline_metrics)
+                                    ))),
+                                    original_state,
+                                )),
+                                Ok(None) => ControlFlow::Continue(original_state),
+                                Err(e) => ControlFlow::Break((
+                                    Poll::Ready(Some(Err(e))),
+                                    original_state,
+                                )),
+                            }
+                        }
                         Err(e) => ControlFlow::Break((
                             Poll::Ready(Some(Err(e))),
                             original_state,
