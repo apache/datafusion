@@ -23,10 +23,10 @@
 //! FROM t WHERE rn <= N
 //! ```
 //!
-//! Instead of sorting the entire dataset, this operator delegates to
-//! [`PartitionedTopK`] (for `ROW_NUMBER`) or [`PartitionedTopKRank`]
-//! (for `RANK`), both of which maintain one heap per distinct partition
-//! key while sharing a single [`arrow::row::RowConverter`],
+//! Instead of sorting the entire dataset, this operator delegates to a
+//! per-partition heap-of-K implementation (one variant for `ROW_NUMBER`
+//! and a sibling variant for `RANK`), both of which maintain one heap per
+//! distinct partition key while sharing a single [`arrow::row::RowConverter`],
 //! [`MemoryReservation`](datafusion_execution::memory_pool::MemoryReservation),
 //! and metrics set across all partitions, and emit only the top-K rows
 //! per partition in sorted order `(partition_keys, order_keys)`.
@@ -108,9 +108,9 @@ pub enum WindowFnKind {
 /// ```
 ///
 /// Instead of sorting the entire dataset, this operator reads unsorted input
-/// and delegates to [`PartitionedTopK`] (for `ROW_NUMBER`) or
-/// [`PartitionedTopKRank`] (for `RANK`), each maintaining one heap per
-/// distinct partition key while sharing a single
+/// and delegates to a per-partition heap-of-K implementation (`PartitionedTopK`
+/// for `ROW_NUMBER` and `PartitionedTopKRank` for `RANK`), each maintaining
+/// one heap per distinct partition key while sharing a single
 /// [`arrow::row::RowConverter`] /
 /// [`MemoryReservation`](datafusion_execution::memory_pool::MemoryReservation)
 /// across all partitions, and emits only the top-K rows per partition in
