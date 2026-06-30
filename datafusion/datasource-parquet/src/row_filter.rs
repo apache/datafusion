@@ -968,11 +968,10 @@ fn build_filter_schema(
             };
 
             let pruned_data_type = prune_struct_type(field.data_type(), node);
-            Arc::new(Field::new(
-                field.name(),
-                pruned_data_type,
-                field.is_nullable(),
-            ))
+            Arc::new(
+                Field::new(field.name(), pruned_data_type, field.is_nullable())
+                    .with_metadata(field.metadata().clone()),
+            )
         })
         .collect::<Vec<_>>();
 
@@ -1040,7 +1039,10 @@ fn prune_struct_type(dt: &DataType, node: &StructAccessNode) -> DataType {
             } else {
                 // Recurse into nested struct.
                 let pruned = prune_struct_type(f.data_type(), child);
-                Arc::new(Field::new(f.name(), pruned, f.is_nullable()))
+                Arc::new(
+                    Field::new(f.name(), pruned, f.is_nullable())
+                        .with_metadata(f.metadata().clone()),
+                )
             };
 
             Some(out)
@@ -1298,6 +1300,7 @@ mod test {
     use super::*;
     use arrow::datatypes::Fields;
     use datafusion_common::ScalarValue;
+    use std::collections::HashMap;
 
     use arrow::array::{
         Int32Array, ListBuilder, StringArray, StringBuilder, StructArray,
@@ -2928,6 +2931,61 @@ mod test {
             pruned, outer_type,
             "shallow selected_here must preserve the whole subtree, \
              not narrow to the deeper child"
+        );
+    }
+
+    /// Field metadata on the root column and on intermediate struct fields
+    /// must survive the rebuild done by `build_filter_schema` and
+    /// `prune_struct_type`. The terminal fields are `Arc::clone`d and so
+    /// trivially preserve metadata; the cases worth pinning down are the
+    /// ones where we mint a fresh `Field` to wrap a pruned `DataType`.
+    #[test]
+    fn build_filter_schema_preserves_field_metadata() {
+        let leaf_a = Arc::new(Field::new("a", DataType::Int32, true));
+        let leaf_b = Arc::new(Field::new("b", DataType::Int32, true));
+        let inner_struct = DataType::Struct(vec![leaf_a, leaf_b].into());
+
+        let inner_field =
+            Arc::new(Field::new("inner", inner_struct, true).with_metadata(
+                HashMap::from([("inner_key".to_string(), "inner_val".to_string())]),
+            ));
+        let outer_struct = DataType::Struct(vec![inner_field].into());
+
+        let root_field = Field::new("outer", outer_struct, true).with_metadata(
+            HashMap::from([("root_key".to_string(), "root_val".to_string())]),
+        );
+        let file_schema = Schema::new(vec![root_field]);
+
+        // Access path goes through both metadata-bearing wrappers and
+        // terminates at `outer.inner.a`, so `outer` and `inner` are both
+        // rebuilt around a pruned `DataType`.
+        let tree = StructAccessTree::from_accesses(&[access(0, &["inner", "a"])]);
+
+        let filter_schema = build_filter_schema(&file_schema, &[], &tree);
+
+        let projected_outer = filter_schema.field(0);
+        assert_eq!(projected_outer.name(), "outer");
+        assert_eq!(
+            projected_outer
+                .metadata()
+                .get("root_key")
+                .map(String::as_str),
+            Some("root_val"),
+            "root field metadata must survive build_filter_schema"
+        );
+
+        let DataType::Struct(outer_fields) = projected_outer.data_type() else {
+            panic!("expected outer to remain a struct");
+        };
+        let projected_inner = &outer_fields[0];
+        assert_eq!(projected_inner.name(), "inner");
+        assert_eq!(
+            projected_inner
+                .metadata()
+                .get("inner_key")
+                .map(String::as_str),
+            Some("inner_val"),
+            "intermediate struct field metadata must survive prune_struct_type"
         );
     }
 }
