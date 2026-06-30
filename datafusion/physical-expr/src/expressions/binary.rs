@@ -1099,28 +1099,35 @@ pub fn binary(
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
 }
 
-fn regex_escape_char(ch: char) -> &'static str {
-    match ch {
-        '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^'
-        | '$' => "\\",
-        _ => "",
-    }
-}
-
-// Translates a SQL `SIMILAR TO` pattern to a Rust regex. Only `%` and `_`
-// are wildcards; everything else is a literal. The wildcard translations
-// are wrapped in `(?s:...)` so newlines match.
+// Translates a SQL `SIMILAR TO` pattern to a Rust regex. `%` and `_` are
+// LIKE-style wildcards (wrapped in `(?s:...)` so they match newlines).
+// The POSIX metacharacters `| * + ? ( ) { } [ ]` pass through to the
+// regex. `. ^ $ \` are SQL literals and are escaped.
 fn sql_similar_to_regex(pattern: &str) -> String {
     let mut result = String::with_capacity(pattern.len() + 10);
     result.push_str("^(?:");
+    let mut in_bracket = false;
     for ch in pattern.chars() {
-        match ch {
-            '%' => result.push_str("(?s:.*)"),
-            '_' => result.push_str("(?s:.)"),
-            c => {
-                result.push_str(regex_escape_char(c));
-                result.push(c);
+        match (ch, in_bracket) {
+            ('%', false) => result.push_str("(?s:.*)"),
+            ('_', false) => result.push_str("(?s:.)"),
+            ('[', false) => {
+                result.push('[');
+                in_bracket = true;
             }
+            (']', true) => {
+                result.push(']');
+                in_bracket = false;
+            }
+            // `. ^ $` are SQL literals but regex metachars when not inside
+            // a `[...]` bracket expression (inside one, regex already treats
+            // them as literals). `\` is a regex escape character in all
+            // positions, so it always needs escaping.
+            ('.' | '^' | '$', false) | ('\\', _) => {
+                result.push('\\');
+                result.push(ch);
+            }
+            (c, _) => result.push(c),
         }
     }
     result.push_str(")$");
@@ -4944,11 +4951,11 @@ mod tests {
             .unwrap();
     }
 
-    // Regression: regex metacharacters in a SIMILAR TO pattern must be
-    // treated as SQL literals, not as regex operators. Without escaping,
-    // `a.` would match any `a` followed by any character (`ab`, `a1`, ...).
+    // Regression: regex metacharacters that are NOT SIMILAR TO metacharacters
+    // (`. ^ $ \`) must be treated as SQL literals. Without escaping, `a.`
+    // would match any `a` followed by any character (`ab`, `a1`, ...).
     #[test]
-    fn test_similar_to_regex_metachars_are_literals() {
+    fn test_similar_to_sql_literal_metachars() {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
 
         // `.` is a literal, not the regex "any character" operator.
@@ -4968,22 +4975,68 @@ mod tests {
         apply_similar_to(&schema, vec!["^x$", "x"], r"^x$", false, false, &expected)
             .unwrap();
 
-        // `|`, `(`, `)`, `*`, `+`, `?`, `[`, `]`, `{`, `}`, `\` are all
-        // literals too.
+        // `\` is a literal backslash (we don't support the ESCAPE clause).
         let expected = [Some(true), Some(false)].iter().collect();
-        apply_similar_to(&schema, vec!["a|b", "a"], "a|b", false, false, &expected)
+        apply_similar_to(&schema, vec![r"a\b", "ab"], r"a\b", false, false, &expected)
             .unwrap();
-        let expected = [Some(true), Some(false)].iter().collect();
-        apply_similar_to(&schema, vec!["(a)", "a"], "(a)", false, false, &expected)
+    }
+
+    // SIMILAR TO borrows POSIX metacharacters from regular expressions:
+    // `| * + ? ( ) { } [ ]`. The translator passes them through to the
+    // underlying regex engine.
+    #[test]
+    fn test_similar_to_posix_metachars() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        // `|` alternation.
+        let expected = [Some(true), Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["a", "c", "b"], "a|b", false, false, &expected)
             .unwrap();
-        let expected = [Some(true), Some(false)].iter().collect();
-        apply_similar_to(&schema, vec!["a*", "aa"], "a*", false, false, &expected)
+
+        // `*` zero or more.
+        let expected = [Some(true), Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["", "aa", "ab"], "a*", false, false, &expected)
             .unwrap();
-        let expected = [Some(true), Some(false)].iter().collect();
-        apply_similar_to(&schema, vec!["[ab]", "a"], "[ab]", false, false, &expected)
+
+        // `+` one or more.
+        let expected = [Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["", "aa"], "a+", false, false, &expected).unwrap();
+
+        // `?` zero or one.
+        let expected = [Some(true), Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["", "a", "aa"], "a?", false, false, &expected)
             .unwrap();
+
+        // `()` grouping.
+        let expected = [Some(true), Some(true), Some(false)].iter().collect();
+        apply_similar_to(
+            &schema,
+            vec!["ab", "abc", "ac"],
+            "(ab)c?",
+            false,
+            false,
+            &expected,
+        )
+        .unwrap();
+
+        // `{m}` exact count.
         let expected = [Some(true), Some(false)].iter().collect();
-        apply_similar_to(&schema, vec![r"a\d", "ad"], r"a\d", false, false, &expected)
+        apply_similar_to(&schema, vec!["aaa", "aa"], "a{3}", false, false, &expected)
+            .unwrap();
+
+        // `[...]` character class.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["a", "c"], "[ab]", false, false, &expected)
+            .unwrap();
+
+        // `[^...]` negated character class.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["c", "a"], "[^ab]", false, false, &expected)
+            .unwrap();
+
+        // `[a-z]` range inside a character class.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["m", "1"], "[a-z]", false, false, &expected)
             .unwrap();
     }
 

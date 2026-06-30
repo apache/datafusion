@@ -92,7 +92,7 @@ SELECT s FROM test WHERE s SIMILAR TO 'p1';
 ----
 p1
 
-# SIMILAR TO treats regex metacharacters as literals (`. ^ $ | * + ? ( ) [ ] \`).
+# SIMILAR TO treats `. ^ $` as SQL literals (not as regex metachars).
 query B
 SELECT 'a.' SIMILAR TO 'a.';
 ----
@@ -100,11 +100,6 @@ true
 
 query B
 SELECT 'ab' SIMILAR TO 'a.';
-----
-false
-
-query B
-SELECT 'a1' SIMILAR TO 'a.';
 ----
 false
 
@@ -118,23 +113,89 @@ SELECT 'x' SIMILAR TO '^x$';
 ----
 false
 
+# SIMILAR TO supports the POSIX metacharacters `| * + ? ( ) { } [ ]`.
 query B
-SELECT 'a|b' SIMILAR TO 'a|b';
+SELECT 'a' SIMILAR TO 'a|b';
 ----
 true
 
 query B
-SELECT 'a' SIMILAR TO 'a|b';
+SELECT 'c' SIMILAR TO 'a|b';
 ----
 false
 
 query B
-SELECT 'a*' SIMILAR TO 'a*';
+SELECT '' SIMILAR TO 'a*';
 ----
 true
 
 query B
 SELECT 'aa' SIMILAR TO 'a*';
+----
+true
+
+query B
+SELECT 'ab' SIMILAR TO 'a*';
+----
+false
+
+query B
+SELECT 'a' SIMILAR TO 'a+';
+----
+true
+
+query B
+SELECT '' SIMILAR TO 'a+';
+----
+false
+
+query B
+SELECT '' SIMILAR TO 'a?';
+----
+true
+
+query B
+SELECT 'a' SIMILAR TO 'a?';
+----
+true
+
+query B
+SELECT 'aa' SIMILAR TO 'a?';
+----
+false
+
+query B
+SELECT 'ab' SIMILAR TO '(ab)';
+----
+true
+
+query B
+SELECT 'a' SIMILAR TO 'a{2}';
+----
+false
+
+query B
+SELECT 'aa' SIMILAR TO 'a{2}';
+----
+true
+
+query B
+SELECT 'a' SIMILAR TO '[ab]';
+----
+true
+
+query B
+SELECT 'c' SIMILAR TO '[ab]';
+----
+false
+
+query B
+SELECT 'c' SIMILAR TO '[^ab]';
+----
+true
+
+query B
+SELECT 'a' SIMILAR TO '[^ab]';
 ----
 false
 
