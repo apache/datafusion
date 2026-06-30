@@ -28,7 +28,6 @@ use object_store::path::Path;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Base trait for cache implementations with common operations.
@@ -226,42 +225,6 @@ impl DFHeapSize for SchemaFingerprint {
     }
 }
 
-/// Cache key for the file-statistics cache.
-///
-/// Like [`TableScopedPath`] it is scoped by table and path, but it additionally
-/// carries a [`SchemaFingerprint`]. File statistics are computed against a
-/// specific `file_schema`, so the same path read under different schemas must
-/// not share an entry; the fingerprint keeps those entries distinct while a
-/// repeated read of the same schema still reuses its entry.
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub struct FileStatisticsCacheKey {
-    pub table: Option<TableReference>,
-    pub path: Path,
-    /// `Arc` so building a key per file is a cheap refcount bump rather than a
-    /// deep clone of the fingerprint. `Arc`'s `Eq`/`Hash` compare the inner value,
-    /// so keying remains by schema contents (not pointer identity).
-    pub schema: Arc<SchemaFingerprint>,
-}
-
-impl DFHeapSize for FileStatisticsCacheKey {
-    /// The schema fingerprint is shared by all file-statistics keys for a
-    /// ListingTable. Do not deep-count it per key, as that would charge the same
-    /// allocation once per file and overstate cache memory.
-    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        self.path.as_ref().heap_size(ctx) + self.table.heap_size(ctx)
-    }
-}
-
-impl CacheKey for FileStatisticsCacheKey {
-    fn size(&self) -> usize {
-        DFHeapSize::heap_size(self, &mut DFHeapSizeCtx::default())
-    }
-
-    fn table_ref(&self) -> Option<&TableReference> {
-        self.table.as_ref()
-    }
-}
-
 #[cfg(test)]
 mod schema_fingerprint_tests {
     use super::*;
@@ -309,30 +272,5 @@ mod schema_fingerprint_tests {
                 .with_metadata([("k".to_string(), "v".to_string())].into()),
         );
         assert_eq!(plain, schema_md, "schema metadata must be ignored");
-    }
-
-    #[test]
-    fn file_statistics_cache_key_size_excludes_schema_fingerprint() {
-        let path = Path::from("file.parquet");
-        let table = Some(TableReference::bare("t"));
-        let narrow_schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-        let wide_schema = Schema::new(
-            (0..100)
-                .map(|i| Field::new(format!("col_{i}"), DataType::Utf8, true))
-                .collect::<Vec<_>>(),
-        );
-
-        let narrow_key = FileStatisticsCacheKey {
-            table: table.clone(),
-            path: path.clone(),
-            schema: Arc::new(SchemaFingerprint::from_schema(&narrow_schema)),
-        };
-        let wide_key = FileStatisticsCacheKey {
-            table,
-            path,
-            schema: Arc::new(SchemaFingerprint::from_schema(&wide_schema)),
-        };
-
-        assert_eq!(narrow_key.size(), wide_key.size());
     }
 }

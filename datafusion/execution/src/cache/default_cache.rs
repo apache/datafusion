@@ -310,7 +310,7 @@ mod tests {
     use crate::cache::default_cache::TimeProvider;
     use crate::cache::{Cache, CacheEntryInfo};
     use crate::cache::{CacheKey, CacheValue};
-    use crate::cache::{FileStatisticsCacheKey, SchemaFingerprint, TableScopedPath};
+    use crate::cache::{SchemaFingerprint, TableScopedPath};
     use arrow::array::{Int32Array, ListArray, RecordBatch};
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -827,61 +827,65 @@ mod tests {
             false,
         )]);
 
-        let key_1 = FileStatisticsCacheKey {
+        let path = TableScopedPath {
             path: meta.location.clone(),
             table: None,
-            schema: Arc::new(SchemaFingerprint::from_schema(&schema)),
         };
+        let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
 
         // Cache miss
-        assert!(cache.get(&key_1).is_none());
+        assert!(cache.get(&path).is_none());
 
         // Put a value
         let cached_value = CachedFileMetadata::new(
             meta.clone(),
+            Arc::clone(&schema_fingerprint),
             Arc::new(Statistics::new_unknown(&schema)),
             None,
         );
-        cache.put(&key_1, cached_value);
+        cache.put(&path, cached_value);
 
         // Cache hit
-        let result = cache.get(&key_1);
+        let result = cache.get(&path);
         assert!(result.is_some());
 
         let cached = result.unwrap();
-        assert!(cached.is_valid_for(&meta));
+        assert!(cached.is_valid_for(&meta, schema_fingerprint.as_ref()));
+
+        let different_schema = Schema::new(vec![Field::new(
+            "different_column",
+            DataType::Timestamp(TimeUnit::Second, None),
+            false,
+        )]);
+        let different_schema_fingerprint =
+            SchemaFingerprint::from_schema(&different_schema);
+        assert!(!cached.is_valid_for(&meta, &different_schema_fingerprint));
 
         // File size changed - validation should fail
         let meta2 = create_test_meta("test", 2048);
 
-        let key_2 = FileStatisticsCacheKey {
-            path: meta2.location.clone(),
-            table: None,
-            schema: Arc::new(SchemaFingerprint::from_schema(&schema)),
-        };
-
-        let cached = cache.get(&key_2).unwrap();
-        assert!(!cached.is_valid_for(&meta2));
+        let cached = cache.get(&path).unwrap();
+        assert!(!cached.is_valid_for(&meta2, schema_fingerprint.as_ref()));
 
         // Update with new value
         let cached_value2 = CachedFileMetadata::new(
             meta2.clone(),
+            Arc::clone(&schema_fingerprint),
             Arc::new(Statistics::new_unknown(&schema)),
             None,
         );
-        cache.put(&key_2, cached_value2);
+        cache.put(&path, cached_value2);
 
         // Test list_entries
         let entries = cache.list_entries();
         assert_eq!(entries.len(), 1);
 
-        let key_3 = FileStatisticsCacheKey {
+        let path_3 = TableScopedPath {
             path: Path::from("test"),
             table: None,
-            schema: Arc::new(SchemaFingerprint::from_schema(&schema)),
         };
 
-        let entry = entries.get(&key_3).unwrap();
+        let entry = entries.get(&path_3).unwrap();
         assert_eq!(entry.value.meta.size, 2048); // Should be updated value
     }
 
@@ -941,10 +945,12 @@ mod tests {
         let cache = DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
 
         // Cache statistics with no ordering
         let cached_value = CachedFileMetadata::new(
             meta.clone(),
+            Arc::clone(&schema_fingerprint),
             Arc::new(Statistics::new_unknown(&schema)),
             None, // No ordering yet
         );
@@ -961,7 +967,9 @@ mod tests {
 
         // Update to add ordering
         let mut cached = cache.get(&path).unwrap();
-        if cached.is_valid_for(&meta) && cached.ordering.is_none() {
+        if cached.is_valid_for(&meta, schema_fingerprint.as_ref())
+            && cached.ordering.is_none()
+        {
             cached.ordering = Some(ordering());
         }
         cache.put(&path, cached);
@@ -983,12 +991,14 @@ mod tests {
             table: None,
         };
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
 
         let meta_v1 = create_test_meta("test.parquet", 100);
 
         // Cache initial value
         let cached_value = CachedFileMetadata::new(
             meta_v1.clone(),
+            Arc::clone(&schema_fingerprint),
             Arc::new(Statistics::new_unknown(&schema)),
             None,
         );
@@ -999,11 +1009,12 @@ mod tests {
 
         let cached = cache.get(&path).unwrap();
         // Should not be valid for new meta
-        assert!(!cached.is_valid_for(&meta_v2));
+        assert!(!cached.is_valid_for(&meta_v2, schema_fingerprint.as_ref()));
 
         // Compute new value and update
         let new_cached = CachedFileMetadata::new(
             meta_v2.clone(),
+            Arc::clone(&schema_fingerprint),
             Arc::new(Statistics::new_unknown(&schema)),
             None,
         );
@@ -1022,6 +1033,7 @@ mod tests {
             table: None,
         };
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
 
         // Cache with original metadata and ordering
         let meta_v1 = ObjectMeta {
@@ -1036,6 +1048,7 @@ mod tests {
         let ordering_v1 = ordering();
         let cached_v1 = CachedFileMetadata::new(
             meta_v1.clone(),
+            Arc::clone(&schema_fingerprint),
             Arc::new(Statistics::new_unknown(&schema)),
             Some(ordering_v1),
         );
@@ -1043,7 +1056,7 @@ mod tests {
 
         // Verify cached ordering is valid
         let cached = cache.get(&path).unwrap();
-        assert!(cached.is_valid_for(&meta_v1));
+        assert!(cached.is_valid_for(&meta_v1, schema_fingerprint.as_ref()));
         assert!(cached.ordering.is_some());
 
         // File modified (size changed)
@@ -1059,12 +1072,13 @@ mod tests {
 
         // Cache entry exists but should be invalid for new metadata
         let cached = cache.get(&path).unwrap();
-        assert!(!cached.is_valid_for(&meta_v2));
+        assert!(!cached.is_valid_for(&meta_v2, schema_fingerprint.as_ref()));
 
         // Cache new version with different ordering
         let ordering_v2 = ordering(); // New ordering instance
         let cached_v2 = CachedFileMetadata::new(
             meta_v2.clone(),
+            Arc::clone(&schema_fingerprint),
             Arc::new(Statistics::new_unknown(&schema)),
             Some(ordering_v2),
         );
@@ -1072,10 +1086,10 @@ mod tests {
 
         // Old metadata should be invalid
         let cached = cache.get(&path).unwrap();
-        assert!(!cached.is_valid_for(&meta_v1));
+        assert!(!cached.is_valid_for(&meta_v1, schema_fingerprint.as_ref()));
 
         // New metadata should be valid
-        assert!(cached.is_valid_for(&meta_v2));
+        assert!(cached.is_valid_for(&meta_v2, schema_fingerprint.as_ref()));
         assert!(cached.ordering.is_some());
     }
 
@@ -1083,11 +1097,13 @@ mod tests {
     fn test_list_entries() {
         let cache = DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT);
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
 
         let meta1 = create_test_meta("test1.parquet", 100);
 
         let cached_value_1 = CachedFileMetadata::new(
             meta1.clone(),
+            Arc::clone(&schema_fingerprint),
             Arc::new(Statistics::new_unknown(&schema)),
             None,
         );
@@ -1101,6 +1117,7 @@ mod tests {
         let meta2 = create_test_meta("test2.parquet", 200);
         let cached_value_2 = CachedFileMetadata::new(
             meta2.clone(),
+            Arc::clone(&schema_fingerprint),
             Arc::new(Statistics::new_unknown(&schema)),
             Some(ordering()),
         );
@@ -1276,8 +1293,14 @@ mod tests {
         };
         let mut ctx = DFHeapSizeCtx::default();
         let object_meta = create_test_meta(file_name, stats.heap_size(&mut ctx) as u64);
-        let value =
-            CachedFileMetadata::new(object_meta.clone(), Arc::new(stats.clone()), None);
+        let schema = Schema::new(vec![Field::new("list", DataType::Int32, true)]);
+        let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
+        let value = CachedFileMetadata::new(
+            object_meta.clone(),
+            schema_fingerprint,
+            Arc::new(stats.clone()),
+            None,
+        );
         (object_meta, value)
     }
 

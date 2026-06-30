@@ -16,9 +16,7 @@
 // under the License.
 
 use crate::cache::default_cache::DefaultCache;
-pub use crate::cache::{
-    Cache, CacheValue, FileStatisticsCacheKey, SchemaFingerprint, TableScopedPath,
-};
+pub use crate::cache::{Cache, CacheValue, SchemaFingerprint, TableScopedPath};
 use datafusion_common::HashMap;
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::{Result, Statistics};
@@ -52,11 +50,12 @@ pub const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
 ///
 /// The typical usage pattern is:
 /// 1. Call `get(path)` to check for cached value
-/// 2. If `Some(cached)`, validate with `cached.is_valid_for(&current_meta)`
+/// 2. If `Some(cached)`, validate with
+///    `cached.is_valid_for(&current_meta, &current_schema_fingerprint)`
 /// 3. If invalid or missing, compute new value and call `put(path, new_value)`
 ///
 /// See [`crate::runtime_env::RuntimeEnv`] for more details
-pub type FileStatisticsCache = dyn Cache<FileStatisticsCacheKey, CachedFileMetadata>;
+pub type FileStatisticsCache = dyn Cache<TableScopedPath, CachedFileMetadata>;
 
 /// A cache for storing the [`ObjectMeta`]s that result from listing a path.
 ///
@@ -93,11 +92,13 @@ pub type FileMetadataCache = dyn Cache<Path, CachedFileMetadataEntry>;
 /// Cached metadata for a file, including statistics and ordering.
 ///
 /// This struct embeds the [`ObjectMeta`] used for cache validation,
-/// along with the cached statistics and ordering information.
+/// the `file_schema` fingerprint, cached statistics, and ordering information.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedFileMetadata {
     /// File metadata used for cache validation (size, last_modified).
     pub meta: ObjectMeta,
+    /// Fingerprint of the `file_schema` used to compute `statistics`.
+    pub schema_fingerprint: Arc<SchemaFingerprint>,
     /// Cached statistics for the file, if available.
     pub statistics: Arc<Statistics>,
     /// Cached ordering for the file.
@@ -108,11 +109,13 @@ impl CachedFileMetadata {
     /// Create a new cached file metadata entry.
     pub fn new(
         meta: ObjectMeta,
+        schema_fingerprint: Arc<SchemaFingerprint>,
         statistics: Arc<Statistics>,
         ordering: Option<LexOrdering>,
     ) -> Self {
         Self {
             meta,
+            schema_fingerprint,
             statistics,
             ordering,
         }
@@ -120,10 +123,15 @@ impl CachedFileMetadata {
 
     /// Check if this cached entry is still valid for the given metadata.
     ///
-    /// Returns true if the file size and last modified time match.
-    pub fn is_valid_for(&self, current_meta: &ObjectMeta) -> bool {
+    /// Returns true if the file size, last modified time, and schema match.
+    pub fn is_valid_for(
+        &self,
+        current_meta: &ObjectMeta,
+        current_schema_fingerprint: &SchemaFingerprint,
+    ) -> bool {
         self.meta.size == current_meta.size
             && self.meta.last_modified == current_meta.last_modified
+            && self.schema_fingerprint.as_ref() == current_schema_fingerprint
     }
 }
 
@@ -141,6 +149,8 @@ impl DFHeapSize for CachedFileMetadata {
             + self.meta.e_tag.heap_size(ctx)
             + self.meta.location.as_ref().heap_size(ctx)
             + self.statistics.heap_size(ctx)
+        // Do not deep-count `schema_fingerprint`: each ListingTable shares one
+        // fingerprint across all cached files.
         //TODO add ordering once LexOrdering/PhysicalExpr implements DFHeapSize
     }
 }
@@ -307,7 +317,7 @@ impl CacheManager {
                     Some(Arc::clone(fsc))
                 }
                 None if config.file_statistics_cache_limit > 0 => Some(Arc::new(
-                    DefaultCache::<FileStatisticsCacheKey, CachedFileMetadata>::new(
+                    DefaultCache::<TableScopedPath, CachedFileMetadata>::new(
                         config.file_statistics_cache_limit,
                     )
                     .with_name("DefaultFileStatisticsCache"),

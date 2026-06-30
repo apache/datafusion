@@ -38,8 +38,7 @@ use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchemaBuilder, compute_all_files_statistics,
 };
 use datafusion_execution::cache::cache_manager::{
-    CachedFileMetadata, FileStatisticsCache, FileStatisticsCacheKey, SchemaFingerprint,
-    TableScopedPath,
+    CachedFileMetadata, FileStatisticsCache, SchemaFingerprint, TableScopedPath,
 };
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
@@ -200,8 +199,9 @@ pub struct ListingTable {
     column_defaults: HashMap<String, Expr>,
     /// Optional [`PhysicalExprAdapterFactory`] for creating physical expression adapters
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
-    /// Precomputed fingerprint of `file_schema` for the file-statistics cache
-    /// key. Constant for the table, so computed once here instead of per file.
+    /// Precomputed fingerprint of `file_schema` for file-statistics cache
+    /// validation. Constant for the table, so computed once here instead of per
+    /// file.
     file_schema_fingerprint: Arc<SchemaFingerprint>,
 }
 
@@ -985,22 +985,18 @@ impl ListingTable {
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
-        let key = FileStatisticsCacheKey {
+        let path = TableScopedPath {
             table: part_file.table_reference.clone(),
             path: part_file.object_meta.location.clone(),
-            // Statistics are computed against `file_schema`, so key on its
-            // fingerprint: reads of the same path under a different schema get
-            // their own entry rather than reusing incompatible column statistics.
-            // The fingerprint is precomputed once per table (see `try_new`).
-            schema: Arc::clone(&self.file_schema_fingerprint),
         };
         let meta = &part_file.object_meta;
 
-        // Check cache first - the schema is part of the key, so a hit is already
-        // schema-compatible; `is_valid_for` only confirms the file is unchanged.
+        // Check cache first. The key stays `{table, path}` for cheap lookups;
+        // the cached value carries the schema fingerprint to prevent reusing
+        // stats computed under a different file schema.
         if let Some(cache) = &self.collected_statistics
-            && let Some(cached) = cache.get(&key)
-            && cached.is_valid_for(meta)
+            && let Some(cached) = cache.get(&path)
+            && cached.is_valid_for(meta, self.file_schema_fingerprint.as_ref())
         {
             // Return cached statistics and ordering
             return Ok((Arc::clone(&cached.statistics), cached.ordering.clone()));
@@ -1018,9 +1014,10 @@ impl ListingTable {
         // Store in cache
         if let Some(cache) = &self.collected_statistics {
             cache.put(
-                &key,
+                &path,
                 CachedFileMetadata::new(
                     meta.clone(),
+                    Arc::clone(&self.file_schema_fingerprint),
                     Arc::clone(&statistics),
                     file_meta.ordering.clone(),
                 ),

@@ -256,10 +256,10 @@ async fn anonymous_parquet_stats_cache_with_explicit_wider_schema() {
     assert_eq!(stats.column_statistics.len(), 2);
     assert_eq!(stats.column_statistics[1].null_count, Precision::Exact(1));
 
-    // #23072: the cache now keys on file_schema, so the wider read no longer
-    // bypasses the cache (as in #22950) — it lands in its own entry and
-    // coexists with the inferred one. Was `1` under the bypass.
-    assert_eq!(cache.len(), 2);
+    // #23072: the cache now validates file_schema, so the wider read no
+    // longer bypasses the cache (as in #22950), but it overwrites the existing
+    // `{table, path}` entry instead of adding a schema-specific key.
+    assert_eq!(cache.len(), 1);
 
     // Repeat the wider read: same path + same file_schema -> reuse (no new
     // entry) and a cache hit. Under #22950's bypass this read could never reuse.
@@ -272,7 +272,7 @@ async fn anonymous_parquet_stats_cache_with_explicit_wider_schema() {
     .create_physical_plan()
     .await
     .unwrap();
-    assert_eq!(cache.len(), 2);
+    assert_eq!(cache.len(), 1);
     let hits: usize = cache.list_entries().values().map(|e| e.hits).sum();
     assert_eq!(
         hits, 1,
