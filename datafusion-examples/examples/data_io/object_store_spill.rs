@@ -182,11 +182,10 @@ impl SpillFile for ObjectStoreSpillFile {
         let store = Arc::clone(&self.store);
         let location = self.location.clone();
 
-        // Note: we use `stream::once` to defer the ObjectStore read until
-        // DataFusion polls the returned stream.
+        // Use `stream::once` to defer the ObjectStore read until DataFusion
+        // polls the returned stream.
         let result_stream =
             async move { store.get(&location).await.map(|r| r.into_stream()) };
-        // combine the result of get and the stream into a single stream
         let stream = stream::once(result_stream)
             .try_flatten()
             .map_err(Into::into);
