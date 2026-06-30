@@ -131,18 +131,10 @@ impl AggregateHashTable<PartialMarker> {
 
     pub(in crate::aggregates) fn can_skip_aggregation(&self) -> bool {
         let state = self.state.building();
-        state.group_values.support_partial_repartition()
-            || state
-                .accumulators
-                .iter()
-                .all(|acc| acc.supports_convert_to_state())
-    }
-
-    pub(in crate::aggregates) fn can_repartition_in_partial(&self) -> bool {
-        self.state
-            .building()
-            .group_values
-            .support_partial_repartition()
+        state
+            .accumulators
+            .iter()
+            .all(|acc| acc.supports_convert_to_state())
     }
 
     /// In skip-partial-aggregation optimization, when a decision has been made to skip

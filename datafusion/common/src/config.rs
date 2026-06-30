@@ -912,6 +912,10 @@ config_namespace! {
         /// aggregation ratio check and trying to switch to skipping aggregation mode
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
 
+        /// Should partial hash aggregation repartition and coalesce output locally
+        /// before sending it to the upstream repartition operator.
+        pub enable_partial_aggregation_local_repartition: bool, default = true
+
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
         /// only exact row numbers (not estimates) are used for this decision.
