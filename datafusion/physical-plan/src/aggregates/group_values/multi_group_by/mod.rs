@@ -1292,6 +1292,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     }
 
     fn skip_hash_group_by(&mut self) -> Result<()> {
+        self.map.clear();
         self.skip_hash_group_by = true;
         Ok(())
     }

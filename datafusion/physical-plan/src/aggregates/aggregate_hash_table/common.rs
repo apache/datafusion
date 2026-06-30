@@ -186,7 +186,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                     + state.batch_hashes.allocated_size()
                     + state.new_group_rows.allocated_size()
             }
-            AggregateHashTableState::OutputtingMaterializedFinal(output) => {
+            AggregateHashTableState::OutputtingMaterialized(output) => {
                 output.memory_size()
             }
             AggregateHashTableState::Done => 0,
@@ -216,14 +216,19 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         state.batch_group_indices = Vec::new();
         self.state = AggregateHashTableState::Outputting(state);
     }
-}
 
-pub(super) fn emit_to_for_batch_size(batch_size: usize, group_count: usize) -> EmitTo {
-    debug_assert!(batch_size > 0);
-    if group_count <= batch_size {
-        EmitTo::All
-    } else {
-        EmitTo::First(batch_size)
+    pub(super) fn emit_next_materialized_batch(
+        &mut self,
+        mut output: MaterializedOutput,
+        batch_size: usize,
+    ) -> Option<RecordBatch> {
+        let batch = output.next_batch(batch_size);
+        if output.is_exhausted() {
+            self.state = AggregateHashTableState::Done;
+        } else {
+            self.state = AggregateHashTableState::OutputtingMaterialized(output);
+        }
+        batch
     }
 }
 
@@ -314,24 +319,21 @@ pub(super) enum AggregateHashTableState {
     Building(AggregateHashTableBuffer),
     /// Emitting results directly from group keys and aggregate state.
     Outputting(AggregateHashTableBuffer),
-    /// Materialize all the output results, and then incrementally output in the `OutputtingMaterializedFinal` state.
-    ///
-    /// Note this is a temporary solution until the `GroupValues` issue is solved:
-    /// Issue: <https://github.com/apache/datafusion/issues/23178>
-    OutputtingMaterializedFinal(MaterializedFinalOutput),
+    /// Materialized output rows sliced across output polls.
+    OutputtingMaterialized(MaterializedOutput),
     Done,
 }
 
-/// Fully evaluated final aggregate output and the next row offset to emit.
+/// Materialized aggregate output and the next row offset to emit.
 ///
-/// Final aggregate evaluation consumes accumulator state, so final output is
-/// materialized once and then sliced to honor `batch_size` across output polls.
-pub(super) struct MaterializedFinalOutput {
+/// Some output paths can only emit all rows from their backing state at once.
+/// The materialized batch is sliced to honor `batch_size` across output polls.
+pub(super) struct MaterializedOutput {
     batch: RecordBatch,
     offset: usize,
 }
 
-impl MaterializedFinalOutput {
+impl MaterializedOutput {
     pub(super) fn new(batch: RecordBatch) -> Self {
         Self { batch, offset: 0 }
     }
@@ -505,8 +507,10 @@ mod tests {
 
     use super::*;
 
+    // Covers materialized output slicing until all rows are emitted.
+    // Example: a five-row batch with batch size two emits 2, 2, then 1 row.
     #[test]
-    fn materialized_final_output_slices_batches_until_exhausted() -> Result<()> {
+    fn test_materialized_output_slices_batches_until_exhausted() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "group_col",
             DataType::Int32,
@@ -516,7 +520,7 @@ mod tests {
             schema,
             vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
         )?;
-        let mut output = MaterializedFinalOutput::new(batch);
+        let mut output = MaterializedOutput::new(batch);
 
         assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![1, 2]);
         assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![3, 4]);
