@@ -79,16 +79,53 @@ SELECT non_range_key, SUM(value) FROM range_partitioned GROUP BY non_range_key O
 
 
 ##########
-# TEST 3: Join on Range Partition Column
-# Both inputs expose Range partitioning on range_key. Join planning currently
-# reaches the unsupported Range output-partitioning path; later optimizer PRs
-# can replace this baseline with a successful plan and result test.
+# TEST 3: Range Join Avoids Hash Repartition
+# Both inputs expose compatible Range partitioning on range_key. Planning can
+# satisfy the partitioned join without inserting Hash repartitioning.
 ##########
 
-query error This feature is not implemented: Join output partitioning with range partitioning is not implemented
-SELECT l.range_key, l.value, r.value
+query TT
+EXPLAIN SELECT l.range_key, l.value, r.value
 FROM range_partitioned l
 JOIN range_partitioned r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
+02)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+03)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query III
+SELECT l.range_key, l.value, r.value
+FROM range_partitioned l
+JOIN range_partitioned r ON l.range_key = r.range_key
+ORDER BY l.range_key;
+----
+1 10 10
+5 50 50
+10 100 100
+15 150 150
+20 200 200
+25 250 250
+30 300 300
+35 350 350
+
+##########
+# TEST 3b: Non-Range Join Repartitions
+# The source Range partitioning does not satisfy a join on non_range_key, so
+# planning still inserts Hash repartitioning.
+##########
+
+query TT
+EXPLAIN SELECT l.non_range_key, l.value, r.value
+FROM range_partitioned l
+JOIN range_partitioned r ON l.non_range_key = r.non_range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(non_range_key@0, non_range_key@0)], projection=[non_range_key@0, value@1, value@3]
+02)--RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
+03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[non_range_key, value], output_partitioning=UnknownPartitioning(4), file_type=csv, has_header=false
+04)--RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
+05)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[non_range_key, value], output_partitioning=UnknownPartitioning(4), file_type=csv, has_header=false
 
 ##########
 # TEST 4: Union of Range Partitioned Inputs

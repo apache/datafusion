@@ -713,6 +713,8 @@ fn add_roundrobin_on_top(
 ///   current executor is less than this value. Partition number will be increased.
 /// * `allow_subset_satisfy_partitioning`: Whether to allow subset partitioning logic in satisfaction checks.
 ///   Set to `false` for partitioned hash joins to ensure exact hash matching.
+/// * `force_to_target`: Whether to repartition even when the hash expressions
+///   are already satisfied but the partition count differs from `n_target`.
 ///
 /// # Returns
 ///
@@ -723,6 +725,7 @@ fn add_hash_on_top(
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
     allow_subset_satisfy_partitioning: bool,
+    force_to_target: bool,
 ) -> Result<DistributionContext> {
     // Early return if hash repartition is unnecessary
     // `RepartitionExec: partitioning=Hash([...], 1), input_partitions=1` is unnecessary.
@@ -731,6 +734,7 @@ fn add_hash_on_top(
     }
 
     let dist = Distribution::HashPartitioned(hash_exprs);
+    let current_partitions = input.plan.output_partitioning().partition_count();
     let satisfaction = input.plan.output_partitioning().satisfaction(
         &dist,
         input.plan.equivalence_properties(),
@@ -740,11 +744,12 @@ fn add_hash_on_top(
     // Add hash repartitioning when:
     // - When subset satisfaction is enabled (current >= threshold): only repartition if not satisfied
     // - When below threshold (current < threshold): repartition if expressions don't match OR to increase parallelism
-    let needs_repartition = if allow_subset_satisfy_partitioning {
+    let needs_repartition = if force_to_target {
+        !satisfaction.is_satisfied() || n_target != current_partitions
+    } else if allow_subset_satisfy_partitioning {
         !satisfaction.is_satisfied()
     } else {
-        !satisfaction.is_satisfied()
-            || n_target > input.plan.output_partitioning().partition_count()
+        !satisfaction.is_satisfied() || n_target > current_partitions
     };
 
     if needs_repartition {
@@ -968,6 +973,32 @@ struct RepartitionRequirementStatus {
     roundrobin_beneficial_stats: bool,
     /// Designates whether hash partitioning is necessary.
     hash_necessary: bool,
+    /// Designates whether hash repartitioning should force the target
+    /// partition count even when the hash expressions are already satisfied.
+    force_hash_to_target: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PartitionedJoinDistribution {
+    /// Inner partitioned hash join children can be paired by existing Range
+    /// partitions, so hash repartitioning is not needed.
+    compatible_range: bool,
+    /// Partitioned join children have different partition counts. If hash
+    /// repartitioning is used, both sides must be forced to the target count.
+    needs_count_alignment: bool,
+}
+
+fn requirement_includes_grouping_id(requirement: &Distribution) -> bool {
+    // Grouping set aggregates (ROLLUP, CUBE, GROUPING SETS) require exact hash
+    // partitioning on all group columns including __grouping_id to ensure
+    // partial aggregates from different partitions are correctly combined.
+    requirement.key_exprs().is_some_and(|exprs| {
+        exprs.iter().any(|expr| {
+            (expr.as_ref() as &dyn Any)
+                .downcast_ref::<Column>()
+                .is_some_and(|col| col.name() == Aggregate::INTERNAL_GROUPING_ID)
+        })
+    })
 }
 
 /// Calculates the `RepartitionRequirementStatus` for each children to generate
@@ -1010,6 +1041,7 @@ fn get_repartition_requirement_status(
     let children = plan.children();
     let rr_beneficial = plan.benefits_from_input_partitioning();
     let requirements = plan.required_input_distribution();
+    let join_distribution = partitioned_join_distribution(plan);
     let mut repartition_status_flags = vec![];
     for (child, requirement, roundrobin_beneficial) in
         izip!(children.into_iter(), requirements, rr_beneficial)
@@ -1024,30 +1056,39 @@ fn get_repartition_requirement_status(
             Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
             Precision::Absent => true,
         };
-        let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
-        // Hash re-partitioning is necessary when the input has more than one
-        // partitions:
+        let is_partitioned_requirement = requirement.key_exprs().is_some();
+        // Hash repartitioning may be necessary when the input has more than one
+        // partition, or when repartitioning one sibling requires aligning all
+        // key-partitioned siblings.
         let multi_partitions = child.output_partitioning().partition_count() > 1;
         let roundrobin_sensible = roundrobin_beneficial && roundrobin_beneficial_stats;
-        needs_alignment |= is_hash && (multi_partitions || roundrobin_sensible);
+        needs_alignment |= is_partitioned_requirement
+            && !join_distribution.compatible_range
+            && (multi_partitions || roundrobin_sensible);
         repartition_status_flags.push((
-            is_hash,
+            is_partitioned_requirement,
             RepartitionRequirementStatus {
                 requirement,
                 roundrobin_beneficial,
                 roundrobin_beneficial_stats,
-                hash_necessary: is_hash && multi_partitions,
+                hash_necessary: is_partitioned_requirement
+                    && multi_partitions
+                    && !join_distribution.compatible_range,
+                // Hash satisfaction checks key expressions, not matching
+                // partition counts, so force repartition when join sides differ.
+                force_hash_to_target: is_partitioned_requirement
+                    && join_distribution.needs_count_alignment,
             },
         ));
     }
-    // Align hash necessary flags for hash partitions to generate consistent
+    // Align hash necessary flags for key partitions to generate consistent
     // hash partitions at each children:
     if needs_alignment {
-        // When there is at least one hash requirement that is necessary or
-        // beneficial according to statistics, make all children require hash
-        // repartitioning:
-        for (is_hash, status) in &mut repartition_status_flags {
-            if *is_hash {
+        // When there is at least one key-partitioned requirement that is necessary
+        // or beneficial according to statistics, make all key-partitioned
+        // children require hash repartitioning:
+        for (is_partitioned_requirement, status) in &mut repartition_status_flags {
+            if *is_partitioned_requirement {
                 status.hash_necessary = true;
             }
         }
@@ -1056,6 +1097,59 @@ fn get_repartition_requirement_status(
         .into_iter()
         .map(|(_, status)| status)
         .collect())
+}
+
+/// Returns distribution state for a partitioned join's children.
+///
+/// This is optimizer policy: partitioned joins require children that can be
+/// paired by partition index. Inner hash joins can reuse compatible range
+/// partitioning; otherwise the existing hash repartitioning policy applies.
+fn partitioned_join_distribution(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> PartitionedJoinDistribution {
+    let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() else {
+        return Default::default();
+    };
+
+    if hash_join.mode != PartitionMode::Partitioned {
+        return Default::default();
+    }
+
+    let children = plan.children();
+    let [left, right] = children.as_slice() else {
+        return Default::default();
+    };
+    let needs_count_alignment = left.output_partitioning().partition_count()
+        != right.output_partitioning().partition_count();
+
+    let requirements = plan.required_input_distribution();
+    let left_partitioning = left.output_partitioning();
+    let right_partitioning = right.output_partitioning();
+    let compatible_range = match requirements.as_slice() {
+        [
+            left_requirement @ Distribution::KeyPartitioned(_),
+            right_requirement @ Distribution::KeyPartitioned(_),
+        ] if hash_join.join_type == JoinType::Inner
+            && matches!(
+                (left_partitioning, right_partitioning),
+                (Partitioning::Range(_), Partitioning::Range(_))
+            ) =>
+        {
+            left_partitioning.co_partitioned_with(
+                left_requirement,
+                left.equivalence_properties(),
+                right_partitioning,
+                right_requirement,
+                right.equivalence_properties(),
+            )
+        }
+        _ => false,
+    };
+
+    PartitionedJoinDistribution {
+        compatible_range,
+        needs_count_alignment,
+    }
 }
 
 /// This function checks whether we need to add additional data exchange
@@ -1184,6 +1278,7 @@ pub fn ensure_distribution(
                 roundrobin_beneficial,
                 roundrobin_beneficial_stats,
                 hash_necessary,
+                force_hash_to_target,
             },
         )| {
             let increases_partition_count =
@@ -1202,18 +1297,6 @@ pub fn ensure_distribution(
             // 3. Not a grouping set aggregate (requires exact hash including __grouping_id)
             let current_partitions = child.plan.output_partitioning().partition_count();
 
-            // Check if the hash partitioning requirement includes __grouping_id column.
-            // Grouping set aggregates (ROLLUP, CUBE, GROUPING SETS) require exact hash
-            // partitioning on all group columns including __grouping_id to ensure partial
-            // aggregates from different partitions are correctly combined.
-            let requires_grouping_id = matches!(&requirement, Distribution::HashPartitioned(exprs)
-                if exprs.iter().any(|expr| {
-                    (expr.as_ref() as &dyn Any)
-                        .downcast_ref::<Column>()
-                        .is_some_and(|col| col.name() == Aggregate::INTERNAL_GROUPING_ID)
-                })
-            );
-
             let allow_subset_satisfy_partitioning = (current_partitions
                 >= subset_satisfaction_threshold
                 // `preserve_file_partitions` exposes existing file-group
@@ -1223,7 +1306,7 @@ pub fn ensure_distribution(
                 || (config.optimizer.preserve_file_partitions > 0
                     && current_partitions < target_partitions))
                 && !is_partitioned_join
-                && !requires_grouping_id;
+                && !requirement_includes_grouping_id(&requirement);
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
@@ -1244,7 +1327,8 @@ pub fn ensure_distribution(
                 Distribution::SinglePartition => {
                     child = add_merge_on_top(child, removed_fetch);
                 }
-                Distribution::HashPartitioned(exprs) => {
+                Distribution::HashPartitioned(exprs)
+                | Distribution::KeyPartitioned(exprs) => {
                     // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
                     // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
                     if hash_necessary {
@@ -1253,6 +1337,7 @@ pub fn ensure_distribution(
                             exprs.to_vec(),
                             target_partitions,
                             allow_subset_satisfy_partitioning,
+                            force_hash_to_target,
                         )?;
                     }
                 }
@@ -1311,7 +1396,9 @@ pub fn ensure_distribution(
                 // no ordering requirement
                 match requirement {
                     // Operator requires specific distribution.
-                    Distribution::SinglePartition | Distribution::HashPartitioned(_) => {
+                    Distribution::SinglePartition
+                    | Distribution::HashPartitioned(_)
+                    | Distribution::KeyPartitioned(_) => {
                         // If the parent doesn't maintain input order, preserving
                         // ordering is pointless. However, if it does maintain
                         // input order, we keep order-preserving variants so

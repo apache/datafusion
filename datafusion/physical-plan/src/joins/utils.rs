@@ -145,12 +145,11 @@ pub fn adjust_right_output_partitioning(
                 .collect::<Result<_>>()?;
             Partitioning::Hash(new_exprs, *size)
         }
-        Partitioning::Range(_) => {
-            // Range partitioning optimizer propagation is tracked in
-            // https://github.com/apache/datafusion/issues/22395
-            return not_impl_err!(
-                "Join output partitioning with range partitioning is not implemented"
-            );
+        // Range partitioning can satisfy join input requirements, but range
+        // output propagation needs broader join semantics coverage.
+        // https://github.com/apache/datafusion/issues/22395
+        Partitioning::Range(range) => {
+            Partitioning::UnknownPartitioning(range.partition_count())
         }
         result => result.clone(),
     };

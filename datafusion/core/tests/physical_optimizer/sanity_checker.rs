@@ -19,9 +19,9 @@ use insta::assert_snapshot;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    bounded_window_exec, global_limit_exec, local_limit_exec, memory_exec,
-    projection_exec, repartition_exec, sort_exec, sort_expr, sort_expr_options,
-    sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
+    bounded_window_exec, global_limit_exec, hash_join_exec, local_limit_exec,
+    memory_exec, projection_exec, repartition_exec, sort_exec, sort_expr,
+    sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
 };
 
 use arrow::compute::SortOptions;
@@ -30,8 +30,8 @@ use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTab
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{JoinType, Result, ScalarValue};
-use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::expressions::{Literal, col};
+use datafusion_physical_expr::{Partitioning, RangePartitioning, SplitPoint};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
@@ -398,6 +398,52 @@ fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
         sanity_checker.optimize(plan.clone(), &opts).is_ok(),
         is_sane
     );
+}
+
+fn range_partitioned_exec(
+    schema: &SchemaRef,
+    key: &str,
+    split_points: impl IntoIterator<Item = i32>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let split_points = split_points
+        .into_iter()
+        .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+        .collect();
+    let partitioning = Partitioning::Range(RangePartitioning::try_new(
+        [sort_expr(key, schema)].into(),
+        split_points,
+    )?);
+    let input = memory_exec(schema);
+
+    RepartitionExec::try_new(input, partitioning)
+        .map(|exec| Arc::new(exec) as Arc<dyn ExecutionPlan>)
+}
+
+#[test]
+fn test_partitioned_hash_join_requires_co_partitioned_children() -> Result<()> {
+    let schema = create_test_schema2();
+    let join_on = vec![(col("a", &schema)?, col("b", &schema)?)];
+    let right = range_partitioned_exec(&schema, "b", [10])?;
+
+    let valid_join = hash_join_exec(
+        range_partitioned_exec(&schema, "a", [10])?,
+        Arc::clone(&right),
+        join_on.clone(),
+        None,
+        &JoinType::Inner,
+    )?;
+    assert_sanity_check(&valid_join, true);
+
+    let invalid_join = hash_join_exec(
+        range_partitioned_exec(&schema, "a", [20])?,
+        right,
+        join_on,
+        None,
+        &JoinType::Inner,
+    )?;
+    assert_sanity_check(&invalid_join, false);
+
+    Ok(())
 }
 
 #[tokio::test]

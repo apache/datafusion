@@ -244,17 +244,13 @@ impl RangePartitioning {
         self.split_points.len() + 1
     }
 
-    /// Returns true when `self` and `other` describe the same range partition
-    /// map.
+    /// Returns true when `self` and `other` have the same range boundaries.
     ///
-    /// Single-partition range partitionings are always compatible. Otherwise,
-    /// the two partitionings must have identical split points and equivalent
-    /// ordering expressions with the same sort options.
-    pub fn compatible_with(
-        &self,
-        other: &Self,
-        eq_properties: &EquivalenceProperties,
-    ) -> bool {
+    /// Single-partition range partitionings always have the same boundaries. Otherwise,
+    /// the two partitionings must have identical split points, ordering width,
+    /// and sort options. This does not compare ordering expressions, callers
+    /// should validate the range keys separately.
+    fn same_boundaries(&self, other: &Self) -> bool {
         if self.partition_count() == 1 && other.partition_count() == 1 {
             return true;
         }
@@ -274,18 +270,7 @@ impl RangePartitioning {
             return false;
         }
 
-        let left_exprs = self
-            .ordering
-            .iter()
-            .map(|sort_expr| Arc::clone(&sort_expr.expr))
-            .collect::<Vec<_>>();
-        let right_exprs = other
-            .ordering
-            .iter()
-            .map(|sort_expr| Arc::clone(&sort_expr.expr))
-            .collect::<Vec<_>>();
-
-        equivalent_exprs(&left_exprs, &right_exprs, eq_properties)
+        true
     }
 
     /// Calculates the range partitioning after applying the given projection.
@@ -406,37 +391,56 @@ impl Partitioning {
         }
     }
 
-    /// Returns true when `self` and `other` describe compatible partition maps.
+    /// Returns true when two partitionings both satisfy their own distribution
+    /// requirements and can be paired by partition index.
     ///
-    /// Compatible partition maps can be used for partition-local behavior: if
-    /// this returns true, partition `i` from both partitionings can be treated
-    /// as covering the same partition domain. This is stricter than
-    /// [`Self::satisfaction`], which only answers whether this partitioning can
-    /// satisfy a required distribution.
-    pub fn compatible_with(
+    /// Use this for multi-input operators, such as partitioned joins, where
+    /// each child has a different schema, required [`Distribution`], and
+    /// expression-equivalence context.
+    ///
+    /// ```text
+    /// # co-partitioned: each side satisfies its own requirement, and boundaries match
+    /// left:  Range(left.a ASC,  [10, 20]), required KeyPartitioned(left.a)
+    /// right: Range(right.x ASC, [10, 20]), required KeyPartitioned(right.x)
+    ///
+    /// # not compatible: right side does not satisfy a hash-specific requirement
+    /// left:  Range(left.a ASC,  [10, 20]), required KeyPartitioned(left.a)
+    /// right: Range(right.x ASC, [10, 20]), required HashPartitioned(right.x)
+    ///
+    /// # not compatible: boundaries differ
+    /// left:  Range(left.a ASC,  [10, 20]), required KeyPartitioned(left.a)
+    /// right: Range(right.x ASC, [15, 20]), required KeyPartitioned(right.x)
+    /// ```
+    pub fn co_partitioned_with(
         &self,
-        other: &Self,
+        required: &Distribution,
         eq_properties: &EquivalenceProperties,
+        other: &Self,
+        other_required: &Distribution,
+        other_eq_properties: &EquivalenceProperties,
     ) -> bool {
+        if !self
+            .satisfaction(required, eq_properties, false)
+            .is_satisfied()
+            || !other
+                .satisfaction(other_required, other_eq_properties, false)
+                .is_satisfied()
+        {
+            return false;
+        }
+
         if self.partition_count() == 1 && other.partition_count() == 1 {
             return true;
         }
 
+        if self.partition_count() != other.partition_count() {
+            return false;
+        }
+
         match (self, other) {
-            (
-                Partitioning::Hash(left_exprs, left_count),
-                Partitioning::Hash(right_exprs, right_count),
-            ) => {
-                if left_count != right_count {
-                    return false;
-                }
-                if left_exprs.is_empty() || right_exprs.is_empty() {
-                    return false;
-                }
-                equivalent_exprs(left_exprs, right_exprs, eq_properties)
-            }
+            (Partitioning::Hash(_, _), Partitioning::Hash(_, _)) => true,
             (Partitioning::Range(left), Partitioning::Range(right)) => {
-                left.compatible_with(right, eq_properties)
+                left.same_boundaries(right)
             }
             _ => false,
         }
@@ -459,6 +463,47 @@ impl Partitioning {
                 .iter()
                 .any(|superset_expr| subset_expr.eq(superset_expr))
         })
+    }
+
+    fn key_expr_satisfaction(
+        partition_exprs: &[Arc<dyn PhysicalExpr>],
+        required_exprs: &[Arc<dyn PhysicalExpr>],
+        eq_properties: &EquivalenceProperties,
+        allow_subset: bool,
+    ) -> PartitioningSatisfaction {
+        if partition_exprs.is_empty() || required_exprs.is_empty() {
+            return PartitioningSatisfaction::NotSatisfied;
+        }
+
+        if equivalent_exprs(required_exprs, partition_exprs, eq_properties) {
+            return PartitioningSatisfaction::Exact;
+        }
+
+        if !allow_subset {
+            return PartitioningSatisfaction::NotSatisfied;
+        }
+
+        let eq_groups = eq_properties.eq_group();
+        if eq_groups.is_empty() {
+            if Self::is_subset_partitioning(partition_exprs, required_exprs) {
+                PartitioningSatisfaction::Subset
+            } else {
+                PartitioningSatisfaction::NotSatisfied
+            }
+        } else {
+            let normalized_partition_exprs =
+                normalize_exprs(partition_exprs, eq_properties);
+            let normalized_required_exprs =
+                normalize_exprs(required_exprs, eq_properties);
+            if Self::is_subset_partitioning(
+                &normalized_partition_exprs,
+                &normalized_required_exprs,
+            ) {
+                PartitioningSatisfaction::Subset
+            } else {
+                PartitioningSatisfaction::NotSatisfied
+            }
+        }
     }
 
     #[deprecated(since = "52.0.0", note = "Use satisfaction instead")]
@@ -484,51 +529,52 @@ impl Partitioning {
             Distribution::SinglePartition if self.partition_count() == 1 => {
                 PartitioningSatisfaction::Exact
             }
-            // When partition count is 1, hash requirement is satisfied.
-            Distribution::HashPartitioned(_) if self.partition_count() == 1 => {
+            // When partition count is 1, partitioned requirements are satisfied.
+            Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_)
+                if self.partition_count() == 1 =>
+            {
                 PartitioningSatisfaction::Exact
             }
+            Distribution::KeyPartitioned(required_exprs) => match self {
+                Partitioning::Hash(partition_exprs, _) => Self::key_expr_satisfaction(
+                    partition_exprs,
+                    required_exprs,
+                    eq_properties,
+                    allow_subset,
+                ),
+                Partitioning::Range(range) => {
+                    let partition_exprs = range
+                        .ordering
+                        .iter()
+                        .map(|sort_expr| Arc::clone(&sort_expr.expr))
+                        .collect::<Vec<_>>();
+                    Self::key_expr_satisfaction(
+                        &partition_exprs,
+                        required_exprs,
+                        eq_properties,
+                        allow_subset,
+                    )
+                }
+                Partitioning::RoundRobinBatch(_)
+                | Partitioning::UnknownPartitioning(_) => {
+                    PartitioningSatisfaction::NotSatisfied
+                }
+            },
             Distribution::HashPartitioned(required_exprs) => match self {
                 // Here we do not check the partition count for hash partitioning and assumes the partition count
                 // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
                 // then we need to have the partition count and hash functions validation.
-                Partitioning::Hash(partition_exprs, _) => {
-                    // Empty hash partitioning is invalid
-                    if partition_exprs.is_empty() || required_exprs.is_empty() {
-                        return PartitioningSatisfaction::NotSatisfied;
-                    }
-
-                    if equivalent_exprs(required_exprs, partition_exprs, eq_properties) {
-                        return PartitioningSatisfaction::Exact;
-                    }
-
-                    let eq_groups = eq_properties.eq_group();
-                    if !eq_groups.is_empty() {
-                        if allow_subset {
-                            let normalized_partition_exprs =
-                                normalize_exprs(partition_exprs, eq_properties);
-                            let normalized_required_exprs =
-                                normalize_exprs(required_exprs, eq_properties);
-                            if Self::is_subset_partitioning(
-                                &normalized_partition_exprs,
-                                &normalized_required_exprs,
-                            ) {
-                                return PartitioningSatisfaction::Subset;
-                            }
-                        }
-                    } else if allow_subset
-                        && Self::is_subset_partitioning(partition_exprs, required_exprs)
-                    {
-                        return PartitioningSatisfaction::Subset;
-                    }
-
-                    PartitioningSatisfaction::NotSatisfied
-                }
+                Partitioning::Hash(partition_exprs, _) => Self::key_expr_satisfaction(
+                    partition_exprs,
+                    required_exprs,
+                    eq_properties,
+                    allow_subset,
+                ),
                 Partitioning::RoundRobinBatch(_)
-                | Partitioning::Range(_)
                 | Partitioning::UnknownPartitioning(_) => {
                     PartitioningSatisfaction::NotSatisfied
                 }
+                Partitioning::Range(_) => PartitioningSatisfaction::NotSatisfied,
             },
             Distribution::SinglePartition => PartitioningSatisfaction::NotSatisfied,
         }
@@ -596,9 +642,31 @@ pub enum Distribution {
     /// Requires children to be distributed in such a way that the same
     /// values of the keys end up in the same partition
     HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
+    /// Requires rows with equal values for the given keys to be colocated in
+    /// the same partition, without requiring a specific partitioning algorithm.
+    ///
+    /// Unlike [`Self::HashPartitioned`], this can be satisfied by non-hash
+    /// partitioning such as range partitioning. A partitioning on a subset of
+    /// these keys can also satisfy this requirement because rows equal on all
+    /// required keys are also equal on any subset.
+    ///
+    /// For multi-input operators, satisfaction alone is not enough: each input
+    /// may satisfy its own key requirement while using incompatible partition
+    /// boundaries. Use [`Partitioning::co_partitioned_with`] before pairing
+    /// partitions by index.
+    KeyPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
 impl Distribution {
+    /// Returns key expressions for distribution variants that require
+    /// co-locating equal key values.
+    pub fn key_exprs(&self) -> Option<&[Arc<dyn PhysicalExpr>]> {
+        match self {
+            Self::HashPartitioned(exprs) | Self::KeyPartitioned(exprs) => Some(exprs),
+            Self::UnspecifiedDistribution | Self::SinglePartition => None,
+        }
+    }
+
     /// Creates a `Partitioning` that satisfies this `Distribution`
     pub fn create_partitioning(self, partition_count: usize) -> Partitioning {
         match self {
@@ -606,7 +674,7 @@ impl Distribution {
                 Partitioning::UnknownPartitioning(partition_count)
             }
             Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
-            Distribution::HashPartitioned(expr) => {
+            Distribution::HashPartitioned(expr) | Distribution::KeyPartitioned(expr) => {
                 Partitioning::Hash(expr, partition_count)
             }
         }
@@ -620,6 +688,9 @@ impl Display for Distribution {
             Distribution::SinglePartition => write!(f, "SinglePartition"),
             Distribution::HashPartitioned(exprs) => {
                 write!(f, "HashPartitioned[{}])", format_physical_expr_list(exprs))
+            }
+            Distribution::KeyPartitioned(exprs) => {
+                write!(f, "KeyPartitioned[{}])", format_physical_expr_list(exprs))
             }
         }
     }
@@ -696,6 +767,13 @@ mod tests {
             Distribution::HashPartitioned(self.cols(indices))
         }
 
+        fn key_partitioned_distribution(
+            &self,
+            indices: impl IntoIterator<Item = usize>,
+        ) -> Distribution {
+            Distribution::KeyPartitioned(self.cols(indices))
+        }
+
         fn range_sort_expr(
             &self,
             index: usize,
@@ -756,6 +834,7 @@ mod tests {
             Distribution::UnspecifiedDistribution,
             Distribution::SinglePartition,
             fixture.hash_distribution([0, 1]),
+            Distribution::KeyPartitioned(fixture.cols([0, 1])),
         ];
 
         let single_partition = Partitioning::UnknownPartitioning(1);
@@ -791,6 +870,9 @@ mod tests {
                     assert_eq!(result, (true, false, false, false, false))
                 }
                 Distribution::HashPartitioned(_) => {
+                    assert_eq!(result, (true, false, false, true, false))
+                }
+                Distribution::KeyPartitioned(_) => {
                     assert_eq!(result, (true, false, false, true, false))
                 }
             }
@@ -1113,6 +1195,101 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn key_partitioned_satisfaction_is_exact() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let hash_a = fixture.hash_partitioning([0], 2);
+        let hash_ab = fixture.hash_partitioning([0, 1], 2);
+        let range_a = fixture
+            .range_partitioning([0], vec![int_split_point([10]), int_split_point([20])]);
+        let range_ab =
+            fixture.range_partitioning([0, 1], vec![int_split_point([10, 20])]);
+
+        let exact_cases = [
+            (
+                "Hash([a]) vs KeyPartitioned([a])",
+                &hash_a,
+                fixture.key_partitioned_distribution([0]),
+            ),
+            (
+                "Range([a]) vs KeyPartitioned([a])",
+                &range_a,
+                fixture.key_partitioned_distribution([0]),
+            ),
+        ];
+        for (desc, partitioning, requirement) in exact_cases {
+            for allow_subset in [true, false] {
+                assert_eq!(
+                    partitioning.satisfaction(
+                        &requirement,
+                        &fixture.eq_properties,
+                        allow_subset,
+                    ),
+                    PartitioningSatisfaction::Exact,
+                    "Failed for {desc} with allow_subset={allow_subset}"
+                );
+            }
+        }
+
+        let subset_cases = [
+            (
+                "Hash([a]) vs KeyPartitioned([a, b])",
+                &hash_a,
+                fixture.key_partitioned_distribution([0, 1]),
+            ),
+            (
+                "Range([a]) vs KeyPartitioned([a, b])",
+                &range_a,
+                fixture.key_partitioned_distribution([0, 1]),
+            ),
+        ];
+        for (desc, partitioning, requirement) in subset_cases {
+            assert_eq!(
+                partitioning.satisfaction(&requirement, &fixture.eq_properties, true),
+                PartitioningSatisfaction::Subset,
+                "Failed for {desc} with subset enabled"
+            );
+            assert_eq!(
+                partitioning.satisfaction(&requirement, &fixture.eq_properties, false),
+                PartitioningSatisfaction::NotSatisfied,
+                "Failed for {desc} with subset disabled"
+            );
+        }
+
+        let not_satisfied_cases = [
+            (
+                "Range([a]) vs KeyPartitioned([b])",
+                &range_a,
+                fixture.key_partitioned_distribution([1]),
+            ),
+            (
+                "Hash([a, b]) vs KeyPartitioned([a])",
+                &hash_ab,
+                fixture.key_partitioned_distribution([0]),
+            ),
+            (
+                "Range([a, b]) vs KeyPartitioned([a])",
+                &range_ab,
+                fixture.key_partitioned_distribution([0]),
+            ),
+        ];
+        for (desc, partitioning, requirement) in not_satisfied_cases {
+            for allow_subset in [true, false] {
+                assert_eq!(
+                    partitioning.satisfaction(
+                        &requirement,
+                        &fixture.eq_properties,
+                        allow_subset,
+                    ),
+                    PartitioningSatisfaction::NotSatisfied,
+                    "Failed for {desc} with allow_subset={allow_subset}"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     fn int_split_point(values: impl IntoIterator<Item = i64>) -> SplitPoint {
         SplitPoint::new(
             values
@@ -1255,154 +1432,140 @@ mod tests {
     }
 
     #[test]
-    fn test_range_partitioning_compatible_with() -> Result<()> {
+    fn range_partitionings_are_co_partitioned_by_boundaries() -> Result<()> {
         let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
-        let mut eq_properties = fixture.eq_properties.clone();
-        eq_properties.add_equal_conditions(fixture.col(0), fixture.col(1))?;
-
-        let split_points = vec![int_split_point([10]), int_split_point([20])];
-        let range_a = fixture.range([0], split_points.clone());
-        let range_a_same = fixture.range([0], split_points.clone());
-        let range_b_equivalent = fixture.range([1], split_points.clone());
-        let range_b_different_split = fixture.range([1], vec![int_split_point([30])]);
-        let range_a_desc = RangePartitioning::try_new(
-            [fixture.range_sort_expr(0, SortOptions::new(true, false))].into(),
-            vec![int_split_point([10])],
-        )?;
-        let single_partition_range_a = fixture.range([0], vec![]);
-        let single_partition_range_b = fixture.range([1], vec![]);
-
-        assert!(range_a.compatible_with(&range_a_same, &fixture.eq_properties));
-        assert!(range_a.compatible_with(&range_b_equivalent, &eq_properties));
-        assert!(!range_a.compatible_with(&range_b_equivalent, &fixture.eq_properties));
-        assert!(!range_a.compatible_with(&range_b_different_split, &eq_properties));
-        assert!(!range_a.compatible_with(&range_a_desc, &eq_properties));
-        assert!(
-            single_partition_range_a
-                .compatible_with(&single_partition_range_b, &fixture.eq_properties)
+        let left = fixture
+            .range_partitioning([0], vec![int_split_point([10]), int_split_point([20])]);
+        let right_same_map = fixture
+            .range_partitioning([1], vec![int_split_point([10]), int_split_point([20])]);
+        let right_different_split = fixture
+            .range_partitioning([1], vec![int_split_point([15]), int_split_point([20])]);
+        let right_desc = fixture.range_partitioning_with_ordering(
+            [fixture.range_sort_expr(1, SortOptions::new(true, false))].into(),
+            vec![int_split_point([20]), int_split_point([10])],
         );
 
-        assert!(
-            fixture
-                .range_partitioning([0], vec![int_split_point([10])])
-                .compatible_with(
-                    &fixture.range_partitioning([1], vec![int_split_point([10])]),
-                    &eq_properties
-                )
-        );
-        assert!(
-            !fixture
-                .range_partitioning([0], vec![int_split_point([10])])
-                .compatible_with(
-                    &fixture.range_partitioning([0], vec![int_split_point([20])]),
-                    &fixture.eq_properties
-                )
-        );
-        assert!(
-            !fixture
-                .range_partitioning([0], vec![int_split_point([10])])
-                .compatible_with(
-                    &fixture.hash_partitioning([0], 2),
-                    &fixture.eq_properties
-                )
-        );
+        let test_cases = [
+            (
+                "same boundaries with matching key requirements",
+                fixture.key_partitioned_distribution([0]),
+                right_same_map.clone(),
+                fixture.key_partitioned_distribution([1]),
+                true,
+            ),
+            (
+                "different split points",
+                fixture.key_partitioned_distribution([0]),
+                right_different_split,
+                fixture.key_partitioned_distribution([1]),
+                false,
+            ),
+            (
+                "different sort options",
+                fixture.key_partitioned_distribution([0]),
+                right_desc,
+                fixture.key_partitioned_distribution([1]),
+                false,
+            ),
+            (
+                "range cannot satisfy hash requirement",
+                fixture.hash_distribution([0]),
+                right_same_map,
+                fixture.key_partitioned_distribution([1]),
+                false,
+            ),
+        ];
+        for (desc, left_requirement, right, right_requirement, expected) in test_cases {
+            assert_eq!(
+                left.co_partitioned_with(
+                    &left_requirement,
+                    &fixture.eq_properties,
+                    &right,
+                    &right_requirement,
+                    &fixture.eq_properties,
+                ),
+                expected,
+                "Failed for {desc}"
+            );
+        }
 
         Ok(())
     }
 
     #[test]
-    fn test_hash_partitioning_compatible_with() -> Result<()> {
+    fn co_partitioned_with_rejects_subset_key_satisfaction() -> Result<()> {
         let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
-        let mut eq_properties = fixture.eq_properties.clone();
-        eq_properties.add_equal_conditions(fixture.col(0), fixture.col(1))?;
+        let left = fixture
+            .range_partitioning([0], vec![int_split_point([10]), int_split_point([20])]);
+        let right = fixture.range_partitioning([0, 1], vec![int_split_point([10, 100])]);
 
-        assert!(
-            fixture.hash_partitioning([0], 2).compatible_with(
-                &fixture.hash_partitioning([0], 2),
-                &fixture.eq_properties
-            )
+        assert_eq!(
+            right.satisfaction(
+                &fixture.key_partitioned_distribution([0]),
+                &fixture.eq_properties,
+                false,
+            ),
+            PartitioningSatisfaction::NotSatisfied
         );
-        assert!(
-            fixture
-                .hash_partitioning([0], 2)
-                .compatible_with(&fixture.hash_partitioning([1], 2), &eq_properties)
+        assert_eq!(
+            left.satisfaction(
+                &fixture.key_partitioned_distribution([0, 1]),
+                &fixture.eq_properties,
+                true,
+            ),
+            PartitioningSatisfaction::Subset
         );
-        assert!(
-            !fixture.hash_partitioning([0], 2).compatible_with(
-                &fixture.hash_partitioning([1], 2),
-                &fixture.eq_properties
-            )
-        );
-        assert!(
-            !fixture.hash_partitioning([0], 2).compatible_with(
-                &fixture.hash_partitioning([0], 3),
-                &fixture.eq_properties
-            )
-        );
-        assert!(!fixture.hash_partitioning([0], 2).compatible_with(
-            &fixture.hash_partitioning([0, 1], 2),
-            &fixture.eq_properties
+        assert!(!left.co_partitioned_with(
+            &fixture.key_partitioned_distribution([0, 1]),
+            &fixture.eq_properties,
+            &right,
+            &fixture.key_partitioned_distribution([0]),
+            &fixture.eq_properties,
         ));
-        assert!(
-            !Partitioning::Hash(vec![], 2)
-                .compatible_with(&Partitioning::Hash(vec![], 2), &fixture.eq_properties)
-        );
-        assert!(!fixture.hash_partitioning([0], 2).compatible_with(
-            &fixture.range_partitioning([0], vec![int_split_point([10])]),
-            &fixture.eq_properties
-        ));
-        assert!(
-            fixture.hash_partitioning([0], 1).compatible_with(
-                &Partitioning::RoundRobinBatch(1),
-                &fixture.eq_properties
-            )
-        );
 
         Ok(())
     }
 
     #[test]
-    fn test_round_robin_partitioning_compatible_with() {
-        let eq_properties = EquivalenceProperties::new(Arc::new(Schema::empty()));
+    fn hash_partitionings_are_co_partitioned_by_count() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let left = fixture.hash_partitioning([0], 2);
 
-        assert!(
-            Partitioning::RoundRobinBatch(1)
-                .compatible_with(&Partitioning::RoundRobinBatch(1), &eq_properties)
-        );
-        assert!(
-            !Partitioning::RoundRobinBatch(2)
-                .compatible_with(&Partitioning::RoundRobinBatch(2), &eq_properties)
-        );
-        assert!(
-            Partitioning::RoundRobinBatch(1)
-                .compatible_with(&Partitioning::UnknownPartitioning(1), &eq_properties)
-        );
-        assert!(
-            !Partitioning::RoundRobinBatch(2)
-                .compatible_with(&Partitioning::UnknownPartitioning(2), &eq_properties)
-        );
-    }
+        let test_cases = [
+            (
+                "same partition count",
+                fixture.hash_partitioning([1], 2),
+                fixture.key_partitioned_distribution([1]),
+                true,
+            ),
+            (
+                "different partition count",
+                fixture.hash_partitioning([1], 3),
+                fixture.key_partitioned_distribution([1]),
+                false,
+            ),
+            (
+                "mixed hash and range partitioning",
+                fixture.range_partitioning([1], vec![int_split_point([10])]),
+                fixture.key_partitioned_distribution([1]),
+                false,
+            ),
+        ];
+        for (desc, right, right_requirement, expected) in test_cases {
+            assert_eq!(
+                left.co_partitioned_with(
+                    &fixture.key_partitioned_distribution([0]),
+                    &fixture.eq_properties,
+                    &right,
+                    &right_requirement,
+                    &fixture.eq_properties,
+                ),
+                expected,
+                "Failed for {desc}"
+            );
+        }
 
-    #[test]
-    fn test_unknown_partitioning_compatible_with() {
-        let eq_properties = EquivalenceProperties::new(Arc::new(Schema::empty()));
-
-        assert!(
-            Partitioning::UnknownPartitioning(1)
-                .compatible_with(&Partitioning::UnknownPartitioning(1), &eq_properties)
-        );
-        assert!(
-            !Partitioning::UnknownPartitioning(2)
-                .compatible_with(&Partitioning::UnknownPartitioning(2), &eq_properties)
-        );
-        assert!(
-            Partitioning::UnknownPartitioning(1)
-                .compatible_with(&Partitioning::RoundRobinBatch(1), &eq_properties)
-        );
-        assert!(
-            !Partitioning::UnknownPartitioning(2)
-                .compatible_with(&Partitioning::RoundRobinBatch(2), &eq_properties)
-        );
+        Ok(())
     }
 
     #[test]

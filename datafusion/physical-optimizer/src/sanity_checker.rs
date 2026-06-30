@@ -31,7 +31,9 @@ use datafusion_common::plan_err;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::joins::SymmetricHashJoinExec;
+use datafusion_physical_plan::joins::{
+    HashJoinExec, PartitionMode, SymmetricHashJoinExec,
+};
 use datafusion_physical_plan::{ExecutionPlanProperties, get_plan_string};
 
 use crate::PhysicalOptimizerRule;
@@ -176,6 +178,50 @@ pub fn check_plan_sanity(
                 child.output_partitioning()
             );
         }
+    }
+
+    check_partitioned_join_distribution(plan)?;
+
+    Ok(())
+}
+
+fn check_partitioned_join_distribution(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+    let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() else {
+        return Ok(());
+    };
+
+    if hash_join.mode != PartitionMode::Partitioned {
+        return Ok(());
+    }
+
+    let children = plan.children();
+    let requirements = plan.required_input_distribution();
+    let ([left, right], [left_req, right_req]) =
+        (children.as_slice(), requirements.as_slice())
+    else {
+        return plan_err!(
+            "Invalid HashJoinExec: expected two children and two distribution requirements"
+        );
+    };
+
+    if !left.output_partitioning().co_partitioned_with(
+        left_req,
+        left.equivalence_properties(),
+        right.output_partitioning(),
+        right_req,
+        right.equivalence_properties(),
+    ) {
+        let plan_str = get_plan_string(plan);
+        return plan_err!(
+            "Plan: {:?} does not satisfy partitioned join co-partitioning requirements: \
+             left requirement: {}, left output partitioning: {}; \
+             right requirement: {}, right output partitioning: {}",
+            plan_str,
+            left_req,
+            left.output_partitioning(),
+            right_req,
+            right.output_partitioning()
+        );
     }
 
     Ok(())
