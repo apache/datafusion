@@ -135,6 +135,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 group_values,
                 batch_group_indices: Default::default(),
                 batch_hashes: Default::default(),
+                group_hashes: Default::default(),
                 new_group_rows: Default::default(),
                 accumulators,
             }),
@@ -184,6 +185,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 acc + state.group_values.size()
                     + state.batch_group_indices.allocated_size()
                     + state.batch_hashes.allocated_size()
+                    + state.group_hashes.allocated_size()
                     + state.new_group_rows.allocated_size()
             }
             AggregateHashTableState::OutputtingMaterialized(output) => {
@@ -303,6 +305,9 @@ pub(super) struct AggregateHashTableBuffer {
 
     /// Hash for each row in the current input batch.
     pub(super) batch_hashes: Vec<u64>,
+
+    /// Hash for each accumulated group.
+    pub(super) group_hashes: Vec<u64>,
 
     /// Input rows that created new groups in the current input batch.
     pub(super) new_group_rows: Vec<usize>,

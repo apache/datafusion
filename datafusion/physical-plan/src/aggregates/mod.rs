@@ -535,7 +535,7 @@ enum StreamType {
     /// [`StreamType::PartialHash`] and [`StreamType::FinalHash`]
     ///
     /// See issue for details: <https://github.com/apache/datafusion/issues/22710>
-    GroupedHash(GroupedHashAggregateStream),
+    GroupedHash(Box<GroupedHashAggregateStream>),
     /// Grouped TopK aggregate stream.
     /// Input output scheme: initial input -> final result
     ///
@@ -550,7 +550,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::PartialHash(stream) => Box::pin(stream),
             StreamType::FinalHash(stream) => Box::pin(stream),
-            StreamType::GroupedHash(stream) => Box::pin(stream),
+            StreamType::GroupedHash(stream) => Box::pin(*stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }
     }
@@ -1035,9 +1035,9 @@ impl AggregateExec {
         }
 
         // Execution paths that have not been migrated use the fallback implementation
-        Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
-            self, context, partition,
-        )?))
+        Ok(StreamType::GroupedHash(Box::new(
+            GroupedHashAggregateStream::new(self, context, partition)?,
+        )))
     }
 
     fn should_use_partial_hash_stream(&self, context: &TaskContext) -> bool {

@@ -25,15 +25,16 @@
 //!
 //! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
+use std::collections::VecDeque;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{PrimitiveArray, RecordBatch};
+use arrow::array::{PrimitiveArray, RecordBatch, UInt32Builder};
 use arrow::compute::take_arrays;
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::UInt32Type;
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -44,6 +45,7 @@ use super::aggregate_hash_table::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialSkipMarker,
 };
 use super::skip_partial::SkipAggregationProbe;
+use crate::coalesce::LimitedBatchCoalescer;
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
@@ -132,8 +134,8 @@ pub(crate) struct PartialHashAggregateStream {
     /// Tracks whether partial aggregation should switch to direct state conversion.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
-    /// Group indices for each target final partition.
-    repartition_state: Option<PartialRepartitionState>,
+    /// Local repartition and coalesce state for partial output.
+    repartition_state: Option<Box<PartialRepartitionState>>,
 
     /// Optional soft limit on the number of groups to accumulate before output.
     ///
@@ -143,102 +145,206 @@ pub(crate) struct PartialHashAggregateStream {
 
     /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
     /// state for emitting output batches.
-    state: Option<PartialHashAggregateState>,
+    state: Option<Box<PartialHashAggregateState>>,
 }
 
 struct PartialRepartitionState {
-    partition_group_indices: Vec<Vec<u32>>,
-    partition_batches: Vec<RecordBatch>,
-    offsets: Vec<usize>,
-    remaining_rows: usize,
+    coalescers: Vec<LimitedBatchCoalescer>,
+    pending: VecDeque<RecordBatch>,
+    partition_indices: Vec<Vec<u32>>,
+    source_batch: Option<RecordBatch>,
+    source_hashes: Vec<u64>,
+    source_offset: usize,
     batch_size: usize,
     num_partitions: usize,
-    next_partition: usize,
+    finished: bool,
 }
 
 impl PartialRepartitionState {
-    fn new(num_partitions: usize, batch_size: usize) -> Self {
+    fn new(schema: &SchemaRef, num_partitions: usize, batch_size: usize) -> Self {
+        let coalescers = (0..num_partitions)
+            .map(|_| LimitedBatchCoalescer::new(Arc::clone(schema), batch_size, None))
+            .collect();
         Self {
-            partition_group_indices: vec![vec![]; num_partitions],
-            partition_batches: Vec::with_capacity(num_partitions),
-            offsets: vec![0; num_partitions],
-            remaining_rows: 0,
+            coalescers,
+            pending: VecDeque::new(),
+            partition_indices: vec![vec![]; num_partitions],
+            source_batch: None,
+            source_hashes: vec![],
+            source_offset: 0,
             batch_size,
             num_partitions,
-            next_partition: 0,
+            finished: false,
         }
     }
 
-    fn start_output(&mut self, batch: &RecordBatch) -> Result<()> {
-        self.partition_batches.clear();
-        self.remaining_rows = 0;
-
-        for group_indices in &self.partition_group_indices {
-            let indices: PrimitiveArray<UInt32Type> = group_indices.clone().into();
-            let columns = take_arrays(batch.columns(), &indices, None)?;
-            let partition_batch =
-                RecordBatch::try_new(Arc::clone(&batch.schema()), columns)?;
-            self.remaining_rows += partition_batch.num_rows();
-            self.partition_batches.push(partition_batch);
+    fn start_output(&mut self, batch: RecordBatch, hashes: Vec<u64>) -> Result<()> {
+        if batch.num_rows() != hashes.len() {
+            return internal_err!(
+                "partial aggregate output has {} rows, but {} hashes",
+                batch.num_rows(),
+                hashes.len()
+            );
         }
 
-        self.offsets.clear();
-        self.offsets.resize(self.num_partitions, 0);
-        self.next_partition = 0;
+        self.source_batch = Some(batch);
+        self.source_hashes = hashes;
+        self.source_offset = 0;
         Ok(())
     }
 
-    fn next_batch(&mut self) -> Option<RecordBatch> {
-        if self.partition_batches.is_empty() {
-            return None;
+    fn push_batch(&mut self, batch: &RecordBatch, hashes: &[u64]) -> Result<()> {
+        if batch.num_rows() != hashes.len() {
+            return internal_err!(
+                "partial aggregate output has {} rows, but {} hashes",
+                batch.num_rows(),
+                hashes.len()
+            );
         }
 
-        for _ in 0..self.num_partitions {
-            let partition = self.next_partition;
-            self.next_partition = (self.next_partition + 1) % self.num_partitions;
+        for indices in &mut self.partition_indices {
+            indices.clear();
+        }
 
-            let batch = &self.partition_batches[partition];
-            let offset = self.offsets[partition];
-            let partition_rows = batch.num_rows();
-            if offset >= partition_rows {
+        if self.num_partitions.is_power_of_two() {
+            let mask = self.num_partitions - 1;
+            self.push_partition_indices(hashes, |hash| (hash as usize) & mask)?;
+        } else {
+            let num_partitions = self.num_partitions;
+            self.push_partition_indices(hashes, |hash| (hash as usize) % num_partitions)?;
+        }
+
+        for partition in 0..self.num_partitions {
+            let indices = &self.partition_indices[partition];
+            if indices.is_empty() {
                 continue;
             }
 
-            let len = self.batch_size.min(partition_rows - offset);
-            let output = add_partitioned_aggregation_metadata(
-                batch.slice(offset, len),
-                partition,
-                self.num_partitions,
-            );
-            self.offsets[partition] += len;
-            self.remaining_rows -= len;
-            if self.remaining_rows == 0 {
-                self.partition_batches.clear();
+            let mut indices_builder = UInt32Builder::with_capacity(indices.len());
+            indices_builder.append_slice(indices);
+            let indices: PrimitiveArray<UInt32Type> = indices_builder.finish();
+            let columns = take_arrays(batch.columns(), &indices, None)?;
+            let partition_batch =
+                RecordBatch::try_new(Arc::clone(&batch.schema()), columns)?;
+            self.coalescers[partition].push_batch(partition_batch)?;
+            while let Some(batch) = self.coalescers[partition].next_completed_batch() {
+                self.pending.push_back(add_partitioned_aggregation_metadata(
+                    batch,
+                    partition,
+                    self.num_partitions,
+                ));
             }
-            return Some(output);
         }
 
-        self.partition_batches.clear();
-        None
+        Ok(())
+    }
+
+    fn push_partition_indices<F>(
+        &mut self,
+        hashes: &[u64],
+        compute_partition: F,
+    ) -> Result<()>
+    where
+        F: Fn(u64) -> usize,
+    {
+        for (row, hash) in hashes.iter().enumerate() {
+            let row = u32::try_from(row).map_err(|_| {
+                datafusion_common::internal_datafusion_err!(
+                    "partitioned aggregate row index exceeds u32::MAX"
+                )
+            })?;
+            self.partition_indices[compute_partition(*hash)].push(row);
+        }
+        Ok(())
+    }
+
+    fn push_next_source_batch(&mut self) -> Result<bool> {
+        let Some(source_batch) = self.source_batch.as_ref() else {
+            return Ok(false);
+        };
+        if self.source_offset >= source_batch.num_rows() {
+            self.source_batch = None;
+            self.source_hashes.clear();
+            self.source_offset = 0;
+            return Ok(false);
+        }
+
+        let len = self
+            .batch_size
+            .min(source_batch.num_rows() - self.source_offset);
+        let batch = source_batch.slice(self.source_offset, len);
+        let hashes =
+            self.source_hashes[self.source_offset..self.source_offset + len].to_vec();
+        self.source_offset += len;
+        self.push_batch(&batch, &hashes)?;
+        Ok(true)
+    }
+
+    fn next_batch(
+        &mut self,
+        finish_when_source_done: bool,
+    ) -> Result<Option<RecordBatch>> {
+        if let Some(batch) = self.pending.pop_front() {
+            return Ok(Some(batch));
+        }
+
+        while self.push_next_source_batch()? {
+            if let Some(batch) = self.pending.pop_front() {
+                return Ok(Some(batch));
+            }
+        }
+
+        if finish_when_source_done {
+            self.finish()?;
+        }
+
+        Ok(self.pending.pop_front())
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        if self.finished {
+            return Ok(());
+        }
+
+        for partition in 0..self.num_partitions {
+            self.coalescers[partition].finish()?;
+            while let Some(batch) = self.coalescers[partition].next_completed_batch() {
+                self.pending.push_back(add_partitioned_aggregation_metadata(
+                    batch,
+                    partition,
+                    self.num_partitions,
+                ));
+            }
+        }
+        self.finished = true;
+        Ok(())
+    }
+
+    fn has_source(&self) -> bool {
+        self.source_batch.is_some()
     }
 
     fn is_done(&self) -> bool {
-        self.partition_batches.is_empty()
+        self.pending.is_empty() && self.source_batch.is_none() && self.finished
     }
 
     fn memory_size(&self) -> usize {
-        self.partition_group_indices.allocated_size()
+        self.partition_indices.allocated_size()
             + self
-                .partition_group_indices
+                .partition_indices
                 .iter()
                 .map(VecAllocExt::allocated_size)
                 .sum::<usize>()
             + self
-                .partition_batches
+                .source_batch
+                .as_ref()
+                .map_or(0, RecordBatch::get_array_memory_size)
+            + self
+                .pending
                 .iter()
                 .map(RecordBatch::get_array_memory_size)
                 .sum::<usize>()
-            + self.offsets.allocated_size()
+            + self.source_hashes.allocated_size()
     }
 }
 
@@ -270,7 +376,7 @@ enum PartialHashAggregateState {
         /// finish in `Done`. If `Some`, partial skip has triggered and the
         /// stream will move to `SkippingAggregation` after these accumulated
         /// groups are emitted.
-        skip_hash_table: Option<AggregateHashTable<PartialSkipMarker>>,
+        skip_hash_table: Option<Box<AggregateHashTable<PartialSkipMarker>>>,
     },
     SkippingAggregation {
         hash_table: AggregateHashTable<PartialSkipMarker>,
@@ -428,15 +534,15 @@ impl PartialHashAggregateStream {
         )?;
         let repartition_state =
             if can_repartition_in_partial(agg, context.as_ref(), &hash_table) {
-                Some(PartialRepartitionState::new(
+                Some(Box::new(PartialRepartitionState::new(
+                    &schema,
                     context.session_config().target_partitions(),
                     batch_size,
-                ))
+                )))
             } else {
                 None
             };
-        let can_skip_aggregation =
-            agg.group_by.is_single() && hash_table.can_skip_aggregation();
+        let can_skip_aggregation = hash_table.can_skip_aggregation();
         let skip_aggregation_probe = if can_skip_aggregation {
             let options = &context.session_config().options().execution;
             let probe_ratio_threshold =
@@ -472,7 +578,9 @@ impl PartialHashAggregateStream {
             skip_aggregation_probe,
             repartition_state,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
-            state: Some(PartialHashAggregateState::ReadingInput { hash_table }),
+            state: Some(Box::new(PartialHashAggregateState::ReadingInput {
+                hash_table,
+            })),
         })
     }
 
@@ -500,24 +608,12 @@ impl PartialHashAggregateStream {
             .is_some_and(|probe| probe.should_skip())
     }
 
-    fn append_new_groups_to_partitions(
-        &mut self,
-        hash_table: &AggregateHashTable<PartialMarker>,
-    ) -> Result<()> {
-        let Some(repartition_state) = self.repartition_state.as_mut() else {
-            return Ok(());
-        };
-
-        hash_table
-            .append_new_group_partitions(&mut repartition_state.partition_group_indices)
-    }
-
     fn memory_size(&self, hash_table: &AggregateHashTable<PartialMarker>) -> usize {
         hash_table.memory_size()
             + self
                 .repartition_state
                 .as_ref()
-                .map_or(0, PartialRepartitionState::memory_size)
+                .map_or(0, |state| state.memory_size())
     }
 
     fn resize_reservation(
@@ -530,19 +626,20 @@ impl PartialHashAggregateStream {
     fn next_output_batch(
         &mut self,
         hash_table: &mut AggregateHashTable<PartialMarker>,
+        finish_when_source_done: bool,
     ) -> Result<Option<RecordBatch>> {
         let Some(repartition_state) = self.repartition_state.as_mut() else {
             return hash_table.next_output_batch();
         };
 
-        if repartition_state.is_done() {
-            let Some(batch) = hash_table.materialize_output_batch()? else {
-                return Ok(None);
-            };
-            repartition_state.start_output(&batch)?;
+        if !repartition_state.has_source()
+            && let Some((batch, hashes)) =
+                hash_table.materialize_output_batch_with_hashes()?
+        {
+            repartition_state.start_output(batch, hashes)?;
         }
 
-        Ok(repartition_state.next_batch())
+        repartition_state.next_batch(finish_when_source_done)
     }
 
     fn is_output_done(&self, hash_table: &AggregateHashTable<PartialMarker>) -> bool {
@@ -550,7 +647,7 @@ impl PartialHashAggregateStream {
             && self
                 .repartition_state
                 .as_ref()
-                .is_none_or(PartialRepartitionState::is_done)
+                .is_none_or(|state| state.is_done())
     }
 
     fn start_output(
@@ -598,15 +695,6 @@ impl PartialHashAggregateStream {
                     ));
                 }
 
-                if let Err(e) =
-                    self.append_new_groups_to_partitions(original_state.hash_table())
-                {
-                    return ControlFlow::Break((
-                        Poll::Ready(Some(Err(e))),
-                        original_state,
-                    ));
-                }
-
                 if self.hit_soft_group_limit(original_state.hash_table()) {
                     let timer = elapsed_compute.timer();
                     let result = self.start_output(original_state.hash_table_mut(), true);
@@ -640,30 +728,10 @@ impl PartialHashAggregateStream {
                 // True branch: a decision has been made to skip partial aggregation.
                 if self.should_skip_aggregation() {
                     let timer = elapsed_compute.timer();
-                    if original_state.hash_table().can_repartition_in_partial() {
-                        let result = original_state.hash_table_mut().skip_hash_group_by();
-                        timer.done();
-
-                        if let Err(e) = result {
-                            return ControlFlow::Break((
-                                Poll::Ready(Some(Err(e))),
-                                original_state,
-                            ));
-                        }
-
-                        if let Err(e) =
-                            self.resize_reservation(original_state.hash_table())
-                        {
-                            return ControlFlow::Break((
-                                Poll::Ready(Some(Err(e))),
-                                original_state,
-                            ));
-                        }
-
-                        return ControlFlow::Continue(original_state);
-                    }
-
-                    let result = match original_state.hash_table().partial_skip_table() {
+                    let result = match original_state
+                        .hash_table()
+                        .partial_skip_table(self.repartition_state.is_some())
+                    {
                         Ok(skip_hash_table) => self
                             .start_output(original_state.hash_table_mut(), false)
                             .map(|()| skip_hash_table),
@@ -685,7 +753,7 @@ impl PartialHashAggregateStream {
                             return ControlFlow::Continue(
                                 PartialHashAggregateState::ProducingOutput {
                                     hash_table,
-                                    skip_hash_table: Some(skip_hash_table),
+                                    skip_hash_table: Some(Box::new(skip_hash_table)),
                                 },
                             );
                         }
@@ -757,7 +825,15 @@ impl PartialHashAggregateStream {
 
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
-        let result = self.next_output_batch(original_state.hash_table_mut());
+        let finish_when_source_done = !matches!(
+            &original_state,
+            PartialHashAggregateState::ProducingOutput {
+                skip_hash_table: Some(_),
+                ..
+            }
+        );
+        let result = self
+            .next_output_batch(original_state.hash_table_mut(), finish_when_source_done);
         timer.done();
 
         match result {
@@ -770,9 +846,9 @@ impl PartialHashAggregateStream {
                         PartialHashAggregateState::ProducingOutput {
                             skip_hash_table: Some(hash_table),
                             ..
-                        } => {
-                            PartialHashAggregateState::SkippingAggregation { hash_table }
-                        }
+                        } => PartialHashAggregateState::SkippingAggregation {
+                            hash_table: *hash_table,
+                        },
                         PartialHashAggregateState::ProducingOutput {
                             skip_hash_table: None,
                             ..
@@ -796,7 +872,9 @@ impl PartialHashAggregateStream {
                     PartialHashAggregateState::ProducingOutput {
                         skip_hash_table: Some(hash_table),
                         ..
-                    } => PartialHashAggregateState::SkippingAggregation { hash_table },
+                    } => PartialHashAggregateState::SkippingAggregation {
+                        hash_table: *hash_table,
+                    },
                     PartialHashAggregateState::ProducingOutput {
                         skip_hash_table: None,
                         ..
@@ -807,6 +885,26 @@ impl PartialHashAggregateStream {
             }
             Err(e) => ControlFlow::Break((Poll::Ready(Some(Err(e))), original_state)),
         }
+    }
+
+    fn push_skip_batch(
+        &mut self,
+        batch: RecordBatch,
+        hashes: &[u64],
+    ) -> Result<Option<RecordBatch>> {
+        let Some(repartition_state) = self.repartition_state.as_mut() else {
+            return Ok(Some(batch));
+        };
+        repartition_state.push_batch(&batch, hashes)?;
+        repartition_state.next_batch(false)
+    }
+
+    fn finish_repartition(&mut self) -> Result<Option<RecordBatch>> {
+        let Some(repartition_state) = self.repartition_state.as_mut() else {
+            return Ok(None);
+        };
+        repartition_state.finish()?;
+        repartition_state.next_batch(true)
     }
 
     /// Handle SkippingAggregation state - convert raw input directly to partial states.
@@ -833,23 +931,55 @@ impl PartialHashAggregateStream {
 
                 let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
                 let timer = elapsed_compute.timer();
-                let result = match &mut original_state {
-                    PartialHashAggregateState::SkippingAggregation { hash_table } => {
-                        hash_table.convert_batch_to_state(&batch)
-                    }
-                    _ => unreachable!("expected skipping aggregation state"),
-                };
-                timer.done();
+                if self.repartition_state.is_some() {
+                    let result = match &mut original_state {
+                        PartialHashAggregateState::SkippingAggregation { hash_table } => {
+                            hash_table.convert_batch_to_state_with_hashes(&batch)
+                        }
+                        _ => unreachable!("expected skipping aggregation state"),
+                    };
+                    timer.done();
 
-                match result {
-                    Ok(batch) => ControlFlow::Break((
-                        Poll::Ready(Some(
-                            Ok(batch.record_output(&self.baseline_metrics)),
+                    match result {
+                        Ok((batch, hashes)) => match self.push_skip_batch(batch, &hashes)
+                        {
+                            Ok(Some(batch)) => ControlFlow::Break((
+                                Poll::Ready(Some(Ok(
+                                    batch.record_output(&self.baseline_metrics)
+                                ))),
+                                original_state,
+                            )),
+                            Ok(None) => ControlFlow::Continue(original_state),
+                            Err(e) => ControlFlow::Break((
+                                Poll::Ready(Some(Err(e))),
+                                original_state,
+                            )),
+                        },
+                        Err(e) => ControlFlow::Break((
+                            Poll::Ready(Some(Err(e))),
+                            original_state,
                         )),
-                        original_state,
-                    )),
-                    Err(e) => {
-                        ControlFlow::Break((Poll::Ready(Some(Err(e))), original_state))
+                    }
+                } else {
+                    let result = match &mut original_state {
+                        PartialHashAggregateState::SkippingAggregation { hash_table } => {
+                            hash_table.convert_batch_to_state(&batch)
+                        }
+                        _ => unreachable!("expected skipping aggregation state"),
+                    };
+                    timer.done();
+
+                    match result {
+                        Ok(batch) => ControlFlow::Break((
+                            Poll::Ready(Some(Ok(
+                                batch.record_output(&self.baseline_metrics)
+                            ))),
+                            original_state,
+                        )),
+                        Err(e) => ControlFlow::Break((
+                            Poll::Ready(Some(Err(e))),
+                            original_state,
+                        )),
                     }
                 }
             }
@@ -859,7 +989,18 @@ impl PartialHashAggregateStream {
             Poll::Ready(None) => {
                 let input_schema = self.input.schema();
                 self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-                ControlFlow::Continue(PartialHashAggregateState::Done)
+                match self.finish_repartition() {
+                    Ok(Some(batch)) => ControlFlow::Break((
+                        Poll::Ready(Some(
+                            Ok(batch.record_output(&self.baseline_metrics)),
+                        )),
+                        original_state,
+                    )),
+                    Ok(None) => ControlFlow::Continue(PartialHashAggregateState::Done),
+                    Err(e) => {
+                        ControlFlow::Break((Poll::Ready(Some(Err(e))), original_state))
+                    }
+                }
             }
         }
     }
@@ -923,7 +1064,7 @@ impl Stream for PartialHashAggregateStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         loop {
-            let cur_state = self
+            let cur_state = *self
                 .state
                 .take()
                 .expect("PartialHashAggregateStream state should not be None");
@@ -940,18 +1081,18 @@ impl Stream for PartialHashAggregateStream {
                 }
                 state @ PartialHashAggregateState::Done => {
                     let _ = self.reservation.try_resize(0);
-                    self.state = Some(state);
+                    self.state = Some(Box::new(state));
                     return Poll::Ready(None);
                 }
             };
 
             match next_state {
                 ControlFlow::Continue(next_state) => {
-                    self.state = Some(next_state);
+                    self.state = Some(Box::new(next_state));
                     continue;
                 }
                 ControlFlow::Break((poll, next_state)) => {
-                    self.state = Some(next_state);
+                    self.state = Some(Box::new(next_state));
                     return poll;
                 }
             }

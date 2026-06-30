@@ -305,36 +305,20 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         Ok(v)
     }
 
-    fn append_all_group_values(
-        &mut self,
+    fn compute_hashes(
+        &self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
         hashes: &mut Vec<u64>,
         new_group_rows: &mut Vec<usize>,
     ) -> Result<()> {
         let num_rows = cols.first().map_or(0, |array| array.len());
-        let first_group_idx = self.len();
 
         groups.clear();
-        groups.extend(first_group_idx..first_group_idx + num_rows);
-
         hashes.clear();
         hashes.resize(num_rows, 0);
         create_hashes(cols, &self.random_state, hashes)?;
-
         new_group_rows.clear();
-        new_group_rows.extend(0..num_rows);
-
-        self.vectorized_operation_buffers.append_row_indices.clear();
-        self.vectorized_operation_buffers
-            .append_row_indices
-            .extend(0..num_rows);
-        for (group_value, col) in self.group_values.iter_mut().zip(cols.iter()) {
-            group_value.vectorized_append(
-                col,
-                &self.vectorized_operation_buffers.append_row_indices,
-            )?;
-        }
 
         Ok(())
     }
@@ -1123,7 +1107,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         new_group_rows: &mut Vec<usize>,
     ) -> Result<()> {
         if self.skip_hash_group_by {
-            return self.append_all_group_values(cols, groups, hashes, new_group_rows);
+            return self.compute_hashes(cols, groups, hashes, new_group_rows);
         }
 
         let n_rows = cols[0].len();

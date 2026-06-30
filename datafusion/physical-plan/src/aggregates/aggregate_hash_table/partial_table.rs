@@ -22,9 +22,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, BooleanArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{
-    Result, assert_eq_or_internal_err, internal_datafusion_err, internal_err,
-};
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_expr::EmitTo;
 
 use crate::aggregates::group_values::new_group_values;
@@ -33,8 +31,8 @@ use crate::aggregates::{AggregateExec, group_id_array, max_duplicate_ordinal};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
-    EvaluatedAccumulatorArgs, HashAggregateAccumulator, MaterializedOutput,
-    PartialMarker, PartialSkipMarker,
+    EvaluatedAccumulatorArgs, EvaluatedAggregateBatch, HashAggregateAccumulator,
+    MaterializedOutput, PartialMarker, PartialSkipMarker,
 };
 
 /// Methods specific to the aggregate hash table used in the partial aggregation stage.
@@ -86,21 +84,23 @@ impl AggregateHashTable<PartialMarker> {
         }
     }
 
-    pub(in crate::aggregates) fn materialize_output_batch(
+    pub(in crate::aggregates) fn materialize_output_batch_with_hashes(
         &mut self,
-    ) -> Result<Option<RecordBatch>> {
+    ) -> Result<Option<(RecordBatch, Vec<u64>)>> {
         match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
             AggregateHashTableState::Outputting(state) => {
                 if state.group_values.is_empty() {
                     return Ok(None);
                 }
 
-                self.materialize_partial_batch(state).map(Some)
+                let hashes = state.group_hashes.clone();
+                self.materialize_partial_batch(state)
+                    .map(|batch| Some((batch, hashes)))
             }
             AggregateHashTableState::Done => Ok(None),
             AggregateHashTableState::Building(_) => {
                 internal_err!(
-                    "materialize_output_batch must be called in the outputting state"
+                    "materialize_output_batch_with_hashes must be called in the outputting state"
                 )
             }
             AggregateHashTableState::OutputtingMaterialized(_) => {
@@ -144,76 +144,19 @@ impl AggregateHashTable<PartialMarker> {
             .support_partial_repartition()
     }
 
-    pub(in crate::aggregates) fn append_new_group_partitions(
-        &self,
-        partition_group_indices: &mut [Vec<u32>],
-    ) -> Result<()> {
-        let num_partitions = partition_group_indices.len();
-        if num_partitions == 0 {
-            return Ok(());
-        }
-
-        if num_partitions.is_power_of_two() {
-            let mask = num_partitions - 1;
-            self.append_new_groups_with_partition(partition_group_indices, |hash| {
-                (hash as usize) & mask
-            })
-        } else {
-            self.append_new_groups_with_partition(partition_group_indices, |hash| {
-                (hash as usize) % num_partitions
-            })
-        }
-    }
-
-    fn append_new_groups_with_partition<F>(
-        &self,
-        partition_group_indices: &mut [Vec<u32>],
-        compute_partition: F,
-    ) -> Result<()>
-    where
-        F: Fn(u64) -> usize,
-    {
-        let state = self.state.building();
-        for &row in &state.new_group_rows {
-            let Some(&group_index) = state.batch_group_indices.get(row) else {
-                return internal_err!(
-                    "new group row index {row} does not have a group index"
-                );
-            };
-            let Some(&hash) = state.batch_hashes.get(row) else {
-                return internal_err!(
-                    "new group row index {row} does not have a hash value"
-                );
-            };
-
-            let group_index = u32::try_from(group_index).map_err(|_| {
-                internal_datafusion_err!(
-                    "partitioned aggregate output index exceeds u32::MAX"
-                )
-            })?;
-            partition_group_indices[compute_partition(hash)].push(group_index);
-        }
-
-        Ok(())
-    }
-
-    pub(in crate::aggregates) fn skip_hash_group_by(&mut self) -> Result<()> {
-        self.state
-            .building_mut()
-            .group_values
-            .skip_hash_group_by()?;
-        Ok(())
-    }
-
     /// In skip-partial-aggregation optimization, when a decision has been made to skip
     /// partial stage, build a typed hash table only for aggregation state conversion
     /// row-by-row.
     pub(in crate::aggregates) fn partial_skip_table(
         &self,
+        skip_hash_group_by: bool,
     ) -> Result<AggregateHashTable<PartialSkipMarker>> {
         let state = self.state.building();
         let group_schema = state.group_by.group_schema(&self.input_schema)?;
-        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        let mut group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        if skip_hash_group_by && group_values.support_partial_repartition() {
+            group_values.skip_hash_group_by()?;
+        }
         let accumulators = state
             .accumulators
             .iter()
@@ -230,6 +173,7 @@ impl AggregateHashTable<PartialMarker> {
                 group_values,
                 batch_group_indices: Default::default(),
                 batch_hashes: Default::default(),
+                group_hashes: Default::default(),
                 new_group_rows: Default::default(),
                 accumulators,
             }),
@@ -254,6 +198,11 @@ impl AggregateHashTable<PartialMarker> {
             )?;
             let group_indices = &state.batch_group_indices;
             let total_num_groups = state.group_values.len();
+            state.group_hashes.resize(total_num_groups, 0);
+            for &row in &state.new_group_rows {
+                let group_index = group_indices[row];
+                state.group_hashes[group_index] = state.batch_hashes[row];
+            }
 
             for (acc, values) in state
                 .accumulators
@@ -325,6 +274,11 @@ impl AggregateHashTable<PartialMarker> {
                 &mut state.batch_hashes,
                 &mut state.new_group_rows,
             )?;
+            state.group_hashes.resize(state.group_values.len(), 0);
+            for &row in &state.new_group_rows {
+                let group_index = state.batch_group_indices[row];
+                state.group_hashes[group_index] = state.batch_hashes[row];
+            }
             any_interned = true;
         }
 
@@ -351,17 +305,7 @@ impl AggregateHashTable<PartialSkipMarker> {
         batch: &RecordBatch,
     ) -> Result<RecordBatch> {
         let evaluated_batch = self.evaluate_batch(batch)?;
-
-        assert_eq_or_internal_err!(
-            evaluated_batch.grouping_set_args.len(),
-            1,
-            "group_values expected to have single element"
-        );
-        let mut output = evaluated_batch
-            .grouping_set_args
-            .into_iter()
-            .next()
-            .unwrap_or_default();
+        let mut output = Self::output_group_values(&evaluated_batch)?;
 
         let state = self.state.building_mut();
         for (acc, values) in state
@@ -376,5 +320,51 @@ impl AggregateHashTable<PartialSkipMarker> {
             Arc::clone(&self.output_schema),
             output,
         )?)
+    }
+
+    pub(in crate::aggregates) fn convert_batch_to_state_with_hashes(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<(RecordBatch, Vec<u64>)> {
+        let evaluated_batch = self.evaluate_batch(batch)?;
+        let output_group_values = Self::output_group_values(&evaluated_batch)?;
+
+        let state = self.state.building_mut();
+        state.group_values.intern(
+            &output_group_values,
+            &mut state.batch_group_indices,
+            &mut state.batch_hashes,
+            &mut state.new_group_rows,
+        )?;
+        let hashes = state.batch_hashes.clone();
+
+        let mut output = output_group_values;
+        for (acc, values) in state
+            .accumulators
+            .iter_mut()
+            .zip(evaluated_batch.accumulator_args.iter())
+        {
+            output.extend(acc.convert_to_state(values)?);
+        }
+
+        Ok((
+            RecordBatch::try_new(Arc::clone(&self.output_schema), output)?,
+            hashes,
+        ))
+    }
+
+    fn output_group_values(
+        evaluated_batch: &EvaluatedAggregateBatch,
+    ) -> Result<Vec<ArrayRef>> {
+        assert_eq_or_internal_err!(
+            evaluated_batch.grouping_set_args.len(),
+            1,
+            "group_values expected to have single element"
+        );
+        Ok(evaluated_batch
+            .grouping_set_args
+            .first()
+            .cloned()
+            .unwrap_or_default())
     }
 }
