@@ -182,6 +182,9 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 acc + state.group_values.size()
                     + state.batch_group_indices.allocated_size()
             }
+            AggregateHashTableState::OutputtingMaterialized(output) => {
+                output.memory_size()
+            }
             AggregateHashTableState::Done => 0,
         }
     }
@@ -208,15 +211,6 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
         state.batch_group_indices = Vec::new();
         self.state = AggregateHashTableState::Outputting(state);
-    }
-}
-
-pub(super) fn emit_to_for_batch_size(batch_size: usize, group_count: usize) -> EmitTo {
-    debug_assert!(batch_size > 0);
-    if group_count <= batch_size {
-        EmitTo::All
-    } else {
-        EmitTo::First(batch_size)
     }
 }
 
@@ -297,9 +291,52 @@ pub(super) struct AggregateHashTableBuffer {
 }
 
 pub(super) enum AggregateHashTableState {
+    /// Accumulating input rows into group keys and aggregate state.
     Building(AggregateHashTableBuffer),
+    /// Emitting results directly from group keys and aggregate state.
     Outputting(AggregateHashTableBuffer),
+    /// Materialize all the output results, and then incrementally output in the `OutputtingMaterialized` state.
+    ///
+    /// Note this is a temporary solution until the `GroupValues` issue is solved:
+    /// Issue: <https://github.com/apache/datafusion/issues/23178>
+    OutputtingMaterialized(MaterializedAggregateOutput),
     Done,
+}
+
+/// Fully evaluated aggregate output and the next row offset to emit.
+///
+/// Final aggregate evaluation consumes accumulator state, and partial terminal
+/// output should not repeatedly renumber group values with `EmitTo::First`.
+/// Materialize once and then slice to honor `batch_size` across output polls.
+pub(super) struct MaterializedAggregateOutput {
+    batch: RecordBatch,
+    offset: usize,
+}
+
+impl MaterializedAggregateOutput {
+    pub(super) fn new(batch: RecordBatch) -> Self {
+        Self { batch, offset: 0 }
+    }
+
+    pub(super) fn next_batch(&mut self, batch_size: usize) -> Option<RecordBatch> {
+        debug_assert!(batch_size > 0);
+        if self.is_exhausted() {
+            return None;
+        }
+
+        let length = batch_size.min(self.batch.num_rows() - self.offset);
+        let batch = self.batch.slice(self.offset, length);
+        self.offset += length;
+        Some(batch)
+    }
+
+    pub(super) fn is_exhausted(&self) -> bool {
+        self.offset >= self.batch.num_rows()
+    }
+
+    pub(super) fn memory_size(&self) -> usize {
+        self.batch.get_array_memory_size()
+    }
 }
 
 impl HashAggregateAccumulator {
@@ -438,5 +475,46 @@ impl AggregateHashTableState {
             unreachable!("hash aggregate table is not building")
         };
         state
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::array::{Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    use super::*;
+
+    #[test]
+    fn materialized_aggregate_output_slices_batches_until_exhausted() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group_col",
+            DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
+        )?;
+        let mut output = MaterializedAggregateOutput::new(batch);
+
+        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![1, 2]);
+        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![3, 4]);
+        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![5]);
+        assert!(output.next_batch(2).is_none());
+        assert!(output.is_exhausted());
+
+        Ok(())
+    }
+
+    fn int32_values(batch: &RecordBatch, column: usize) -> Vec<i32> {
+        let array = batch
+            .column(column)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        (0..array.len()).map(|idx| array.value(idx)).collect()
     }
 }

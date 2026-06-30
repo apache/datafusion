@@ -117,3 +117,34 @@ SELECT id2, largest2_v2 FROM (
            ROW_NUMBER() OVER (PARTITION BY id2 ORDER BY v2 DESC) AS order_v2
     FROM large WHERE v2 IS NOT NULL
 ) sub_query WHERE order_v2 <= 2;
+
+-- Window Top-N partition cardinality sweep (id3 % N gives N distinct partitions).
+-- These exercise PartitionedTopKExec across cardinalities to validate it stays
+-- competitive with the SortExec+Filter baseline as partition count grows.
+-- Window Top-N: 100 partitions
+SELECT pk, largest2_v2 FROM (
+    SELECT id3 % 100 AS pk, v2 AS largest2_v2,
+           ROW_NUMBER() OVER (PARTITION BY id3 % 100 ORDER BY v2 DESC) AS order_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE order_v2 <= 2;
+
+-- Window Top-N: 1,000 partitions
+SELECT pk, largest2_v2 FROM (
+    SELECT id3 % 1000 AS pk, v2 AS largest2_v2,
+           ROW_NUMBER() OVER (PARTITION BY id3 % 1000 ORDER BY v2 DESC) AS order_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE order_v2 <= 2;
+
+-- Window Top-N: 10,000 partitions
+SELECT pk, largest2_v2 FROM (
+    SELECT id3 % 10000 AS pk, v2 AS largest2_v2,
+           ROW_NUMBER() OVER (PARTITION BY id3 % 10000 ORDER BY v2 DESC) AS order_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE order_v2 <= 2;
+
+-- Window Top-N: 100,000 partitions
+SELECT pk, largest2_v2 FROM (
+    SELECT id3 % 100000 AS pk, v2 AS largest2_v2,
+           ROW_NUMBER() OVER (PARTITION BY id3 % 100000 ORDER BY v2 DESC) AS order_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE order_v2 <= 2;
