@@ -296,4 +296,8 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
+name = "parallel_window_scaling"
+
+[[bench]]
+harness = false
 name = "reset_plan_states"
