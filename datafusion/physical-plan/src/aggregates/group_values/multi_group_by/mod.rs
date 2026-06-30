@@ -20,6 +20,7 @@
 mod boolean;
 mod bytes;
 pub mod bytes_view;
+mod dictionary;
 pub mod primitive;
 
 use std::mem::{self, size_of};
@@ -954,9 +955,8 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Timestamp(_, _)
             | DataType::Utf8View
             | DataType::BinaryView
-            | DataType::Boolean // TODO
-                                // || DataType::Dictionary(_, _)
-    )
+            | DataType::Boolean
+    ) || matches!(data_type, DataType::Dictionary(_,v ) if group_column_supported_type(v)) // this doesnt support arbitrary nesting for now
 }
 
 /// Build a [`GroupColumn`] for a single schema field.
@@ -978,7 +978,7 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
     let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(1);
-    match *data_type {
+    match data_type {
         DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type, data_type),
         DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type, data_type),
         DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type, data_type),
@@ -1067,6 +1067,13 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
             } else {
                 v.push(Box::new(BooleanGroupValueBuilder::<false>::new()));
             }
+        }
+        DataType::Dictionary(_, value_dt) => {
+            let new_field = Field::new("", *value_dt.clone(), true);
+            let new_t = dictionary::DictionaryGroupValuesColumn::new(make_group_column(
+                &new_field,
+            )?);
+            v.push(Box::new(new_t) as _)
         }
         _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
     }
@@ -1350,6 +1357,75 @@ mod tests {
                 make_group_column(&field).is_err(),
                 "group_column_supported_type rejected {dt:?} but make_group_column accepted it"
             );
+        }
+    }
+
+    // Dictionary types are supported iff their value type is supported.
+    // Key type is irrelevant to the check — only the value type matters.
+    #[test]
+    fn group_column_supported_type_dictionary_supported_value_types() {
+        let supported: Vec<DataType> = vec![
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Utf8),
+            ),
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Int64),
+            ),
+            DataType::Dictionary(
+                Box::new(DataType::UInt16),
+                Box::new(DataType::LargeUtf8),
+            ),
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Timestamp(
+                    arrow::datatypes::TimeUnit::Nanosecond,
+                    None,
+                )),
+            ),
+        ];
+
+        for dt in &supported {
+            assert!(
+                group_column_supported_type(dt),
+                "expected supported for {dt:?}"
+            );
+            let builder = make_group_column(&Field::new("c", dt.clone(), true))
+                .unwrap_or_else(|e| {
+                    panic!("make_group_column rejected supported dict type {dt:?}: {e}")
+                });
+            assert_eq!(builder.len(), 0, "fresh dictionary builder must have len 0");
+        }
+    }
+
+    // Dictionaries whose value type is not supported must be rejected by both
+    // group_column_supported_type and make_group_column.
+    #[test]
+    fn group_column_supported_type_dictionary_unsupported_value_types() {
+        let unsupported: Vec<DataType> = vec![
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Float16),
+            ),
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Decimal256(76, 10)),
+            ),
+        ];
+
+        for dt in &unsupported {
+            assert!(
+                !group_column_supported_type(dt),
+                "expected unsupported for {dt:?}"
+            );
+            match make_group_column(&Field::new("c", dt.clone(), true)) {
+                Ok(_) => panic!("make_group_column should reject unsupported dict value type {dt:?}"),
+                Err(e) => assert!(
+                    e.to_string().contains("not supported"),
+                    "expected 'not supported' in error for {dt:?}, got: {e}"
+                ),
+            }
         }
     }
 
