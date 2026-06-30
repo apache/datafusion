@@ -66,8 +66,9 @@ pub use expressions::{DynamicFilterTracker, DynamicFilterTracking};
 pub use partitioning::{Distribution, Partitioning, RangePartitioning};
 pub use physical_expr::{
     add_offset_to_expr, add_offset_to_physical_sort_exprs, create_lex_ordering,
-    create_ordering, create_physical_sort_expr, create_physical_sort_exprs,
-    physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
+    create_ordering, create_physical_partitioning, create_physical_sort_expr,
+    create_physical_sort_exprs, physical_exprs_bag_equal, physical_exprs_contains,
+    physical_exprs_equal,
 };
 
 pub use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
