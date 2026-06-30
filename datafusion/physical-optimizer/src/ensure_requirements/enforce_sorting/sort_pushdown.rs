@@ -113,13 +113,23 @@ fn min_fetch(f1: Option<usize>, f2: Option<usize>) -> Option<usize> {
 
 /// Returns the stricter of two distribution requirements.
 /// `SinglePartition` is the strictest.
+#[expect(
+    deprecated,
+    reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+)]
 fn stronger_distribution(a: &Distribution, b: &Distribution) -> Distribution {
     match (a, b) {
         (Distribution::SinglePartition, _) | (_, Distribution::SinglePartition) => {
             Distribution::SinglePartition
         }
-        (Distribution::HashPartitioned(_), _) => a.clone(),
-        (_, Distribution::HashPartitioned(_)) => b.clone(),
+        (Distribution::HashPartitioned(exprs), _)
+        | (Distribution::KeyPartitioned(exprs), _) => {
+            Distribution::KeyPartitioned(exprs.clone())
+        }
+        (_, Distribution::HashPartitioned(exprs))
+        | (_, Distribution::KeyPartitioned(exprs)) => {
+            Distribution::KeyPartitioned(exprs.clone())
+        }
         _ => Distribution::UnspecifiedDistribution,
     }
 }
