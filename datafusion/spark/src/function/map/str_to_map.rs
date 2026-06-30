@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::array::{
@@ -34,6 +33,7 @@ use datafusion_expr::{
 };
 
 use crate::function::map::utils::map_type_from_key_value_types;
+use datafusion_common::config::MapKeyDedupPolicy;
 
 const DEFAULT_PAIR_DELIM: &str = ",";
 const DEFAULT_KV_DELIM: &str = ":";
@@ -49,11 +49,10 @@ const DEFAULT_KV_DELIM: &str = ":";
 /// - keyValueDelim: Delimiter between key and value (default: ':')
 ///
 /// # Duplicate Key Handling
-/// Uses EXCEPTION behavior (Spark 3.0+ default): errors on duplicate keys.
-/// See `spark.sql.mapKeyDedupPolicy`:
-/// <https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4502-L4511>
-///
-/// TODO: Support configurable `spark.sql.mapKeyDedupPolicy` (LAST_WIN) in a follow-up PR.
+/// Mirrors Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4502-L4511),
+/// wired through DataFusion's `datafusion.spark.map_key_dedup_policy`:
+/// - `EXCEPTION` (default): error on duplicate keys.
+/// - `LAST_WIN`: keep the last occurrence of each duplicate key.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkStrToMap {
     signature: Signature,
@@ -84,10 +83,6 @@ impl SparkStrToMap {
 }
 
 impl ScalarUDFImpl for SparkStrToMap {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "str_to_map"
     }
@@ -107,22 +102,32 @@ impl ScalarUDFImpl for SparkStrToMap {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let last_value_wins =
+            args.config_options.spark.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
         let arrays: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args.args)?;
-        let result = str_to_map_inner(&arrays)?;
+        let result = str_to_map_inner(&arrays, last_value_wins)?;
         Ok(ColumnarValue::Array(result))
     }
 }
 
-fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn str_to_map_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef> {
     match args.len() {
         1 => match args[0].data_type() {
-            DataType::Utf8 => str_to_map_impl(as_string_array(&args[0])?, None, None),
-            DataType::LargeUtf8 => {
-                str_to_map_impl(as_large_string_array(&args[0])?, None, None)
+            DataType::Utf8 => {
+                str_to_map_impl(as_string_array(&args[0])?, None, None, last_value_wins)
             }
-            DataType::Utf8View => {
-                str_to_map_impl(as_string_view_array(&args[0])?, None, None)
-            }
+            DataType::LargeUtf8 => str_to_map_impl(
+                as_large_string_array(&args[0])?,
+                None,
+                None,
+                last_value_wins,
+            ),
+            DataType::Utf8View => str_to_map_impl(
+                as_string_view_array(&args[0])?,
+                None,
+                None,
+                last_value_wins,
+            ),
             other => exec_err!(
                 "Unsupported data type {other:?} for str_to_map, \
                 expected Utf8, LargeUtf8, or Utf8View"
@@ -133,16 +138,19 @@ fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 as_string_array(&args[0])?,
                 Some(as_string_array(&args[1])?),
                 None,
+                last_value_wins,
             ),
             (DataType::LargeUtf8, DataType::LargeUtf8) => str_to_map_impl(
                 as_large_string_array(&args[0])?,
                 Some(as_large_string_array(&args[1])?),
                 None,
+                last_value_wins,
             ),
             (DataType::Utf8View, DataType::Utf8View) => str_to_map_impl(
                 as_string_view_array(&args[0])?,
                 Some(as_string_view_array(&args[1])?),
                 None,
+                last_value_wins,
             ),
             (t1, t2) => exec_err!(
                 "Unsupported data types ({t1:?}, {t2:?}) for str_to_map, \
@@ -158,12 +166,14 @@ fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 as_string_array(&args[0])?,
                 Some(as_string_array(&args[1])?),
                 Some(as_string_array(&args[2])?),
+                last_value_wins,
             ),
             (DataType::LargeUtf8, DataType::LargeUtf8, DataType::LargeUtf8) => {
                 str_to_map_impl(
                     as_large_string_array(&args[0])?,
                     Some(as_large_string_array(&args[1])?),
                     Some(as_large_string_array(&args[2])?),
+                    last_value_wins,
                 )
             }
             (DataType::Utf8View, DataType::Utf8View, DataType::Utf8View) => {
@@ -171,6 +181,7 @@ fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                     as_string_view_array(&args[0])?,
                     Some(as_string_view_array(&args[1])?),
                     Some(as_string_view_array(&args[2])?),
+                    last_value_wins,
                 )
             }
             (t1, t2, t3) => exec_err!(
@@ -186,18 +197,18 @@ fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
     text_array: V,
     pair_delim_array: Option<V>,
     kv_delim_array: Option<V>,
+    last_value_wins: bool,
 ) -> Result<ArrayRef> {
     let num_rows = text_array.len();
 
     // Precompute combined null buffer from all input arrays.
-    // NullBuffer::union performs a bitmap-level AND, which is more efficient
-    // than checking per-row nullability inline.
-    let text_nulls = text_array.nulls().cloned();
-    let pair_nulls = pair_delim_array.and_then(|a| a.nulls().cloned());
-    let kv_nulls = kv_delim_array.and_then(|a| a.nulls().cloned());
-    let combined_nulls = [text_nulls.as_ref(), pair_nulls.as_ref(), kv_nulls.as_ref()]
-        .into_iter()
-        .fold(None, |acc, nulls| NullBuffer::union(acc.as_ref(), nulls));
+    // NullBuffer::union_many performs a bitmap-level AND, which is more
+    // efficient than checking per-row nullability inline.
+    let combined_nulls = NullBuffer::union_many([
+        text_array.nulls(),
+        pair_delim_array.as_ref().and_then(|a| a.nulls()),
+        kv_delim_array.as_ref().and_then(|a| a.nulls()),
+    ]);
 
     // Use field names matching map_type_from_key_value_types: "key" and "value"
     let field_names = MapFieldNames {
@@ -212,6 +223,10 @@ fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
     );
 
     let mut seen_keys = HashSet::new();
+    // LAST_WIN buffers pairs to support in-place value overwrite at the key's
+    // first-seen position — matches Spark's `ArrayBasedMapBuilder`.
+    let mut pairs: Vec<(&str, Option<&str>)> = Vec::new();
+    let mut key_positions: HashMap<&str, usize> = HashMap::new();
     for row_idx in 0..num_rows {
         if combined_nulls.as_ref().is_some_and(|n| n.is_null(row_idx)) {
             map_builder.append(false)?;
@@ -232,31 +247,56 @@ fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
             continue;
         }
 
-        seen_keys.clear();
-        for pair in text.split(pair_delim) {
-            if pair.is_empty() {
-                continue;
+        if last_value_wins {
+            pairs.clear();
+            key_positions.clear();
+            for pair in text.split(pair_delim) {
+                if pair.is_empty() {
+                    continue;
+                }
+                let mut kv_iter = pair.splitn(2, kv_delim);
+                let key = kv_iter.next().unwrap_or("");
+                let value = kv_iter.next();
+                match key_positions.get(key) {
+                    Some(&idx) => pairs[idx].1 = value,
+                    None => {
+                        key_positions.insert(key, pairs.len());
+                        pairs.push((key, value));
+                    }
+                }
             }
-
-            let mut kv_iter = pair.splitn(2, kv_delim);
-            let key = kv_iter.next().unwrap_or("");
-            let value = kv_iter.next();
-
-            // TODO: Support LAST_WIN policy via spark.sql.mapKeyDedupPolicy config
-            // EXCEPTION policy: error on duplicate keys (Spark 3.0+ default)
-            if !seen_keys.insert(key) {
-                return exec_err!(
-                    "Duplicate map key '{key}' was found, please check the input data. \
-                    If you want to remove the duplicated keys, you can set \
-                    spark.sql.mapKeyDedupPolicy to \"LAST_WIN\" so that the key \
-                    inserted at last takes precedence."
-                );
+            for (key, value) in &pairs {
+                map_builder.keys().append_value(key);
+                match value {
+                    Some(v) => map_builder.values().append_value(v),
+                    None => map_builder.values().append_null(),
+                }
             }
+        } else {
+            seen_keys.clear();
+            for pair in text.split(pair_delim) {
+                if pair.is_empty() {
+                    continue;
+                }
 
-            map_builder.keys().append_value(key);
-            match value {
-                Some(v) => map_builder.values().append_value(v),
-                None => map_builder.values().append_null(),
+                let mut kv_iter = pair.splitn(2, kv_delim);
+                let key = kv_iter.next().unwrap_or("");
+                let value = kv_iter.next();
+
+                if !seen_keys.insert(key) {
+                    return exec_err!(
+                        "[DUPLICATED_MAP_KEY] Duplicate map key '{key}' was found, \
+                         please check the input data. To allow duplicate keys with \
+                         last-value-wins semantics, set \
+                         `datafusion.spark.map_key_dedup_policy` to `LAST_WIN`."
+                    );
+                }
+
+                map_builder.keys().append_value(key);
+                match value {
+                    Some(v) => map_builder.values().append_value(v),
+                    None => map_builder.values().append_null(),
+                }
             }
         }
         map_builder.append(true)?;

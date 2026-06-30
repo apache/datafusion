@@ -41,7 +41,6 @@ workspace = true
 name = "datafusion_functions_aggregate"
 
 [dependencies]
-ahash = { workspace = true }
 arrow = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
@@ -54,7 +53,6 @@ datafusion-physical-expr-common = { workspace = true }
 half = { workspace = true }
 log = { workspace = true }
 num-traits = { workspace = true }
-paste = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
@@ -76,3 +74,26 @@ harness = false
 [[bench]]
 harness = false
 name = "min_max_bytes"
+
+[[bench]]
+name = "approx_distinct"
+harness = false
+
+[[bench]]
+name = "first_last"
+harness = false
+
+[[bench]]
+name = "count_distinct"
+harness = false
+
+[[bench]]
+name = "median"
+harness = false
+
+[[bench]]
+name = "percentile_cont"
+harness = false
+
+[features]
+force_hash_collisions = ["datafusion-common/force_hash_collisions"]

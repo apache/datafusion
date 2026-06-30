@@ -21,14 +21,15 @@ use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 #[user_doc(
     doc_section(label = "Struct Functions"),
     description = "Returns an Arrow struct using the specified input expressions optionally named.
 Fields in the returned struct use the optional name or the `cN` naming convention.
-For example: `c0`, `c1`, `c2`, etc.",
+For example: `c0`, `c1`, `c2`, etc.
+For information on comparing and ordering struct values (including `NULL` handling),
+see [Comparison and Ordering](struct_coercion.md#comparison-and-ordering).",
     syntax_example = "struct(expression1[, ..., expression_n])",
     sql_example = r#"For example, this query converts two columns `a` and `b` to a single column with
 a struct type of fields `field_a` and `c1`:
@@ -86,9 +87,6 @@ impl StructFunc {
 }
 
 impl ScalarUDFImpl for StructFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "struct"
     }

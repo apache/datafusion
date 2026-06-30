@@ -21,7 +21,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::error::{_plan_err, _schema_err, DataFusionError, Result};
 use crate::{
@@ -127,6 +127,13 @@ impl DFSchema {
             field_qualifiers: vec![],
             functional_dependencies: FunctionalDependencies::empty(),
         }
+    }
+
+    /// Returns a reference to a shared empty [`DFSchema`].
+    pub fn empty_ref() -> &'static DFSchemaRef {
+        static EMPTY: LazyLock<DFSchemaRef> =
+            LazyLock::new(|| Arc::new(DFSchema::empty()));
+        &EMPTY
     }
 
     /// Return a reference to the inner Arrow [`Schema`]
@@ -592,30 +599,6 @@ impl DFSchema {
             .all(|(dffield, arrowfield)| dffield.name() == arrowfield.name())
     }
 
-    /// Check to see if fields in 2 Arrow schemas are compatible
-    #[deprecated(since = "47.0.0", note = "This method is no longer used")]
-    pub fn check_arrow_schema_type_compatible(
-        &self,
-        arrow_schema: &Schema,
-    ) -> Result<()> {
-        let self_arrow_schema = self.as_arrow();
-        self_arrow_schema
-            .fields()
-            .iter()
-            .zip(arrow_schema.fields().iter())
-            .try_for_each(|(l_field, r_field)| {
-                if !can_cast_types(r_field.data_type(), l_field.data_type()) {
-                    _plan_err!("Column {} (type: {}) is not compatible with column {} (type: {})",
-                                r_field.name(),
-                                r_field.data_type(),
-                                l_field.name(),
-                                l_field.data_type())
-                } else {
-                    Ok(())
-                }
-            })
-    }
-
     /// Returns true if the two schemas have the same qualified named
     /// fields with logically equivalent data types. Returns false otherwise.
     ///
@@ -632,11 +615,6 @@ impl DFSchema {
                 && f1.name() == f2.name()
                 && Self::datatype_is_logically_equal(f1.data_type(), f2.data_type())
         })
-    }
-
-    #[deprecated(since = "47.0.0", note = "Use has_equivalent_names_and_types` instead")]
-    pub fn equivalent_names_and_types(&self, other: &Self) -> bool {
-        self.has_equivalent_names_and_types(other).is_ok()
     }
 
     /// Returns Ok if the two schemas have the same qualified named
@@ -1274,13 +1252,13 @@ pub trait SchemaExt {
     /// This is a specialized version of Eq that ignores differences
     /// in nullability and metadata.
     ///
-    /// It works the same as [`DFSchema::equivalent_names_and_types`].
+    /// It works the same as [`DFSchema::has_equivalent_names_and_types`].
     fn equivalent_names_and_types(&self, other: &Self) -> bool;
 
     /// Returns nothing if the two schemas have the same qualified named
     /// fields with logically equivalent data types. Returns internal error otherwise.
     ///
-    /// Use [DFSchema]::equivalent_names_and_types for stricter semantic type
+    /// Use [DFSchema]::has_equivalent_names_and_types for stricter semantic type
     /// equivalence checking.
     ///
     /// It is only used by insert into cases.
@@ -1338,11 +1316,44 @@ impl SchemaExt for Schema {
     }
 }
 
+/// Build a fully-qualified field name string. This is equivalent to
+/// `format!("{q}.{name}")` when `qualifier` is `Some`, or just `name` when
+/// `None`. We avoid going through the `fmt` machinery for performance reasons.
 pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
-    match qualifier {
-        Some(q) => format!("{q}.{name}"),
-        None => name.to_string(),
+    let qualifier = match qualifier {
+        None => return name.to_string(),
+        Some(q) => q,
+    };
+    let (first, second, third) = match qualifier {
+        TableReference::Bare { table } => (table.as_ref(), None, None),
+        TableReference::Partial { schema, table } => {
+            (schema.as_ref(), Some(table.as_ref()), None)
+        }
+        TableReference::Full {
+            catalog,
+            schema,
+            table,
+        } => (
+            catalog.as_ref(),
+            Some(schema.as_ref()),
+            Some(table.as_ref()),
+        ),
+    };
+
+    let extra = second.map_or(0, str::len) + third.map_or(0, str::len);
+    let mut s = String::with_capacity(first.len() + extra + 3 + name.len());
+    s.push_str(first);
+    if let Some(second) = second {
+        s.push('.');
+        s.push_str(second);
     }
+    if let Some(third) = third {
+        s.push('.');
+        s.push_str(third);
+    }
+    s.push('.');
+    s.push_str(name);
+    s
 }
 
 #[cfg(test)]
@@ -1351,17 +1362,44 @@ mod tests {
 
     use super::*;
 
+    /// `qualified_name` doesn't use `TableReference::Display` for performance
+    /// reasons, but check that the output is consistent.
+    #[test]
+    fn qualified_name_agrees_with_display() {
+        let cases: &[(Option<TableReference>, &str)] = &[
+            (None, "col"),
+            (Some(TableReference::bare("t")), "c0"),
+            (Some(TableReference::partial("s", "t")), "c0"),
+            (Some(TableReference::full("c", "s", "t")), "c0"),
+            (Some(TableReference::bare("mytable")), "some_column_name"),
+            // Empty segments must be preserved so that distinct qualified
+            // fields don't collide in `DFSchema::field_names()`.
+            (Some(TableReference::bare("")), "col"),
+            (Some(TableReference::partial("s", "")), "col"),
+            (Some(TableReference::partial("", "t")), "col"),
+            (Some(TableReference::full("c", "", "t")), "col"),
+            (Some(TableReference::full("", "s", "t")), "col"),
+            (Some(TableReference::full("c", "s", "")), "col"),
+            (Some(TableReference::full("", "", "")), "col"),
+        ];
+        for (qualifier, name) in cases {
+            let actual = qualified_name(qualifier.as_ref(), name);
+            let expected = match qualifier {
+                Some(q) => format!("{q}.{name}"),
+                None => name.to_string(),
+            };
+            assert_eq!(actual, expected, "qualifier={qualifier:?} name={name}");
+        }
+    }
+
     #[test]
     fn qualifier_in_name() -> Result<()> {
         let col = Column::from_name("t1.c0");
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
-        let expected = "Schema error: No field named \"t1.c0\". \
-            Column names are case sensitive. \
-            You can use double quotes to refer to the \"\"t1.c0\"\" column \
-            or set the datafusion.sql_parser.enable_ident_normalization configuration. \
-            Did you mean 't1.c0'?.";
+        let expected = "Schema error: No field named \"t1.c0\". Did you mean 't1.c0'?\n\
+            Valid fields are t1.c0, t1.c1.";
         assert_eq!(err.strip_backtrace(), expected);
         Ok(())
     }
@@ -1379,8 +1417,43 @@ mod tests {
 
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
-        let expected = "Schema error: No field named \"t1.c0\". \
+        let expected = "Schema error: No field named \"t1.c0\".\n\
             Valid fields are t1.\"CapitalColumn\", t1.\"field.with.period\".";
+        assert_eq!(err.strip_backtrace(), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn field_not_found_suggests_closest_field_name() -> Result<()> {
+        let schema = DFSchema::try_from(Schema::new(vec![
+            Field::new("abzz", DataType::Boolean, true),
+            Field::new("abcd", DataType::Boolean, true),
+        ]))?;
+
+        let err = schema.field_with_unqualified_name("abc").unwrap_err();
+        let expected = "Schema error: No field named abc. Did you mean 'abcd'?\n\
+            Valid fields are abzz, abcd.";
+        assert_eq!(err.strip_backtrace(), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn field_not_found_suggests_case_sensitive_qualified_field() -> Result<()> {
+        let schema = DFSchema::try_from_qualified_schema(
+            "hits",
+            &Schema::new(vec![
+                Field::new("WatchID", DataType::Boolean, true),
+                Field::new("URL", DataType::Boolean, true),
+                Field::new("URLHash", DataType::Boolean, true),
+            ]),
+        )?;
+
+        let err = schema.field_with_unqualified_name("url").unwrap_err();
+        let expected = "Schema error: No field named url. Did you mean 'hits.\"URL\"'?\n\
+            Column names are case sensitive. \
+            You can use double quotes to refer to the hits.\"URL\" column \
+            or disable the datafusion.sql_parser.enable_ident_normalization configuration.\n\
+            Valid fields are hits.\"WatchID\", hits.\"URL\", hits.\"URLHash\".";
         assert_eq!(err.strip_backtrace(), expected);
         Ok(())
     }

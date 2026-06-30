@@ -64,8 +64,8 @@ pub struct RunOpt {
     #[arg(short = 'm', long = "mem-table")]
     mem_table: bool,
 
-    /// Mark the first column of each table as sorted in ascending order.
-    /// The tables should have been created with the `--sort` option for this to have any effect.
+    /// Declare that the first column of the input table is already sorted in ascending order.
+    /// This flag only attaches ordering metadata; it does not sort the input files.
     #[arg(short = 't', long = "sorted")]
     sorted: bool,
 
@@ -209,10 +209,10 @@ impl RunOpt {
     /// Benchmark query `query_id` in `SORT_QUERIES`
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
         let config = self.common.config()?;
-        let rt_builder = self.common.runtime_env_builder()?;
+        let rt = self.common.build_runtime()?;
         let state = SessionStateBuilder::new()
             .with_config(config)
-            .with_runtime_env(rt_builder.build_arc()?)
+            .with_runtime_env(rt)
             .with_default_features()
             .build();
         let ctx = SessionContext::from(state);
@@ -333,9 +333,7 @@ impl RunOpt {
         );
         let extension = DEFAULT_PARQUET_EXTENSION;
 
-        let options = ListingOptions::new(format)
-            .with_file_extension(extension)
-            .with_collect_stat(state.config().collect_statistics());
+        let options = ListingOptions::new(format).with_file_extension(extension);
 
         let table_path = ListingTableUrl::parse(path)?;
         let schema = options.infer_schema(&state, &table_path).await?;
@@ -351,7 +349,9 @@ impl RunOpt {
             .with_listing_options(options)
             .with_schema(schema);
 
-        Ok(Arc::new(ListingTable::try_new(config)?))
+        Ok(Arc::new(ListingTable::try_new(config)?.with_cache(
+            ctx.runtime_env().cache_manager.get_file_statistic_cache(),
+        )))
     }
 
     fn iterations(&self) -> usize {

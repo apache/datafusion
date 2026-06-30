@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use arrow::array::{
+    BinaryArray, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray, RecordBatch,
+};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{Result, test_util::parquet_test_data};
@@ -44,7 +50,7 @@ async fn describe() -> Result<()> {
     | std        | 2107.472815166704 | null     | 2.8724780750809518 | 2.8724780750809518 | 2.8724780750809518 | 28.724780750809533 | 3.1597258182544645 | 29.012028558317645 | null            | null       | null                    | 0.5000342500942125 | 3.44808750051728  |
     | min        | 0.0               | null     | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 01/01/09        | 0          | 2008-12-31T23:00:00     | 2009.0             | 1.0               |
     | max        | 7299.0            | null     | 9.0                | 9.0                | 9.0                | 90.0               | 9.899999618530273  | 90.89999999999999  | 12/31/10        | 9          | 2010-12-31T04:09:13.860 | 2010.0             | 12.0              |
-    | median     | 3649.0            | null     | 4.0                | 4.0                | 4.0                | 45.0               | 4.949999809265137  | 45.45              | null            | null       | null                    | 2009.0             | 7.0               |
+    | median     | 3649.5            | null     | 4.5                | 4.5                | 4.5                | 45.0               | 4.949999809265137  | 45.45              | null            | null       | null                    | 2009.5             | 7.0               |
     +------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+
     ");
     Ok(())
@@ -109,6 +115,59 @@ async fn describe_null() -> Result<()> {
     | median     | null | null |
     +------------+------+------+
     ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn describe_binary_columns() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("bin", DataType::Binary, true),
+        Field::new("lbin", DataType::LargeBinary, true),
+        Field::new("vbin", DataType::BinaryView, true),
+        Field::new("fbin", DataType::FixedSizeBinary(2), true),
+    ]));
+
+    let bin: BinaryArray = vec![Some([0x00u8, 0x01]), Some([0xff, 0xee]), None]
+        .into_iter()
+        .collect();
+    let lbin: LargeBinaryArray = vec![Some([0x00u8, 0x01]), Some([0xff, 0xee]), None]
+        .into_iter()
+        .collect();
+    let vbin: BinaryViewArray = vec![Some([0x00u8, 0x01]), Some([0xff, 0xee]), None]
+        .into_iter()
+        .collect();
+    let fbin = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+        [Some([0x00u8, 0x01]), Some([0xff, 0xee]), None].into_iter(),
+        2,
+    )?;
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(bin),
+            Arc::new(lbin),
+            Arc::new(vbin),
+            Arc::new(fbin),
+        ],
+    )?;
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    let result = ctx.table("t").await?.describe().await?.collect().await?;
+
+    assert_snapshot!(batches_to_string(&result),
+        @r"
+        +------------+------+------+------+------+
+        | describe   | bin  | lbin | vbin | fbin |
+        +------------+------+------+------+------+
+        | count      | 2    | 2    | 2    | 2    |
+        | null_count | 1    | 1    | 1    | 1    |
+        | mean       | null | null | null | null |
+        | std        | null | null | null | null |
+        | min        | 0001 | 0001 | 0001 | 0001 |
+        | max        | ffee | ffee | ffee | ffee |
+        | median     | null | null | null | null |
+        +------------+------+------+------+------+
+");
+
     Ok(())
 }
 

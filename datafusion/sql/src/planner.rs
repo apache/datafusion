@@ -18,7 +18,7 @@
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::vec;
 
 use crate::utils::make_decimal_type;
@@ -32,10 +32,10 @@ use datafusion_common::{
     DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
     plan_datafusion_err,
 };
+use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 pub use datafusion_expr::planner::ContextProvider;
 use datafusion_expr::utils::find_column_exprs;
-use datafusion_expr::{Expr, col};
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
@@ -257,7 +257,7 @@ impl IdentNormalizer {
 pub struct PlannerContext {
     /// Data types for numbered parameters ($1, $2, etc), if supplied
     /// in `PREPARE` statement
-    prepare_param_data_types: Arc<Vec<FieldRef>>,
+    prepare_param_data_types: Arc<Vec<Option<FieldRef>>>,
     /// Map of CTE name to logical plan of the WITH clause.
     /// Use `Arc<LogicalPlan>` to allow cheap cloning
     ctes: HashMap<String, Arc<LogicalPlan>>,
@@ -270,6 +270,12 @@ pub struct PlannerContext {
     outer_from_schema: Option<DFSchemaRef>,
     /// The query schema defined by the table
     create_table_schema: Option<DFSchemaRef>,
+    /// When planning non-first queries in a set expression
+    /// (UNION/INTERSECT/EXCEPT), holds the schema of the left-most query.
+    /// Used to alias duplicate expressions to match the left side's field names.
+    set_expr_left_schema: Option<DFSchemaRef>,
+    /// The parameters of all lambdas seen so far
+    lambda_parameters: HashMap<String, FieldRef>,
 }
 
 impl Default for PlannerContext {
@@ -287,13 +293,15 @@ impl PlannerContext {
             outer_queries_schemas_stack: vec![],
             outer_from_schema: None,
             create_table_schema: None,
+            set_expr_left_schema: None,
+            lambda_parameters: HashMap::new(),
         }
     }
 
     /// Update the PlannerContext with provided prepare_param_data_types
     pub fn with_prepare_param_data_types(
         mut self,
-        prepare_param_data_types: Vec<FieldRef>,
+        prepare_param_data_types: Vec<Option<FieldRef>>,
     ) -> Self {
         self.prepare_param_data_types = prepare_param_data_types.into();
         self
@@ -373,7 +381,7 @@ impl PlannerContext {
     }
 
     /// Return the types of parameters (`$1`, `$2`, etc) if known
-    pub fn prepare_param_data_types(&self) -> &[FieldRef] {
+    pub fn prepare_param_data_types(&self) -> &[Option<FieldRef>] {
         &self.prepare_param_data_types
     }
 
@@ -396,9 +404,31 @@ impl PlannerContext {
         self.ctes.get(cte_name).map(|cte| cte.as_ref())
     }
 
+    pub fn lambda_parameters(&self) -> &HashMap<String, FieldRef> {
+        &self.lambda_parameters
+    }
+
+    pub fn with_lambda_parameters(
+        mut self,
+        parameters: impl IntoIterator<Item = FieldRef>,
+    ) -> Self {
+        self.lambda_parameters
+            .extend(parameters.into_iter().map(|f| (f.name().clone(), f)));
+
+        self
+    }
+
     /// Remove the plan of CTE / Subquery for the specified name
     pub(super) fn remove_cte(&mut self, cte_name: &str) {
         self.ctes.remove(cte_name);
+    }
+
+    /// Sets the left-most set expression schema, returning the previous value
+    pub(super) fn set_set_expr_left_schema(
+        &mut self,
+        schema: Option<DFSchemaRef>,
+    ) -> Option<DFSchemaRef> {
+        std::mem::replace(&mut self.set_expr_left_schema, schema)
     }
 }
 
@@ -425,6 +455,7 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) context_provider: &'a S,
     pub(crate) options: ParserOptions,
     pub(crate) ident_normalizer: IdentNormalizer,
+    warnings: Mutex<Vec<Diagnostic>>,
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -447,7 +478,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             context_provider,
             options,
             ident_normalizer: IdentNormalizer::new(ident_normalize),
+            warnings: Mutex::new(vec![]),
         }
+    }
+
+    pub(crate) fn add_warning(&self, warning: Diagnostic) {
+        self.warnings
+            .lock()
+            .expect("warning diagnostic lock poisoned")
+            .push(warning);
+    }
+
+    /// Drain and return non-fatal warnings collected during SQL planning.
+    pub fn take_warnings(&self) -> Vec<Diagnostic> {
+        std::mem::take(
+            &mut self
+                .warnings
+                .lock()
+                .expect("warning diagnostic lock poisoned"),
+        )
     }
 
     pub fn build_schema(&self, columns: Vec<SQLColumnDef>) -> Result<Schema> {
@@ -542,10 +591,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 idents.len()
             )
         } else {
-            let fields = plan.schema().fields().clone();
+            let columns = plan.schema().columns();
             LogicalPlanBuilder::from(plan)
-                .project(fields.iter().zip(idents.into_iter()).map(|(field, ident)| {
-                    col(field.name()).alias(self.ident_normalizer.normalize(ident))
+                .project(columns.into_iter().zip(idents).map(|(col, ident)| {
+                    Expr::Column(col).alias(self.ident_normalizer.normalize(ident))
                 }))?
                 .build()
         }

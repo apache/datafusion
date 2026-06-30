@@ -25,6 +25,8 @@
 #[cfg(test)]
 mod tests {
     use crate::utils::test::add_plan_schemas_to_ctx;
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::arrow::util::pretty::pretty_format_batches;
     use datafusion::common::Result;
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
@@ -32,6 +34,34 @@ mod tests {
     use std::fs::File;
     use std::io::BufReader;
     use substrait::proto::Plan;
+
+    async fn execute_plan(name: &str) -> Result<Vec<RecordBatch>> {
+        let path = format!("tests/testdata/test_plans/{name}");
+        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
+            File::open(path).expect("file not found"),
+        ))
+        .expect("failed to parse json");
+        let ctx = SessionContext::new();
+        let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+        ctx.execute_logical_plan(plan).await?.collect().await
+    }
+
+    /// Pretty-print batches as a table with header on top and data rows sorted.
+    fn pretty_sorted(batches: &[RecordBatch]) -> String {
+        let pretty = pretty_format_batches(batches).unwrap().to_string();
+        let all_lines: Vec<&str> = pretty.trim().lines().collect();
+        let header = &all_lines[..3];
+        let mut data: Vec<&str> = all_lines[3..all_lines.len() - 1].to_vec();
+        data.sort();
+        let footer = &all_lines[all_lines.len() - 1..];
+        header
+            .iter()
+            .copied()
+            .chain(data)
+            .chain(footer.iter().copied())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 
     async fn tpch_plan_to_string(query_id: i32) -> Result<String> {
         let path =
@@ -177,7 +207,7 @@ mod tests {
         @r#"
         Aggregate: groupBy=[[]], aggr=[[sum(LINEITEM.L_EXTENDEDPRICE * LINEITEM.L_DISCOUNT) AS REVENUE]]
           Projection: LINEITEM.L_EXTENDEDPRICE * LINEITEM.L_DISCOUNT
-            Filter: LINEITEM.L_SHIPDATE >= CAST(Utf8("1994-01-01") AS Date32) AND LINEITEM.L_SHIPDATE < CAST(Utf8("1995-01-01") AS Date32) AND LINEITEM.L_DISCOUNT >= Decimal128(Some(5),3,2) AND LINEITEM.L_DISCOUNT <= Decimal128(Some(7),3,2) AND LINEITEM.L_QUANTITY < CAST(Int32(24) AS Decimal128(15, 2))
+            Filter: LINEITEM.L_SHIPDATE >= CAST(Utf8("1994-01-01") AS Date32) AND LINEITEM.L_SHIPDATE < CAST(Utf8("1995-01-01") AS Date32) AND LINEITEM.L_DISCOUNT >= Decimal128(0.05,3,2) AND LINEITEM.L_DISCOUNT <= Decimal128(0.07,3,2) AND LINEITEM.L_QUANTITY < CAST(Int32(24) AS Decimal128(15, 2))
               TableScan: LINEITEM
         "#
                 );
@@ -243,7 +273,7 @@ mod tests {
           Sort: sum(PARTSUPP.PS_SUPPLYCOST * PARTSUPP.PS_AVAILQTY) DESC NULLS FIRST
             Filter: sum(PARTSUPP.PS_SUPPLYCOST * PARTSUPP.PS_AVAILQTY) > (<subquery>)
               Subquery:
-                Projection: sum(PARTSUPP.PS_SUPPLYCOST * PARTSUPP.PS_AVAILQTY) * Decimal128(Some(1000000),11,10)
+                Projection: sum(PARTSUPP.PS_SUPPLYCOST * PARTSUPP.PS_AVAILQTY) * Decimal128(0.0001000000,11,10)
                   Aggregate: groupBy=[[]], aggr=[[sum(PARTSUPP.PS_SUPPLYCOST * PARTSUPP.PS_AVAILQTY)]]
                     Projection: PARTSUPP.PS_SUPPLYCOST * CAST(PARTSUPP.PS_AVAILQTY AS Decimal128(19, 0))
                       Filter: PARTSUPP.PS_SUPPKEY = SUPPLIER.S_SUPPKEY AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_NAME = Utf8("JAPAN")
@@ -310,9 +340,9 @@ mod tests {
         assert_snapshot!(
         plan_str,
         @r#"
-        Projection: Decimal128(Some(10000),5,2) * sum(CASE WHEN PART.P_TYPE LIKE Utf8("PROMO%") THEN LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT ELSE Decimal128(Some(0),19,4) END) / sum(LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT) AS PROMO_REVENUE
-          Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN PART.P_TYPE LIKE Utf8("PROMO%") THEN LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT ELSE Decimal128(Some(0),19,4) END), sum(LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT)]]
-            Projection: CASE WHEN PART.P_TYPE LIKE CAST(Utf8("PROMO%") AS Utf8) THEN LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT) ELSE Decimal128(Some(0),19,4) END, LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT)
+        Projection: Decimal128(100.00,5,2) * sum(CASE WHEN PART.P_TYPE LIKE Utf8("PROMO%") THEN LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT ELSE Decimal128(0.0000,19,4) END) / sum(LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT) AS PROMO_REVENUE
+          Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN PART.P_TYPE LIKE Utf8("PROMO%") THEN LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT ELSE Decimal128(0.0000,19,4) END), sum(LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT)]]
+            Projection: CASE WHEN PART.P_TYPE LIKE CAST(Utf8("PROMO%") AS Utf8) THEN LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT) ELSE Decimal128(0.0000,19,4) END, LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT)
               Filter: LINEITEM.L_PARTKEY = PART.P_PARTKEY AND LINEITEM.L_SHIPDATE >= Date32("1995-09-01") AND LINEITEM.L_SHIPDATE < CAST(Utf8("1995-10-01") AS Date32)
                 Cross Join:
                   TableScan: LINEITEM
@@ -359,12 +389,12 @@ mod tests {
         assert_snapshot!(
         plan_str,
         @r#"
-        Projection: sum(LINEITEM.L_EXTENDEDPRICE) / Decimal128(Some(70),2,1) AS AVG_YEARLY
+        Projection: sum(LINEITEM.L_EXTENDEDPRICE) / Decimal128(7.0,2,1) AS AVG_YEARLY
           Aggregate: groupBy=[[]], aggr=[[sum(LINEITEM.L_EXTENDEDPRICE)]]
             Projection: LINEITEM.L_EXTENDEDPRICE
               Filter: PART.P_PARTKEY = LINEITEM.L_PARTKEY AND PART.P_BRAND = Utf8("Brand#23") AND PART.P_CONTAINER = Utf8("MED BOX") AND LINEITEM.L_QUANTITY < (<subquery>)
                 Subquery:
-                  Projection: Decimal128(Some(2),2,1) * avg(LINEITEM.L_QUANTITY)
+                  Projection: Decimal128(0.2,2,1) * avg(LINEITEM.L_QUANTITY)
                     Aggregate: groupBy=[[]], aggr=[[avg(LINEITEM.L_QUANTITY)]]
                       Projection: LINEITEM.L_QUANTITY
                         Filter: LINEITEM.L_PARTKEY = outer_ref(PART.P_PARTKEY)
@@ -438,7 +468,7 @@ mod tests {
                         Filter: PART.P_NAME LIKE CAST(Utf8("forest%") AS Utf8)
                           TableScan: PART
                     Subquery:
-                      Projection: Decimal128(Some(5),2,1) * sum(LINEITEM.L_QUANTITY)
+                      Projection: Decimal128(0.5,2,1) * sum(LINEITEM.L_QUANTITY)
                         Aggregate: groupBy=[[]], aggr=[[sum(LINEITEM.L_QUANTITY)]]
                           Projection: LINEITEM.L_QUANTITY
                             Filter: LINEITEM.L_PARTKEY = outer_ref(PARTSUPP.PS_PARTKEY) AND LINEITEM.L_SUPPKEY = outer_ref(PARTSUPP.PS_SUPPKEY) AND LINEITEM.L_SHIPDATE >= CAST(Utf8("1994-01-01") AS Date32) AND LINEITEM.L_SHIPDATE < CAST(Utf8("1995-01-01") AS Date32)
@@ -496,7 +526,7 @@ mod tests {
                   Subquery:
                     Aggregate: groupBy=[[]], aggr=[[avg(CUSTOMER.C_ACCTBAL)]]
                       Projection: CUSTOMER.C_ACCTBAL
-                        Filter: CUSTOMER.C_ACCTBAL > Decimal128(Some(0),3,2) AND (substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("13") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("31") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("23") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("29") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("30") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("18") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("17") AS Utf8))
+                        Filter: CUSTOMER.C_ACCTBAL > Decimal128(0.00,3,2) AND (substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("13") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("31") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("23") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("29") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("30") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("18") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("17") AS Utf8))
                           TableScan: CUSTOMER
                   Subquery:
                     Filter: ORDERS.O_CUSTKEY = outer_ref(CUSTOMER.C_CUSTKEY)
@@ -758,6 +788,82 @@ mod tests {
                           Filter: index_name = Utf8("aaa")
                             Values: (Utf8("aaa"), Utf8("host-a"), Int64(128)), (Utf8("bbb"), Utf8("host-b"), Int64(256))
         "#
+        );
+
+        Ok(())
+    }
+
+    /// Substrait join with both `equal` and `is_not_distinct_from` must demote
+    /// `IS NOT DISTINCT FROM` to the join filter.
+    #[tokio::test]
+    async fn test_mixed_join_equal_and_indistinct_inner_join() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("mixed_join_equal_and_indistinct.json").await?;
+        // Eq becomes the equijoin key; IS NOT DISTINCT FROM is demoted to filter.
+        assert_snapshot!(
+            plan_str,
+            @r#"
+        Projection: left.id, left.val, left.comment, right.id AS id0, right.val AS val0, right.comment AS comment0
+          Inner Join: left.id = right.id Filter: left.val IS NOT DISTINCT FROM right.val
+            SubqueryAlias: left
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+            SubqueryAlias: right
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+        "#
+        );
+
+        // Execute and verify actual rows, including NULL=NULL matches (ids 3,4).
+        let results = execute_plan("mixed_join_equal_and_indistinct.json").await?;
+        assert_snapshot!(pretty_sorted(&results),
+            @r"
+        +----+-----+---------+-----+------+----------+
+        | id | val | comment | id0 | val0 | comment0 |
+        +----+-----+---------+-----+------+----------+
+        | 1  | a   | c1      | 1   | a    | c1       |
+        | 2  | b   | c2      | 2   | b    | c2       |
+        | 3  |     | c3      | 3   |      | c3       |
+        | 4  |     | c4      | 4   |      | c4       |
+        | 5  | e   | c5      | 5   | e    | c5       |
+        | 6  | f   | c6      | 6   | f    | c6       |
+        +----+-----+---------+-----+------+----------+
+        "
+        );
+
+        Ok(())
+    }
+
+    /// Substrait join with both `equal` and `is_not_distinct_from` must demote
+    /// `IS NOT DISTINCT FROM` to the join filter.
+    #[tokio::test]
+    async fn test_mixed_join_equal_and_indistinct_left_join() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("mixed_join_equal_and_indistinct_left.json").await?;
+        assert_snapshot!(
+            plan_str,
+            @r#"
+        Projection: left.id, left.val, left.comment, right.id AS id0, right.val AS val0, right.comment AS comment0
+          Left Join: left.id = right.id Filter: left.val IS NOT DISTINCT FROM right.val
+            SubqueryAlias: left
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+            SubqueryAlias: right
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+        "#
+        );
+
+        let results = execute_plan("mixed_join_equal_and_indistinct_left.json").await?;
+        assert_snapshot!(pretty_sorted(&results),
+            @r"
+        +----+-----+---------+-----+------+----------+
+        | id | val | comment | id0 | val0 | comment0 |
+        +----+-----+---------+-----+------+----------+
+        | 1  | a   | c1      | 1   | a    | c1       |
+        | 2  | b   | c2      | 2   | b    | c2       |
+        | 3  |     | c3      | 3   |      | c3       |
+        | 4  |     | c4      | 4   |      | c4       |
+        | 5  | e   | c5      | 5   | e    | c5       |
+        | 6  | f   | c6      | 6   | f    | c6       |
+        +----+-----+---------+-----+------+----------+
+        "
         );
 
         Ok(())

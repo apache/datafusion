@@ -20,7 +20,9 @@ mod cast;
 mod field_reference;
 mod function_arguments;
 mod if_then;
+mod lambda;
 mod literal;
+mod nested;
 mod scalar_function;
 mod singular_or_list;
 mod subquery;
@@ -31,7 +33,9 @@ pub use cast::*;
 pub use field_reference::*;
 pub use function_arguments::*;
 pub use if_then::*;
+pub use lambda::*;
 pub use literal::*;
+pub use nested::*;
 pub use scalar_function::*;
 pub use singular_or_list::*;
 pub use subquery::*;
@@ -93,8 +97,11 @@ pub async fn from_substrait_rex(
             RexType::DynamicParameter(expr) => {
                 consumer.consume_dynamic_parameter(expr, input_schema).await
             }
-            RexType::Lambda(_) | RexType::LambdaInvocation(_) => {
-                not_impl_err!("Lambda expressions are not yet supported")
+            RexType::Lambda(lambda) => {
+                consumer.consume_lambda(lambda.as_ref(), input_schema).await
+            }
+            RexType::LambdaInvocation(_) => {
+                not_impl_err!("Lambda invocations are not supported")
             }
         },
         None => substrait_err!("Expression must set rex_type: {expression:?}"),

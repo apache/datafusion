@@ -17,7 +17,6 @@
 
 //! [`CoalesceBatchesExec`] combines small batches into larger batches.
 
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -25,6 +24,8 @@ use std::task::{Context, Poll};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
 use crate::projection::ProjectionExec;
+use crate::statistics::StatisticsArgs;
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
     check_if_same_properties,
@@ -33,7 +34,6 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
@@ -168,10 +168,6 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -186,13 +182,6 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -227,8 +216,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.input, args.partition())?,
+        );
         Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
@@ -348,6 +339,8 @@ impl CoalesceBatchesStream {
                 None => {
                     // Input stream is exhausted, finalize any remaining batches
                     self.completed = true;
+                    self.input =
+                        Box::pin(EmptyRecordBatchStream::new(self.coalescer.schema()));
                     self.coalescer.finish()?;
                 }
                 Some(Ok(batch)) => {
@@ -358,6 +351,9 @@ impl CoalesceBatchesStream {
                         PushBatchStatus::LimitReached => {
                             // limit was reached, so stop early
                             self.completed = true;
+                            self.input = Box::pin(EmptyRecordBatchStream::new(
+                                self.coalescer.schema(),
+                            ));
                             self.coalescer.finish()?;
                         }
                     }

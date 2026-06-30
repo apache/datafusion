@@ -95,7 +95,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
 02)--SortExec: expr=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet]]}, projection=[int_col, string_col], file_type=parquet
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet]]}, projection=[int_col, string_col], file_type=parquet, sort_order_for_reorder=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
 
 # Tear down test_table:
 statement ok
@@ -748,8 +748,47 @@ ERROR: Cast error: Failed to convert -9357363680509551 to datetime for Timestamp
 statement ok
 drop table int96_from_spark;
 
+# Enable coercion of int96 to microseconds AND attach a UTC timezone, so the
+# resulting Arrow type is `Timestamp(unit, Some("UTC"))`. This matches Spark
+# `TimestampType` semantics (INT96 values are UTC-adjusted instants).
+statement ok
+set datafusion.execution.parquet.coerce_int96 = ms;
+
+statement ok
+set datafusion.execution.parquet.coerce_int96_tz = 'UTC';
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+# The schema now carries the timezone.
+query TTT
+describe int96_from_spark;
+----
+a Timestamp(ms, "UTC") YES
+
+# Same values as the non-tz `coerce_int96 = ms` block above, but rendered in
+# UTC (note the trailing `Z`).
+query P
+select * from int96_from_spark
+----
+2024-01-01T20:34:56.123Z
+2024-01-01T01:00:00Z
+9999-12-31T03:00:00Z
+2024-12-30T23:00:00Z
+NULL
+ERROR: Cast error: Failed to convert -9357363680509551 to datetime for Timestamp(ms, "UTC")
+
+# Cleanup / reset default setting
+statement ok
+drop table int96_from_spark;
+
 statement ok
 set datafusion.execution.parquet.coerce_int96 = ns;
+
+statement ok
+reset datafusion.execution.parquet.coerce_int96_tz;
 
 
 ### Tests for metadata caching
@@ -886,6 +925,26 @@ FROM t
 WHERE b = 2;
 ----
 2
+
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.runtime.list_files_cache_limit;
+
+statement ok
+reset datafusion.execution.listing_table_ignore_subdirectory;
+
+statement ok
+reset datafusion.execution.parquet.coerce_int96;
+
+# Config reset
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema;
 
 statement ok
 DROP TABLE t;

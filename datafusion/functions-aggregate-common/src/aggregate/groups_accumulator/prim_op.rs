@@ -41,7 +41,7 @@ use super::accumulate::NullState;
 pub struct PrimitiveGroupsAccumulator<T, F>
 where
     T: ArrowPrimitiveType + Send,
-    F: Fn(&mut T::Native, T::Native) + Send + Sync,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     /// values per group, stored as the native type
     values: Vec<T::Native>,
@@ -62,7 +62,7 @@ where
 impl<T, F> PrimitiveGroupsAccumulator<T, F>
 where
     T: ArrowPrimitiveType + Send,
-    F: Fn(&mut T::Native, T::Native) + Send + Sync,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
@@ -84,7 +84,7 @@ where
 impl<T, F> GroupsAccumulator for PrimitiveGroupsAccumulator<T, F>
 where
     T: ArrowPrimitiveType + Send,
-    F: Fn(&mut T::Native, T::Native) + Send + Sync,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     fn update_batch(
         &mut self,
@@ -131,11 +131,10 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         // update / merge are the same
-        self.update_batch(values, group_indices, opt_filter, total_num_groups)
+        self.update_batch(values, group_indices, None, total_num_groups)
     }
 
     /// Converts an input batch directly to a state batch

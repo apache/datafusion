@@ -31,7 +31,7 @@ on:
 jobs:
   process:
     name: Process
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # only run for users whose permissions allow them to update PRs
     # otherwise labeler is failing:
     # https://github.com/apache/datafusion/issues/3743
@@ -44,7 +44,7 @@ jobs:
           github.event_name == 'pull_request_target' &&
             (github.event.action == 'opened' ||
              github.event.action == 'synchronize')
-        uses: actions/labeler@634933edcd8ababfe52f92936142cc22ac488b1b  # v6.0.1
+        uses: actions/labeler@f27b608878404679385c85cfa523b85ccb86e213  # v6.1.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           configuration-path: .github/workflows/labeler/labeler-config.yml

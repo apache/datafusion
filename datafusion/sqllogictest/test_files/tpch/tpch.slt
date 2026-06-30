@@ -21,6 +21,15 @@ include ./create_tables.slt.part
 include ./plans/q*.slt.part
 include ./answers/q*.slt.part
 
+# test answers with uncorrelated scalar subqueries rewritten to joins
+statement ok
+set datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery = false;
+
+include ./answers/q*.slt.part
+
+statement ok
+reset datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery;
+
 # test answers with sort merge join
 statement ok
 set datafusion.optimizer.prefer_hash_join = false;
@@ -28,3 +37,7 @@ set datafusion.optimizer.prefer_hash_join = false;
 include ./answers/q*.slt.part
 
 include ./drop_tables.slt.part
+
+# Config reset
+statement ok
+reset datafusion.optimizer.prefer_hash_join;

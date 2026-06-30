@@ -50,7 +50,6 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use datafusion_macros::user_doc;
 use log::debug;
-use std::any::Any;
 use std::fmt::Debug;
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
@@ -127,10 +126,6 @@ impl Default for Avg {
 }
 
 impl AggregateUDFImpl for Avg {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "avg"
     }
@@ -524,9 +519,16 @@ impl Accumulator for AvgAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Float64(
-            self.sum.map(|f| f / self.count as f64),
-        ))
+        // In sliding-window mode `retract_batch` can bring `count` back to 0
+        // while `sum` remains `Some(..)` (possibly zero or a floating-point
+        // residual). Guard against that so the frame with no non-NULL values
+        // yields NULL rather than NaN / ±Inf.
+        let avg = if self.count == 0 {
+            None
+        } else {
+            self.sum.map(|f| f / self.count as f64)
+        };
+        Ok(ScalarValue::Float64(avg))
     }
 
     fn size(&self) -> usize {
@@ -589,17 +591,23 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let v = self
-            .sum
-            .map(|v| {
-                DecimalAverager::<T>::try_new(
-                    self.sum_scale,
-                    self.target_precision,
-                    self.target_scale,
-                )?
-                .avg(v, T::Native::from_usize(self.count as usize).unwrap())
-            })
-            .transpose()?;
+        // `count == 0` can occur in sliding-window mode after `retract_batch`
+        // removes every contributing value. Return NULL rather than dividing
+        // by zero (which would panic for integer decimal types).
+        let v = if self.count == 0 {
+            None
+        } else {
+            self.sum
+                .map(|v| {
+                    DecimalAverager::<T>::try_new(
+                        self.sum_scale,
+                        self.target_precision,
+                        self.target_scale,
+                    )?
+                    .avg(v, T::Native::from_usize(self.count as usize).unwrap())
+                })
+                .transpose()?
+        };
 
         ScalarValue::new_primitive::<T>(
             v,
@@ -675,7 +683,14 @@ impl Accumulator for DurationAvgAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let avg = self.sum.map(|sum| sum / self.count as i64);
+        // Guard against `count == 0` which can happen in sliding-window mode
+        // after every contributing value has been retracted. Without this
+        // check we would integer-divide by zero.
+        let avg = if self.count == 0 {
+            None
+        } else {
+            self.sum.map(|sum| sum / self.count as i64)
+        };
 
         match self.result_unit {
             TimeUnit::Second => Ok(ScalarValue::DurationSecond(avg)),
@@ -754,7 +769,7 @@ impl Accumulator for DurationAvgAccumulator {
 struct AvgGroupsAccumulator<T, F>
 where
     T: ArrowNumericType + Send,
-    F: Fn(T::Native, u64) -> Result<T::Native> + Send,
+    F: Fn(T::Native, u64) -> Result<T::Native> + Send + 'static,
 {
     /// The type of the internal sum
     sum_data_type: DataType,
@@ -778,7 +793,7 @@ where
 impl<T, F> AvgGroupsAccumulator<T, F>
 where
     T: ArrowNumericType + Send,
-    F: Fn(T::Native, u64) -> Result<T::Native> + Send,
+    F: Fn(T::Native, u64) -> Result<T::Native> + Send + 'static,
 {
     pub fn new(sum_data_type: &DataType, return_data_type: &DataType, avg_fn: F) -> Self {
         debug!(
@@ -800,7 +815,7 @@ where
 impl<T, F> GroupsAccumulator for AvgGroupsAccumulator<T, F>
 where
     T: ArrowNumericType + Send,
-    F: Fn(T::Native, u64) -> Result<T::Native> + Send,
+    F: Fn(T::Native, u64) -> Result<T::Native> + Send + 'static,
 {
     fn update_batch(
         &mut self,
@@ -862,7 +877,7 @@ where
         } else {
             let averages: Vec<T::Native> = sums
                 .into_iter()
-                .zip(counts.into_iter())
+                .zip(counts)
                 .map(|(sum, count)| (self.avg_fn)(sum, count))
                 .collect::<Result<Vec<_>>>()?;
             PrimitiveArray::new(averages.into(), nulls) // no copy
@@ -893,7 +908,6 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
@@ -905,7 +919,7 @@ where
         self.null_state.accumulate(
             group_indices,
             partial_counts,
-            opt_filter,
+            None,
             total_num_groups,
             |group_index, partial_count| {
                 // SAFETY: group_index is guaranteed to be in bounds
@@ -919,7 +933,7 @@ where
         self.null_state.accumulate(
             group_indices,
             partial_sums,
-            opt_filter,
+            None,
             total_num_groups,
             |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
                 // SAFETY: group_index is guaranteed to be in bounds

@@ -16,18 +16,22 @@
 // under the License.
 
 use datafusion_common::datatype::DataTypeExt;
-use datafusion_expr::expr::{AggregateFunctionParams, Unnest, WindowFunctionParams};
+use datafusion_expr::expr::{
+    AggregateFunctionParams, HigherOrderFunction, WindowFunctionParams,
+};
+use datafusion_expr::expr::{Lambda, Unnest};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Array, BinaryOperator, CaseWhen, DuplicateTreatment, Expr as AstExpr, Function,
-    Ident, Interval, ObjectName, OrderByOptions, Subscript, TimezoneInfo, UnaryOperator,
-    ValueWithSpan,
+    self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
+    Subscript, TimezoneInfo, UnaryOperator,
 };
+use sqlparser::ast::{CaseWhen, DuplicateTreatment, OrderByOptions, ValueWithSpan};
 use std::sync::Arc;
 use std::vec;
 
 use super::Unparser;
-use super::dialect::IntervalStyle;
+use super::dialect::{DistinctFromStyle, IntervalStyle};
+use crate::stack::StackGuard;
 use arrow::array::{
     ArrayRef, Date32Array, Date64Array, PrimitiveArray,
     types::{
@@ -91,11 +95,64 @@ const IS: &BinaryOperator = &BinaryOperator::BitwiseAnd;
 
 impl Unparser<'_> {
     pub fn expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
+        // Unparsing recurses once per nesting level. The function-argument and
+        // dialect scalar-function-override paths cost more per level than the
+        // default `recursive` red zone, so without raising the minimum stack
+        // size the stack-growing trampoline engages too late and the OS stack
+        // overflows on deeply nested expressions (issue #23056). The size
+        // mirrors the planner's `StackGuard` usage in `query.rs`.
+        let _guard = StackGuard::new(256 * 1024);
+        self.expr_to_sql_with_nesting(expr)
+    }
+
+    /// Recursive entry point shared by the public [`Self::expr_to_sql`] and the
+    /// internal recursion sites (scalar-function arguments, arrays, maps, and
+    /// dialect scalar-function overrides).
+    ///
+    /// This carries the `recursive` annotation so every nesting level becomes a
+    /// stack-growth checkpoint. Internal recursion must call this rather than
+    /// the public [`Self::expr_to_sql`]: the public entry point is not
+    /// annotated and would re-install the [`StackGuard`] on every level.
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    pub(crate) fn expr_to_sql_with_nesting(&self, expr: &Expr) -> Result<ast::Expr> {
         let mut root_expr = self.expr_to_sql_inner(expr)?;
         if self.pretty {
             root_expr = self.remove_unnecessary_nesting(root_expr, LOWEST, LOWEST);
         }
         Ok(root_expr)
+    }
+
+    fn distinct_from_to_sql(
+        &self,
+        left: ast::Expr,
+        right: ast::Expr,
+        is_distinct: bool,
+    ) -> Result<ast::Expr> {
+        match self.dialect.distinct_from_style() {
+            DistinctFromStyle::FullText => {
+                let expr = if is_distinct {
+                    ast::Expr::IsDistinctFrom(Box::new(left), Box::new(right))
+                } else {
+                    ast::Expr::IsNotDistinctFrom(Box::new(left), Box::new(right))
+                };
+                Ok(ast::Expr::Nested(Box::new(expr)))
+            }
+            DistinctFromStyle::Spaceship => {
+                let expr = ast::Expr::Nested(Box::new(ast::Expr::BinaryOp {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    op: BinaryOperator::Spaceship,
+                }));
+                if is_distinct {
+                    Ok(ast::Expr::Nested(Box::new(ast::Expr::UnaryOp {
+                        op: UnaryOperator::Not,
+                        expr: Box::new(expr),
+                    })))
+                } else {
+                    Ok(expr)
+                }
+            }
+        }
     }
 
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
@@ -145,6 +202,24 @@ impl Unparser<'_> {
                 ))))
             }
             Expr::Column(col) => self.col_to_sql(col),
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::IsDistinctFrom,
+                right,
+            }) => {
+                let l = self.expr_to_sql_inner(left.as_ref())?;
+                let r = self.expr_to_sql_inner(right.as_ref())?;
+                self.distinct_from_to_sql(l, r, true)
+            }
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::IsNotDistinctFrom,
+                right,
+            }) => {
+                let l = self.expr_to_sql_inner(left.as_ref())?;
+                let r = self.expr_to_sql_inner(right.as_ref())?;
+                self.distinct_from_to_sql(l, r, false)
+            }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
@@ -288,7 +363,8 @@ impl Unparser<'_> {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
                 pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                escape_char: escape_char.map(|c| SingleQuotedString(c.to_string())),
+                escape_char: escape_char
+                    .map(|c| SingleQuotedString(c.to_string()).into()),
                 any: false,
             }),
             Expr::Like(Like {
@@ -304,7 +380,7 @@ impl Unparser<'_> {
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                         escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string())),
+                            .map(|c| SingleQuotedString(c.to_string()).into()),
                         any: false,
                     })
                 } else {
@@ -313,7 +389,7 @@ impl Unparser<'_> {
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                         escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string())),
+                            .map(|c| SingleQuotedString(c.to_string()).into()),
                         any: false,
                     })
                 }
@@ -552,6 +628,36 @@ impl Unparser<'_> {
             }
             Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
             Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+                let func_name = func.name();
+
+                if let Some(expr) = self
+                    .dialect
+                    .higher_order_function_to_sql_overrides(self, func_name, args)?
+                {
+                    return Ok(expr);
+                }
+
+                self.function_to_sql_internal(func_name, args)
+            }
+            Expr::Lambda(Lambda { params, body }) => {
+                Ok(ast::Expr::Lambda(ast::LambdaFunction {
+                    params: ast::OneOrManyWithParens::Many(
+                        params
+                            .iter()
+                            .map(|param| ast::LambdaFunctionParameter {
+                                name: self.new_ident_quoted_if_needs(param.clone()),
+                                data_type: None,
+                            })
+                            .collect(),
+                    ),
+                    body: Box::new(self.expr_to_sql_inner(body)?),
+                    syntax: ast::LambdaSyntax::Arrow,
+                }))
+            }
+            Expr::LambdaVariable(l) => Ok(ast::Expr::Identifier(
+                self.new_ident_quoted_if_needs(l.name.clone()),
+            )),
         }
     }
 
@@ -567,11 +673,11 @@ impl Unparser<'_> {
             "get_field" => self.get_field_to_sql(args),
             "map" => self.map_to_sql(args),
             // TODO: support for the construct and access functions of the `map` type
-            _ => self.scalar_function_to_sql_internal(func_name, args),
+            _ => self.function_to_sql_internal(func_name, args),
         }
     }
 
-    fn scalar_function_to_sql_internal(
+    fn function_to_sql_internal(
         &self,
         func_name: &str,
         args: &[Expr],
@@ -600,11 +706,11 @@ impl Unparser<'_> {
     fn make_array_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
         let args = args
             .iter()
-            .map(|e| self.expr_to_sql(e))
+            .map(|e| self.expr_to_sql_with_nesting(e))
             .collect::<Result<Vec<_>>>()?;
         Ok(ast::Expr::Array(Array {
             elem: args,
-            named: false,
+            named: self.dialect.use_array_keyword_for_array_literals(),
         }))
     }
 
@@ -615,7 +721,10 @@ impl Unparser<'_> {
             elem.push(self.scalar_to_sql(&value)?);
         }
 
-        Ok(ast::Expr::Array(Array { elem, named: false }))
+        Ok(ast::Expr::Array(Array {
+            elem,
+            named: self.dialect.use_array_keyword_for_array_literals(),
+        }))
     }
 
     fn array_element_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
@@ -624,8 +733,8 @@ impl Unparser<'_> {
             2,
             "array_element must have exactly 2 arguments"
         );
-        let array = self.expr_to_sql(&args[0])?;
-        let index = self.expr_to_sql(&args[1])?;
+        let array = self.expr_to_sql_with_nesting(&args[0])?;
+        let index = self.expr_to_sql_with_nesting(&args[1])?;
         Ok(ast::Expr::CompoundFieldAccess {
             root: Box::new(array),
             access_chain: vec![ast::AccessExpr::Subscript(Subscript::Index { index })],
@@ -648,7 +757,7 @@ impl Unparser<'_> {
 
                 Ok(ast::DictionaryField {
                     key,
-                    value: Box::new(self.expr_to_sql(&chunk[1])?),
+                    value: Box::new(self.expr_to_sql_with_nesting(&chunk[1])?),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -718,7 +827,8 @@ impl Unparser<'_> {
     fn map_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
         assert_eq_or_internal_err!(args.len(), 2, "map must have exactly 2 arguments");
 
-        let ast::Expr::Array(Array { elem: keys, .. }) = self.expr_to_sql(&args[0])?
+        let ast::Expr::Array(Array { elem: keys, .. }) =
+            self.expr_to_sql_with_nesting(&args[0])?
         else {
             return internal_err!(
                 "map expects first argument to be an array, but received: {:?}",
@@ -726,7 +836,8 @@ impl Unparser<'_> {
             );
         };
 
-        let ast::Expr::Array(Array { elem: values, .. }) = self.expr_to_sql(&args[1])?
+        let ast::Expr::Array(Array { elem: values, .. }) =
+            self.expr_to_sql_with_nesting(&args[1])?
         else {
             return internal_err!(
                 "map expects second argument to be an array, but received: {:?}",
@@ -860,7 +971,7 @@ impl Unparser<'_> {
                 ) {
                     Ok(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
                 } else {
-                    self.expr_to_sql(e)
+                    self.expr_to_sql_with_nesting(e)
                         .map(|e| ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e)))
                 }
             })
@@ -905,6 +1016,7 @@ impl Unparser<'_> {
     ///
     /// Also note that when fetching the precedence of a nested expression, we ignore other nested
     /// expressions, so precedence of expr `(a * (b + c))` equals `*` and not `+`.
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn remove_unnecessary_nesting(
         &self,
         expr: ast::Expr,
@@ -1294,34 +1406,43 @@ impl Unparser<'_> {
                 Ok(ast::Expr::value(ast::Value::Number(ui.to_string(), false)))
             }
             ScalarValue::UInt64(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::Utf8(Some(str)) => {
+            ScalarValue::Utf8(Some(str))
+            | ScalarValue::Utf8View(Some(str))
+            | ScalarValue::LargeUtf8(Some(str)) => {
+                if let Some(expr) = self.dialect.string_literal_to_sql(str) {
+                    return Ok(expr);
+                }
                 Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
             }
-            ScalarValue::Utf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::Utf8View(Some(str)) => {
-                Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
+            ScalarValue::Utf8(None)
+            | ScalarValue::Utf8View(None)
+            | ScalarValue::LargeUtf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Binary(Some(bin))
+            | ScalarValue::BinaryView(Some(bin))
+            | ScalarValue::LargeBinary(Some(bin))
+            | ScalarValue::FixedSizeBinary(_, Some(bin)) => {
+                let hex = bin
+                    .iter()
+                    .flat_map(|x| {
+                        const HEX: [char; 16] = [
+                            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b',
+                            'c', 'd', 'e', 'f',
+                        ];
+                        let (hi, lo) = (((*x >> 4) & 0xfu8), (*x & 0xfu8));
+                        [HEX[hi as usize], HEX[lo as usize]]
+                    })
+                    .collect::<String>();
+                Ok(ast::Expr::value(ast::Value::HexStringLiteral(hex)))
             }
-            ScalarValue::Utf8View(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::LargeUtf8(Some(str)) => {
-                Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
-            }
-            ScalarValue::LargeUtf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::Binary(Some(_)) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::Binary(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::BinaryView(Some(_)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::BinaryView(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::FixedSizeBinary(..) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::LargeBinary(Some(_)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::LargeBinary(None) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Binary(None)
+            | ScalarValue::BinaryView(None)
+            | ScalarValue::FixedSizeBinary(_, None)
+            | ScalarValue::LargeBinary(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::FixedSizeList(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::List(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::LargeList(a) => self.scalar_value_list_to_sql(a.values()),
+            ScalarValue::ListView(a) => self.scalar_value_list_to_sql(a.values()),
+            ScalarValue::LargeListView(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::Date32(Some(_)) => {
                 let date = v
                     .to_array()?
@@ -1735,7 +1856,7 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Boolean => Ok(ast::DataType::Bool),
-            DataType::Int8 => Ok(ast::DataType::TinyInt(None)),
+            DataType::Int8 => Ok(self.dialect.int8_cast_dtype()),
             DataType::Int16 => Ok(ast::DataType::SmallInt(None)),
             DataType::Int32 => Ok(self.dialect.int32_cast_dtype()),
             DataType::Int64 => Ok(self.dialect.int64_cast_dtype()),
@@ -1834,35 +1955,38 @@ impl Unparser<'_> {
 #[cfg(test)]
 mod tests {
     use std::ops::{Add, Sub};
-    use std::{any::Any, sync::Arc, vec};
+    use std::{sync::Arc, vec};
 
-    use crate::unparser::dialect::SqliteDialect;
-    use arrow::array::{LargeListArray, ListArray};
+    use crate::unparser::dialect::{MySqlDialect, SqliteDialect};
+    use arrow::array::{LargeListArray, LargeListViewArray, ListArray, ListViewArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
     use datafusion_common::datatype::DataTypeExt;
     use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
-        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        ColumnarValue, HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda,
         Volatility, WindowFrame, WindowFunctionDefinition, case, cast, col, cube, exists,
-        grouping_set, interval_datetime_lit, interval_year_month_lit, lit, not,
-        not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast, when,
+        grouping_set, interval_datetime_lit, interval_year_month_lit, lambda, lambda_var,
+        lit, not, not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast,
+        when,
     };
     use datafusion_expr::{ExprFunctionExt, interval_month_day_nano_lit};
     use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
     use datafusion_functions::expr_fn::{get_field, named_struct};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
-    use datafusion_functions_nested::expr_fn::{array_element, make_array};
+    use datafusion_functions_nested::expr_fn::{array_element, array_has, make_array};
     use datafusion_functions_nested::map::map;
     use datafusion_functions_window::rank::rank_udwf;
     use datafusion_functions_window::row_number::row_number_udwf;
     use sqlparser::ast::ExactNumberInfo;
 
     use crate::unparser::dialect::{
-        CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
-        DefaultDialect, Dialect, DuckDBDialect, PostgreSqlDialect, ScalarFnToSqlHandler,
+        BigQueryDialect, CharacterLengthStyle, CustomDialect, CustomDialectBuilder,
+        DateFieldExtractStyle, DefaultDialect, Dialect, DuckDBDialect, PostgreSqlDialect,
+        ScalarFnToSqlHandler,
     };
 
     use super::*;
@@ -1882,10 +2006,6 @@ mod tests {
     }
 
     impl ScalarUDFImpl for DummyUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "dummy_udf"
         }
@@ -1903,6 +2023,41 @@ mod tests {
         }
     }
     // See sql::tests for E2E tests.
+
+    #[derive(Debug, Hash, Eq, PartialEq)]
+    struct DummyHigherOrderUDF;
+
+    impl HigherOrderUDFImpl for DummyHigherOrderUDF {
+        fn name(&self) -> &str {
+            "dummy_higher_order_function"
+        }
+
+        fn signature(&self) -> &datafusion_expr::HigherOrderSignature {
+            unimplemented!()
+        }
+
+        fn lambda_parameters(
+            &self,
+            _step: usize,
+            _fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ) -> Result<LambdaParametersProgress> {
+            unimplemented!()
+        }
+
+        fn return_field_from_args(
+            &self,
+            _args: datafusion_expr::HigherOrderReturnFieldArgs,
+        ) -> Result<FieldRef> {
+            unimplemented!()
+        }
+
+        fn invoke_with_args(
+            &self,
+            _args: datafusion_expr::HigherOrderFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
+    }
 
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
@@ -1989,6 +2144,13 @@ mod tests {
                 r#"dummy_udf(a, b) IS NOT NULL"#,
             ),
             (
+                Expr::HigherOrderFunction(HigherOrderFunction::new(
+                    Arc::new(HigherOrderUDF::new_from_impl(DummyHigherOrderUDF)),
+                    vec![col("a"), lambda(["v"], -lambda_var("v"))],
+                )),
+                r#"dummy_higher_order_function(a, (v) -> -v)"#,
+            ),
+            (
                 Expr::Like(Like {
                     negated: true,
                     expr: Box::new(col("a")),
@@ -2051,7 +2213,7 @@ mod tests {
                     ScalarValue::TimestampSecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01 10:46:41 +08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T10:46:41+08:00' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampMillisecond(Some(10001), None), None),
@@ -2062,7 +2224,7 @@ mod tests {
                     ScalarValue::TimestampMillisecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01 08:00:10.001 +08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:10.001+08:00' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampMicrosecond(Some(10001), None), None),
@@ -2073,7 +2235,7 @@ mod tests {
                     ScalarValue::TimestampMicrosecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01 08:00:00.010001 +08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:00.010001+08:00' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampNanosecond(Some(10001), None), None),
@@ -2084,7 +2246,7 @@ mod tests {
                     ScalarValue::TimestampNanosecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01 08:00:00.000010001 +08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:00.000010001+08:00' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::Time32Second(Some(10001)), None),
@@ -2355,6 +2517,28 @@ mod tests {
                 "[1, 2, 3]",
             ),
             (
+                Expr::Literal(
+                    ScalarValue::ListView(Arc::new(
+                        ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                            Some(vec![Some(1), Some(2), Some(3)]),
+                        ]),
+                    )),
+                    None,
+                ),
+                "[1, 2, 3]",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::LargeListView(Arc::new(
+                        LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                            Some(vec![Some(1), Some(2), Some(3)]),
+                        ]),
+                    )),
+                    None,
+                ),
+                "[1, 2, 3]",
+            ),
+            (
                 Expr::BinaryExpr(BinaryExpr {
                     left: Box::new(col("a")),
                     op: Operator::ArrowAt,
@@ -2397,7 +2581,6 @@ mod tests {
 
         let expected = r#"('a' > 4)"#;
         assert_eq!(actual, expected);
-
         Ok(())
     }
 
@@ -2961,6 +3144,70 @@ mod tests {
     }
 
     #[test]
+    fn test_mssql_dialect_national_literal() -> Result<()> {
+        struct MsSqlDialect;
+
+        impl Dialect for MsSqlDialect {
+            fn identifier_quote_style(&self, _identifier: &str) -> Option<char> {
+                Some('[')
+            }
+
+            fn string_literal_to_sql(&self, s: &str) -> Option<ast::Expr> {
+                if !s.is_ascii() {
+                    Some(ast::Expr::value(ast::Value::NationalStringLiteral(
+                        s.to_string(),
+                    )))
+                } else {
+                    None
+                }
+            }
+        }
+
+        let dialect = MsSqlDialect;
+        let unparser = Unparser::new(&dialect);
+
+        // Get nation string literal for the custom mssql dialect
+        for (s, expected) in [
+            ("national string", "'national string'"),
+            ("datafusion資料融合", "N'datafusion資料融合'"),
+        ] {
+            let expr = Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::Utf8View(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::LargeUtf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+        }
+
+        let dialect = DefaultDialect {};
+        let unparser = Unparser::new(&dialect);
+
+        // Get normal string literal for default dialect
+        for (s, expected) in [
+            ("national string", "'national string'"),
+            ("datafusion資料融合", "'datafusion資料融合'"),
+        ] {
+            let expr = Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::Utf8View(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::LargeUtf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_cast_value_to_dict_expr() {
         let tests = [(
             Expr::Cast(Cast::new(
@@ -2981,6 +3228,61 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+    }
+
+    #[test]
+    fn test_array_literal_scalar_value_to_sql_postgres() -> Result<()> {
+        let dialect: Arc<dyn Dialect> = Arc::new(PostgreSqlDialect {});
+        let unparser = Unparser::new(dialect.as_ref());
+
+        let expr = Expr::Literal(
+            ScalarValue::List(ScalarValue::new_list_nullable(
+                &[
+                    ScalarValue::Int32(Some(1)),
+                    ScalarValue::Int32(Some(2)),
+                    ScalarValue::Int32(Some(3)),
+                ],
+                &DataType::Int32,
+            )),
+            None,
+        );
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        assert_eq!(ast.to_string(), "ARRAY[1, 2, 3]");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_array_literal_scalar_value_to_sql_postgres() -> Result<()> {
+        let dialect: Arc<dyn Dialect> = Arc::new(PostgreSqlDialect {});
+        let unparser = Unparser::new(dialect.as_ref());
+
+        let inner_type = DataType::Int32;
+        let nested_type =
+            DataType::List(Arc::new(Field::new_list_field(inner_type.clone(), true)));
+
+        let expr = Expr::Literal(
+            ScalarValue::List(ScalarValue::new_list_nullable(
+                &[
+                    ScalarValue::List(ScalarValue::new_list_nullable(
+                        &[ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(2))],
+                        &inner_type,
+                    )),
+                    ScalarValue::List(ScalarValue::new_list_nullable(
+                        &[ScalarValue::Int32(Some(3)), ScalarValue::Int32(Some(4))],
+                        &inner_type,
+                    )),
+                ],
+                &nested_type,
+            )),
+            None,
+        );
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        assert_eq!(ast.to_string(), "ARRAY[ARRAY[1, 2], ARRAY[3, 4]]");
+
+        Ok(())
     }
 
     #[test]
@@ -3013,6 +3315,90 @@ mod tests {
             assert_eq!(actual, expected);
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_postgres_array_has_to_any() -> Result<()> {
+        let default_dialect: Arc<dyn Dialect> = Arc::new(DefaultDialect {});
+        let postgres_dialect: Arc<dyn Dialect> = Arc::new(PostgreSqlDialect {});
+        let expr = array_has(col("items"), lit(1));
+
+        for (dialect, expected) in [
+            (default_dialect, "array_has(\"items\", 1)"),
+            (postgres_dialect, "1 = ANY(\"items\")"),
+        ] {
+            let unparser = Unparser::new(dialect.as_ref());
+            let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+            assert_eq!(actual, expected);
+        }
+
+        Ok(())
+    }
+
+    /// Regression test for https://github.com/apache/datafusion/issues/23056
+    ///
+    /// Deeply-nested expressions whose unparse path routes through scalar
+    /// function arguments and dialect scalar-function overrides used to
+    /// overflow the OS stack even with `recursive_protection` enabled,
+    /// because the per-level stack cost of those paths exceeds the default
+    /// `recursive` red zone and the unparser installed no [`StackGuard`].
+    ///
+    /// This test only asserts the protected behavior, so it is gated on the
+    /// `recursive_protection` feature. Without that feature the unparser is
+    /// not stack-safe by design and a deep enough expression will overflow.
+    #[cfg(feature = "recursive_protection")]
+    #[test]
+    fn test_deeply_nested_expr_does_not_overflow_stack() {
+        // Far deeper than the ~60 levels that overflow without protection, but
+        // bounded so the trampoline's heap stacks stay reasonable in debug.
+        const DEPTH: usize = 2_000;
+
+        // Run on an explicit, realistically-sized thread stack. The work is
+        // performed on a spawned thread so an overflow (in the unfixed code)
+        // aborts the process and fails the test deterministically rather than
+        // depending on the harness thread's stack size.
+        let handle = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                // 1. Linear chain through a dialect scalar-function override:
+                //    array_has(array_has(... array_has(col, 'x') ...), 'x').
+                //    PostgreSqlDialect unparses array_has via array_has_to_sql_any,
+                //    which recurses back into the unparser for each argument.
+                let mut nested_fn: Expr = col("c");
+                for _ in 0..DEPTH {
+                    nested_fn = array_has(nested_fn, lit("x"));
+                }
+                let pg = PostgreSqlDialect {};
+                Unparser::new(&pg)
+                    .expr_to_sql(&nested_fn)
+                    .expect("deeply nested scalar function should unparse");
+
+                // 2. Linear chain of plain binary operators, exercising the
+                //    inner -> inner recursion on the default dialect.
+                let mut nested_binary: Expr = col("c");
+                for _ in 0..DEPTH {
+                    nested_binary = nested_binary + lit(1);
+                }
+                Unparser::default()
+                    .expr_to_sql(&nested_binary)
+                    .expect("deeply nested binary expression should unparse");
+
+                // 3. Same binary chain in pretty mode. Pretty mode runs
+                //    `remove_unnecessary_nesting` at every level, which recurses
+                //    alongside the unparse itself; this locks down that second
+                //    recursion site fixed by this PR.
+                Unparser::default()
+                    .with_pretty(true)
+                    .expr_to_sql(&nested_binary)
+                    .expect(
+                        "deeply nested binary expression should unparse in pretty mode",
+                    );
+            })
+            .unwrap();
+
+        // If the unparser overflows, the process aborts and this join is never
+        // reached; otherwise the spawned thread returns cleanly.
+        handle.join().expect("unparsing thread should not panic");
     }
 
     #[test]
@@ -3291,12 +3677,13 @@ mod tests {
             Arc::new(CustomDialectBuilder::new().build());
 
         let duckdb_dialect: Arc<dyn Dialect> = Arc::new(DuckDBDialect::new());
+        let bigquery_dialect: Arc<dyn Dialect> = Arc::new(BigQueryDialect::new());
 
         for (dialect, scalar, expected) in [
             (
                 Arc::clone(&default_dialect),
                 ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
-                "CAST('2025-09-15 11:00:00 +00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3304,7 +3691,7 @@ mod tests {
                     Some(1757934000123),
                     Some("+01:00".into()),
                 ),
-                "CAST('2025-09-15 12:00:00.123 +01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3312,7 +3699,7 @@ mod tests {
                     Some(1757934000123456),
                     Some("-01:00".into()),
                 ),
-                "CAST('2025-09-15 10:00:00.123456 -01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3320,12 +3707,12 @@ mod tests {
                     Some(1757934000123456789),
                     Some("+00:00".into()),
                 ),
-                "CAST('2025-09-15 11:00:00.123456789 +00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
                 ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
-                "CAST('2025-09-15 11:00:00+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3333,7 +3720,7 @@ mod tests {
                     Some(1757934000123),
                     Some("+01:00".into()),
                 ),
-                "CAST('2025-09-15 12:00:00.123+01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3341,7 +3728,7 @@ mod tests {
                     Some(1757934000123456),
                     Some("-01:00".into()),
                 ),
-                "CAST('2025-09-15 10:00:00.123456-01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3349,7 +3736,36 @@ mod tests {
                     Some(1757934000123456789),
                     Some("+00:00".into()),
                 ),
-                "CAST('2025-09-15 11:00:00.123456789+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&bigquery_dialect),
+                ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
+                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&bigquery_dialect),
+                ScalarValue::TimestampMillisecond(
+                    Some(1757934000123),
+                    Some("+01:00".into()),
+                ),
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&bigquery_dialect),
+                ScalarValue::TimestampMicrosecond(
+                    Some(1757934000123456),
+                    Some("-01:00".into()),
+                ),
+                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&bigquery_dialect),
+                ScalarValue::TimestampNanosecond(
+                    Some(1757934000123456789),
+                    Some("+00:00".into()),
+                ),
+                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
             ),
         ] {
             let unparser = Unparser::new(dialect.as_ref());
@@ -3360,5 +3776,149 @@ mod tests {
             assert_eq!(actual, expected);
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_bigquery_dialect_overrides() -> Result<()> {
+        let bigquery_dialect: Arc<dyn Dialect> = Arc::new(BigQueryDialect::new());
+        let unparser = Unparser::new(bigquery_dialect.as_ref());
+
+        // date_field_extract_style: EXTRACT instead of date_part
+        let expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::new_from_impl(
+                datafusion_functions::datetime::date_part::DatePartFunc::new(),
+            )),
+            args: vec![lit("YEAR"), col("date_col")],
+        });
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "EXTRACT(YEAR FROM `date_col`)");
+
+        // interval_style: SQL standard instead of PostgresVerbose
+        let expr = interval_year_month_lit("3 months");
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "INTERVAL '3' MONTH");
+
+        // float64_ast_dtype: FLOAT64 instead of DOUBLE
+        let expr = cast(col("a"), DataType::Float64);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS FLOAT64)");
+
+        // supports_column_alias_in_table_alias: false
+        assert!(!bigquery_dialect.supports_column_alias_in_table_alias());
+
+        // utf8_cast_dtype: STRING instead of VARCHAR
+        let expr = cast(col("a"), DataType::Utf8);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS STRING)");
+
+        // large_utf8_cast_dtype: STRING instead of TEXT
+        let expr = cast(col("a"), DataType::LargeUtf8);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS STRING)");
+
+        // timestamp_cast_dtype: TIMESTAMP (no WITH TIME ZONE)
+        let expr = cast(
+            col("a"),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+        );
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS TIMESTAMP)");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_distinct_from() {
+        let mysql_unparser = Unparser::new(&MySqlDialect {});
+
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("c1")),
+            Operator::IsDistinctFrom,
+            Box::new(lit(true)),
+        ));
+
+        let sql = expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(c1 IS DISTINCT FROM true)");
+        let sql = mysql_unparser.expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(NOT (`c1` <=> true))");
+
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("c1")),
+            Operator::IsNotDistinctFrom,
+            Box::new(lit(true)),
+        ));
+
+        let sql = expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(c1 IS NOT DISTINCT FROM true)");
+        let sql = mysql_unparser.expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(`c1` <=> true)");
+    }
+
+    #[test]
+    fn test_binary_literal() {
+        let value = vec![0xDEu8, 0xAD, 0xBE, 0xEF];
+        let expected_hex = "X'deadbeef'";
+
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::Binary(Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::BinaryView(Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::FixedSizeBinary(4, Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::LargeBinary(Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::Binary(None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::BinaryView(None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::FixedSizeBinary(1, None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::LargeBinary(None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
     }
 }

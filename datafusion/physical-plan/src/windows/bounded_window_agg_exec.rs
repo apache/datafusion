@@ -20,7 +20,6 @@
 //! the input data seen so far), which makes it appropriate when processing
 //! infinite inputs.
 
-use std::any::Any;
 use std::cmp::{Ordering, min};
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -29,6 +28,8 @@ use std::task::{Context, Poll};
 
 use super::utils::create_schema;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::statistics::StatisticsArgs;
+use crate::stream::EmptyRecordBatchStream;
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
     window_equivalence_properties,
@@ -48,7 +49,6 @@ use arrow::{
 };
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
@@ -67,7 +67,7 @@ use datafusion_physical_expr_common::sort_expr::{
 };
 
 use crate::execution_plan::CardinalityEffect;
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use futures::stream::Stream;
 use futures::{StreamExt, ready};
 use hashbrown::hash_table::HashTable;
@@ -313,29 +313,12 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for window_expr in &self.window_expr {
-            for expr in window_expr.expressions() {
-                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -395,9 +378,10 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let input_stat =
-            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let input_stat = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.input, args.partition())?,
+        );
         Ok(Arc::new(self.statistics_helper(input_stat)?))
     }
 
@@ -1088,6 +1072,10 @@ impl BoundedWindowAggStream {
                 let _timer = elapsed_compute.timer();
 
                 self.finished = true;
+                // Release the input pipeline's resources before computing the
+                // final aggregates.
+                let input_schema = self.input.schema();
+                self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                 for (_, partition_batch_state) in self.partition_buffers.iter_mut() {
                     partition_batch_state.is_end = true;
                 }
@@ -1865,7 +1853,6 @@ mod tests {
             Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
         let plan = bounded_window_exec_pb_latent_range(input, 1, "hash", "sn")?;
         let plan = plan
-            .as_any()
             .downcast_ref::<BoundedWindowAggExec>()
             .expect("expected BoundedWindowAggExec");
 

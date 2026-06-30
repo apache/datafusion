@@ -37,7 +37,7 @@ use super::accumulate::NullState;
 #[derive(Debug)]
 pub struct BooleanGroupsAccumulator<F>
 where
-    F: Fn(bool, bool) -> bool + Send + Sync,
+    F: Fn(bool, bool) -> bool + Send + Sync + 'static,
 {
     /// values per group
     values: BooleanBufferBuilder,
@@ -55,7 +55,7 @@ where
 
 impl<F> BooleanGroupsAccumulator<F>
 where
-    F: Fn(bool, bool) -> bool + Send + Sync,
+    F: Fn(bool, bool) -> bool + Send + Sync + 'static,
 {
     pub fn new(bool_fn: F, identity: bool) -> Self {
         Self {
@@ -69,7 +69,7 @@ where
 
 impl<F> GroupsAccumulator for BooleanGroupsAccumulator<F>
 where
-    F: Fn(bool, bool) -> bool + Send + Sync,
+    F: Fn(bool, bool) -> bool + Send + Sync + 'static,
 {
     fn update_batch(
         &mut self,
@@ -132,11 +132,10 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         // update / merge are the same
-        self.update_batch(values, group_indices, opt_filter, total_num_groups)
+        self.update_batch(values, group_indices, None, total_num_groups)
     }
 
     fn size(&self) -> usize {

@@ -18,8 +18,7 @@
 //! Execution [`RuntimeEnv`] environment that manages access to object
 //! store, memory manager, disk manager.
 
-#[expect(deprecated)]
-use crate::disk_manager::{DiskManagerConfig, SpillingProgress};
+use crate::disk_manager::SpillingProgress;
 use crate::{
     disk_manager::{DiskManager, DiskManagerBuilder, DiskManagerMode},
     memory_pool::{
@@ -103,17 +102,18 @@ fn create_runtime_config_entries(
     metadata_cache_limit: Option<String>,
     list_files_cache_limit: Option<String>,
     list_files_cache_ttl: Option<String>,
+    file_statistics_cache_limit: Option<String>,
 ) -> Vec<ConfigEntry> {
     vec![
         ConfigEntry {
             key: "datafusion.runtime.memory_limit".to_string(),
             value: memory_limit,
-            description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
         },
         ConfigEntry {
             key: "datafusion.runtime.max_temp_directory_size".to_string(),
             value: max_temp_directory_size,
-            description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
         },
         ConfigEntry {
             key: "datafusion.runtime.temp_directory".to_string(),
@@ -123,17 +123,22 @@ fn create_runtime_config_entries(
         ConfigEntry {
             key: "datafusion.runtime.metadata_cache_limit".to_string(),
             value: metadata_cache_limit,
-            description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
         },
         ConfigEntry {
             key: "datafusion.runtime.list_files_cache_limit".to_string(),
             value: list_files_cache_limit,
-            description: "Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            description: "Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
         },
         ConfigEntry {
             key: "datafusion.runtime.list_files_cache_ttl".to_string(),
             value: list_files_cache_ttl,
             description: "TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.",
+        },
+        ConfigEntry {
+            key: "datafusion.runtime.file_statistics_cache_limit".to_string(),
+            value: file_statistics_cache_limit,
+            description: "Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
         },
     ]
 }
@@ -296,6 +301,14 @@ impl RuntimeEnv {
             .get_list_files_cache_ttl()
             .map(format_duration);
 
+        let file_statistics_cache_limit =
+            self.cache_manager.get_file_statistic_cache_limit();
+        let file_statistics_cache_value = format_byte_size(
+            file_statistics_cache_limit
+                .try_into()
+                .expect("File statistics cache size conversion failed"),
+        );
+
         create_runtime_config_entries(
             memory_limit_value,
             Some(max_temp_dir_value),
@@ -303,6 +316,7 @@ impl RuntimeEnv {
             Some(metadata_cache_value),
             Some(list_files_cache_value),
             list_files_cache_ttl,
+            Some(file_statistics_cache_value),
         )
     }
 }
@@ -318,9 +332,8 @@ impl Default for RuntimeEnv {
 /// See example on [`RuntimeEnv`]
 #[derive(Clone)]
 pub struct RuntimeEnvBuilder {
-    #[expect(deprecated)]
     /// DiskManager to manage temporary disk file usage
-    pub disk_manager: DiskManagerConfig,
+    pub disk_manager: Option<Arc<DiskManager>>,
     /// DiskManager builder to manager temporary disk file usage
     pub disk_manager_builder: Option<DiskManagerBuilder>,
     /// [`MemoryPool`] from which to allocate memory
@@ -354,14 +367,6 @@ impl RuntimeEnvBuilder {
             #[cfg(feature = "parquet_encryption")]
             parquet_encryption_factory_registry: Default::default(),
         }
-    }
-
-    #[expect(deprecated)]
-    #[deprecated(since = "48.0.0", note = "Use with_disk_manager_builder instead")]
-    /// Customize disk manager
-    pub fn with_disk_manager(mut self, disk_manager: DiskManagerConfig) -> Self {
-        self.disk_manager = disk_manager;
-        self
     }
 
     /// Customize the disk manager builder
@@ -438,6 +443,11 @@ impl RuntimeEnvBuilder {
         self
     }
 
+    pub fn with_file_statistics_cache_limit(mut self, limit: usize) -> Self {
+        self.cache_manager = self.cache_manager.with_file_statistics_cache_limit(limit);
+        self
+    }
+
     /// Build a RuntimeEnv
     pub fn build(self) -> Result<RuntimeEnv> {
         let Self {
@@ -452,14 +462,15 @@ impl RuntimeEnvBuilder {
         let memory_pool =
             memory_pool.unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
 
+        let disk_manager: Arc<DiskManager> = match (disk_manager, disk_manager_builder) {
+            (_, Some(builder)) => Arc::new(builder.build()?),
+            (Some(manager), None) => manager,
+            (None, None) => Arc::new(DiskManagerBuilder::default().build()?),
+        };
+
         Ok(RuntimeEnv {
             memory_pool,
-            disk_manager: if let Some(builder) = disk_manager_builder {
-                Arc::new(builder.build()?)
-            } else {
-                #[expect(deprecated)]
-                DiskManager::try_new(disk_manager)?
-            },
+            disk_manager,
             cache_manager: CacheManager::try_new(&cache_manager)?,
             object_store_registry,
             #[cfg(feature = "parquet_encryption")]
@@ -475,9 +486,10 @@ impl RuntimeEnvBuilder {
     /// Create a new RuntimeEnvBuilder from an existing RuntimeEnv
     pub fn from_runtime_env(runtime_env: &RuntimeEnv) -> Self {
         let cache_config = CacheManagerConfig {
-            table_files_statistics_cache: runtime_env
+            file_statistics_cache: runtime_env.cache_manager.get_file_statistic_cache(),
+            file_statistics_cache_limit: runtime_env
                 .cache_manager
-                .get_file_statistic_cache(),
+                .get_file_statistic_cache_limit(),
             list_files_cache: runtime_env.cache_manager.get_list_files_cache(),
             list_files_cache_limit: runtime_env
                 .cache_manager
@@ -490,10 +502,7 @@ impl RuntimeEnvBuilder {
         };
 
         Self {
-            #[expect(deprecated)]
-            disk_manager: DiskManagerConfig::Existing(Arc::clone(
-                &runtime_env.disk_manager,
-            )),
+            disk_manager: Some(Arc::clone(&runtime_env.disk_manager)),
             disk_manager_builder: None,
             memory_pool: Some(Arc::clone(&runtime_env.memory_pool)),
             cache_manager: cache_config,
@@ -514,6 +523,7 @@ impl RuntimeEnvBuilder {
             Some("50M".to_owned()),
             Some("1M".to_owned()),
             None,
+            Some("20M".to_owned()),
         )
     }
 

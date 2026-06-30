@@ -41,9 +41,35 @@ const BENCHMARKS_PATH_1: &str = "../../benchmarks/";
 const BENCHMARKS_PATH_2: &str = "./benchmarks/";
 const CLICKBENCH_DATA_PATH: &str = "data/hits_partitioned/";
 
-/// Create a logical plan from the specified sql
+/// Create a logical plan from the specified sql (parse + analyze only, NO optimization)
 fn logical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     black_box(rt.block_on(ctx.sql(sql)).unwrap());
+}
+
+/// Parse SQL and run the analyzer to get an analyzed (but unoptimized) LogicalPlan.
+/// This is the input to the optimizer.
+fn analyzed_plan(
+    ctx: &SessionContext,
+    rt: &Runtime,
+    sql: &str,
+) -> datafusion_expr::LogicalPlan {
+    let state = ctx.state();
+    let plan = rt.block_on(state.create_logical_plan(sql)).unwrap();
+    state
+        .analyzer()
+        .execute_and_check(plan, state.config().options(), |_, _| {})
+        .unwrap()
+}
+
+/// Run ONLY the optimizer on a pre-analyzed plan. Measures optimizer cost in isolation.
+fn optimize_plan(ctx: &SessionContext, plan: &datafusion_expr::LogicalPlan) {
+    let state = ctx.state();
+    black_box(
+        state
+            .optimizer()
+            .optimize(plan.clone(), &state, |_, _| {})
+            .unwrap(),
+    );
 }
 
 /// Create a physical ExecutionPlan (by way of logical plan)
@@ -107,15 +133,23 @@ fn create_context() -> SessionContext {
 
 /// Register the table definitions as a MemTable with the context and return the
 /// context
-#[expect(clippy::needless_pass_by_value)]
 fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
-    defs.iter().for_each(|TableDef { name, schema }| {
+    for TableDef {
+        name,
+        schema,
+        constraints,
+    } in defs
+    {
         ctx.register_table(
-            name,
-            Arc::new(MemTable::try_new(Arc::new(schema.clone()), vec![vec![]]).unwrap()),
+            &name,
+            Arc::new(
+                MemTable::try_new(Arc::new(schema), vec![vec![]])
+                    .unwrap()
+                    .with_constraints(constraints),
+            ),
         )
         .unwrap();
-    });
+    }
     ctx
 }
 
@@ -130,7 +164,8 @@ fn register_clickbench_hits_table(rt: &Runtime) -> SessionContext {
             format!("{BENCHMARKS_PATH_2}{CLICKBENCH_DATA_PATH}")
         };
 
-    let sql = format!("CREATE EXTERNAL TABLE hits STORED AS PARQUET LOCATION '{path}'");
+    let sql =
+        format!("CREATE EXTERNAL TABLE hits_raw STORED AS PARQUET LOCATION '{path}'");
 
     // ClickBench partitioned dataset was written by an ancient version of pyarrow that
     // that wrote strings with the wrong logical type. To read it correctly, we must
@@ -138,6 +173,17 @@ fn register_clickbench_hits_table(rt: &Runtime) -> SessionContext {
     rt.block_on(ctx.sql("SET datafusion.execution.parquet.binary_as_string  = true;"))
         .unwrap();
     rt.block_on(ctx.sql(&sql)).unwrap();
+
+    // ClickBench stores EventDate as UInt16 (days since 1970-01-01). Create a view
+    // that exposes it as SQL DATE so that queries comparing it with date literals
+    // (e.g. "EventDate >= '2013-07-01'") work correctly during planning.
+    rt.block_on(ctx.sql(
+        "CREATE VIEW hits AS \
+         SELECT * EXCEPT (\"EventDate\"), \
+                CAST(CAST(\"EventDate\" AS INTEGER) AS DATE) AS \"EventDate\" \
+         FROM hits_raw",
+    ))
+    .unwrap();
 
     let count =
         rt.block_on(async { ctx.table("hits").await.unwrap().count().await.unwrap() });
@@ -634,6 +680,433 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("with_param_values_many_columns", |b| {
         benchmark_with_param_values_many_columns(&ctx, &rt, b);
     });
+
+    // ==========================================================================
+    // Optimizer-focused benchmarks
+    // These benchmarks are designed to stress the logical optimizer with
+    // varying plan sizes, expression counts, and node type distributions.
+    // ==========================================================================
+
+    // --- Deep join trees (many plan nodes, few expressions) ---
+    // Tests optimizer traversal cost as plan node count grows.
+    // Each join adds ~3 nodes (Join, TableScan, CrossJoin/Filter).
+
+    // Register additional tables for join benchmarks
+    for i in 3..=16 {
+        ctx.register_table(format!("j{i}"), create_table_provider("x", 10))
+            .unwrap();
+    }
+
+    c.bench_function("logical_join_chain_4", |b| {
+        b.iter(|| {
+            logical_plan(
+                &ctx,
+                &rt,
+                "SELECT j3.x0 FROM j3 \
+                 JOIN j4 ON j3.x0 = j4.x0 \
+                 JOIN j5 ON j4.x0 = j5.x0 \
+                 JOIN j6 ON j5.x0 = j6.x0",
+            )
+        })
+    });
+
+    c.bench_function("logical_join_chain_8", |b| {
+        b.iter(|| {
+            logical_plan(
+                &ctx,
+                &rt,
+                "SELECT j3.x0 FROM j3 \
+                 JOIN j4 ON j3.x0 = j4.x0 \
+                 JOIN j5 ON j4.x0 = j5.x0 \
+                 JOIN j6 ON j5.x0 = j6.x0 \
+                 JOIN j7 ON j6.x0 = j7.x0 \
+                 JOIN j8 ON j7.x0 = j8.x0 \
+                 JOIN j9 ON j8.x0 = j9.x0 \
+                 JOIN j10 ON j9.x0 = j10.x0",
+            )
+        })
+    });
+
+    c.bench_function("logical_join_chain_16", |b| {
+        b.iter(|| {
+            logical_plan(
+                &ctx,
+                &rt,
+                "SELECT j3.x0 FROM j3 \
+                 JOIN j4 ON j3.x0 = j4.x0 \
+                 JOIN j5 ON j4.x0 = j5.x0 \
+                 JOIN j6 ON j5.x0 = j6.x0 \
+                 JOIN j7 ON j6.x0 = j7.x0 \
+                 JOIN j8 ON j7.x0 = j8.x0 \
+                 JOIN j9 ON j8.x0 = j9.x0 \
+                 JOIN j10 ON j9.x0 = j10.x0 \
+                 JOIN j11 ON j10.x0 = j11.x0 \
+                 JOIN j12 ON j11.x0 = j12.x0 \
+                 JOIN j13 ON j12.x0 = j13.x0 \
+                 JOIN j14 ON j13.x0 = j14.x0 \
+                 JOIN j15 ON j14.x0 = j15.x0 \
+                 JOIN j16 ON j15.x0 = j16.x0 \
+                 JOIN j3 AS j3b ON j16.x0 = j3b.x0 \
+                 JOIN j4 AS j4b ON j3b.x0 = j4b.x0",
+            )
+        })
+    });
+
+    // --- Wide expressions (few plan nodes, many expressions) ---
+    // Tests expression processing overhead in optimizer rules like
+    // SimplifyExpressions, CommonSubexprEliminate, OptimizeProjections.
+
+    // Many WHERE clauses (filter expressions)
+    {
+        let predicates: Vec<String> = (0..50).map(|i| format!("a{i} > 0")).collect();
+        let query = format!("SELECT a0 FROM t1 WHERE {}", predicates.join(" AND "));
+        c.bench_function("logical_wide_filter_50_predicates", |b| {
+            b.iter(|| logical_plan(&ctx, &rt, &query))
+        });
+    }
+
+    {
+        let predicates: Vec<String> = (0..200).map(|i| format!("a{i} > 0")).collect();
+        let query = format!("SELECT a0 FROM t1 WHERE {}", predicates.join(" AND "));
+        c.bench_function("logical_wide_filter_200_predicates", |b| {
+            b.iter(|| logical_plan(&ctx, &rt, &query))
+        });
+    }
+
+    // Many aggregate expressions
+    {
+        let aggs: Vec<String> =
+            (0..50).map(|i| format!("SUM(a{i}), AVG(a{i})")).collect();
+        let query = format!("SELECT {} FROM t1", aggs.join(", "));
+        c.bench_function("logical_wide_aggregate_100_exprs", |b| {
+            b.iter(|| logical_plan(&ctx, &rt, &query))
+        });
+    }
+
+    // Many CASE WHEN expressions (complex expressions)
+    {
+        let cases: Vec<String> = (0..50)
+            .map(|i| {
+                format!("CASE WHEN a{i} > 0 THEN a{i} * 2 ELSE a{i} + 1 END AS r{i}")
+            })
+            .collect();
+        let query = format!("SELECT {} FROM t1", cases.join(", "));
+        c.bench_function("logical_wide_case_50_exprs", |b| {
+            b.iter(|| logical_plan(&ctx, &rt, &query))
+        });
+    }
+
+    // --- Mixed: deep plan + wide expressions ---
+    // This is the worst case for optimizer: many nodes AND many expressions.
+
+    c.bench_function("logical_join_4_with_agg_and_filter", |b| {
+        b.iter(|| {
+            logical_plan(
+                &ctx,
+                &rt,
+                "SELECT j3.x0, SUM(j4.x1), AVG(j5.x2), COUNT(j6.x3), \
+                        MIN(j3.x4), MAX(j4.x5) \
+                 FROM j3 \
+                 JOIN j4 ON j3.x0 = j4.x0 \
+                 JOIN j5 ON j4.x0 = j5.x0 \
+                 JOIN j6 ON j5.x0 = j6.x0 \
+                 WHERE j3.x1 > 0 AND j4.x2 < 100 AND j5.x3 != j6.x4 \
+                 GROUP BY j3.x0 \
+                 HAVING SUM(j4.x1) > 10 \
+                 ORDER BY j3.x0",
+            )
+        })
+    });
+
+    c.bench_function("logical_join_8_with_agg_sort_limit", |b| {
+        b.iter(|| {
+            logical_plan(
+                &ctx,
+                &rt,
+                "SELECT j3.x0, j4.x1, j5.x2, \
+                        SUM(j6.x3), AVG(j7.x4), COUNT(j8.x5), \
+                        MIN(j9.x6), MAX(j10.x7) \
+                 FROM j3 \
+                 JOIN j4 ON j3.x0 = j4.x0 \
+                 JOIN j5 ON j4.x0 = j5.x0 \
+                 JOIN j6 ON j5.x0 = j6.x0 \
+                 JOIN j7 ON j6.x0 = j7.x0 \
+                 JOIN j8 ON j7.x0 = j8.x0 \
+                 JOIN j9 ON j8.x0 = j9.x0 \
+                 JOIN j10 ON j9.x0 = j10.x0 \
+                 WHERE j3.x1 > 0 AND j5.x2 < 100 \
+                 GROUP BY j3.x0, j4.x1, j5.x2 \
+                 ORDER BY j3.x0 DESC \
+                 LIMIT 100",
+            )
+        })
+    });
+
+    // --- Subqueries (trigger decorrelation rules) ---
+    // Tests rules like DecorrelatePredicateSubquery, ScalarSubqueryToJoin.
+
+    c.bench_function("logical_correlated_subquery_exists", |b| {
+        b.iter(|| {
+            logical_plan(
+                &ctx,
+                &rt,
+                "SELECT a0, a1 FROM t1 \
+                 WHERE EXISTS (SELECT 1 FROM t2 WHERE t2.b0 = t1.a0)",
+            )
+        })
+    });
+
+    c.bench_function("logical_correlated_subquery_in", |b| {
+        b.iter(|| {
+            logical_plan(
+                &ctx,
+                &rt,
+                "SELECT a0, a1 FROM t1 \
+                 WHERE a0 IN (SELECT b0 FROM t2 WHERE t2.b1 = t1.a1)",
+            )
+        })
+    });
+
+    c.bench_function("logical_scalar_subquery", |b| {
+        b.iter(|| {
+            logical_plan(
+                &ctx,
+                &rt,
+                "SELECT a0, (SELECT MAX(b1) FROM t2 WHERE t2.b0 = t1.a0) AS max_b \
+                 FROM t1",
+            )
+        })
+    });
+
+    c.bench_function("logical_multiple_subqueries", |b| {
+        b.iter(|| {
+            logical_plan(
+                &ctx,
+                &rt,
+                "SELECT a0, a1 FROM t1 \
+                 WHERE a0 IN (SELECT b0 FROM t2 WHERE b1 > 0) \
+                   AND EXISTS (SELECT 1 FROM t2 WHERE t2.b0 = t1.a0 AND t2.b1 < 100) \
+                   AND a1 > (SELECT AVG(b1) FROM t2)",
+            )
+        })
+    });
+
+    // --- UNION queries (test OptimizeUnions, PropagateEmptyRelation) ---
+
+    c.bench_function("logical_union_4_branches", |b| {
+        b.iter(|| {
+            logical_plan(
+                &ctx,
+                &rt,
+                "SELECT a0, a1 FROM t1 WHERE a0 > 0 \
+                 UNION ALL SELECT a0, a1 FROM t1 WHERE a0 > 10 \
+                 UNION ALL SELECT a0, a1 FROM t1 WHERE a0 > 20 \
+                 UNION ALL SELECT a0, a1 FROM t1 WHERE a0 > 30",
+            )
+        })
+    });
+
+    c.bench_function("logical_union_8_branches", |b| {
+        b.iter(|| {
+            logical_plan(
+                &ctx,
+                &rt,
+                "SELECT a0, a1 FROM t1 WHERE a0 > 0 \
+                 UNION ALL SELECT a0, a1 FROM t1 WHERE a0 > 10 \
+                 UNION ALL SELECT a0, a1 FROM t1 WHERE a0 > 20 \
+                 UNION ALL SELECT a0, a1 FROM t1 WHERE a0 > 30 \
+                 UNION ALL SELECT a0, a1 FROM t1 WHERE a0 > 40 \
+                 UNION ALL SELECT a0, a1 FROM t1 WHERE a0 > 50 \
+                 UNION ALL SELECT a0, a1 FROM t1 WHERE a0 > 60 \
+                 UNION ALL SELECT a0, a1 FROM t1 WHERE a0 > 70",
+            )
+        })
+    });
+
+    // --- DISTINCT (test ReplaceDistinctWithAggregate) ---
+
+    c.bench_function("logical_distinct_many_columns", |b| {
+        let cols: Vec<String> = (0..50).map(|i| format!("a{i}")).collect();
+        let query = format!("SELECT DISTINCT {} FROM t1", cols.join(", "));
+        b.iter(|| logical_plan(&ctx, &rt, &query))
+    });
+
+    // --- Nested views / CTEs (deeper plan trees) ---
+
+    c.bench_function("logical_nested_cte_4_levels", |b| {
+        b.iter(|| {
+            logical_plan(
+                &ctx,
+                &rt,
+                "WITH \
+                   cte1 AS (SELECT a0, a1, a2 FROM t1 WHERE a0 > 0), \
+                   cte2 AS (SELECT a0, a1 FROM cte1 WHERE a1 > 0), \
+                   cte3 AS (SELECT a0 FROM cte2 WHERE a0 < 100), \
+                   cte4 AS (SELECT a0, COUNT(*) AS cnt FROM cte3 GROUP BY a0) \
+                 SELECT * FROM cte4 ORDER BY a0 LIMIT 10",
+            )
+        })
+    });
+
+    // --- TPC-H logical plans (uncommented from existing code) ---
+    // These test real-world query patterns with moderate plan complexity.
+
+    c.bench_function("logical_plan_tpch_all", |b| {
+        b.iter(|| {
+            for sql in &all_tpch_sql_queries {
+                logical_plan(&tpch_ctx, &rt, sql)
+            }
+        })
+    });
+
+    c.bench_function("logical_plan_tpcds_all", |b| {
+        b.iter(|| {
+            for sql in &all_tpcds_sql_queries {
+                logical_plan(&tpcds_ctx, &rt, sql)
+            }
+        })
+    });
+
+    // ==========================================================================
+    // Optimizer-only benchmarks
+    // These measure ONLY the optimizer, not SQL parsing or analysis.
+    // Plans are pre-parsed and pre-analyzed in setup, then only optimization
+    // is measured in the benchmark loop.
+    // ==========================================================================
+
+    // Simple select (baseline: few nodes, few expressions)
+    {
+        let plan = analyzed_plan(&ctx, &rt, "SELECT c1 FROM t700");
+        c.bench_function("optimizer_select_one_from_700", |b| {
+            b.iter(|| optimize_plan(&ctx, &plan))
+        });
+    }
+
+    // Wide select (many expressions, few nodes)
+    {
+        let plan = analyzed_plan(&ctx, &rt, "SELECT * FROM t1000");
+        c.bench_function("optimizer_select_all_from_1000", |b| {
+            b.iter(|| optimize_plan(&ctx, &plan))
+        });
+    }
+
+    // Deep join chains (many nodes, few expressions)
+    {
+        let plan = analyzed_plan(
+            &ctx,
+            &rt,
+            "SELECT j3.x0 FROM j3 \
+             JOIN j4 ON j3.x0 = j4.x0 \
+             JOIN j5 ON j4.x0 = j5.x0 \
+             JOIN j6 ON j5.x0 = j6.x0",
+        );
+        c.bench_function("optimizer_join_chain_4", |b| {
+            b.iter(|| optimize_plan(&ctx, &plan))
+        });
+    }
+
+    {
+        let plan = analyzed_plan(
+            &ctx,
+            &rt,
+            "SELECT j3.x0 FROM j3 \
+             JOIN j4 ON j3.x0 = j4.x0 \
+             JOIN j5 ON j4.x0 = j5.x0 \
+             JOIN j6 ON j5.x0 = j6.x0 \
+             JOIN j7 ON j6.x0 = j7.x0 \
+             JOIN j8 ON j7.x0 = j8.x0 \
+             JOIN j9 ON j8.x0 = j9.x0 \
+             JOIN j10 ON j9.x0 = j10.x0",
+        );
+        c.bench_function("optimizer_join_chain_8", |b| {
+            b.iter(|| optimize_plan(&ctx, &plan))
+        });
+    }
+
+    // Wide filter (many expressions)
+    {
+        let predicates: Vec<String> = (0..200).map(|i| format!("a{i} > 0")).collect();
+        let query = format!("SELECT a0 FROM t1 WHERE {}", predicates.join(" AND "));
+        let plan = analyzed_plan(&ctx, &rt, &query);
+        c.bench_function("optimizer_wide_filter_200", |b| {
+            b.iter(|| optimize_plan(&ctx, &plan))
+        });
+    }
+
+    // Wide aggregate (many expressions)
+    {
+        let aggs: Vec<String> =
+            (0..50).map(|i| format!("SUM(a{i}), AVG(a{i})")).collect();
+        let query = format!("SELECT {} FROM t1", aggs.join(", "));
+        let plan = analyzed_plan(&ctx, &rt, &query);
+        c.bench_function("optimizer_wide_aggregate_100", |b| {
+            b.iter(|| optimize_plan(&ctx, &plan))
+        });
+    }
+
+    // Subquery (tests decorrelation rules)
+    {
+        let plan = analyzed_plan(
+            &ctx,
+            &rt,
+            "SELECT a0, a1 FROM t1 \
+             WHERE EXISTS (SELECT 1 FROM t2 WHERE t2.b0 = t1.a0)",
+        );
+        c.bench_function("optimizer_correlated_exists", |b| {
+            b.iter(|| optimize_plan(&ctx, &plan))
+        });
+    }
+
+    // Mixed: joins + aggregates + filter
+    {
+        let plan = analyzed_plan(
+            &ctx,
+            &rt,
+            "SELECT j3.x0, SUM(j4.x1), AVG(j5.x2), COUNT(j6.x3), \
+                    MIN(j3.x4), MAX(j4.x5) \
+             FROM j3 \
+             JOIN j4 ON j3.x0 = j4.x0 \
+             JOIN j5 ON j4.x0 = j5.x0 \
+             JOIN j6 ON j5.x0 = j6.x0 \
+             WHERE j3.x1 > 0 AND j4.x2 < 100 AND j5.x3 != j6.x4 \
+             GROUP BY j3.x0 \
+             HAVING SUM(j4.x1) > 10 \
+             ORDER BY j3.x0",
+        );
+        c.bench_function("optimizer_join_4_with_agg_filter", |b| {
+            b.iter(|| optimize_plan(&ctx, &plan))
+        });
+    }
+
+    // TPC-H all queries (optimizer only)
+    {
+        let plans: Vec<_> = all_tpch_sql_queries
+            .iter()
+            .map(|sql| analyzed_plan(&tpch_ctx, &rt, sql))
+            .collect();
+        c.bench_function("optimizer_tpch_all", |b| {
+            b.iter(|| {
+                for plan in &plans {
+                    optimize_plan(&tpch_ctx, plan)
+                }
+            })
+        });
+    }
+
+    // TPC-DS all queries (optimizer only)
+    {
+        let plans: Vec<_> = all_tpcds_sql_queries
+            .iter()
+            .map(|sql| analyzed_plan(&tpcds_ctx, &rt, sql))
+            .collect();
+        c.bench_function("optimizer_tpcds_all", |b| {
+            b.iter(|| {
+                for plan in &plans {
+                    optimize_plan(&tpcds_ctx, plan)
+                }
+            })
+        });
+    }
 }
 
 criterion_group!(benches, criterion_benchmark);

@@ -44,7 +44,9 @@ use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
+mod content_defined_chunking;
 mod custom_reader;
+mod dynamic_row_group_pruning;
 #[cfg(feature = "parquet_encryption")]
 mod encryption;
 mod expr_adapter;
@@ -59,7 +61,7 @@ mod schema_coercion;
 mod utils;
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();
@@ -98,6 +100,10 @@ enum Unit {
     RowGroup(usize),
     // pass max row per page in parquet writer
     Page(usize),
+    // pass max row per row_group AND max row per page. Use when a test
+    // needs both multi-RG layout AND multiple pages within each RG so the
+    // page index can prune at sub-RG granularity.
+    RowGroupAndPage(usize, usize),
 }
 
 /// Test fixture that has an execution context that has an external
@@ -146,6 +152,12 @@ struct TestOutput {
 }
 
 impl TestOutput {
+    /// Pretty-printed result batches, useful for asserting concrete row
+    /// values in regression tests.
+    fn pretty_results(&self) -> &str {
+        &self.pretty_results
+    }
+
     /// retrieve the value of the named metric, if any
     fn metric_value(&self, metric_name: &str) -> Option<usize> {
         if let Some(pm) = self.pruning_metric(metric_name) {
@@ -258,6 +270,13 @@ impl TestOutput {
             .map(|pm| pm.total_pruned())
     }
 
+    /// The number of row groups pruned at runtime by the dynamic
+    /// row-group pruner (e.g. driven by a TopK `SortExec` threshold
+    /// pushed down via `DynamicFilterPhysicalExpr`).
+    fn row_groups_pruned_dynamic_filter(&self) -> Option<usize> {
+        self.metric_value("row_groups_pruned_dynamic_filter")
+    }
+
     fn description(&self) -> String {
         format!(
             "Input:\n{}\nQuery:\n{}\nOutput:\n{}\nMetrics:\n{}",
@@ -304,12 +323,31 @@ impl ContextWithParquet {
             Unit::RowGroup(row_per_group) => {
                 config = config.with_parquet_bloom_filter_pruning(true);
                 config.options_mut().execution.parquet.pushdown_filters = true;
-                make_test_file_rg(scenario, row_per_group, custom_schema, custom_batches)
-                    .await
+                make_test_file_rg(
+                    scenario,
+                    row_per_group,
+                    None,
+                    custom_schema,
+                    custom_batches,
+                )
+                .await
             }
             Unit::Page(row_per_page) => {
                 config = config.with_parquet_page_index_pruning(true);
                 make_test_file_page(scenario, row_per_page).await
+            }
+            Unit::RowGroupAndPage(row_per_group, row_per_page) => {
+                config = config.with_parquet_bloom_filter_pruning(true);
+                config = config.with_parquet_page_index_pruning(true);
+                config.options_mut().execution.parquet.pushdown_filters = true;
+                make_test_file_rg(
+                    scenario,
+                    row_per_group,
+                    Some(row_per_page),
+                    custom_schema,
+                    custom_batches,
+                )
+                .await
             }
         };
         let parquet_path = file.path().to_string_lossy();
@@ -725,11 +763,11 @@ fn make_bytearray_batch(
     let name: StringArray = std::iter::repeat_n(Some(name), num_rows).collect();
     let service_string: StringArray = string_values.iter().map(Some).collect();
     let service_binary: BinaryArray = binary_values.iter().map(Some).collect();
-    let service_fixedsize: FixedSizeBinaryArray = fixedsize_values
-        .iter()
-        .map(|value| Some(value.as_slice()))
-        .collect::<Vec<_>>()
-        .into();
+    let service_fixedsize = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+        fixedsize_values.iter().map(|value| Some(value.as_slice())),
+        3,
+    )
+    .unwrap();
     let service_large_binary: LargeBinaryArray =
         large_binary_values.iter().map(Some).collect();
 
@@ -1138,6 +1176,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
 async fn make_test_file_rg(
     scenario: Scenario,
     row_per_group: usize,
+    row_per_page: Option<usize>,
     custom_schema: Option<SchemaRef>,
     custom_batches: Option<Vec<RecordBatch>>,
 ) -> NamedTempFile {
@@ -1147,11 +1186,19 @@ async fn make_test_file_rg(
         .tempfile()
         .expect("tempfile creation");
 
-    let props = WriterProperties::builder()
+    let mut props_builder = WriterProperties::builder()
         .set_max_row_group_row_count(Some(row_per_group))
         .set_bloom_filter_enabled(true)
-        .set_statistics_enabled(EnabledStatistics::Page)
-        .build();
+        .set_statistics_enabled(EnabledStatistics::Page);
+    if let Some(rpp) = row_per_page {
+        // Bound rows per page so the page index can prune at sub-RG
+        // granularity. `write_batch_size` must also be set so the writer
+        // does not buffer the whole RG into one page.
+        props_builder = props_builder
+            .set_data_page_row_count_limit(rpp)
+            .set_write_batch_size(rpp);
+    }
+    let props = props_builder.build();
 
     let (batches, schema) =
         if let (Some(schema), Some(batches)) = (custom_schema, custom_batches) {

@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
@@ -24,16 +23,33 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
+use datafusion_common::hash_utils::RandomState;
+use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use half::f16;
 use hashbrown::hash_table::HashTable;
+#[cfg(not(feature = "force_hash_collisions"))]
+use std::hash::BuildHasher;
 use std::mem::size_of;
 use std::sync::Arc;
 
 /// A trait to allow hashing of floating point numbers
-pub(crate) trait HashValue {
+pub trait HashValue {
     fn hash(&self, state: &RandomState) -> u64;
+
+    /// Return a canonical representative whose bit pattern is identical for
+    /// all values that should be grouped together. Default is the identity;
+    /// floats override this to fold `-0.0` into `+0.0` so the bit-equal
+    /// `is_eq` check used during insertion treats them as the same group.
+    /// NaN payload bits are preserved.
+    #[inline]
+    fn canonicalize(self) -> Self
+    where
+        Self: Sized,
+    {
+        self
+    }
 }
 
 macro_rules! hash_integer {
@@ -60,12 +76,19 @@ macro_rules! hash_float {
         $(impl HashValue for $t {
             #[cfg(not(feature = "force_hash_collisions"))]
             fn hash(&self, state: &RandomState) -> u64 {
-                state.hash_one(self.to_bits())
+                state.hash_one(self.canonicalize().to_bits())
             }
 
             #[cfg(feature = "force_hash_collisions")]
             fn hash(&self, _state: &RandomState) -> u64 {
                 0
+            }
+
+            #[inline]
+            fn canonicalize(self) -> Self {
+                let bits = self.to_bits();
+                let bits = if bits << 1 == 0 { 0 } else { bits };
+                Self::from_bits(bits)
             }
         })+
     };
@@ -124,6 +147,10 @@ where
                     group_id
                 }),
                 Some(key) => {
+                    // Fold equivalence-class duplicates (e.g. `-0.0` → `+0.0`)
+                    // so the bit-equal `is_eq` matches and the stored value is
+                    // the canonical representative.
+                    let key = key.canonicalize();
                     let state = &self.random_state;
                     let hash = key.hash(state);
                     let insert = self.map.entry(
@@ -205,9 +232,7 @@ where
                     Some(_) => self.null_group.take(),
                     None => None,
                 };
-                let mut split = self.values.split_off(n);
-                std::mem::swap(&mut self.values, &mut split);
-                build_primitive(split, null_group)
+                build_primitive(split_vec_min_alloc(&mut self.values, n), null_group)
             }
         };
 
@@ -219,5 +244,53 @@ where
         self.values.shrink_to(num_rows);
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::types::Int32Type;
+    use arrow::array::{ArrayRef, Int32Array};
+    use arrow::datatypes::DataType;
+    use datafusion_expr::EmitTo;
+    use std::sync::Arc;
+
+    /// Mirror of the `EmitTo::take_needed` regression test, applied to the
+    /// concrete `GroupValuesPrimitive` accumulator.
+    ///
+    /// When `n` is small, the old `split_off(n) + swap` pattern used inside
+    /// `emit(EmitTo::First(n))` left `self.values` with a small fresh allocation
+    /// and returned the emitted prefix carrying the original large backing.
+    ///
+    /// With `split_vec_min_alloc` and `n * 2 <= len`, the drain branch is taken:
+    /// the emitted prefix gets a compact allocation and `self.values` retains the
+    /// original large one.
+    #[test]
+    fn emit_first_small_n_allocates_minimally() -> Result<()> {
+        let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+
+        // Intern 20 distinct values; `new()` pre-allocates capacity 128 for `values`.
+        let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..20i32));
+        let mut groups = vec![];
+        gv.intern(&[arr], &mut groups)?;
+        let capacity_before = gv.values.capacity(); // 128
+
+        // n=4, n*2=8 <= len=20 -> drain branch
+        let emitted = gv.emit(EmitTo::First(4))?;
+
+        assert_eq!(emitted[0].len(), 4);
+
+        // `self.values` must retain its original large allocation.
+        // Old split_off+swap left it with a fresh small allocation (~16).
+        assert_eq!(
+            gv.values.capacity(),
+            capacity_before,
+            "self.values capacity {} should equal original {} after small First(n) emit",
+            gv.values.capacity(),
+            capacity_before,
+        );
+
+        Ok(())
     }
 }

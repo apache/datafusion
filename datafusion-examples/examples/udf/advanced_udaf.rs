@@ -20,7 +20,7 @@
 use arrow::datatypes::{Field, Schema};
 use datafusion::physical_expr::NullState;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::array::{
     ArrayRef, AsArray, Float32Array, PrimitiveArray, PrimitiveBuilder, UInt32Array,
@@ -64,11 +64,6 @@ impl GeoMeanUdaf {
 }
 
 impl AggregateUDFImpl for GeoMeanUdaf {
-    /// We implement as_any so that we can downcast the AggregateUDFImpl trait object
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     /// Return the name of this function
     fn name(&self) -> &str {
         "geo_mean"
@@ -273,7 +268,6 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&arrow::array::BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
@@ -285,7 +279,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         self.null_state.accumulate(
             group_indices,
             partial_counts,
-            opt_filter,
+            None,
             total_num_groups,
             |group_index, partial_count| {
                 self.counts[group_index] += partial_count;
@@ -297,7 +291,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         self.null_state.accumulate(
             group_indices,
             partial_prods,
-            opt_filter,
+            None,
             total_num_groups,
             |group_index, new_value: <Float64Type as ArrowPrimitiveType>::Native| {
                 let prod = &mut self.prods[group_index];
@@ -387,10 +381,6 @@ impl SimplifiedGeoMeanUdaf {
 }
 
 impl AggregateUDFImpl for SimplifiedGeoMeanUdaf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "simplified_geo_mean"
     }

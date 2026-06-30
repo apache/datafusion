@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::datetime::common::*;
@@ -27,13 +26,14 @@ use arrow::array::{
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    ArrowTimestampType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
+    ArrowTimestampType, DECIMAL128_MAX_PRECISION, DataType, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, ScalarType, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarType, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -332,14 +332,31 @@ impl_to_timestamp_constructors!(ToTimestampMillisFunc);
 impl_to_timestamp_constructors!(ToTimestampMicrosFunc);
 impl_to_timestamp_constructors!(ToTimestampNanosFunc);
 
-fn decimal_to_nanoseconds(value: i128, scale: i8) -> i64 {
+fn decimal_to_nanoseconds(value: i128, scale: i8) -> Result<i64> {
     let nanos_exponent = 9_i16 - scale as i16;
+    let power = 10_i128
+        .checked_pow(nanos_exponent.unsigned_abs() as u32)
+        .ok_or_else(|| {
+            exec_datafusion_err!(
+                "Decimal value {value} with scale {scale} overflows timestamp nanoseconds"
+            )
+        })?;
+
     let timestamp_nanos = if nanos_exponent >= 0 {
-        value * 10_i128.pow(nanos_exponent as u32)
+        value.checked_mul(power).ok_or_else(|| {
+            exec_datafusion_err!(
+                "Decimal value {value} with scale {scale} overflows timestamp nanoseconds"
+            )
+        })?
     } else {
-        value / 10_i128.pow(nanos_exponent.unsigned_abs() as u32)
+        value / power
     };
-    timestamp_nanos as i64
+
+    i64::try_from(timestamp_nanos).map_err(|_| {
+        exec_datafusion_err!(
+            "Decimal value {value} with scale {scale} overflows timestamp nanoseconds"
+        )
+    })
 }
 
 fn decimal128_to_timestamp_nanos(
@@ -348,7 +365,7 @@ fn decimal128_to_timestamp_nanos(
 ) -> Result<ColumnarValue> {
     match arg {
         ColumnarValue::Scalar(ScalarValue::Decimal128(Some(value), _, scale)) => {
-            let timestamp_nanos = decimal_to_nanoseconds(*value, *scale);
+            let timestamp_nanos = decimal_to_nanoseconds(*value, *scale)?;
             Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
                 Some(timestamp_nanos),
                 tz,
@@ -362,8 +379,8 @@ fn decimal128_to_timestamp_nanos(
             let scale = decimal_arr.scale();
             let result: TimestampNanosecondArray = decimal_arr
                 .iter()
-                .map(|v| v.map(|val| decimal_to_nanoseconds(val, scale)))
-                .collect();
+                .map(|v| v.map(|val| decimal_to_nanoseconds(val, scale)).transpose())
+                .collect::<Result<_>>()?;
             let result = result.with_timezone_opt(tz);
             Ok(ColumnarValue::Array(Arc::new(result)))
         }
@@ -387,10 +404,6 @@ macro_rules! impl_with_updated_config {
 }
 
 impl ScalarUDFImpl for ToTimestampFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp"
     }
@@ -405,11 +418,8 @@ impl ScalarUDFImpl for ToTimestampFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -481,7 +491,8 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 _ => exec_err!("Invalid Float64 value for to_timestamp"),
             },
             Decimal32(_, _) | Decimal64(_, _) | Decimal256(_, _) => {
-                let arg = args[0].cast_to(&Decimal128(38, 9), None)?;
+                let arg =
+                    args[0].cast_to(&Decimal128(DECIMAL128_MAX_PRECISION, 9), None)?;
                 decimal128_to_timestamp_nanos(&arg, tz)
             }
             Decimal128(_, _) => decimal128_to_timestamp_nanos(&args[0], tz),
@@ -500,10 +511,6 @@ impl ScalarUDFImpl for ToTimestampFunc {
 }
 
 impl ScalarUDFImpl for ToTimestampSecondsFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp_seconds"
     }
@@ -518,11 +525,8 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -576,10 +580,6 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
 }
 
 impl ScalarUDFImpl for ToTimestampMillisFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp_millis"
     }
@@ -594,11 +594,8 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -652,10 +649,6 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 }
 
 impl ScalarUDFImpl for ToTimestampMicrosFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp_micros"
     }
@@ -670,11 +663,8 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -728,10 +718,6 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
 }
 
 impl ScalarUDFImpl for ToTimestampNanosFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp_nanos"
     }
@@ -746,11 +732,8 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -842,7 +825,6 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use arrow::array::types::Int64Type;
     use arrow::array::{
@@ -852,9 +834,8 @@ mod tests {
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
     use arrow::datatypes::{Field, TimeUnit};
     use chrono::{DateTime, FixedOffset, Utc};
-    use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{DataFusionError, ScalarValue, assert_contains};
-    use datafusion_expr::{ScalarFunctionArgs, ScalarFunctionImplementation};
+    use datafusion_common::{DataFusionError, assert_contains};
+    use datafusion_expr::ScalarFunctionImplementation;
 
     use super::*;
 
@@ -982,6 +963,37 @@ mod tests {
             panic!("Expected a columnar array")
         }
         Ok(())
+    }
+
+    #[test]
+    fn to_timestamp_decimal128_overflow_returns_error() {
+        let value = "99999999999999999999999999999999999999"
+            .parse::<i128>()
+            .unwrap();
+        let err = decimal128_to_timestamp_nanos(
+            &ColumnarValue::Scalar(ScalarValue::Decimal128(Some(value), 38, 0)),
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_contains!(err, "overflows timestamp nanoseconds");
+    }
+
+    #[test]
+    fn to_timestamp_decimal128_array_overflow_returns_error() {
+        let value = "99999999999999999999999999999999999999"
+            .parse::<i128>()
+            .unwrap();
+        let array = Decimal128Array::from(vec![Some(value)])
+            .with_precision_and_scale(38, 0)
+            .unwrap();
+        let err =
+            decimal128_to_timestamp_nanos(&ColumnarValue::Array(Arc::new(array)), None)
+                .unwrap_err()
+                .to_string();
+
+        assert_contains!(err, "overflows timestamp nanoseconds");
     }
 
     #[test]
@@ -1867,19 +1879,19 @@ mod tests {
     #[test]
     fn test_decimal_to_nanoseconds_negative_scale() {
         // scale -2: internal value 5 represents 5 * 10^2 = 500 seconds
-        let nanos = decimal_to_nanoseconds(5, -2);
+        let nanos = decimal_to_nanoseconds(5, -2).unwrap();
         assert_eq!(nanos, 500_000_000_000); // 500 seconds in nanoseconds
 
         // scale -1: internal value 10 represents 10 * 10^1 = 100 seconds
-        let nanos = decimal_to_nanoseconds(10, -1);
+        let nanos = decimal_to_nanoseconds(10, -1).unwrap();
         assert_eq!(nanos, 100_000_000_000);
 
         // scale 0: internal value 5 represents 5 seconds
-        let nanos = decimal_to_nanoseconds(5, 0);
+        let nanos = decimal_to_nanoseconds(5, 0).unwrap();
         assert_eq!(nanos, 5_000_000_000);
 
         // scale 3: internal value 1500 represents 1.5 seconds
-        let nanos = decimal_to_nanoseconds(1500, 3);
+        let nanos = decimal_to_nanoseconds(1500, 3).unwrap();
         assert_eq!(nanos, 1_500_000_000);
     }
 }

@@ -17,7 +17,6 @@
 
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
-use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray};
 use arrow::datatypes::Field;
 use arrow::datatypes::{
@@ -25,24 +24,28 @@ use arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Decimal32Type,
     Decimal64Type, Decimal128Type, Decimal256Type, DurationMicrosecondType,
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, FieldRef,
-    Float64Type, Int64Type, TimeUnit, UInt64Type,
+    Float64Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType, TimeUnit, UInt64Type,
 };
+use datafusion_common::hash_utils::RandomState;
+use datafusion_common::internal_err;
 use datafusion_common::types::{
     NativeType, logical_float64, logical_int8, logical_int16, logical_int32,
     logical_int64, logical_uint8, logical_uint16, logical_uint32, logical_uint64,
 };
 use datafusion_common::{HashMap, Result, ScalarValue, exec_err, not_impl_err};
+use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr_fn::cast;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, GroupsAccumulator,
-    ReversedUDAF, SetMonotonicity, Signature, TypeSignature, TypeSignatureClass,
-    Volatility,
+    Operator, ReversedUDAF, SetMonotonicity, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::mem::size_of_val;
 
 make_udaf_expr_and_func!(
@@ -54,7 +57,7 @@ make_udaf_expr_and_func!(
 );
 
 pub fn sum_distinct(expr: Expr) -> Expr {
-    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+    Expr::AggregateFunction(AggregateFunction::new_udf(
         sum_udaf(),
         vec![expr],
         true,
@@ -112,6 +115,21 @@ macro_rules! downcast_sum {
             DataType::Duration(TimeUnit::Nanosecond) => {
                 $helper!(
                     DurationNanosecondType,
+                    $args.return_field.data_type().clone()
+                )
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                $helper!(
+                    IntervalYearMonthType,
+                    $args.return_field.data_type().clone()
+                )
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                $helper!(IntervalDayTimeType, $args.return_field.data_type().clone())
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                $helper!(
+                    IntervalMonthDayNanoType,
                     $args.return_field.data_type().clone()
                 )
             }
@@ -184,6 +202,9 @@ impl Sum {
                     TypeSignature::Coercible(vec![Coercion::new_exact(
                         TypeSignatureClass::Duration,
                     )]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Interval,
+                    )]),
                 ],
                 Volatility::Immutable,
             ),
@@ -198,10 +219,6 @@ impl Default for Sum {
 }
 
 impl AggregateUDFImpl for Sum {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "sum"
     }
@@ -234,6 +251,7 @@ impl AggregateUDFImpl for Sum {
                 Ok(DataType::Decimal256(new_precision, *scale))
             }
             DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
+            DataType::Interval(interval_unit) => Ok(DataType::Interval(*interval_unit)),
             other => {
                 exec_err!("[return_type] SUM not supported for {}", other)
             }
@@ -305,13 +323,18 @@ impl AggregateUDFImpl for Sum {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
         if args.is_distinct {
-            // distinct path: use our sliding‐window distinct‐sum
-            macro_rules! helper_distinct {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(SlidingDistinctSumAccumulator::try_new(&$dt)?))
-                };
+            // distinct path: [`SlidingDistinctSumAccumulator`] only implements
+            // Int64, so gate the supported type here rather than dispatching
+            // through `downcast_sum!`, which accepts every SUM type
+            match args.return_field.data_type() {
+                DataType::Int64 => Ok(Box::new(SlidingDistinctSumAccumulator::try_new(
+                    &DataType::Int64,
+                )?)),
+                _ => not_impl_err!(
+                    "SUM(DISTINCT) over sliding window frames is only supported for Int64, got {}",
+                    args.expr_fields[0].data_type()
+                ),
             }
-            downcast_sum!(args, helper_distinct)
         } else {
             // non‐distinct path: existing sliding sum
             macro_rules! helper {
@@ -345,6 +368,47 @@ impl AggregateUDFImpl for Sum {
             DataType::UInt64 => SetMonotonicity::Increasing,
             _ => SetMonotonicity::NotMonotonic,
         }
+    }
+
+    /// Implement ClickBench Q29 specific optimization:
+    /// `SUM(arg + constant)` --> `SUM(arg) + constant * COUNT(arg)`
+    ///
+    /// See background on [`AggregateUDFImpl::simplify_expr_op_literal`]
+    fn simplify_expr_op_literal(
+        &self,
+        agg_function: &AggregateFunction,
+        arg: &Expr,
+        op: Operator,
+        lit: &Expr,
+        // Only support '+' so the order of the args doesn't matter
+        _arg_is_left: bool,
+    ) -> Result<Option<Expr>> {
+        if op != Operator::Plus {
+            return Ok(None);
+        }
+
+        let lit_type = match &lit {
+            Expr::Literal(value, _) => value.data_type(),
+            _ => {
+                return internal_err!(
+                    "Sum::simplify_expr_op_literal got a non literal argument"
+                );
+            }
+        };
+        if lit_type == DataType::Null {
+            return Ok(None);
+        }
+
+        // Build up SUM(arg)
+        let mut sum_agg = agg_function.clone();
+        sum_agg.params.args = vec![arg.clone()];
+        let sum_agg = Expr::AggregateFunction(sum_agg);
+
+        // COUNT(arg) - cast to the correct type
+        let count_agg = cast(crate::count::count(arg.clone()), lit_type);
+
+        // SUM(arg) + lit * COUNT(arg)
+        Ok(Some(sum_agg + (lit.clone() * count_agg)))
     }
 }
 
@@ -486,7 +550,9 @@ impl SlidingDistinctSumAccumulator {
     pub fn try_new(data_type: &DataType) -> Result<Self> {
         // TODO support other numeric types
         if *data_type != DataType::Int64 {
-            return exec_err!("SlidingDistinctSumAccumulator only supports Int64");
+            return exec_err!(
+                "SlidingDistinctSumAccumulator only supports Int64, got {data_type}"
+            );
         }
         Ok(Self {
             counts: HashMap::default(),
@@ -494,25 +560,60 @@ impl SlidingDistinctSumAccumulator {
             data_type: data_type.clone(),
         })
     }
+
+    fn update_value(&mut self, value: i64) {
+        let cnt = self.counts.entry(value).or_insert(0);
+        if *cnt == 0 {
+            // first occurrence in window
+            self.sum = self.sum.wrapping_add(value);
+        }
+        *cnt += 1;
+    }
+
+    fn retract_value(&mut self, value: i64) {
+        if let Some(cnt) = self.counts.get_mut(&value) {
+            *cnt -= 1;
+            if *cnt == 0 {
+                // last copy leaving window
+                self.sum = self.sum.wrapping_sub(value);
+                self.counts.remove(&value);
+            }
+        }
+    }
+
+    fn apply_valid_values<F>(
+        &mut self,
+        arr: &arrow::array::PrimitiveArray<Int64Type>,
+        mut op: F,
+    ) where
+        F: FnMut(&mut Self, i64),
+    {
+        if arr.null_count() == 0 {
+            for &value in arr.values() {
+                op(self, value);
+            }
+        } else {
+            for (idx, &value) in arr.values().iter().enumerate() {
+                if arr.is_valid(idx) {
+                    op(self, value);
+                }
+            }
+        }
+    }
 }
 
 impl Accumulator for SlidingDistinctSumAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let arr = values[0].as_primitive::<Int64Type>();
-        for &v in arr.values() {
-            let cnt = self.counts.entry(v).or_insert(0);
-            if *cnt == 0 {
-                // first occurrence in window
-                self.sum = self.sum.wrapping_add(v);
-            }
-            *cnt += 1;
-        }
+        self.apply_valid_values(arr, Self::update_value);
         Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         // O(1) wrap of running sum
-        Ok(ScalarValue::Int64(Some(self.sum)))
+        Ok(ScalarValue::Int64(
+            (!self.counts.is_empty()).then_some(self.sum),
+        ))
     }
 
     fn size(&self) -> usize {
@@ -542,11 +643,7 @@ impl Accumulator for SlidingDistinctSumAccumulator {
                 if let ScalarValue::Int64(Some(v)) =
                     ScalarValue::try_from_array(&*maybe_inner, idx)?
                 {
-                    let cnt = self.counts.entry(v).or_insert(0);
-                    if *cnt == 0 {
-                        self.sum = self.sum.wrapping_add(v);
-                    }
-                    *cnt += 1;
+                    self.update_value(v);
                 }
             }
         }
@@ -555,20 +652,61 @@ impl Accumulator for SlidingDistinctSumAccumulator {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let arr = values[0].as_primitive::<Int64Type>();
-        for &v in arr.values() {
-            if let Some(cnt) = self.counts.get_mut(&v) {
-                *cnt -= 1;
-                if *cnt == 0 {
-                    // last copy leaving window
-                    self.sum = self.sum.wrapping_sub(v);
-                    self.counts.remove(&v);
-                }
-            }
-        }
+        self.apply_valid_values(arr, Self::retract_value);
         Ok(())
     }
 
     fn supports_retract_batch(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::{
+        array::Int64Array,
+        buffer::{NullBuffer, ScalarBuffer},
+    };
+    use std::sync::Arc;
+
+    #[test]
+    fn sliding_distinct_sum_ignores_null_slots() -> Result<()> {
+        let mut acc = SlidingDistinctSumAccumulator::try_new(&DataType::Int64)?;
+
+        let values: ArrayRef = Arc::new(Int64Array::new(
+            ScalarBuffer::from(vec![42, 5, 5]),
+            Some(NullBuffer::from(vec![false, true, true])),
+        ));
+        acc.update_batch(&[values])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(5)));
+
+        let retract: ArrayRef = Arc::new(Int64Array::new(
+            ScalarBuffer::from(vec![42, 5]),
+            Some(NullBuffer::from(vec![false, true])),
+        ));
+        acc.retract_batch(&[retract])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(5)));
+
+        let retract_last: ArrayRef =
+            Arc::new(Int64Array::new(ScalarBuffer::from(vec![5]), None));
+        acc.retract_batch(&[retract_last])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(None));
+
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_distinct_sum_returns_null_for_all_null_frame() -> Result<()> {
+        let mut acc = SlidingDistinctSumAccumulator::try_new(&DataType::Int64)?;
+
+        let values: ArrayRef = Arc::new(Int64Array::new(
+            ScalarBuffer::from(vec![99]),
+            Some(NullBuffer::from(vec![false])),
+        ));
+        acc.update_batch(&[values])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(None));
+
+        Ok(())
     }
 }

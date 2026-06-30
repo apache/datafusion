@@ -41,7 +41,15 @@ BENCHMARK=all
 DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
+SQL_CARGO_COMMAND=${SQL_CARGO_COMMAND:-"cargo bench --bench sql"}
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
+SIMULATE_LATENCY=${SIMULATE_LATENCY:-false}
+
+# Build latency arg based on SIMULATE_LATENCY setting
+LATENCY_ARG=""
+if [ "$SIMULATE_LATENCY" = "true" ]; then
+    LATENCY_ARG="--simulate-latency"
+fi
 
 usage() {
     echo "
@@ -91,13 +99,28 @@ tpcds:                  TPCDS inspired benchmark on Scale Factor (SF) 1 (~1GB), 
 sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=1)
 sort_tpch10:            Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=10)
 topk_tpch:              Benchmark of top-k (sorting with limit) queries on TPC-H dataset (SF=1)
+topk_sorted_tpch:       Benchmark of top-k queries on TPC-H lineitem ordered by l_orderkey (SF=1)
+push_down_topk:         Benchmark of ORDER BY ... LIMIT over outer joins on TPC-H dataset (SF=1) — exercises pushing TopK through a join
 external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
+wide_schema:            Small-projection queries on a wide synthetic dataset (1024 cols × 256 files) — measures per-file metadata overhead
+                          (runs both 'wide' and 'narrow' subgroups: narrow is an internal baseline; the wide-vs-narrow ratio is the signal)
+predicate_eval:         Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an
+                          adaptive predicate-ordering system behaves across them (see https://github.com/apache/datafusion/issues/11262)
+                          (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift)
+                          (toggle a system under test with its native DATAFUSION_* env var; size data with PRED_ROWS, string width with PRED_FILL)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against partitioned (100 files) parquet
 clickbench_pushdown:    ClickBench queries against partitioned (100 files) parquet w/ filter_pushdown enabled
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
+
+# Sort Pushdown Benchmarks
+sort_pushdown:          Sort pushdown baseline (no WITH ORDER) on TPC-H data (SF=1)
+sort_pushdown_sorted:   Sort pushdown with WITH ORDER — tests sort elimination on non-overlapping files
+sort_pushdown_inexact:  Sort pushdown Inexact path (--sorted DESC) — multi-file with scrambled RGs, tests reverse scan + RG reorder
+sort_pushdown_inexact_unsorted: Sort pushdown Inexact path (no WITH ORDER) — same data, tests Unsupported path + RG reorder
+sort_pushdown_inexact_overlap: Sort pushdown Inexact path — multi-file scrambled RGs (streaming data scenario)
 
 # Sorted Data Benchmarks (ORDER BY Optimization)
 clickbench_sorted:     ClickBench queries on pre-sorted data using prefer_existing_sort (tests sort elimination optimization)
@@ -130,6 +153,7 @@ cancellation:           How long cancelling a query takes
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
 hj:                     Benchmark for simple hash joins, testing various join scenarios
 smj:                    Benchmark for simple sort merge joins, testing various join scenarios
+dict:                   Benchmark for dictionary-encoded group-by scenarios
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -141,6 +165,7 @@ CARGO_COMMAND       command that runs the benchmark binary
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
 RESULTS_NAME        folder where the benchmark files are stored
 PREFER_HASH_JOIN    Prefer hash join algorithm (default true)
+SIMULATE_LATENCY    Simulate object store latency to mimic S3 (default false)
 DATAFUSION_*        Set the given datafusion configuration
 "
     exit 1
@@ -223,6 +248,13 @@ main() {
                 tpch_csv10)
                     data_tpch "10" "csv"
                     ;;
+                wide_schema)
+                    data_wide_schema
+                    ;;
+                predicate_eval)
+                    # Data is generated inline by the suite's load SQL.
+                    echo "predicate_eval: no external data to generate"
+                    ;;
                 tpcds)
                     data_tpcds
                     ;;
@@ -301,6 +333,12 @@ main() {
                     # same data as for tpch
                     data_tpch "1" "parquet"
                     ;;
+                sort_pushdown|sort_pushdown_sorted)
+                    data_sort_pushdown
+                    ;;
+                sort_pushdown_inexact|sort_pushdown_inexact_unsorted|sort_pushdown_inexact_overlap)
+                    data_sort_pushdown_inexact
+                    ;;
                 sort_tpch)
                     # same data as for tpch
                     data_tpch "1" "parquet"
@@ -309,7 +347,11 @@ main() {
                     # same data as for tpch10
                     data_tpch "10" "parquet"
                     ;;
-                topk_tpch)
+                topk_tpch|topk_sorted_tpch)
+                    # same data as for tpch
+                    data_tpch "1" "parquet"
+                    ;;
+                push_down_topk)
                     # same data as for tpch
                     data_tpch "1" "parquet"
                     ;;
@@ -323,6 +365,10 @@ main() {
                 smj)
                     # smj uses range() function, no data generation needed
                     echo "SMJ benchmark does not require data generation"
+                    ;;
+                dict)
+                    # dict generates in-memory data, no data generation needed
+                    echo "DICT benchmark does not require data generation"
                     ;;
                 compile_profile)
                     data_tpch "1" "parquet"
@@ -371,6 +417,7 @@ main() {
             echo "RESULTS_DIR: ${RESULTS_DIR}"
             echo "CARGO_COMMAND: ${CARGO_COMMAND}"
             echo "PREFER_HASH_JOIN: ${PREFER_HASH_JOIN}"
+            echo "SIMULATE_LATENCY: ${SIMULATE_LATENCY}"
             echo "***************************"
 
             # navigate to the appropriate directory
@@ -402,6 +449,7 @@ main() {
                     run_hj
                     run_tpcds
                     run_smj
+                    run_dict 
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -420,6 +468,12 @@ main() {
                     ;;
                 tpch_mem10)
                     run_tpch_mem "10"
+                    ;;
+                wide_schema)
+                    run_wide_schema
+                    ;;
+                predicate_eval)
+                    run_predicate_eval
                     ;;
                 tpcds)
                     run_tpcds
@@ -500,6 +554,21 @@ main() {
                 external_aggr)
                     run_external_aggr
                     ;;
+                sort_pushdown)
+                    run_sort_pushdown
+                    ;;
+                sort_pushdown_sorted)
+                    run_sort_pushdown_sorted
+                    ;;
+                sort_pushdown_inexact)
+                    run_sort_pushdown_inexact
+                    ;;
+                sort_pushdown_inexact_unsorted)
+                    run_sort_pushdown_inexact_unsorted
+                    ;;
+                sort_pushdown_inexact_overlap)
+                    run_sort_pushdown_inexact_overlap
+                    ;;
                 sort_tpch)
                     run_sort_tpch "1"
                     ;;
@@ -509,6 +578,12 @@ main() {
                 topk_tpch)
                     run_topk_tpch
                     ;;
+                topk_sorted_tpch)
+                    run_topk_sorted_tpch
+                    ;;
+                push_down_topk)
+                    run_push_down_topk
+                    ;;
                 nlj)
                     run_nlj
                     ;;
@@ -517,6 +592,9 @@ main() {
                     ;;
                 smj)
                     run_smj
+                    ;;
+                dict)
+                    run_dict
                     ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
@@ -648,14 +726,122 @@ run_tpch() {
         echo "Internal error: Scale factor not specified"
         exit 1
     fi
-    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
-
-    RESULTS_FILE="${RESULTS_DIR}/tpch_sf${SCALE_FACTOR}.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    FORMAT=$2
     echo "Running tpch benchmark..."
 
-    FORMAT=$2
-    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run env BENCH_NAME=tpch \
+      BENCH_SIZE="${SCALE_FACTOR}" \
+      DATA_DIR="${DATA_DIR}" \
+      PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
+      TPCH_FILE_TYPE="${FORMAT}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Synthesizes two parquet datasets used to measure per-file metadata
+# overhead of a wide schema:
+#
+#   - data/wide_schema/wide/    1024-col events × 256 files (~225 MB)
+#   - data/wide_schema/narrow/    8-col events × 256 files (~110 MB)
+#
+# Both share row count, file count, and per-file row-group shape; only
+# schema width differs. No external data source required — gen_wide_data
+# synthesizes everything from scratch in ~60 s.
+data_wide_schema() {
+    NUM_FILES=256
+    ROWS_PER_FILE=50000
+    WIDTH_FACTOR=128
+
+    DST_DIR="${DATA_DIR}/wide_schema"
+    WIDE_DIR="${DST_DIR}/wide"
+    NARROW_DIR="${DST_DIR}/narrow"
+
+    if [ -d "${WIDE_DIR}" ] && [ "$(ls -A "${WIDE_DIR}" 2>/dev/null | wc -l)" -ge ${NUM_FILES} ]; then
+        echo " wide parquet exists (${WIDE_DIR})."
+    else
+        mkdir -p "${WIDE_DIR}"
+        echo " synthesizing wide -> ${WIDE_DIR} (factor ${WIDTH_FACTOR}, ${NUM_FILES} files × ${ROWS_PER_FILE} rows) ..."
+        debug_run $CARGO_COMMAND --bin gen_wide_data -- \
+            --dst-dir "${WIDE_DIR}" \
+            --width-factor ${WIDTH_FACTOR} \
+            --num-files ${NUM_FILES} \
+            --rows-per-file ${ROWS_PER_FILE}
+    fi
+
+    if [ -d "${NARROW_DIR}" ] && [ "$(ls -A "${NARROW_DIR}" 2>/dev/null | wc -l)" -ge ${NUM_FILES} ]; then
+        echo " narrow parquet exists (${NARROW_DIR})."
+    else
+        mkdir -p "${NARROW_DIR}"
+        echo " synthesizing narrow -> ${NARROW_DIR} (8 base cols, ${NUM_FILES} files × ${ROWS_PER_FILE} rows) ..."
+        debug_run $CARGO_COMMAND --bin gen_wide_data -- \
+            --dst-dir "${NARROW_DIR}" \
+            --width-factor 1 \
+            --num-files ${NUM_FILES} \
+            --rows-per-file ${ROWS_PER_FILE}
+    fi
+}
+
+# Runs the wide_schema benchmark. Each query has a `subgroup`
+# directive that picks up BENCH_SUBGROUP, so we invoke the framework
+# twice — once with subgroup=wide (the actual workload) and once with
+# subgroup=narrow (the baseline). The wide-only queries (Q02/Q08/Q11/Q12)
+# hardcode `subgroup wide`, so they're skipped on the narrow pass.
+run_wide_schema() {
+    echo "Running wide_schema benchmark (wide subgroup)..."
+    debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=wide \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+
+    echo "Running wide_schema benchmark (narrow baseline subgroup)..."
+    debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=narrow \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the push_down_topk benchmark (ORDER BY ... LIMIT over outer joins).
+# Reuses the TPC-H parquet data, so it needs `./bench.sh data tpch` (or
+# `data push_down_topk`) first.
+run_push_down_topk() {
+    echo "Running push_down_topk benchmark..."
+
+    debug_run env BENCH_NAME=push_down_topk \
+      BENCH_SIZE="1" \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the predicate_eval benchmark suite: conjunctive (AND) filter-evaluation
+# micro-benchmarks where each subgroup is a different predicate pattern, used to
+# test how an adaptive predicate-ordering system behaves across them (see
+# https://github.com/apache/datafusion/issues/11262). Data is generated inline
+# by the suite's load SQL, so there is no data step.
+#
+# By default the suite measures DataFusion's built-in left-deep AND short-circuit
+# and sets no engine config of its own. To evaluate a system under test, export
+# its native DATAFUSION_* config before invoking bench.sh -- the harness reads
+# SessionConfig::from_env, and that environment is inherited here, e.g.
+#   DATAFUSION_EXECUTION_ADAPTIVE_FILTER_REORDERING=true ./bench.sh run predicate_eval
+# Suite-specific knobs (string-substituted into the load SQL, not engine config):
+#   BENCH_SUBGROUP   run one subgroup (costsel, cost, selectivity, cardinality,
+#                    width, scale, neutral, correlation, drift)
+#   PRED_ROWS        synthetic row count (default 1_000_000; the scale subgroup
+#                    overrides this per query)
+#   PRED_FILL        filler chars per marker = string-column width knob
+run_predicate_eval() {
+    echo "Running predicate_eval benchmark (subgroup=${BENCH_SUBGROUP:-all}, rows=${PRED_ROWS:-1000000})..."
+    debug_run env BENCH_NAME=predicate_eval \
+      ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
+      PRED_ROWS="${PRED_ROWS:-1000000}" \
+      ${PRED_FILL:+PRED_FILL="${PRED_FILL}"} \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Runs the tpch in memory (needs tpch parquet data)
@@ -665,13 +851,16 @@ run_tpch_mem() {
         echo "Internal error: Scale factor not specified"
         exit 1
     fi
-    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
-
-    RESULTS_FILE="${RESULTS_DIR}/tpch_mem_sf${SCALE_FACTOR}.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
-    # -m means in memory
-    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+
+    debug_run env BENCH_NAME=tpch \
+      BENCH_SIZE="${SCALE_FACTOR}" \
+      DATA_DIR="${DATA_DIR}" \
+      TPCH_FILE_TYPE="mem" \
+      PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Runs the tpcds benchmark
@@ -691,7 +880,7 @@ run_tpcds() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpcds benchmark..."
 
-    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" --prefer_hash_join "${PREFER_HASH_JOIN}" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" --prefer_hash_join "${PREFER_HASH_JOIN}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the compile profile benchmark helper
@@ -713,7 +902,7 @@ run_cancellation() {
     RESULTS_FILE="${RESULTS_DIR}/cancellation.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running cancellation benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- cancellation --iterations 5 --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin dfbench -- cancellation --iterations 5 --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}" ${LATENCY_ARG}
 }
 
 
@@ -767,7 +956,7 @@ run_clickbench_1() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_1.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
  # Runs the clickbench benchmark with the partitioned parquet dataset (100 files)
@@ -775,7 +964,7 @@ run_clickbench_partitioned() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 
@@ -784,7 +973,7 @@ run_clickbench_pushdown() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_pushdown.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark with pushdown_filters=true, reorder_filters=true..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench --pushdown --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench --pushdown --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 
@@ -793,7 +982,7 @@ run_clickbench_extended() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_extended.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) extended benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)
@@ -878,7 +1067,7 @@ data_imdb() {
                 if [ "${DOWNLOADED_SIZE}" != "${expected_size}" ]; then
                     echo "Error: Download size mismatch"
                     echo "Expected: ${expected_size}"
-                    echo "Got: ${DOWNLADED_SIZE}"
+                    echo "Got: ${DOWNLOADED_SIZE}"
                     echo "Please re-initiate the download"
                     return 1
                 fi
@@ -908,7 +1097,7 @@ run_imdb() {
     RESULTS_FILE="${RESULTS_DIR}/imdb.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running imdb benchmark..."
-    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 data_h2o() {
@@ -980,7 +1169,7 @@ run_h2o() {
         --path "${H2O_DIR}/${FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
         -o "${RESULTS_FILE}" \
-         ${QUERY_ARG}
+         ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Utility function to run h2o join/window benchmark
@@ -1032,7 +1221,7 @@ h2o_runner() {
         --join-paths "${H2O_DIR}/${X_TABLE_FILE_NAME},${H2O_DIR}/${SMALL_TABLE_FILE_NAME},${H2O_DIR}/${MEDIUM_TABLE_FILE_NAME},${H2O_DIR}/${LARGE_TABLE_FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
         -o "${RESULTS_FILE}" \
-         ${QUERY_ARG}
+         ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runners for h2o join benchmark
@@ -1061,6 +1250,241 @@ run_external_aggr() {
     debug_run $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
+# Runs the sort pushdown benchmark (without WITH ORDER)
+# Generates sort pushdown benchmark data: TPC-H lineitem with 3 parts,
+# renamed so alphabetical order does NOT match sort key order.
+# This forces the sort pushdown optimizer to reorder files by statistics.
+#
+# tpchgen produces 3 sorted, non-overlapping parquet files:
+#   lineitem.1.parquet: l_orderkey 1 ~ 2M        (lowest keys)
+#   lineitem.2.parquet: l_orderkey 2M ~ 4M
+#   lineitem.3.parquet: l_orderkey 4M ~ 6M       (highest keys)
+#
+# We rename them so alphabetical order is reversed:
+#   a_part3.parquet (highest keys, sorts first alphabetically)
+#   b_part2.parquet
+#   c_part1.parquet (lowest keys, sorts last alphabetically)
+data_sort_pushdown() {
+    SORT_PUSHDOWN_DIR="${DATA_DIR}/sort_pushdown/lineitem"
+    if [ -d "${SORT_PUSHDOWN_DIR}" ] && [ "$(ls -A ${SORT_PUSHDOWN_DIR}/*.parquet 2>/dev/null)" ]; then
+        echo "Sort pushdown data already exists at ${SORT_PUSHDOWN_DIR}"
+        return
+    fi
+
+    echo "Generating sort pushdown benchmark data (3 parts with reversed naming)..."
+
+    TEMP_DIR="${DATA_DIR}/sort_pushdown_temp"
+    mkdir -p "${TEMP_DIR}" "${SORT_PUSHDOWN_DIR}"
+
+    tpchgen-cli --scale-factor 1 --format parquet --parquet-compression='ZSTD(1)' --parts=3 --output-dir "${TEMP_DIR}"
+
+    # Rename: reverse alphabetical order vs key order
+    mv "${TEMP_DIR}/lineitem/lineitem.3.parquet" "${SORT_PUSHDOWN_DIR}/a_part3.parquet"
+    mv "${TEMP_DIR}/lineitem/lineitem.2.parquet" "${SORT_PUSHDOWN_DIR}/b_part2.parquet"
+    mv "${TEMP_DIR}/lineitem/lineitem.1.parquet" "${SORT_PUSHDOWN_DIR}/c_part1.parquet"
+
+    rm -rf "${TEMP_DIR}"
+
+    echo "Sort pushdown data generated at ${SORT_PUSHDOWN_DIR}"
+    ls -la "${SORT_PUSHDOWN_DIR}"
+}
+
+run_sort_pushdown() {
+    SORT_PUSHDOWN_DIR="${DATA_DIR}/sort_pushdown"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown.json"
+    echo "Running sort pushdown benchmark (no WITH ORDER)..."
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --iterations 5 --path "${SORT_PUSHDOWN_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sort pushdown benchmark with WITH ORDER (enables sort elimination)
+run_sort_pushdown_sorted() {
+    SORT_PUSHDOWN_DIR="${DATA_DIR}/sort_pushdown"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_sorted.json"
+    echo "Running sort pushdown benchmark (with WITH ORDER)..."
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${SORT_PUSHDOWN_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Generates data for sort pushdown Inexact benchmark.
+#
+# Produces multiple parquet files where each file has MULTIPLE row groups
+# with scrambled RG order. This tests both:
+#   - Row-group-level reorder within each file (reorder_by_statistics)
+#   - TopK threshold initialization from RG statistics
+#
+# Strategy:
+# 1. Write a single sorted file with small (100K-row) RGs (~61 RGs total).
+# 2. Use pyarrow to redistribute RGs into N_FILES files, scrambling the
+#    RG order within each file using a deterministic permutation.
+#    Each file gets ~61/N_FILES RGs with narrow, non-overlapping ranges
+#    but in scrambled order.
+#
+# Writing a single file with ORDER BY scramble does NOT work: the parquet
+# writer merges rows from adjacent chunks at RG boundaries, widening
+# ranges and defeating reorder_by_statistics.
+#
+# Requires pyarrow (pip install pyarrow).
+data_sort_pushdown_inexact() {
+    INEXACT_DIR="${DATA_DIR}/sort_pushdown_inexact/lineitem"
+    if [ -d "${INEXACT_DIR}" ] && [ "$(ls -A ${INEXACT_DIR}/*.parquet 2>/dev/null)" ]; then
+        echo "Sort pushdown Inexact data already exists at ${INEXACT_DIR}"
+        return
+    fi
+
+    # Check pyarrow dependency (needed to split/scramble RGs)
+    if ! python3 -c "import pyarrow" 2>/dev/null; then
+        echo "Error: pyarrow is required for sort pushdown Inexact data generation."
+        echo "Install with: pip install pyarrow"
+        return 1
+    fi
+
+    echo "Generating sort pushdown Inexact benchmark data (multi-file, scrambled RGs)..."
+
+    # Re-use the sort_pushdown data as the source (generate if missing)
+    data_sort_pushdown
+
+    mkdir -p "${INEXACT_DIR}"
+    SRC_DIR="${DATA_DIR}/sort_pushdown/lineitem"
+
+    # Step 1: Write a single sorted file with small (100K-row) RGs
+    TMPFILE="${INEXACT_DIR}/_sorted_small_rgs.parquet"
+    (cd "${SCRIPT_DIR}/.." && cargo run --release -p datafusion-cli -- -c "
+        CREATE EXTERNAL TABLE src
+        STORED AS PARQUET
+        LOCATION '${SRC_DIR}';
+
+        COPY (SELECT * FROM src ORDER BY l_orderkey)
+        TO '${TMPFILE}'
+        STORED AS PARQUET
+        OPTIONS ('format.max_row_group_size' '100000');
+    ")
+
+    # Step 2: Redistribute RGs into 3 files with scrambled RG order.
+    # Each file gets ~20 RGs. RG assignment: rg_idx % 3 determines file,
+    # permutation (rg_idx * 41 + 7) % n scrambles the order within file.
+    python3 -c "
+import pyarrow.parquet as pq
+
+pf = pq.ParquetFile('${TMPFILE}')
+n = pf.metadata.num_row_groups
+n_files = 3
+
+# Assign each RG to a file, scramble order within each file
+file_rgs = [[] for _ in range(n_files)]
+for rg_idx in range(n):
+    slot = (rg_idx * 41 + 7) % n  # scrambled index
+    file_id = slot % n_files
+    file_rgs[file_id].append(rg_idx)
+
+# Write each file with its assigned RGs (in scrambled order)
+for file_id in range(n_files):
+    rgs = file_rgs[file_id]
+    if not rgs:
+        continue
+    tables = [pf.read_row_group(rg) for rg in rgs]
+    writer = pq.ParquetWriter(
+        '${INEXACT_DIR}/part_%03d.parquet' % file_id,
+        pf.schema_arrow)
+    for t in tables:
+        writer.write_table(t)
+    writer.close()
+    print(f'File part_{file_id:03d}.parquet: {len(rgs)} RGs')
+"
+
+    rm -f "${TMPFILE}"
+    echo "Sort pushdown Inexact data generated at ${INEXACT_DIR}"
+    ls -la "${INEXACT_DIR}"
+
+    # Also generate overlap data: same strategy but with different file count
+    # and permutation. Simulates streaming data with network delays where
+    # chunks arrive out of sequence.
+    #
+    # Requires pyarrow (pip install pyarrow).
+    OVERLAP_DIR="${DATA_DIR}/sort_pushdown_inexact_overlap/lineitem"
+    if [ -d "${OVERLAP_DIR}" ] && [ "$(ls -A ${OVERLAP_DIR}/*.parquet 2>/dev/null)" ]; then
+        echo "Sort pushdown Inexact overlap data already exists at ${OVERLAP_DIR}"
+        return
+    fi
+
+    echo "Generating sort pushdown Inexact overlap data (multi-file, scrambled RGs)..."
+    mkdir -p "${OVERLAP_DIR}"
+
+    # Step 1: Write a single sorted file with small (100K-row) RGs
+    TMPFILE="${OVERLAP_DIR}/_sorted_small_rgs.parquet"
+    (cd "${SCRIPT_DIR}/.." && cargo run --release -p datafusion-cli -- -c "
+        CREATE EXTERNAL TABLE src
+        STORED AS PARQUET
+        LOCATION '${SRC_DIR}';
+
+        COPY (SELECT * FROM src ORDER BY l_orderkey)
+        TO '${TMPFILE}'
+        STORED AS PARQUET
+        OPTIONS ('format.max_row_group_size' '100000');
+    ")
+
+    # Step 2: Redistribute into 5 files with scrambled RG order.
+    python3 -c "
+import pyarrow.parquet as pq
+
+pf = pq.ParquetFile('${TMPFILE}')
+n = pf.metadata.num_row_groups
+n_files = 5
+
+file_rgs = [[] for _ in range(n_files)]
+for rg_idx in range(n):
+    slot = (rg_idx * 37 + 13) % n
+    file_id = slot % n_files
+    file_rgs[file_id].append(rg_idx)
+
+for file_id in range(n_files):
+    rgs = file_rgs[file_id]
+    if not rgs:
+        continue
+    tables = [pf.read_row_group(rg) for rg in rgs]
+    writer = pq.ParquetWriter(
+        '${OVERLAP_DIR}/part_%03d.parquet' % file_id,
+        pf.schema_arrow)
+    for t in tables:
+        writer.write_table(t)
+    writer.close()
+    print(f'File part_{file_id:03d}.parquet: {len(rgs)} RGs')
+"
+
+    rm -f "${TMPFILE}"
+}
+
+# Runs the sort pushdown Inexact benchmark (tests RG reorder by statistics).
+# Enables pushdown_filters so TopK's dynamic filter is pushed to the parquet
+# reader for late materialization (only needed for Inexact path).
+run_sort_pushdown_inexact() {
+    INEXACT_DIR="${DATA_DIR}/sort_pushdown_inexact"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_inexact.json"
+    echo "Running sort pushdown Inexact benchmark (multi-file scrambled RGs, --sorted DESC)..."
+    DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true \
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${INEXACT_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown_inexact" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sort pushdown Inexact benchmark WITHOUT declared ordering.
+# Tests the Unsupported path in try_pushdown_sort where RG reorder by
+# statistics can still help TopK queries without any file ordering guarantee.
+run_sort_pushdown_inexact_unsorted() {
+    INEXACT_DIR="${DATA_DIR}/sort_pushdown_inexact"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_inexact_unsorted.json"
+    echo "Running sort pushdown Inexact benchmark (no WITH ORDER, Unsupported path)..."
+    DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true \
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --iterations 5 --path "${INEXACT_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown_inexact_unsorted" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sort pushdown benchmark with multi-file scrambled RG order.
+# Simulates streaming data with network delays — multiple files, each with
+# scrambled RGs. Tests both RG-level reorder and TopK stats initialization.
+run_sort_pushdown_inexact_overlap() {
+    OVERLAP_DIR="${DATA_DIR}/sort_pushdown_inexact_overlap"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_inexact_overlap.json"
+    echo "Running sort pushdown Inexact benchmark (multi-file scrambled RGs, streaming data pattern)..."
+    DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true \
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${OVERLAP_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown_inexact_overlap" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
 # Runs the sort integration benchmark
 run_sort_tpch() {
     SCALE_FACTOR=$1
@@ -1073,7 +1497,7 @@ run_sort_tpch() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sort tpch benchmark..."
 
-    debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the sort tpch integration benchmark with limit 100 (topk)
@@ -1083,7 +1507,17 @@ run_topk_tpch() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running topk tpch benchmark..."
 
-    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100 ${QUERY_ARG}
+    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100 ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sorted sort tpch integration benchmark with limit 100 (topk)
+run_topk_sorted_tpch() {
+    TPCH_DIR="${DATA_DIR}/tpch_sf1"
+    RESULTS_FILE="${RESULTS_DIR}/run_topk_sorted_tpch.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running sorted topk tpch benchmark..."
+
+    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --sorted --limit 100 ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the nlj benchmark
@@ -1091,7 +1525,7 @@ run_nlj() {
     RESULTS_FILE="${RESULTS_DIR}/nlj.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running nlj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the hj benchmark
@@ -1100,7 +1534,7 @@ run_hj() {
     RESULTS_FILE="${RESULTS_DIR}/hj.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running hj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the smj benchmark
@@ -1108,7 +1542,15 @@ run_smj() {
     RESULTS_FILE="${RESULTS_DIR}/smj.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running smj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- smj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- smj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the dict benchmark
+run_dict() {
+    RESULTS_FILE="${RESULTS_DIR}/dict.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running dict benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- dict --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 
@@ -1250,7 +1692,7 @@ run_clickbench_sorted() {
         --sorted-by "EventTime" \
         -c datafusion.optimizer.prefer_existing_sort=true \
         -o "${RESULTS_FILE}" \
-        ${QUERY_ARG}
+        ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 

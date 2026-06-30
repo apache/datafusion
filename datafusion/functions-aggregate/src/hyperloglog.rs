@@ -34,7 +34,7 @@
 //!
 //! This module also borrows some code structure from [pdatastructs.rs](https://github.com/crepererum/pdatastructs.rs/blob/3997ed50f6b6871c9e53c4c5e0f48f431405fc63/src/hyperloglog.rs).
 
-use ahash::RandomState;
+use std::hash::BuildHasher;
 use std::hash::Hash;
 use std::marker::PhantomData;
 
@@ -42,7 +42,7 @@ use std::marker::PhantomData;
 const HLL_P: usize = 14_usize;
 /// The number of bits of the hash value used determining the number of leading zeros
 const HLL_Q: usize = 64_usize - HLL_P;
-const NUM_REGISTERS: usize = 1_usize << HLL_P;
+pub(crate) const NUM_REGISTERS: usize = 1_usize << HLL_P;
 /// Mask to obtain index into the registers
 const HLL_P_MASK: u64 = (NUM_REGISTERS as u64) - 1;
 
@@ -55,18 +55,7 @@ where
     phantom: PhantomData<T>,
 }
 
-/// Fixed seed for the hashing so that values are consistent across runs
-///
-/// Note that when we later move on to have serialized HLL register binaries
-/// shared across cluster, this SEED will have to be consistent across all
-/// parties otherwise we might have corruption. So ideally for later this seed
-/// shall be part of the serialized form (or stay unchanged across versions).
-const SEED: RandomState = RandomState::with_seeds(
-    0x885f6cab121d01a3_u64,
-    0x71e4379f2976ad8f_u64,
-    0xbf30173dd28a8816_u64,
-    0x0eaea5d736d733a4_u64,
-);
+pub(crate) use datafusion_common::hash_utils::HLL_RANDOM_STATE as HLL_HASH_STATE;
 
 impl<T> Default for HyperLogLog<T>
 where
@@ -97,17 +86,25 @@ where
         }
     }
 
-    /// choice of hash function: ahash is already an dependency
-    /// and it fits the requirements of being a 64bit hash with
-    /// reasonable performance.
+    /// The HLL hash state is shared through `datafusion_common::hash_utils`
+    /// so sketches remain compatible across accumulators.
     #[inline]
     fn hash_value(&self, obj: &T) -> u64 {
-        SEED.hash_one(obj)
+        HLL_HASH_STATE.hash_one(obj)
     }
 
     /// Adds an element to the HyperLogLog.
     pub fn add(&mut self, obj: &T) {
         let hash = self.hash_value(obj);
+        self.add_hashed(hash);
+    }
+
+    /// Adds a pre-computed hash value directly to the HyperLogLog.
+    ///
+    /// The hash should be computed using [`HLL_HASH_STATE`], the same hasher used
+    /// by [`Self::add`].
+    #[inline]
+    pub(crate) fn add_hashed(&mut self, hash: u64) {
         let index = (hash & HLL_P_MASK) as usize;
         let p = ((hash >> HLL_P) | (1_u64 << HLL_Q)).trailing_zeros() + 1;
         self.registers[index] = self.registers[index].max(p as u8);
@@ -140,16 +137,69 @@ where
 
     /// Guess the number of unique elements seen by the HyperLogLog.
     pub fn count(&self) -> usize {
-        let histogram = self.get_histogram();
-        let m = NUM_REGISTERS as f64;
-        let mut z = m * hll_tau((m - histogram[HLL_Q + 1] as f64) / m);
-        for i in histogram[1..=HLL_Q].iter().rev() {
-            z += *i as f64;
-            z *= 0.5;
-        }
-        z += m * hll_sigma(histogram[0] as f64 / m);
-        (0.5 / 2_f64.ln() * m * m / z).round() as usize
+        count_from_histogram(&self.get_histogram())
     }
+}
+
+/// Compute `index` and `rho` (register value) for a precomputed hash, exactly as
+/// [`HyperLogLog::add_hashed`] does.
+#[inline]
+pub(crate) fn register_for_hash(hash: u64) -> (usize, u8) {
+    let index = (hash & HLL_P_MASK) as usize;
+    let rho = (((hash >> HLL_P) | (1_u64 << HLL_Q)).trailing_zeros() + 1) as u8;
+    (index, rho)
+}
+
+/// Estimate the cardinality of a set of precomputed hashes without
+/// materializing a full [`NUM_REGISTERS`]-byte register array.
+///
+/// This is equivalent to adding every hash to a fresh [`HyperLogLog`] via
+/// [`HyperLogLog::add_hashed`] and calling [`HyperLogLog::count`], but only does
+/// work proportional to the number of hashes. It is used to cheaply estimate the
+/// many small groups produced by a high-cardinality `GROUP BY`, where allocating
+/// and scanning a 16 KiB sketch per group would dominate the runtime.
+///
+/// `hashes` may contain duplicates (duplicate hashes are idempotent).
+pub(crate) fn count_from_hashes(hashes: &[u64]) -> usize {
+    if hashes.is_empty() {
+        return 0;
+    }
+    // For each touched register index keep the maximum rho. Sorting by
+    // (index, rho) groups equal indices together with the max rho last.
+    let mut idx_rho: Vec<(usize, u8)> =
+        hashes.iter().map(|&hash| register_for_hash(hash)).collect();
+    idx_rho.sort_unstable();
+
+    let mut histogram = [0u32; HLL_Q + 2];
+    let mut touched = 0u32;
+    let mut i = 0;
+    while i < idx_rho.len() {
+        let index = idx_rho[i].0;
+        let mut max_rho = idx_rho[i].1;
+        i += 1;
+        while i < idx_rho.len() && idx_rho[i].0 == index {
+            max_rho = idx_rho[i].1; // ascending rho => last is the max
+            i += 1;
+        }
+        histogram[max_rho as usize] += 1;
+        touched += 1;
+    }
+    // All remaining registers are still zero.
+    histogram[0] = NUM_REGISTERS as u32 - touched;
+    count_from_histogram(&histogram)
+}
+
+/// Apply the HyperLogLog cardinality estimator to a register histogram.
+#[inline]
+fn count_from_histogram(histogram: &[u32; HLL_Q + 2]) -> usize {
+    let m = NUM_REGISTERS as f64;
+    let mut z = m * hll_tau((m - histogram[HLL_Q + 1] as f64) / m);
+    for i in histogram[1..=HLL_Q].iter().rev() {
+        z += *i as f64;
+        z *= 0.5;
+    }
+    z += m * hll_sigma(histogram[0] as f64 / m);
+    (0.5 / 2_f64.ln() * m * m / z).round() as usize
 }
 
 /// Helper function sigma as defined in

@@ -27,7 +27,6 @@ use datafusion_functions::{
     downcast_named_arg, make_abs_function, make_try_abs_function,
     make_wrapping_abs_function,
 };
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `abs` expression
@@ -62,10 +61,6 @@ impl SparkAbs {
 }
 
 impl ScalarUDFImpl for SparkAbs {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "abs"
     }
@@ -515,10 +510,6 @@ mod tests {
 
     #[test]
     fn test_abs_nullability() {
-        use arrow::datatypes::{DataType, Field};
-        use datafusion_expr::ReturnFieldArgs;
-        use std::sync::Arc;
-
         let abs = SparkAbs::new();
 
         // --- non-nullable Int32 input ---

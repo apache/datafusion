@@ -22,8 +22,8 @@ use super::{
     rewrite::TableAliasRewriter,
 };
 use datafusion_common::{
-    Column, DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
-    internal_err,
+    Column, DFSchema, DataFusionError, Result, ScalarValue, TableReference,
+    assert_eq_or_internal_err, internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::{
@@ -54,7 +54,12 @@ pub(crate) fn find_agg_node_within_select(
     // Agg nodes explicitly return immediately with a single node
     if let LogicalPlan::Aggregate(agg) = input {
         Some(agg)
-    } else if let LogicalPlan::TableScan(_) = input {
+    } else if matches!(
+        input,
+        LogicalPlan::TableScan(_)
+            | LogicalPlan::Subquery(_)
+            | LogicalPlan::SubqueryAlias(_)
+    ) {
         None
     } else if let LogicalPlan::Projection(_) = input {
         if already_projected {
@@ -181,6 +186,32 @@ pub(crate) fn unproject_unnest_expr(expr: Expr, unnest: &Unnest) -> Result<Expr>
             Ok(Transformed::no(sub_expr))
 
         }).map(|e| e.data)
+}
+
+/// Like `unproject_unnest_expr`, but for Snowflake FLATTEN:
+/// transforms `__unnest_placeholder(...)` column references into
+/// `Expr::Column(Column { relation: Some(alias), name: "VALUE" })`.
+pub(crate) fn unproject_unnest_expr_as_flatten_value(
+    expr: Expr,
+    unnest: &Unnest,
+    flatten_alias: &str,
+) -> Result<Expr> {
+    expr.transform(|sub_expr| {
+        if let Expr::Column(col_ref) = &sub_expr
+            && unnest
+                .list_type_columns
+                .iter()
+                .any(|e| e.1.output_column.name == col_ref.name)
+        {
+            let value_col = Expr::Column(Column::new(
+                Some(TableReference::bare(flatten_alias)),
+                "VALUE",
+            ));
+            return Ok(Transformed::yes(value_col));
+        }
+        Ok(Transformed::no(sub_expr))
+    })
+    .map(|e| e.data)
 }
 
 /// Recursively identify all Column expressions and transform them into the appropriate
@@ -358,11 +389,16 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
             }
             LogicalPlan::TableScan(table_scan) => {
                 let table_schema = table_scan.source.schema();
+                let filter_schema = DFSchema::try_from_qualified_schema(
+                    table_scan.table_name.clone(),
+                    table_schema.as_ref(),
+                )?;
                 // optional rewriter if table has an alias
                 let mut filter_alias_rewriter =
                     table_alias.as_ref().map(|alias_name| TableAliasRewriter {
-                        table_schema: &table_schema,
+                        table_schema: &filter_schema,
                         alias_name: alias_name.clone(),
+                        rewrite_unqualified: true,
                     });
 
                 // rewrite filters to use table alias if present
@@ -417,7 +453,7 @@ pub(crate) fn date_part_to_sql(
 ) -> Result<Option<ast::Expr>> {
     match (style, date_part_args.len()) {
         (DateFieldExtractStyle::Extract, 2) => {
-            let date_expr = unparser.expr_to_sql(&date_part_args[1])?;
+            let date_expr = unparser.expr_to_sql_with_nesting(&date_part_args[1])?;
             if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
                 let field = match field.to_lowercase().as_str() {
                     "year" => ast::DateTimeField::Year,
@@ -437,7 +473,7 @@ pub(crate) fn date_part_to_sql(
             }
         }
         (DateFieldExtractStyle::Strftime, 2) => {
-            let column = unparser.expr_to_sql(&date_part_args[1])?;
+            let column = unparser.expr_to_sql_with_nesting(&date_part_args[1])?;
 
             if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
                 let field = match field.to_lowercase().as_str() {

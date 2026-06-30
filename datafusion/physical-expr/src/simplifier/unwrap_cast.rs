@@ -36,7 +36,9 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue, tree_node::Transformed};
 use datafusion_expr::Operator;
-use datafusion_expr_common::casts::try_cast_literal_to_type;
+use datafusion_expr_common::casts::{
+    is_timestamp_precision_narrowing_cast, try_cast_literal_to_type,
+};
 
 use crate::PhysicalExpr;
 use crate::expressions::{BinaryExpr, CastExpr, Literal, TryCastExpr, lit};
@@ -46,7 +48,7 @@ pub(crate) fn unwrap_cast_in_comparison(
     expr: Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>()
+    if let Some(binary) = expr.downcast_ref::<BinaryExpr>()
         && let Some(unwrapped) = try_unwrap_cast_binary(binary, schema)?
     {
         return Ok(Transformed::yes(unwrapped));
@@ -60,13 +62,14 @@ fn try_unwrap_cast_binary(
     schema: &Schema,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     // Case 1: cast(left_expr) op literal
-    if let (Some((inner_expr, _cast_type)), Some(literal)) = (
+    if let (Some((inner_expr, cast_type)), Some(literal)) = (
         extract_cast_info(binary.left()),
-        binary.right().as_any().downcast_ref::<Literal>(),
+        binary.right().downcast_ref::<Literal>(),
     ) && binary.op().supports_propagation()
         && let Some(unwrapped) = try_unwrap_cast_comparison(
             Arc::clone(inner_expr),
             literal.value(),
+            cast_type,
             *binary.op(),
             schema,
         )?
@@ -75,8 +78,8 @@ fn try_unwrap_cast_binary(
     }
 
     // Case 2: literal op cast(right_expr)
-    if let (Some(literal), Some((inner_expr, _cast_type))) = (
-        binary.left().as_any().downcast_ref::<Literal>(),
+    if let (Some(literal), Some((inner_expr, cast_type))) = (
+        binary.left().downcast_ref::<Literal>(),
         extract_cast_info(binary.right()),
     ) {
         // For literal op cast(expr), we need to swap the operator
@@ -85,6 +88,7 @@ fn try_unwrap_cast_binary(
             && let Some(unwrapped) = try_unwrap_cast_comparison(
                 Arc::clone(inner_expr),
                 literal.value(),
+                cast_type,
                 swapped_op,
                 schema,
             )?
@@ -105,9 +109,9 @@ fn try_unwrap_cast_binary(
 fn extract_cast_info(
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Option<(&Arc<dyn PhysicalExpr>, &DataType)> {
-    if let Some(cast) = expr.as_any().downcast_ref::<CastExpr>() {
+    if let Some(cast) = expr.downcast_ref::<CastExpr>() {
         Some((cast.expr(), cast.cast_type()))
-    } else if let Some(try_cast) = expr.as_any().downcast_ref::<TryCastExpr>() {
+    } else if let Some(try_cast) = expr.downcast_ref::<TryCastExpr>() {
         Some((try_cast.expr(), try_cast.cast_type()))
     } else {
         None
@@ -118,11 +122,16 @@ fn extract_cast_info(
 fn try_unwrap_cast_comparison(
     inner_expr: Arc<dyn PhysicalExpr>,
     literal_value: &ScalarValue,
+    cast_type: &DataType,
     op: Operator,
     schema: &Schema,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     // Get the data type of the inner expression
     let inner_type = inner_expr.data_type(schema)?;
+
+    if is_timestamp_precision_narrowing_cast(&inner_type, cast_type) {
+        return Ok(None);
+    }
 
     // Try to cast the literal to the inner expression's type
     if let Some(casted_literal) = try_cast_literal_to_type(literal_value, &inner_type) {
@@ -137,27 +146,25 @@ fn try_unwrap_cast_comparison(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{ScalarValue, tree_node::TreeNode};
-    use datafusion_expr::Operator;
+    use crate::expressions::col;
+    use arrow::datatypes::{Field, TimeUnit};
+    use datafusion_common::tree_node::TreeNode;
 
     /// Check if an expression is a cast expression
     fn is_cast_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
-        expr.as_any().downcast_ref::<CastExpr>().is_some()
-            || expr.as_any().downcast_ref::<TryCastExpr>().is_some()
+        expr.downcast_ref::<CastExpr>().is_some()
+            || expr.downcast_ref::<TryCastExpr>().is_some()
     }
 
     /// Check if a binary expression is suitable for cast unwrapping
     fn is_binary_expr_with_cast_and_literal(binary: &BinaryExpr) -> bool {
         // Check if left is cast and right is literal
         let left_cast_right_literal = is_cast_expr(binary.left())
-            && binary.right().as_any().downcast_ref::<Literal>().is_some();
+            && binary.right().downcast_ref::<Literal>().is_some();
 
         // Check if left is literal and right is cast
-        let left_literal_right_cast =
-            binary.left().as_any().downcast_ref::<Literal>().is_some()
-                && is_cast_expr(binary.right());
+        let left_literal_right_cast = binary.left().downcast_ref::<Literal>().is_some()
+            && is_cast_expr(binary.right());
 
         left_cast_right_literal || left_literal_right_cast
     }
@@ -189,17 +196,13 @@ mod tests {
 
         // The result should be: c1 > INT32(10)
         let optimized = result.data;
-        let optimized_binary = optimized.as_any().downcast_ref::<BinaryExpr>().unwrap();
+        let optimized_binary = optimized.downcast_ref::<BinaryExpr>().unwrap();
 
         // Check that left side is no longer a cast
         assert!(!is_cast_expr(optimized_binary.left()));
 
         // Check that right side is a literal with the correct type and value
-        let right_literal = optimized_binary
-            .right()
-            .as_any()
-            .downcast_ref::<Literal>()
-            .unwrap();
+        let right_literal = optimized_binary.right().downcast_ref::<Literal>().unwrap();
         assert_eq!(right_literal.value(), &ScalarValue::Int32(Some(10)));
     }
 
@@ -222,7 +225,7 @@ mod tests {
 
         // The result should be equivalent to: c1 > INT32(10)
         let optimized = result.data;
-        let optimized_binary = optimized.as_any().downcast_ref::<BinaryExpr>().unwrap();
+        let optimized_binary = optimized.downcast_ref::<BinaryExpr>().unwrap();
 
         // Check the operator was swapped
         assert_eq!(*optimized_binary.op(), Operator::Gt);
@@ -255,9 +258,7 @@ mod tests {
         let literal_expr = lit(10i64);
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
-        let binary_ref = binary_expr.as_any().downcast_ref::<BinaryExpr>().unwrap();
-
-        assert!(is_binary_expr_with_cast_and_literal(binary_ref));
+        assert!(is_binary_expr_with_cast_and_literal(&binary_expr));
     }
 
     #[test]
@@ -289,7 +290,7 @@ mod tests {
 
         // The result should be: decimal_col >= Decimal128(400, 9, 2)
         let optimized = result.data;
-        let optimized_binary = optimized.as_any().downcast_ref::<BinaryExpr>().unwrap();
+        let optimized_binary = optimized.downcast_ref::<BinaryExpr>().unwrap();
 
         // Check operator was swapped correctly
         assert_eq!(*optimized_binary.op(), Operator::GtEq);
@@ -298,11 +299,7 @@ mod tests {
         assert!(!is_cast_expr(optimized_binary.left()));
 
         // Check that right side is a literal with the correct type
-        let right_literal = optimized_binary
-            .right()
-            .as_any()
-            .downcast_ref::<Literal>()
-            .unwrap();
+        let right_literal = optimized_binary.right().downcast_ref::<Literal>().unwrap();
         assert_eq!(
             right_literal.value().data_type(),
             DataType::Decimal128(9, 2)
@@ -338,8 +335,7 @@ mod tests {
             assert!(result.transformed);
 
             let optimized = result.data;
-            let optimized_binary =
-                optimized.as_any().downcast_ref::<BinaryExpr>().unwrap();
+            let optimized_binary = optimized.downcast_ref::<BinaryExpr>().unwrap();
 
             // Check the operator was swapped correctly
             assert_eq!(
@@ -352,11 +348,8 @@ mod tests {
             assert!(!is_cast_expr(optimized_binary.left()));
 
             // Check that the literal was cast to the column type
-            let right_literal = optimized_binary
-                .right()
-                .as_any()
-                .downcast_ref::<Literal>()
-                .unwrap();
+            let right_literal =
+                optimized_binary.right().downcast_ref::<Literal>().unwrap();
             assert_eq!(right_literal.value(), &ScalarValue::Int32(Some(100)));
         }
     }
@@ -429,12 +422,8 @@ mod tests {
 
         // Verify the NULL was cast to the column type
         let optimized = result.data;
-        let optimized_binary = optimized.as_any().downcast_ref::<BinaryExpr>().unwrap();
-        let right_literal = optimized_binary
-            .right()
-            .as_any()
-            .downcast_ref::<Literal>()
-            .unwrap();
+        let optimized_binary = optimized.downcast_ref::<BinaryExpr>().unwrap();
+        let right_literal = optimized_binary.right().downcast_ref::<Literal>().unwrap();
         assert_eq!(right_literal.value(), &ScalarValue::Int32(None));
     }
 
@@ -489,20 +478,12 @@ mod tests {
 
         // Verify the AND operator is preserved
         let optimized = result.data;
-        let and_binary = optimized.as_any().downcast_ref::<BinaryExpr>().unwrap();
+        let and_binary = optimized.downcast_ref::<BinaryExpr>().unwrap();
         assert_eq!(*and_binary.op(), Operator::And);
 
         // Both sides should have their casts unwrapped
-        let left_binary = and_binary
-            .left()
-            .as_any()
-            .downcast_ref::<BinaryExpr>()
-            .unwrap();
-        let right_binary = and_binary
-            .right()
-            .as_any()
-            .downcast_ref::<BinaryExpr>()
-            .unwrap();
+        let left_binary = and_binary.left().downcast_ref::<BinaryExpr>().unwrap();
+        let right_binary = and_binary.right().downcast_ref::<BinaryExpr>().unwrap();
 
         assert!(!is_cast_expr(left_binary.left()));
         assert!(!is_cast_expr(right_binary.left()));
@@ -526,17 +507,13 @@ mod tests {
         assert!(result.transformed);
 
         let optimized = result.data;
-        let optimized_binary = optimized.as_any().downcast_ref::<BinaryExpr>().unwrap();
+        let optimized_binary = optimized.downcast_ref::<BinaryExpr>().unwrap();
 
         // Verify the try_cast was removed
         assert!(!is_cast_expr(optimized_binary.left()));
 
         // Verify the literal was converted
-        let right_literal = optimized_binary
-            .right()
-            .as_any()
-            .downcast_ref::<Literal>()
-            .unwrap();
+        let right_literal = optimized_binary.right().downcast_ref::<Literal>().unwrap();
         assert_eq!(right_literal.value(), &ScalarValue::Int32(Some(100)));
     }
 
@@ -581,6 +558,59 @@ mod tests {
     }
 
     #[test]
+    fn test_not_unwrap_timestamp_precision_narrowing() {
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        )]);
+
+        let column_expr = col("ts", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(
+            column_expr,
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            None,
+        ));
+        let literal_expr = lit(ScalarValue::TimestampMillisecond(Some(1), None));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal_expr));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+
+        assert!(!result.transformed);
+    }
+
+    #[test]
+    fn test_unwrap_timestamp_precision_widening() {
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        )]);
+
+        let column_expr = col("ts", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(
+            column_expr,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            None,
+        ));
+        let literal_expr = lit(ScalarValue::TimestampNanosecond(Some(1_000_000), None));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal_expr));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+
+        assert!(result.transformed);
+        let optimized_binary = result.data.downcast_ref::<BinaryExpr>().unwrap();
+        assert!(!is_cast_expr(optimized_binary.left()));
+        let right_literal = optimized_binary.right().downcast_ref::<Literal>().unwrap();
+        assert_eq!(
+            right_literal.value(),
+            &ScalarValue::TimestampMillisecond(Some(1), None)
+        );
+    }
+
+    #[test]
     fn test_complex_nested_expression() {
         let schema = test_schema();
 
@@ -609,34 +639,18 @@ mod tests {
 
         // Verify both sides of the AND were optimized
         let optimized = result.data;
-        let and_binary = optimized.as_any().downcast_ref::<BinaryExpr>().unwrap();
+        let and_binary = optimized.downcast_ref::<BinaryExpr>().unwrap();
 
         // Left side should be: c1 > INT32(10)
-        let left_binary = and_binary
-            .left()
-            .as_any()
-            .downcast_ref::<BinaryExpr>()
-            .unwrap();
+        let left_binary = and_binary.left().downcast_ref::<BinaryExpr>().unwrap();
         assert!(!is_cast_expr(left_binary.left()));
-        let left_literal = left_binary
-            .right()
-            .as_any()
-            .downcast_ref::<Literal>()
-            .unwrap();
+        let left_literal = left_binary.right().downcast_ref::<Literal>().unwrap();
         assert_eq!(left_literal.value(), &ScalarValue::Int32(Some(10)));
 
         // Right side should be: c2 = INT64(20) (c2 is already INT64, literal cast to match)
-        let right_binary = and_binary
-            .right()
-            .as_any()
-            .downcast_ref::<BinaryExpr>()
-            .unwrap();
+        let right_binary = and_binary.right().downcast_ref::<BinaryExpr>().unwrap();
         assert!(!is_cast_expr(right_binary.left()));
-        let right_literal = right_binary
-            .right()
-            .as_any()
-            .downcast_ref::<Literal>()
-            .unwrap();
+        let right_literal = right_binary.right().downcast_ref::<Literal>().unwrap();
         assert_eq!(right_literal.value(), &ScalarValue::Int64(Some(20)));
     }
 }

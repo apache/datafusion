@@ -1,0 +1,64 @@
+# Content-defined chunking (CDC) config resolution.
+#
+# CDC is a plain CdcOptions struct with an explicit `enabled` flag, so toggling
+# `content_defined_chunking.enabled` is independent of the chunking parameters
+# and of the order in which keys are set. There is no bare boolean form.
+
+statement ok
+SET datafusion.catalog.information_schema = true
+
+# Disabled by default: enabled=false, parameters at their defaults.
+query TT rowsort
+SELECT name, value FROM information_schema.df_settings
+WHERE name LIKE '%content_defined_chunking%'
+----
+datafusion.execution.parquet.content_defined_chunking.enabled false
+datafusion.execution.parquet.content_defined_chunking.max_chunk_size 1048576
+datafusion.execution.parquet.content_defined_chunking.min_chunk_size 262144
+datafusion.execution.parquet.content_defined_chunking.norm_level 0
+
+# Setting a parameter does NOT enable CDC: `enabled` stays false.
+statement ok
+SET datafusion.execution.parquet.content_defined_chunking.min_chunk_size = 2048
+
+query TT rowsort
+SELECT name, value FROM information_schema.df_settings
+WHERE name LIKE '%content_defined_chunking%'
+----
+datafusion.execution.parquet.content_defined_chunking.enabled false
+datafusion.execution.parquet.content_defined_chunking.max_chunk_size 1048576
+datafusion.execution.parquet.content_defined_chunking.min_chunk_size 2048
+datafusion.execution.parquet.content_defined_chunking.norm_level 0
+
+# Enabling is explicit and independent of the parameters already set.
+statement ok
+SET datafusion.execution.parquet.content_defined_chunking.enabled = true
+
+query TT rowsort
+SELECT name, value FROM information_schema.df_settings
+WHERE name LIKE '%content_defined_chunking%'
+----
+datafusion.execution.parquet.content_defined_chunking.enabled true
+datafusion.execution.parquet.content_defined_chunking.max_chunk_size 1048576
+datafusion.execution.parquet.content_defined_chunking.min_chunk_size 2048
+datafusion.execution.parquet.content_defined_chunking.norm_level 0
+
+# Disabling only flips the flag; the parameters are left untouched.
+statement ok
+SET datafusion.execution.parquet.content_defined_chunking.enabled = false
+
+query TT rowsort
+SELECT name, value FROM information_schema.df_settings
+WHERE name LIKE '%content_defined_chunking%'
+----
+datafusion.execution.parquet.content_defined_chunking.enabled false
+datafusion.execution.parquet.content_defined_chunking.max_chunk_size 1048576
+datafusion.execution.parquet.content_defined_chunking.min_chunk_size 2048
+datafusion.execution.parquet.content_defined_chunking.norm_level 0
+
+# Restore defaults so the harness does not see modified configuration.
+statement ok
+SET datafusion.execution.parquet.content_defined_chunking.min_chunk_size = 262144
+
+statement ok
+SET datafusion.catalog.information_schema = false

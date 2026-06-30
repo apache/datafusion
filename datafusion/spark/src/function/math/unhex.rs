@@ -22,12 +22,13 @@ use datafusion_common::cast::{
 };
 use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
+};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
 };
-use std::any::Any;
 use std::sync::Arc;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#unhex>
@@ -53,10 +54,6 @@ impl SparkUnhex {
 }
 
 impl ScalarUDFImpl for SparkUnhex {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "unhex"
     }
@@ -130,7 +127,12 @@ where
     for v in iter {
         if let Some(s) = v {
             buffer.clear();
-            buffer.reserve(s.as_ref().len().div_ceil(2));
+            let additional = s.as_ref().len().div_ceil(2);
+            buffer.try_reserve(additional).map_err(|e| {
+                exec_datafusion_err!(
+                    "failed to reserve {additional} bytes for unhex output: {e}"
+                )
+            })?;
             if unhex_common(s.as_ref().as_bytes(), &mut buffer) {
                 builder.append_value(&buffer);
             } else {

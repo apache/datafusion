@@ -22,11 +22,13 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Fields};
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, Scalar,
+    Array, ArrayRef, BooleanArray, Float64Array, GenericListArray, NullBufferBuilder,
+    OffsetSizeTrait, Scalar,
 };
-use arrow::buffer::OffsetBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion_common::cast::{
-    as_fixed_size_list_array, as_large_list_array, as_list_array,
+    as_fixed_size_list_array, as_float64_array, as_generic_list_array,
+    as_large_list_array, as_large_list_view_array, as_list_array, as_list_view_array,
 };
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
@@ -243,6 +245,14 @@ pub(crate) fn compute_array_dims(
                 value = as_large_list_array(&value)?.value(0);
                 res.push(Some(value.len() as u64));
             }
+            DataType::ListView(_) => {
+                value = as_list_view_array(&value)?.value(0);
+                res.push(Some(value.len() as u64));
+            }
+            DataType::LargeListView(_) => {
+                value = as_large_list_view_array(&value)?.value(0);
+                res.push(Some(value.len() as u64));
+            }
             DataType::FixedSizeList(..) => {
                 value = as_fixed_size_list_array(&value)?.value(0);
                 res.push(Some(value.len() as u64));
@@ -265,6 +275,142 @@ pub(crate) fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
         }
         _ => internal_err!("Expected a Map type, got {data_type}"),
     }
+}
+
+/// Shared `coerce_types` impl for array-math UDFs whose kernels expect
+/// `List<Float64>` / `LargeList<Float64>` (e.g. `array_add`, `cosine_distance`,
+/// `inner_product`, `array_normalize`).
+///
+/// Each input must be `Null`, `List`, `LargeList`, or `FixedSizeList`; otherwise
+/// returns a plan error naming `name`. `FixedSizeList` is widened to `List`,
+/// `Null` is coerced to a list of `Float64`, and if any input is `LargeList`
+/// the rest are widened to `LargeList` so the runtime sees a homogeneous pair.
+pub(crate) fn coerce_array_math_arg_types(
+    name: &str,
+    arg_types: &[DataType],
+) -> Result<Vec<DataType>> {
+    use DataType::{FixedSizeList, LargeList, List, Null};
+    use datafusion_common::utils::{ListCoercion, coerced_type_with_base_type_only};
+
+    let coercion = Some(&ListCoercion::FixedSizedListToList);
+
+    for arg_type in arg_types {
+        if !matches!(arg_type, Null | List(_) | LargeList(_) | FixedSizeList(..)) {
+            return plan_err!("{name} does not support type {arg_type}");
+        }
+    }
+
+    // If any input is `LargeList`, both sides must be widened to `LargeList`
+    // so the runtime dispatch in `inner_product_inner` sees a homogeneous
+    // pair. Follows the pattern in `ArrayConcat::coerce_types`.
+    let any_large_list = arg_types.iter().any(|t| matches!(t, LargeList(_)));
+
+    let coerced = arg_types
+        .iter()
+        .map(|arg_type| {
+            if matches!(arg_type, Null) {
+                let field = Arc::new(Field::new_list_field(DataType::Float64, true));
+                return if any_large_list {
+                    LargeList(field)
+                } else {
+                    List(field)
+                };
+            }
+            let coerced =
+                coerced_type_with_base_type_only(arg_type, &DataType::Float64, coercion);
+            match coerced {
+                List(field) if any_large_list => LargeList(field),
+                other => other,
+            }
+        })
+        .collect();
+
+    Ok(coerced)
+}
+
+/// Element-wise binary operation kernel for two `Float64` lists of equal per-row
+/// length. The caller is responsible for type-dispatching on `O` (`i32` for
+/// `List`, `i64` for `LargeList`).
+///
+/// Semantics:
+/// - whole-row NULL on either side → NULL output row, length 0
+/// - per-element NULL on either side → NULL at that output position
+/// - per-row length mismatch → exec error tagged with `op_name`
+///
+/// `op_name` flows into the error message; `op` is the per-element scalar op
+/// (e.g. `|a, b| a + b` for `array_add`, `|a, b| a - b` for `array_subtract`).
+pub(crate) fn array_math_binary_op<O, F>(
+    op_name: &str,
+    lhs: &ArrayRef,
+    rhs: &ArrayRef,
+    op: F,
+) -> Result<ArrayRef>
+where
+    O: OffsetSizeTrait,
+    F: Fn(f64, f64) -> f64,
+{
+    let lhs = as_generic_list_array::<O>(lhs)?;
+    let rhs = as_generic_list_array::<O>(rhs)?;
+
+    let lhs_values = as_float64_array(lhs.values())?;
+    let rhs_values = as_float64_array(rhs.values())?;
+    let lhs_offsets = lhs.value_offsets();
+    let rhs_offsets = rhs.value_offsets();
+
+    let row_nulls = NullBuffer::union(lhs.nulls(), rhs.nulls());
+
+    let mut out_values: Vec<f64> = Vec::with_capacity(lhs_values.len());
+    let mut out_inner_nulls = NullBufferBuilder::new(lhs_values.len());
+    let mut out_offsets = Vec::<O>::with_capacity(lhs.len() + 1);
+    out_offsets.push(O::zero());
+
+    for row in 0..lhs.len() {
+        if row_nulls.as_ref().is_some_and(|nb| nb.is_null(row)) {
+            out_offsets.push(out_offsets[row]);
+            continue;
+        }
+
+        let start1 = lhs_offsets[row].as_usize();
+        let len1 = lhs.value_length(row).as_usize();
+        let start2 = rhs_offsets[row].as_usize();
+        let len2 = rhs.value_length(row).as_usize();
+
+        if len1 != len2 {
+            return exec_err!(
+                "{op_name} requires both list inputs to have the same length per row, got {len1} and {len2} at row {row}"
+            );
+        }
+
+        let l_slice = lhs_values.slice(start1, len1);
+        let r_slice = rhs_values.slice(start2, len2);
+
+        let l_vals = l_slice.values();
+        let r_vals = r_slice.values();
+
+        for i in 0..len1 {
+            out_values.push(op(l_vals[i], r_vals[i]));
+        }
+
+        match NullBuffer::union(l_slice.nulls(), r_slice.nulls()) {
+            Some(nb) => out_inner_nulls.append_buffer(&nb),
+            None => out_inner_nulls.append_n_non_nulls(len1),
+        }
+
+        out_offsets.push(out_offsets[row] + O::usize_as(len1));
+    }
+
+    let values_array = Arc::new(Float64Array::new(
+        out_values.into(),
+        out_inner_nulls.finish(),
+    ));
+    let field = Arc::new(Field::new_list_field(DataType::Float64, true));
+
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        field,
+        OffsetBuffer::new(out_offsets.into()),
+        values_array,
+        row_nulls,
+    )?))
 }
 
 #[cfg(test)]

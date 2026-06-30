@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_expr::{
@@ -69,9 +67,6 @@ impl PlacementTestUDF {
 }
 
 impl ScalarUDFImpl for PlacementTestUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         match self.placement {
             ExpressionPlacement::MoveTowardsLeafNodes => "leaf_udf",

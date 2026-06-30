@@ -84,10 +84,6 @@ impl VarianceSample {
 }
 
 impl AggregateUDFImpl for VarianceSample {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "var"
     }
@@ -184,10 +180,6 @@ impl VariancePopulation {
 }
 
 impl AggregateUDFImpl for VariancePopulation {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "var_pop"
     }
@@ -356,6 +348,13 @@ impl Accumulator for VarianceAccumulator {
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let arr = as_float64_array(&values[0])?;
         for value in arr.iter().flatten() {
+            if self.count <= 1 {
+                self.count = 0;
+                self.mean = 0.0;
+                self.m2 = 0.0;
+                continue;
+            }
+
             let new_count = self.count - 1;
             let delta1 = self.mean - value;
             let new_mean = delta1 / new_count as f64 + self.mean;
@@ -529,8 +528,6 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        // Since aggregate filter should be applied in partial stage, in final stage there should be no filter
-        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 3, "two arguments to merge_batch");
@@ -674,8 +671,8 @@ mod tests {
             Arc::new(Float64Array::from(vec![1.0])),
         ];
         let mut acc = VarianceGroupsAccumulator::new(StatsType::Sample);
-        acc.merge_batch(&state_1, &[0], None, 1)?;
-        acc.merge_batch(&state_2, &[0], None, 1)?;
+        acc.merge_batch(&state_1, &[0], 1)?;
+        acc.merge_batch(&state_2, &[0], 1)?;
         let result = acc.evaluate(EmitTo::All)?;
         let result = result.as_any().downcast_ref::<Float64Array>().unwrap();
         assert_eq!(result.len(), 1);

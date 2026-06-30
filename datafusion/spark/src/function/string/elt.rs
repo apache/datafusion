@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -51,10 +50,6 @@ impl SparkElt {
 }
 
 impl ScalarUDFImpl for SparkElt {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "elt"
     }
@@ -74,9 +69,9 @@ impl ScalarUDFImpl for SparkElt {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let length = arg_types.len();
         if length < 2 {
-            plan_datafusion_err!(
+            return Err(plan_datafusion_err!(
                 "ELT function expects at least 2 arguments: index, value1"
-            );
+            ));
         }
 
         let idx_dt: &DataType = &arg_types[0];
@@ -150,11 +145,6 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 mod tests {
     use super::*;
     use arrow::array::Int64Array;
-    use datafusion_common::Result;
-
-    use arrow::array::{ArrayRef, StringArray};
-    use datafusion_common::DataFusionError;
-    use std::sync::Arc;
 
     fn run_elt_arrays(arrs: Vec<ArrayRef>) -> Result<Arc<StringArray>> {
         let arr = elt(&arrs)?;

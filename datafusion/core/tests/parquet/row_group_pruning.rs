@@ -399,321 +399,365 @@ async fn prune_disabled() {
 // https://github.com/apache/datafusion/issues/9779 bug so that tests pass
 // if and only if Bloom filters on Int8 and Int16 columns are still buggy.
 macro_rules! int_tests {
-    ($bits:expr) => {
-        paste::item! {
-            #[tokio::test]
-            async fn [<prune_int $bits _lt >]() {
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::Int)
-                    .with_query(&format!("SELECT * FROM t where i{} < 1", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(3))
-                    .with_pruned_by_stats(Some(1))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(3))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(11)
-                    .test_row_group_prune()
-                    .await;
+    ($bits:expr, $fn_lt:ident, $fn_eq:ident, $fn_scalar_fun_and_eq:ident, $fn_scalar_fun:ident, $fn_complex_expr:ident, $fn_complex_expr_subtract:ident, $fn_eq_in_list:ident, $fn_eq_in_list_2:ident, $fn_eq_in_list_negated:ident) => {
+        #[tokio::test]
+        async fn $fn_lt() {
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::Int)
+                .with_query(&format!("SELECT * FROM t where i{} < 1", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(3))
+                .with_pruned_by_stats(Some(1))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(3))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(11)
+                .test_row_group_prune()
+                .await;
 
-                // result of sql "SELECT * FROM t where i < 1" is same as
-                // "SELECT * FROM t where -i > -1"
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::Int)
-                    .with_query(&format!("SELECT * FROM t where -i{} > -1", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(3))
-                    .with_pruned_by_stats(Some(1))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(3))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(11)
-                    .test_row_group_prune()
-                    .await;
-            }
+            // result of sql "SELECT * FROM t where i < 1" is same as
+            // "SELECT * FROM t where -i > -1"
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::Int)
+                .with_query(&format!("SELECT * FROM t where -i{} > -1", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(3))
+                .with_pruned_by_stats(Some(1))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(3))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(11)
+                .test_row_group_prune()
+                .await;
+        }
 
-            #[tokio::test]
-            async fn [<prune_int $bits _eq >]() {
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::Int)
-                    .with_query(&format!("SELECT * FROM t where i{} = 1", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(1))
-                    .with_pruned_by_stats(Some(3))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(1))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(1)
-                    .test_row_group_prune()
-                    .await;
-            }
-            #[tokio::test]
-            async fn [<prune_int $bits _scalar_fun_and_eq >]() {
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::Int)
-                    .with_query(&format!("SELECT * FROM t where abs(i{}) = 1 and i{} = 1", $bits, $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(1))
-                    .with_pruned_by_stats(Some(3))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(1))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(1)
-                    .test_row_group_prune()
-                    .await;
-            }
+        #[tokio::test]
+        async fn $fn_eq() {
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::Int)
+                .with_query(&format!("SELECT * FROM t where i{} = 1", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(1))
+                .with_pruned_by_stats(Some(3))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(1))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(1)
+                .test_row_group_prune()
+                .await;
+        }
+        #[tokio::test]
+        async fn $fn_scalar_fun_and_eq() {
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::Int)
+                .with_query(&format!(
+                    "SELECT * FROM t where abs(i{}) = 1 and i{} = 1",
+                    $bits, $bits
+                ))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(1))
+                .with_pruned_by_stats(Some(3))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(1))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(1)
+                .test_row_group_prune()
+                .await;
+        }
 
-            #[tokio::test]
-            async fn [<prune_int $bits _scalar_fun >]() {
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::Int)
-                    .with_query(&format!("SELECT * FROM t where abs(i{}) = 1", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(4))
-                    .with_pruned_by_stats(Some(0))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(4))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(3)
-                    .test_row_group_prune()
-                    .await;
-            }
+        #[tokio::test]
+        async fn $fn_scalar_fun() {
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::Int)
+                .with_query(&format!("SELECT * FROM t where abs(i{}) = 1", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(4))
+                .with_pruned_by_stats(Some(0))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(4))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(3)
+                .test_row_group_prune()
+                .await;
+        }
 
-            #[tokio::test]
-            async fn [<prune_int $bits _complex_expr >]() {
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::Int)
-                    .with_query(&format!("SELECT * FROM t where i{}+1 = 1", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(4))
-                    .with_pruned_by_stats(Some(0))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(4))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(2)
-                    .test_row_group_prune()
-                    .await;
-            }
+        #[tokio::test]
+        async fn $fn_complex_expr() {
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::Int)
+                .with_query(&format!("SELECT * FROM t where i{}+1 = 1", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(4))
+                .with_pruned_by_stats(Some(0))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(4))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(2)
+                .test_row_group_prune()
+                .await;
+        }
 
-            #[tokio::test]
-            async fn [<prune_int $bits _complex_expr_subtract >]() {
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::Int)
-                    .with_query(&format!("SELECT * FROM t where 1-i{} > 1", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(4))
-                    .with_pruned_by_stats(Some(0))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(4))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(9)
-                    .test_row_group_prune()
-                    .await;
-            }
+        #[tokio::test]
+        async fn $fn_complex_expr_subtract() {
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::Int)
+                .with_query(&format!("SELECT * FROM t where 1-i{} > 1", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(4))
+                .with_pruned_by_stats(Some(0))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(4))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(9)
+                .test_row_group_prune()
+                .await;
+        }
 
-            #[tokio::test]
-            async fn [<prune_int $bits _eq_in_list >]() {
-                // result of sql "SELECT * FROM t where in (1)"
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::Int)
-                    .with_query(&format!("SELECT * FROM t where i{} in (1)", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(1))
-                    .with_pruned_by_stats(Some(3))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(1))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(1)
-                    .test_row_group_prune()
-                    .await;
-            }
+        #[tokio::test]
+        async fn $fn_eq_in_list() {
+            // result of sql "SELECT * FROM t where in (1)"
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::Int)
+                .with_query(&format!("SELECT * FROM t where i{} in (1)", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(1))
+                .with_pruned_by_stats(Some(3))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(1))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(1)
+                .test_row_group_prune()
+                .await;
+        }
 
-            #[tokio::test]
-            async fn [<prune_int $bits _eq_in_list_2 >]() {
-                // result of sql "SELECT * FROM t where in (1000)", prune all
-                // test whether statistics works
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::Int)
-                    .with_query(&format!("SELECT * FROM t where i{} in (100)", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(0))
-                    .with_pruned_by_stats(Some(0))
-                    .with_pruned_files(Some(1))
-                    .with_matched_by_bloom_filter(Some(0))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(0)
-                    .test_row_group_prune()
-                    .await;
-            }
+        #[tokio::test]
+        async fn $fn_eq_in_list_2() {
+            // result of sql "SELECT * FROM t where in (1000)", prune all
+            // test whether statistics works
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::Int)
+                .with_query(&format!("SELECT * FROM t where i{} in (100)", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(0))
+                .with_pruned_by_stats(Some(0))
+                .with_pruned_files(Some(1))
+                .with_matched_by_bloom_filter(Some(0))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(0)
+                .test_row_group_prune()
+                .await;
+        }
 
-            #[tokio::test]
-            async fn [<prune_int $bits _eq_in_list_negated >]() {
-                // result of sql "SELECT * FROM t where not in (1)" prune nothing
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::Int)
-                    .with_query(&format!("SELECT * FROM t where i{} not in (1)", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(4))
-                    .with_pruned_by_stats(Some(0))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(4))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(19)
-                    .test_row_group_prune()
-                    .await;
-            }
+        #[tokio::test]
+        async fn $fn_eq_in_list_negated() {
+            // result of sql "SELECT * FROM t where not in (1)" prune nothing
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::Int)
+                .with_query(&format!("SELECT * FROM t where i{} not in (1)", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(4))
+                .with_pruned_by_stats(Some(0))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(4))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(19)
+                .test_row_group_prune()
+                .await;
         }
     };
 }
 
 // int8/int16 are incorrect: https://github.com/apache/datafusion/issues/9779
-int_tests!(32);
-int_tests!(64);
+int_tests!(
+    32,
+    prune_int32_lt,
+    prune_int32_eq,
+    prune_int32_scalar_fun_and_eq,
+    prune_int32_scalar_fun,
+    prune_int32_complex_expr,
+    prune_int32_complex_expr_subtract,
+    prune_int32_eq_in_list,
+    prune_int32_eq_in_list_2,
+    prune_int32_eq_in_list_negated
+);
+int_tests!(
+    64,
+    prune_int64_lt,
+    prune_int64_eq,
+    prune_int64_scalar_fun_and_eq,
+    prune_int64_scalar_fun,
+    prune_int64_complex_expr,
+    prune_int64_complex_expr_subtract,
+    prune_int64_eq_in_list,
+    prune_int64_eq_in_list_2,
+    prune_int64_eq_in_list_negated
+);
 
 // $bits: number of bits of the integer to test (8, 16, 32, 64)
 // $correct_bloom_filters: if false, replicates the
 // https://github.com/apache/datafusion/issues/9779 bug so that tests pass
 // if and only if Bloom filters on UInt8 and UInt16 columns are still buggy.
 macro_rules! uint_tests {
-    ($bits:expr) => {
-        paste::item! {
-            #[tokio::test]
-            async fn [<prune_uint $bits _lt >]() {
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::UInt)
-                    .with_query(&format!("SELECT * FROM t where u{} < 6", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(3))
-                    .with_pruned_by_stats(Some(1))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(3))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(11)
-                    .test_row_group_prune()
-                    .await;
-            }
+    ($bits:expr, $fn_lt:ident, $fn_eq:ident, $fn_scalar_fun_and_eq:ident, $fn_scalar_fun:ident, $fn_complex_expr:ident, $fn_eq_in_list:ident, $fn_eq_in_list_2:ident, $fn_eq_in_list_negated:ident) => {
+        #[tokio::test]
+        async fn $fn_lt() {
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::UInt)
+                .with_query(&format!("SELECT * FROM t where u{} < 6", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(3))
+                .with_pruned_by_stats(Some(1))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(3))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(11)
+                .test_row_group_prune()
+                .await;
+        }
 
-            #[tokio::test]
-            async fn [<prune_uint $bits _eq >]() {
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::UInt)
-                    .with_query(&format!("SELECT * FROM t where u{} = 6", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(1))
-                    .with_pruned_by_stats(Some(3))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(1))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(1)
-                    .test_row_group_prune()
-                    .await;
-            }
-            #[tokio::test]
-            async fn [<prune_uint $bits _scalar_fun_and_eq >]() {
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::UInt)
-                    .with_query(&format!("SELECT * FROM t where power(u{}, 2) = 36 and u{} = 6", $bits, $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(1))
-                    .with_pruned_by_stats(Some(3))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(1))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(1)
-                    .test_row_group_prune()
-                    .await;
-            }
+        #[tokio::test]
+        async fn $fn_eq() {
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::UInt)
+                .with_query(&format!("SELECT * FROM t where u{} = 6", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(1))
+                .with_pruned_by_stats(Some(3))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(1))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(1)
+                .test_row_group_prune()
+                .await;
+        }
+        #[tokio::test]
+        async fn $fn_scalar_fun_and_eq() {
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::UInt)
+                .with_query(&format!(
+                    "SELECT * FROM t where power(u{}, 2) = 36 and u{} = 6",
+                    $bits, $bits
+                ))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(1))
+                .with_pruned_by_stats(Some(3))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(1))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(1)
+                .test_row_group_prune()
+                .await;
+        }
 
-            #[tokio::test]
-            async fn [<prune_uint $bits _scalar_fun >]() {
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::UInt)
-                    .with_query(&format!("SELECT * FROM t where power(u{}, 2) = 25", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(4))
-                    .with_pruned_by_stats(Some(0))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(4))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(2)
-                    .test_row_group_prune()
-                    .await;
-            }
+        #[tokio::test]
+        async fn $fn_scalar_fun() {
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::UInt)
+                .with_query(&format!("SELECT * FROM t where power(u{}, 2) = 25", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(4))
+                .with_pruned_by_stats(Some(0))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(4))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(2)
+                .test_row_group_prune()
+                .await;
+        }
 
-            #[tokio::test]
-            async fn [<prune_uint $bits _complex_expr >]() {
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::UInt)
-                    .with_query(&format!("SELECT * FROM t where u{}+1 = 6", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(4))
-                    .with_pruned_by_stats(Some(0))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(4))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(2)
-                    .test_row_group_prune()
-                    .await;
-            }
+        #[tokio::test]
+        async fn $fn_complex_expr() {
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::UInt)
+                .with_query(&format!("SELECT * FROM t where u{}+1 = 6", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(4))
+                .with_pruned_by_stats(Some(0))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(4))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(2)
+                .test_row_group_prune()
+                .await;
+        }
 
-            #[tokio::test]
-            async fn [<prune_uint $bits _eq_in_list >]() {
-                // result of sql "SELECT * FROM t where in (1)"
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::UInt)
-                    .with_query(&format!("SELECT * FROM t where u{} in (6)", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(1))
-                    .with_pruned_by_stats(Some(3))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(1))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(1)
-                    .test_row_group_prune()
-                    .await;
-            }
+        #[tokio::test]
+        async fn $fn_eq_in_list() {
+            // result of sql "SELECT * FROM t where in (1)"
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::UInt)
+                .with_query(&format!("SELECT * FROM t where u{} in (6)", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(1))
+                .with_pruned_by_stats(Some(3))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(1))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(1)
+                .test_row_group_prune()
+                .await;
+        }
 
-            #[tokio::test]
-            async fn [<prune_uint $bits _eq_in_list_2 >]() {
-                // result of sql "SELECT * FROM t where in (1000)", prune all
-                // test whether statistics works
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::UInt)
-                    .with_query(&format!("SELECT * FROM t where u{} in (100)", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(0))
-                    .with_pruned_by_stats(Some(4))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(0))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(0)
-                    .test_row_group_prune()
-                    .await;
-            }
+        #[tokio::test]
+        async fn $fn_eq_in_list_2() {
+            // result of sql "SELECT * FROM t where in (1000)", prune all
+            // test whether statistics works
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::UInt)
+                .with_query(&format!("SELECT * FROM t where u{} in (100)", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(0))
+                .with_pruned_by_stats(Some(4))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(0))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(0)
+                .test_row_group_prune()
+                .await;
+        }
 
-            #[tokio::test]
-            async fn [<prune_uint $bits _eq_in_list_negated >]() {
-                // result of sql "SELECT * FROM t where not in (1)" prune nothing
-                RowGroupPruningTest::new()
-                    .with_scenario(Scenario::UInt)
-                    .with_query(&format!("SELECT * FROM t where u{} not in (6)", $bits))
-                    .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(4))
-                    .with_pruned_by_stats(Some(0))
-                    .with_pruned_files(Some(0))
-                    .with_matched_by_bloom_filter(Some(4))
-                    .with_pruned_by_bloom_filter(Some(0))
-                    .with_expected_rows(19)
-                    .test_row_group_prune()
-                    .await;
-            }
+        #[tokio::test]
+        async fn $fn_eq_in_list_negated() {
+            // result of sql "SELECT * FROM t where not in (1)" prune nothing
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::UInt)
+                .with_query(&format!("SELECT * FROM t where u{} not in (6)", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(4))
+                .with_pruned_by_stats(Some(0))
+                .with_pruned_files(Some(0))
+                .with_matched_by_bloom_filter(Some(4))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(19)
+                .test_row_group_prune()
+                .await;
         }
     };
 }
 
 // uint8/uint16 are incorrect: https://github.com/apache/datafusion/issues/9779
-uint_tests!(32);
-uint_tests!(64);
+uint_tests!(
+    32,
+    prune_uint32_lt,
+    prune_uint32_eq,
+    prune_uint32_scalar_fun_and_eq,
+    prune_uint32_scalar_fun,
+    prune_uint32_complex_expr,
+    prune_uint32_eq_in_list,
+    prune_uint32_eq_in_list_2,
+    prune_uint32_eq_in_list_negated
+);
+uint_tests!(
+    64,
+    prune_uint64_lt,
+    prune_uint64_eq,
+    prune_uint64_scalar_fun_and_eq,
+    prune_uint64_scalar_fun,
+    prune_uint64_complex_expr,
+    prune_uint64_eq_in_list,
+    prune_uint64_eq_in_list_2,
+    prune_uint64_eq_in_list_negated
+);
 
 #[tokio::test]
 async fn prune_int32_eq_large_in_list() {
@@ -1733,6 +1777,15 @@ fn make_i32_batch(
     RecordBatch::try_new(schema, vec![array]).map_err(DataFusionError::from)
 }
 
+fn make_nullable_i32_batch(
+    name: &str,
+    values: Vec<Option<i32>>,
+) -> datafusion_common::error::Result<RecordBatch> {
+    let schema = Arc::new(Schema::new(vec![Field::new(name, DataType::Int32, true)]));
+    let array: ArrayRef = Arc::new(Int32Array::from(values));
+    RecordBatch::try_new(schema, vec![array]).map_err(DataFusionError::from)
+}
+
 // Helper function to create a batch with two Int32 columns
 fn make_two_col_i32_batch(
     name_a: &str,
@@ -1747,6 +1800,72 @@ fn make_two_col_i32_batch(
     let array_a: ArrayRef = Arc::new(Int32Array::from(values_a));
     let array_b: ArrayRef = Arc::new(Int32Array::from(values_b));
     RecordBatch::try_new(schema, vec![array_a, array_b]).map_err(DataFusionError::from)
+}
+
+#[tokio::test]
+async fn prune_is_not_distinct_from_i32() -> datafusion_common::error::Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let batches = vec![
+        make_nullable_i32_batch("a", vec![None, None])?,
+        make_nullable_i32_batch("a", vec![Some(0), Some(0)])?,
+        make_nullable_i32_batch("a", vec![Some(0), Some(1)])?,
+        make_nullable_i32_batch("a", vec![Some(2), Some(3)])?,
+        make_nullable_i32_batch("a", vec![None, Some(5)])?,
+    ];
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Int)
+        .with_query("SELECT a FROM t WHERE a IS NOT DISTINCT FROM 0")
+        .with_expected_errors(Some(0))
+        .with_expected_rows(3)
+        .with_pruned_files(Some(0))
+        .with_matched_by_stats(Some(2))
+        .with_fully_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(3))
+        .with_limit_pruned_row_groups(Some(0))
+        .test_row_group_prune_with_custom_data(schema.clone(), batches.clone(), 2)
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Int)
+        .with_query("SELECT a FROM t WHERE a IS NOT DISTINCT FROM NULL")
+        .with_expected_errors(Some(0))
+        .with_expected_rows(3)
+        .with_pruned_files(Some(0))
+        .with_matched_by_stats(Some(2))
+        .with_fully_matched_by_stats(Some(0))
+        .with_pruned_by_stats(Some(3))
+        .with_limit_pruned_row_groups(Some(0))
+        .test_row_group_prune_with_custom_data(schema.clone(), batches.clone(), 2)
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Int)
+        .with_query("SELECT a FROM t WHERE a IS DISTINCT FROM 0")
+        .with_expected_errors(Some(0))
+        .with_expected_rows(7)
+        .with_pruned_files(Some(0))
+        .with_matched_by_stats(Some(4))
+        .with_fully_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_limit_pruned_row_groups(Some(0))
+        .test_row_group_prune_with_custom_data(schema.clone(), batches.clone(), 2)
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Int)
+        .with_query("SELECT a FROM t WHERE a IS DISTINCT FROM NULL")
+        .with_expected_errors(Some(0))
+        .with_expected_rows(7)
+        .with_pruned_files(Some(0))
+        .with_matched_by_stats(Some(4))
+        .with_fully_matched_by_stats(Some(3))
+        .with_pruned_by_stats(Some(1))
+        .with_limit_pruned_row_groups(Some(0))
+        .test_row_group_prune_with_custom_data(schema, batches, 2)
+        .await;
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -1958,4 +2077,27 @@ async fn test_limit_pruning_exceeds_fully_matched() -> datafusion_common::error:
         .test_row_group_prune_with_custom_data(schema, batches, 4)
         .await;
     Ok(())
+}
+
+#[tokio::test]
+async fn prune_like_prefix() {
+    // UTF8 scenario: 2 row groups (5 rows each)
+    //   RG1: ["a","b","c","d",NULL] => min="a", max="d"
+    //   RG2: ["e","f","g","h","i"]  => min="e", max="i"
+    //
+    // LIKE 'a%' => build_like_match produces: "a" <= max AND min <= "a" (actually min < "b")
+    //   RG1: "a" <= "d" ✓, "a" < "b" ✓ => matched
+    //   RG2: "a" <= "i" ✓, "e" < "b" ✗ => pruned
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::UTF8)
+        .with_query("SELECT * FROM t WHERE utf8 LIKE 'a%'")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_expected_rows(1) // only "a" matches LIKE 'a%'
+        .test_row_group_prune()
+        .await;
 }

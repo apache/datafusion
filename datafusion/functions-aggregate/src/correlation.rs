@@ -17,7 +17,6 @@
 
 //! [`Correlation`]: correlation sample aggregations.
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::mem::size_of_val;
 use std::sync::Arc;
@@ -96,11 +95,6 @@ impl Correlation {
 }
 
 impl AggregateUDFImpl for Correlation {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "corr"
     }
@@ -286,6 +280,10 @@ impl Accumulator for CorrelationAccumulator {
         self.stddev1.retract_batch(&values[0..1])?;
         self.stddev2.retract_batch(&values[1..2])?;
         Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 
@@ -495,7 +493,6 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         // Resize vectors to accommodate total number of groups
@@ -513,11 +510,6 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         let partial_sum_xy = values[3].as_primitive::<Float64Type>();
         let partial_sum_xx = values[4].as_primitive::<Float64Type>();
         let partial_sum_yy = values[5].as_primitive::<Float64Type>();
-
-        assert!(
-            opt_filter.is_none(),
-            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
-        );
 
         accumulate_correlation_states(
             group_indices,
@@ -555,7 +547,6 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Float64Array, UInt64Array};
 
     #[test]
     fn test_accumulate_correlation_states() {

@@ -17,7 +17,6 @@
 
 //! EmptyRelation with produce_one_row=false execution plan
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::memory::MemoryStream;
@@ -30,12 +29,12 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{ColumnStatistics, Result, ScalarValue, assert_or_internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::EquivalenceProperties;
 
 use crate::execution_plan::SchedulingType;
+use crate::statistics::StatisticsArgs;
 use log::trace;
 
 /// Execution plan for empty relation with produce_one_row=false
@@ -112,23 +111,12 @@ impl ExecutionPlan for EmptyExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -164,8 +152,8 @@ impl ExecutionPlan for EmptyExec {
         )?))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if let Some(partition) = partition {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        if let Some(partition) = args.partition() {
             assert_or_internal_err!(
                 partition < self.partitions,
                 "EmptyExec invalid partition {} (expected less than {})",

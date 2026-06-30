@@ -25,7 +25,6 @@ use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `negative` expression
@@ -77,10 +76,6 @@ impl SparkNegative {
 }
 
 impl ScalarUDFImpl for SparkNegative {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "negative"
     }

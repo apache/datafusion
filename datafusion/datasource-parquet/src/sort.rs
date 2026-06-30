@@ -17,7 +17,11 @@
 
 //! Sort-related utilities for Parquet scanning
 
-use datafusion_common::Result;
+use arrow::datatypes::Schema;
+use datafusion_common::{Result, ScalarValue};
+use datafusion_datasource::PartitionedFile;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::ParquetMetaData;
 use std::collections::HashMap;
@@ -118,11 +122,93 @@ pub fn reverse_row_selection(
     Ok(RowSelection::from(reversed_selectors))
 }
 
+/// Reorder a file list so the most "promising" files are read first,
+/// matching `PreparedAccessPlan::reorder_by_statistics` at the
+/// row-group level: key off the file's `min(col)`, and let the sort
+/// direction follow the request (ASC by `min` for ASC requests, DESC
+/// by `min` for DESC requests).
+///
+/// Keeping both layers consistent matters because they share the same
+/// convergence story for TopK's dynamic filter: file `i`'s `min` is a
+/// lower bound on every row group inside it, so the order chosen here
+/// is a natural prefix of the order `reorder_by_statistics` will
+/// produce within each file.
+///
+/// No-op when:
+/// * `sort_order` is `None` (sort pushdown didn't fire);
+/// * the leading sort expression is not a plain `Column`; or
+/// * the column is not in `table_schema`.
+///
+/// Files missing statistics sort to the end so present-stats files
+/// run first.
+pub(crate) fn reorder_files_by_min_statistics(
+    mut files: Vec<PartitionedFile>,
+    sort_order: Option<&LexOrdering>,
+    reverse_row_groups: bool,
+    table_schema: &Schema,
+) -> Vec<PartitionedFile> {
+    let Some((col_name, descending)) =
+        extract_topk_sort_info(sort_order, reverse_row_groups)
+    else {
+        return files;
+    };
+
+    let Ok(col_idx) = table_schema.index_of(&col_name) else {
+        return files;
+    };
+
+    files.sort_by(|a, b| {
+        let key_a = file_min_value(a, col_idx);
+        let key_b = file_min_value(b, col_idx);
+        match (key_a, key_b) {
+            (Some(va), Some(vb)) => {
+                let cmp = va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal);
+                if descending { cmp.reverse() } else { cmp }
+            }
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    });
+
+    log::debug!(
+        "Reordered {} files by min({}) {} for TopK optimization",
+        files.len(),
+        col_name,
+        if descending { "DESC" } else { "ASC" }
+    );
+
+    files
+}
+
+/// Extract the `(column name, descending)` tuple used by file-level
+/// reordering. Returns `None` when the sort order isn't set or the
+/// leading sort expression isn't a plain `Column`.
+fn extract_topk_sort_info(
+    sort_order: Option<&LexOrdering>,
+    reverse_row_groups: bool,
+) -> Option<(String, bool)> {
+    let sort_order = sort_order?;
+    let first = sort_order.first();
+    let col = first.expr.downcast_ref::<Column>()?;
+    Some((col.name().to_string(), reverse_row_groups))
+}
+
+/// File's per-column `min` for the reorder key.
+fn file_min_value(file: &PartitionedFile, col_idx: usize) -> Option<ScalarValue> {
+    let stats = file.statistics.as_ref()?;
+    stats
+        .column_statistics
+        .get(col_idx)?
+        .min_value
+        .get_value()
+        .cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ParquetAccessPlan;
     use crate::RowGroupAccess;
-    use crate::opener::PreparedAccessPlan;
     use arrow::datatypes::{DataType, Field, Schema};
     use bytes::Bytes;
     use parquet::arrow::ArrowWriter;
@@ -169,9 +255,9 @@ mod tests {
         let access_plan = ParquetAccessPlan::new_all(3);
         let rg_metadata = metadata.row_groups();
 
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         // Verify original plan
         assert_eq!(prepared_plan.row_group_indexes, vec![0, 1, 2]);
@@ -205,9 +291,9 @@ mod tests {
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -255,9 +341,9 @@ mod tests {
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -298,9 +384,9 @@ mod tests {
         }
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let reversed_plan = prepared_plan
             .reverse(&metadata)
@@ -338,9 +424,9 @@ mod tests {
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -379,9 +465,9 @@ mod tests {
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -435,9 +521,9 @@ mod tests {
         access_plan.scan_selection(2, RowSelection::from(vec![RowSelector::select(100)]));
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -502,9 +588,9 @@ mod tests {
         let rg_metadata = metadata.row_groups();
 
         // Step 1: Create PreparedAccessPlan
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         // Verify original plan
         assert_eq!(prepared_plan.row_group_indexes, vec![0, 2, 3]);
@@ -594,9 +680,9 @@ mod tests {
         access_plan.scan_selection(2, RowSelection::from(vec![RowSelector::select(100)]));
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -647,9 +733,9 @@ mod tests {
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -720,9 +806,9 @@ mod tests {
         let rg_metadata = metadata.row_groups();
 
         // Step 1: Create PreparedAccessPlan
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         // Verify original plan in detail
         assert_eq!(prepared_plan.row_group_indexes, vec![0, 2, 3]);
@@ -862,9 +948,9 @@ mod tests {
         access_plan.scan_selection(2, RowSelection::from(vec![RowSelector::select(100)]));
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         // Verify original selection structure in detail
         let orig_selectors: Vec<_> = prepared_plan
@@ -944,9 +1030,9 @@ mod tests {
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         // Original: [0, 2]
         assert_eq!(prepared_plan.row_group_indexes, vec![0, 2]);

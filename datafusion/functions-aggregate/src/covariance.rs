@@ -88,10 +88,6 @@ impl CovarianceSample {
 }
 
 impl AggregateUDFImpl for CovarianceSample {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "covar_samp"
     }
@@ -172,10 +168,6 @@ impl CovariancePopulation {
 }
 
 impl AggregateUDFImpl for CovariancePopulation {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "covar_pop"
     }
@@ -313,6 +305,14 @@ impl Accumulator for CovarianceAccumulator {
                 _ => continue,
             };
 
+            if self.count <= 1 {
+                self.count = 0;
+                self.mean1 = 0.0;
+                self.mean2 = 0.0;
+                self.algo_const = 0.0;
+                continue;
+            }
+
             let new_count = self.count - 1;
             let delta1 = self.mean1 - value1;
             let new_mean1 = delta1 / new_count as f64 + self.mean1;
@@ -380,5 +380,9 @@ impl Accumulator for CovarianceAccumulator {
 
     fn size(&self) -> usize {
         size_of_val(self)
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }

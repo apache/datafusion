@@ -15,13 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::VecDeque;
+use std::hash::Hash;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayData, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
+use arrow::array::{
+    Array, ArrayData, ArrayRef, ArrowPrimitiveType, MapArray, OffsetSizeTrait,
+    StructArray, cast::AsArray,
+};
 use arrow::buffer::Buffer;
-use arrow::datatypes::{DataType, Field, SchemaBuilder, ToByteSlice};
+use arrow::datatypes::{
+    DataType, Date32Type, Date64Type, Field, Int8Type, Int16Type, Int32Type, Int64Type,
+    SchemaBuilder, ToByteSlice, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+};
 
 use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
 use datafusion_common::{
@@ -29,7 +35,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -56,44 +63,120 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
         .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
 }
 
-fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let [keys_arg, values_arg] = take_function_args("make_map", args)?;
+fn expand_if_scalar(arg: ColumnarValue, rows: usize) -> Result<ColumnarValue> {
+    Ok(ColumnarValue::Array(arg.into_array(rows)?))
+}
 
-    let can_evaluate_to_const = can_evaluate_to_const(args);
+fn make_map_batch(args: Vec<ColumnarValue>, number_rows: usize) -> Result<ColumnarValue> {
+    let can_evaluate_to_const = can_evaluate_to_const(&args);
+    let [mut keys_arg, mut values_arg] = take_function_args("make_map", args)?;
 
-    let keys = get_first_array_ref(keys_arg)?;
+    // if we can't evaluate to const (inputs are not both scalar) then ensure they
+    // are expanded to arrays which following logic expects
+    if !can_evaluate_to_const {
+        keys_arg = expand_if_scalar(keys_arg, number_rows)?;
+        values_arg = expand_if_scalar(values_arg, number_rows)?;
+    };
+
+    let keys = get_first_array_ref(&keys_arg)?;
     let key_array = keys.as_ref();
 
-    match keys_arg {
-        ColumnarValue::Array(_) => {
-            let row_keys = match key_array.data_type() {
-                DataType::List(_) => list_to_arrays::<i32>(&keys),
-                DataType::LargeList(_) => list_to_arrays::<i64>(&keys),
-                DataType::FixedSizeList(_, _) => fixed_size_list_to_arrays(&keys),
-                data_type => {
-                    return exec_err!(
-                        "Expected list, large_list or fixed_size_list, got {:?}",
-                        data_type
-                    );
-                }
-            };
-
-            row_keys
+    match &keys_arg {
+        ColumnarValue::Array(_) => match key_array.data_type() {
+            DataType::List(_) => keys
+                .as_list::<i32>()
                 .iter()
-                .try_for_each(|key| validate_map_keys(key.as_ref()))?;
-        }
+                .flatten()
+                .try_for_each(|row| validate_map_keys(row.as_ref()))?,
+            DataType::LargeList(_) => keys
+                .as_list::<i64>()
+                .iter()
+                .flatten()
+                .try_for_each(|row| validate_map_keys(row.as_ref()))?,
+            DataType::FixedSizeList(_, _) => {
+                keys.as_fixed_size_list()
+                    .iter()
+                    .flatten()
+                    .try_for_each(|row| validate_map_keys(row.as_ref()))?
+            }
+            data_type => {
+                return exec_err!(
+                    "Expected list, large_list or fixed_size_list, got {:?}",
+                    data_type
+                );
+            }
+        },
         ColumnarValue::Scalar(_) => {
             validate_map_keys(key_array)?;
         }
     }
 
-    let values = get_first_array_ref(values_arg)?;
+    let values = get_first_array_ref(&values_arg)?;
 
     make_map_batch_internal(&keys, &values, can_evaluate_to_const, &keys_arg.data_type())
 }
 
-/// Validates that map keys are non-null and unique.
-fn validate_map_keys(array: &dyn Array) -> Result<()> {
+fn validate_unique_primitive_keys<T: ArrowPrimitiveType>(array: &dyn Array) -> Result<()>
+where
+    T::Native: Copy + Eq + Hash + std::fmt::Display,
+{
+    let primitive_array = array.as_primitive::<T>();
+    if primitive_array.null_count() > 0 {
+        return exec_err!("map key cannot be null");
+    }
+
+    if let Some(value) = find_duplicate_value(
+        primitive_array.len(),
+        primitive_array.values().iter().copied(),
+    ) {
+        return exec_err!("map key must be unique, duplicate key found: {}", value);
+    }
+
+    Ok(())
+}
+
+fn validate_unique_str_keys<'a>(
+    null_count: usize,
+    len: usize,
+    values: impl IntoIterator<Item = &'a str>,
+) -> Result<()> {
+    if null_count > 0 {
+        return exec_err!("map key cannot be null");
+    }
+
+    if let Some(value) = find_duplicate_value(len, values) {
+        return exec_err!("map key must be unique, duplicate key found: {}", value);
+    }
+
+    Ok(())
+}
+
+fn validate_unique_binary_keys<'a>(
+    null_count: usize,
+    len: usize,
+    values: impl IntoIterator<Item = &'a [u8]>,
+) -> Result<()> {
+    if null_count > 0 {
+        return exec_err!("map key cannot be null");
+    }
+
+    if let Some(value) = find_duplicate_value(len, values) {
+        return exec_err!("map key must be unique, duplicate key found: {:?}", value);
+    }
+
+    Ok(())
+}
+
+fn find_duplicate_value<T, I>(len: usize, values: I) -> Option<T>
+where
+    T: Copy + Eq + Hash,
+    I: IntoIterator<Item = T>,
+{
+    let mut seen_keys = HashSet::with_capacity(len);
+    values.into_iter().find(|value| !seen_keys.insert(*value))
+}
+
+fn validate_unique_keys_generic(array: &dyn Array) -> Result<()> {
     let mut seen_keys = HashSet::with_capacity(array.len());
 
     for i in 0..array.len() {
@@ -111,6 +194,47 @@ fn validate_map_keys(array: &dyn Array) -> Result<()> {
         seen_keys.insert(key);
     }
     Ok(())
+}
+
+/// Validates that map keys are non-null and unique.
+fn validate_map_keys(array: &dyn Array) -> Result<()> {
+    match array.data_type() {
+        DataType::Int8 => validate_unique_primitive_keys::<Int8Type>(array),
+        DataType::Int16 => validate_unique_primitive_keys::<Int16Type>(array),
+        DataType::Int32 => validate_unique_primitive_keys::<Int32Type>(array),
+        DataType::Int64 => validate_unique_primitive_keys::<Int64Type>(array),
+        DataType::UInt8 => validate_unique_primitive_keys::<UInt8Type>(array),
+        DataType::UInt16 => validate_unique_primitive_keys::<UInt16Type>(array),
+        DataType::UInt32 => validate_unique_primitive_keys::<UInt32Type>(array),
+        DataType::UInt64 => validate_unique_primitive_keys::<UInt64Type>(array),
+        DataType::Date32 => validate_unique_primitive_keys::<Date32Type>(array),
+        DataType::Date64 => validate_unique_primitive_keys::<Date64Type>(array),
+        DataType::Utf8 => {
+            let arr = array.as_string::<i32>();
+            validate_unique_str_keys(arr.null_count(), arr.len(), arr.iter().flatten())
+        }
+        DataType::LargeUtf8 => {
+            let arr = array.as_string::<i64>();
+            validate_unique_str_keys(arr.null_count(), arr.len(), arr.iter().flatten())
+        }
+        DataType::Utf8View => {
+            let arr = array.as_string_view();
+            validate_unique_str_keys(arr.null_count(), arr.len(), arr.iter().flatten())
+        }
+        DataType::Binary => {
+            let arr = array.as_binary::<i32>();
+            validate_unique_binary_keys(arr.null_count(), arr.len(), arr.iter().flatten())
+        }
+        DataType::LargeBinary => {
+            let arr = array.as_binary::<i64>();
+            validate_unique_binary_keys(arr.null_count(), arr.len(), arr.iter().flatten())
+        }
+        DataType::BinaryView => {
+            let arr = array.as_binary_view();
+            validate_unique_binary_keys(arr.null_count(), arr.len(), arr.iter().flatten())
+        }
+        _ => validate_unique_keys_generic(array),
+    }
 }
 
 fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
@@ -256,10 +380,6 @@ impl MapFunc {
 }
 
 impl ScalarUDFImpl for MapFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "map"
     }
@@ -288,11 +408,8 @@ impl ScalarUDFImpl for MapFunc {
         ))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        make_map_batch(&args.args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_map_batch(args.args, args.number_rows)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -381,7 +498,7 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     let nulls_bitmap = keys.nulls().cloned();
 
     let keys = list_to_arrays::<O>(keys);
-    let values = list_to_arrays::<O>(values);
+    let values = list_to_arrays_skipping_null_rows::<O>(values, nulls_bitmap.as_ref());
 
     build_map_array(
         &keys,
@@ -408,7 +525,8 @@ fn make_map_array_from_fixed_size_list(
     let nulls_bitmap = keys.nulls().cloned();
 
     let keys = fixed_size_list_to_arrays(keys);
-    let values = fixed_size_list_to_arrays(values);
+    let values =
+        fixed_size_list_to_arrays_skipping_null_rows(values, nulls_bitmap.as_ref());
 
     build_map_array(
         &keys,
@@ -418,6 +536,41 @@ fn make_map_array_from_fixed_size_list(
         original_len,
         nulls_bitmap,
     )
+}
+fn list_to_arrays_skipping_null_rows<O: OffsetSizeTrait>(
+    array: &ArrayRef,
+    null_rows: Option<&arrow::buffer::NullBuffer>,
+) -> Vec<ArrayRef> {
+    array
+        .as_list::<O>()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, row)| {
+            if null_rows.is_some_and(|nulls| nulls.is_null(i)) {
+                None
+            } else {
+                row
+            }
+        })
+        .collect()
+}
+
+fn fixed_size_list_to_arrays_skipping_null_rows(
+    array: &ArrayRef,
+    null_rows: Option<&arrow::buffer::NullBuffer>,
+) -> Vec<ArrayRef> {
+    array
+        .as_fixed_size_list()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, row)| {
+            if null_rows.is_some_and(|nulls| nulls.is_null(i)) {
+                None
+            } else {
+                row
+            }
+        })
+        .collect()
 }
 
 /// Common logic to build a MapArray from decomposed list arrays
@@ -429,6 +582,10 @@ fn build_map_array(
     original_len: usize,
     nulls_bitmap: Option<arrow::buffer::NullBuffer>,
 ) -> Result<ColumnarValue> {
+    if keys.len() != values.len() {
+        return exec_err!("map requires key and value lists to have the same length");
+    }
+
     let mut key_array_vec = vec![];
     let mut value_array_vec = vec![];
     for (k, v) in keys.iter().zip(values.iter()) {
@@ -569,10 +726,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should succeed
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            vec![
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            3,
+        );
 
         assert!(result.is_ok(), "Should handle NULL maps correctly");
 
@@ -617,10 +777,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should fail
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            vec![
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            1,
+        );
 
         assert!(result.is_err(), "Should reject null keys within maps");
 
@@ -665,10 +828,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should succeed
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            vec![
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            2,
+        );
 
         assert!(
             result.is_ok(),
@@ -694,7 +860,7 @@ mod tests {
 
         use arrow::array::FixedSizeListBuilder;
 
-        // Build keys array as FixedSizeList(2): [['a', 'b'], ['c', 'd']]
+        // Build keys array as FixedSizeList(2): [['a', 'b'], NULL, ['c', 'd']]
         let key_values_builder = arrow::array::StringBuilder::new();
         let mut key_builder = FixedSizeListBuilder::new(key_values_builder, 2);
 
@@ -703,6 +869,11 @@ mod tests {
         key_builder.values().append_value("b");
         key_builder.append(true);
 
+        // Second map: NULL (entire map is NULL)
+        key_builder.values().append_null();
+        key_builder.values().append_null();
+        key_builder.append(false);
+
         // Second map: ['c', 'd']
         key_builder.values().append_value("c");
         key_builder.values().append_value("d");
@@ -710,12 +881,17 @@ mod tests {
 
         let keys_array = Arc::new(key_builder.finish());
 
-        // Build values array as FixedSizeList(2): [[1, 2], [3, 4]]
+        // Build values array as FixedSizeList(2): [[1, 2], [99, 100], [3, 4]]
+        // The middle row should be ignored because the corresponding key row is NULL.
         let value_values_builder = arrow::array::Int32Builder::new();
         let mut value_builder = FixedSizeListBuilder::new(value_values_builder, 2);
 
         value_builder.values().append_value(1);
         value_builder.values().append_value(2);
+        value_builder.append(true);
+
+        value_builder.values().append_value(99);
+        value_builder.values().append_value(100);
         value_builder.append(true);
 
         value_builder.values().append_value(3);
@@ -725,10 +901,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should succeed
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            vec![
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            3,
+        );
 
         assert!(
             result.is_ok(),
@@ -742,8 +921,9 @@ mod tests {
             _ => panic!("Expected Array result"),
         };
 
-        assert_eq!(map_array.len(), 2, "Should have 2 maps");
+        assert_eq!(map_array.len(), 3, "Should have 3 maps");
         assert!(!map_array.is_null(0), "First map should not be NULL");
-        assert!(!map_array.is_null(1), "Second map should not be NULL");
+        assert!(map_array.is_null(1), "Second map should be NULL");
+        assert!(!map_array.is_null(2), "Third map should not be NULL");
     }
 }

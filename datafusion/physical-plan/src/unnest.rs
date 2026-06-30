@@ -18,14 +18,15 @@
 //! Define a plan for unnesting values in columns that contain a list type.
 
 use std::cmp::{self, Ordering};
+use std::sync::Arc;
 use std::task::{Poll, ready};
-use std::{any::Any, sync::Arc};
 
 use super::metrics::{
-    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
-    RecordOutput,
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
+    MetricsSet, RecordOutput,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
     SendableRecordBatchStream, check_if_same_properties,
@@ -33,7 +34,8 @@ use crate::{
 
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeListArray, Int64Array,
-    LargeListArray, ListArray, PrimitiveArray, Scalar, StructArray, new_null_array,
+    LargeListArray, LargeListViewArray, ListArray, ListViewArray, PrimitiveArray, Scalar,
+    StructArray, new_null_array,
 };
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
@@ -42,7 +44,6 @@ use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
 use async_trait::async_trait;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
     internal_err,
@@ -229,23 +230,12 @@ impl ExecutionPlan for UnnestExec {
         "UnnestExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -301,10 +291,13 @@ struct UnnestMetrics {
 
 impl UnnestMetrics {
     fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
-        let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
+        let input_batches = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("input_batches", partition);
 
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+        let input_rows = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("input_rows", partition);
 
         Self {
             baseline_metrics: BaselineMetrics::new(metrics, partition),
@@ -382,6 +375,7 @@ impl UnnestStream {
                     debug_assert!(result_batch.num_rows() > 0);
                     Some(Ok(result_batch))
                 }
+                // If the stream is depleted or returned an error, log the finish message:
                 other => {
                     trace!(
                         "Processed {} probe-side input batches containing {} rows and \
@@ -392,6 +386,14 @@ impl UnnestStream {
                         self.metrics.baseline_metrics.output_rows(),
                         self.metrics.baseline_metrics.elapsed_compute(),
                     );
+
+                    // In the non-error case, i.e., input is simply depleted:
+                    if other.is_none() {
+                        // Release the input pipeline's resources.
+                        let input_schema = self.input.schema();
+                        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+                    }
+
                     other
                 }
             });
@@ -845,6 +847,30 @@ impl ListArrayType for FixedSizeListArray {
     }
 }
 
+impl ListArrayType for ListViewArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn value_offsets(&self, row: usize) -> (i64, i64) {
+        let offset = self.value_offsets()[row] as i64;
+        let size = self.value_sizes()[row] as i64;
+        (offset, offset + size)
+    }
+}
+
+impl ListArrayType for LargeListViewArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn value_offsets(&self, row: usize) -> (i64, i64) {
+        let offset = self.value_offsets()[row];
+        let size = self.value_sizes()[row];
+        (offset, offset + size)
+    }
+}
+
 /// Unnest multiple list arrays according to the length array.
 fn unnest_list_arrays(
     list_arrays: &[ArrayRef],
@@ -860,6 +886,12 @@ fn unnest_list_arrays(
             }
             DataType::FixedSizeList(_, _) => {
                 Ok(list_array.as_fixed_size_list() as &dyn ListArrayType)
+            }
+            DataType::ListView(_) => {
+                Ok(list_array.as_list_view::<i32>() as &dyn ListArrayType)
+            }
+            DataType::LargeListView(_) => {
+                Ok(list_array.as_list_view::<i64>() as &dyn ListArrayType)
             }
             other => exec_err!("Invalid unnest datatype {other }"),
         })

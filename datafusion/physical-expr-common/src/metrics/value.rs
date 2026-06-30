@@ -468,6 +468,8 @@ pub struct RatioMetrics {
     part: Arc<AtomicUsize>,
     total: Arc<AtomicUsize>,
     merge_strategy: RatioMergeStrategy,
+    /// Ratios are displayed as `1% (1/100)`; this controls the latter part.
+    display_raw_values: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -485,11 +487,17 @@ impl RatioMetrics {
             part: Arc::new(AtomicUsize::new(0)),
             total: Arc::new(AtomicUsize::new(0)),
             merge_strategy: RatioMergeStrategy::AddPartAddTotal,
+            display_raw_values: true,
         }
     }
 
     pub fn with_merge_strategy(mut self, merge_strategy: RatioMergeStrategy) -> Self {
         self.merge_strategy = merge_strategy;
+        self
+    }
+
+    pub fn with_display_raw_values(mut self, display_raw_values: bool) -> Self {
+        self.display_raw_values = display_raw_values;
         self
     }
 
@@ -540,48 +548,68 @@ impl RatioMetrics {
     pub fn total(&self) -> usize {
         self.total.load(Ordering::Relaxed)
     }
+
+    /// Return the strategy used to merge two [`RatioMetrics`] values
+    pub fn merge_strategy(&self) -> &RatioMergeStrategy {
+        &self.merge_strategy
+    }
+
+    /// Whether `Display` for this metric appends the raw `(part/total)` numbers
+    /// alongside the percentage
+    pub fn display_raw_values(&self) -> bool {
+        self.display_raw_values
+    }
 }
 
 impl PartialEq for RatioMetrics {
     fn eq(&self, other: &Self) -> bool {
-        self.part() == other.part() && self.total() == other.total()
+        self.part() == other.part()
+            && self.total() == other.total()
+            && self.display_raw_values == other.display_raw_values
     }
-}
-
-/// Format a float number with `digits` most significant numbers.
-///
-/// fmt_significant(12.5) -> "12"
-/// fmt_significant(0.0543) -> "0.054"
-/// fmt_significant(0.000123) -> "0.00012"
-fn fmt_significant(mut x: f64, digits: usize) -> String {
-    if x == 0.0 {
-        return "0".to_string();
-    }
-
-    let exp = x.abs().log10().floor(); // exponent of first significant digit
-    let scale = 10f64.powf(-(exp - (digits as f64 - 1.0)));
-    x = (x * scale).round() / scale; // round to N significant digits
-    format!("{x}")
 }
 
 impl Display for RatioMetrics {
+    /// Format the ratio to a format like '18.26% (220/1150)'
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let part = self.part();
         let total = self.total();
 
+        // Format the ratio first (for example, `6667/10000` -> `66.67%`),
+        // then optionally append the raw values as ` (6.67 K/10.00 K)`.
+        if total == 0 {
+            write!(f, "N/A")?;
+        } else {
+            // Use basis points so we can round with integer math:
+            // e.g. 18.26% has basis point 1826
+            let basis_points = (((part as u128 * 10_000) + (total as u128 / 2))
+                / total as u128) as usize;
+            let whole = basis_points / 100;
+            let fractional = basis_points % 100;
+
+            if fractional == 0 {
+                write!(f, "{whole}%")?;
+            } else if fractional.is_multiple_of(10) {
+                write!(f, "{whole}.{}%", fractional / 10)?;
+            } else {
+                write!(f, "{whole}.{fractional:02}%")?;
+            }
+        }
+
+        if !self.display_raw_values {
+            return Ok(());
+        }
+
         if total == 0 {
             if part == 0 {
-                write!(f, "N/A (0/0)")
+                write!(f, " (0/0)")
             } else {
-                write!(f, "N/A ({}/0)", human_readable_count(part))
+                write!(f, " ({}/0)", human_readable_count(part))
             }
         } else {
-            let percentage = (part as f64 / total as f64) * 100.0;
-
             write!(
                 f,
-                "{}% ({}/{})",
-                fmt_significant(percentage, 2),
+                " ({}/{})",
                 human_readable_count(part),
                 human_readable_count(total)
             )
@@ -639,6 +667,13 @@ pub enum MetricValue {
     },
     /// Operator defined gauge.
     Gauge {
+        /// The provided name of this metric
+        name: Cow<'static, str>,
+        /// The value of the metric
+        gauge: Gauge,
+    },
+    /// Operator defined peak memory usage in bytes.
+    PeakMemoryUsage {
         /// The provided name of this metric
         name: Cow<'static, str>,
         /// The value of the metric
@@ -716,6 +751,13 @@ impl PartialEq for MetricValue {
                     name: other_name,
                     gauge: other_gauge,
                 },
+            )
+            | (
+                MetricValue::PeakMemoryUsage { name, gauge },
+                MetricValue::PeakMemoryUsage {
+                    name: other_name,
+                    gauge: other_gauge,
+                },
             ) => name == other_name && gauge == other_gauge,
             (
                 MetricValue::Time { name, time },
@@ -782,7 +824,9 @@ impl MetricValue {
             Self::CurrentMemoryUsage(_) => "mem_used",
             Self::ElapsedCompute(_) => "elapsed_compute",
             Self::Count { name, .. } => name.borrow(),
-            Self::Gauge { name, .. } => name.borrow(),
+            Self::Gauge { name, .. } | Self::PeakMemoryUsage { name, .. } => {
+                name.borrow()
+            }
             Self::Time { name, .. } => name.borrow(),
             Self::StartTimestamp(_) => "start_timestamp",
             Self::EndTimestamp(_) => "end_timestamp",
@@ -805,7 +849,9 @@ impl MetricValue {
             Self::CurrentMemoryUsage(used) => used.value(),
             Self::ElapsedCompute(time) => time.value(),
             Self::Count { count, .. } => count.value(),
-            Self::Gauge { gauge, .. } => gauge.value(),
+            Self::Gauge { gauge, .. } | Self::PeakMemoryUsage { gauge, .. } => {
+                gauge.value()
+            }
             Self::Time { time, .. } => time.value(),
             Self::StartTimestamp(timestamp) => timestamp
                 .value()
@@ -847,6 +893,10 @@ impl MetricValue {
                 name: name.clone(),
                 gauge: Gauge::new(),
             },
+            Self::PeakMemoryUsage { name, .. } => Self::PeakMemoryUsage {
+                name: name.clone(),
+                gauge: Gauge::new(),
+            },
             Self::Time { name, .. } => Self::Time {
                 name: name.clone(),
                 time: Time::new(),
@@ -865,7 +915,8 @@ impl MetricValue {
                 Self::Ratio {
                     name: name.clone(),
                     ratio_metrics: RatioMetrics::new()
-                        .with_merge_strategy(merge_strategy),
+                        .with_merge_strategy(merge_strategy)
+                        .with_display_raw_values(ratio_metrics.display_raw_values),
                 }
             }
             Self::Custom { name, value } => Self::Custom {
@@ -902,6 +953,12 @@ impl MetricValue {
             | (
                 Self::Gauge { gauge, .. },
                 Self::Gauge {
+                    gauge: other_gauge, ..
+                },
+            )
+            | (
+                Self::PeakMemoryUsage { gauge, .. },
+                Self::PeakMemoryUsage {
                     gauge: other_gauge, ..
                 },
             ) => gauge.add(other_gauge.value()),
@@ -992,7 +1049,15 @@ impl MetricValue {
             Self::SpilledBytes(_) => 11,
             Self::SpilledRows(_) => 12,
             Self::CurrentMemoryUsage(_) => 13,
-            Self::Count { .. } => 14,
+            Self::Count { name, .. } => match name.as_ref() {
+                // This Parquet page-index metric is a plain Count because it
+                // records pages that skipped page-index evaluation, not a
+                // pruned/matched pair. Keep it grouped with the other
+                // page-index pruning metrics in EXPLAIN output.
+                "page_index_pages_skipped_by_fully_matched" => 8,
+                _ => 14,
+            },
+            Self::PeakMemoryUsage { .. } => 13,
             Self::Gauge { .. } => 15,
             Self::Time { .. } => 16,
             Self::Ratio { .. } => 17,
@@ -1025,6 +1090,10 @@ impl Display for MetricValue {
             }
             Self::CurrentMemoryUsage(gauge) => {
                 // CurrentMemoryUsage is in bytes, format like SpilledBytes
+                let readable_size = human_readable_size(gauge.value());
+                write!(f, "{readable_size}")
+            }
+            Self::PeakMemoryUsage { gauge, .. } => {
                 let readable_size = human_readable_size(gauge.value());
                 write!(f, "{readable_size}")
             }
@@ -1232,7 +1301,21 @@ mod tests {
         };
         tiny_ratio_metrics.add_part(1);
         tiny_ratio_metrics.add_total(3000);
-        assert_eq!("0.033% (1/3.00 K)", tiny_ratio.to_string());
+        assert_eq!("0.03% (1/3.00 K)", tiny_ratio.to_string());
+
+        ratio_metrics.set_part(6667);
+        ratio_metrics.set_total(10_000);
+        assert_eq!("66.67% (6.67 K/10.00 K)", ratio.to_string());
+
+        let percentage_only = RatioMetrics::new().with_display_raw_values(false);
+        let ratio = MetricValue::Ratio {
+            name: Cow::Borrowed("percentage_only"),
+            ratio_metrics: percentage_only.clone(),
+        };
+        assert_eq!("N/A", ratio.to_string());
+        percentage_only.set_part(6667);
+        percentage_only.set_total(10_000);
+        assert_eq!("66.67%", ratio.to_string());
     }
 
     #[test]
@@ -1472,6 +1555,18 @@ mod tests {
         mem_gauge.add(100 * MB as usize);
         assert_eq!(
             MetricValue::CurrentMemoryUsage(mem_gauge.clone()).to_string(),
+            "100.0 MB"
+        );
+
+        // Test PeakMemoryUsage formatting (should use size, not count)
+        let peak_mem_gauge = Gauge::new();
+        peak_mem_gauge.add(100 * MB as usize);
+        assert_eq!(
+            MetricValue::PeakMemoryUsage {
+                name: "peak_mem_used".into(),
+                gauge: peak_mem_gauge.clone()
+            }
+            .to_string(),
             "100.0 MB"
         );
 

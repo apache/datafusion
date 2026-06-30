@@ -23,16 +23,23 @@ use arrow::array::Int32Array;
 use arrow::array::{Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::MemTable;
 use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::Result;
 use datafusion_common::assert_batches_eq;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::stats::Precision;
+use datafusion_common::{ColumnStatistics, Result, Statistics};
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::TaskContext;
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::Operator;
+use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::expressions::{self, cast};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
@@ -76,7 +83,7 @@ async fn assert_count_optim_success(
     let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &config)?;
 
     // A ProjectionExec is a sign that the count optimization was applied
-    assert!(optimized.as_any().is::<ProjectionExec>());
+    assert!(optimized.is::<ProjectionExec>());
 
     // run both the optimized and nonoptimized plan
     let optimized_result =
@@ -273,7 +280,7 @@ async fn test_count_inexact_stat() -> Result<()> {
     let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 
     // check that the original ExecutionPlan was not replaced
-    assert!(optimized.as_any().is::<AggregateExec>());
+    assert!(optimized.is::<AggregateExec>());
 
     Ok(())
 }
@@ -317,7 +324,7 @@ async fn test_count_with_nulls_inexact_stat() -> Result<()> {
     let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 
     // check that the original ExecutionPlan was not replaced
-    assert!(optimized.as_any().is::<AggregateExec>());
+    assert!(optimized.is::<AggregateExec>());
 
     Ok(())
 }
@@ -399,6 +406,234 @@ async fn utf8_grouping_min_max_limit_fallbacks() -> Result<()> {
         ],
         &unsupported_batches
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_count_distinct_optimization() -> Result<()> {
+    struct TestCase {
+        name: &'static str,
+        distinct_count: Precision<usize>,
+        use_column_expr: bool,
+        expect_optimized: bool,
+        expected_value: Option<i64>,
+    }
+
+    let cases = vec![
+        TestCase {
+            name: "exact statistics",
+            distinct_count: Precision::Exact(42),
+            use_column_expr: true,
+            expect_optimized: true,
+            expected_value: Some(42),
+        },
+        TestCase {
+            name: "absent statistics",
+            distinct_count: Precision::Absent,
+            use_column_expr: true,
+            expect_optimized: false,
+            expected_value: None,
+        },
+        TestCase {
+            name: "inexact statistics",
+            distinct_count: Precision::Inexact(42),
+            use_column_expr: true,
+            expect_optimized: false,
+            expected_value: None,
+        },
+        TestCase {
+            name: "non-column expression with exact statistics",
+            distinct_count: Precision::Exact(42),
+            use_column_expr: false,
+            expect_optimized: false,
+            expected_value: None,
+        },
+    ];
+
+    for case in cases {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let statistics = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    distinct_count: case.distinct_count,
+                    null_count: Precision::Exact(10),
+                    ..Default::default()
+                },
+                ColumnStatistics::default(),
+            ],
+        };
+
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(ParquetSource::new(Arc::clone(&schema))),
+        )
+        .with_file(PartitionedFile::new("x".to_string(), 100))
+        .with_statistics(statistics)
+        .build();
+
+        let source: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        let schema = source.schema();
+
+        let (agg_args, alias): (Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>>, _) =
+            if case.use_column_expr {
+                (vec![expressions::col("a", &schema)?], "COUNT(DISTINCT a)")
+            } else {
+                (
+                    vec![expressions::binary(
+                        expressions::col("a", &schema)?,
+                        Operator::Plus,
+                        expressions::col("b", &schema)?,
+                        &schema,
+                    )?],
+                    "COUNT(DISTINCT a + b)",
+                )
+            };
+
+        let count_distinct_expr = AggregateExprBuilder::new(count_udaf(), agg_args)
+            .schema(Arc::clone(&schema))
+            .alias(alias)
+            .distinct()
+            .build()?;
+
+        let partial_agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            vec![Arc::new(count_distinct_expr.clone())],
+            vec![None],
+            source,
+            Arc::clone(&schema),
+        )?;
+
+        let final_agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![Arc::new(count_distinct_expr)],
+            vec![None],
+            Arc::new(partial_agg),
+            Arc::clone(&schema),
+        )?;
+
+        let conf = ConfigOptions::new();
+        let optimized =
+            AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+
+        if case.expect_optimized {
+            assert!(
+                optimized.is::<ProjectionExec>(),
+                "'{}': expected ProjectionExec",
+                case.name
+            );
+
+            if let Some(expected_val) = case.expected_value {
+                let task_ctx = Arc::new(TaskContext::default());
+                let result = common::collect(optimized.execute(0, task_ctx)?).await?;
+                assert_eq!(result.len(), 1, "'{}': expected 1 batch", case.name);
+                assert_eq!(
+                    as_int64_array(result[0].column(0)).unwrap().values(),
+                    &[expected_val],
+                    "'{}': unexpected value",
+                    case.name
+                );
+            }
+        } else {
+            assert!(
+                optimized.is::<AggregateExec>(),
+                "'{}': expected AggregateExec (not optimized)",
+                case.name
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Regression test for https://github.com/apache/datafusion/issues/22554
+///
+/// TopK aggregation for DISTINCT queries was unconditionally dropping NULL
+/// group keys, producing wrong results with NULLS FIRST / NULLS LAST ordering.
+#[tokio::test]
+async fn topk_distinct_preserves_nulls() -> Result<()> {
+    let ctx = SessionContext::new_with_config(SessionConfig::new());
+
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, true)])),
+        vec![Arc::new(StringArray::from(vec![None, Some(""), Some("a")]))],
+    )?;
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(table))?;
+
+    // ASC NULLS FIRST LIMIT 1 → NULL should come first
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t ORDER BY v ASC NULLS FIRST LIMIT 1")
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(&["+---+", "| v |", "+---+", "|   |", "+---+"], &result);
+    assert!(result[0].column(0).is_null(0), "first row should be NULL");
+
+    // ASC NULLS FIRST LIMIT 2 → NULL, then empty string
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t ORDER BY v ASC NULLS FIRST LIMIT 2")
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(result[0].num_rows(), 2);
+    assert!(result[0].column(0).is_null(0));
+    assert!(!result[0].column(0).is_null(1));
+
+    // ASC NULLS LAST LIMIT 1 → empty string (smallest non-null)
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t ORDER BY v ASC NULLS LAST LIMIT 1")
+        .await?
+        .collect()
+        .await?;
+    assert!(
+        !result[0].column(0).is_null(0),
+        "first row should NOT be NULL"
+    );
+
+    // Full result with NULLS LAST should include NULL at end
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t ORDER BY v ASC NULLS LAST LIMIT 3")
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(result[0].num_rows(), 3);
+    assert!(result[0].column(0).is_null(2), "last row should be NULL");
+
+    // Integer column
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)])),
+        vec![Arc::new(Int64Array::from(vec![None, Some(3), Some(1)]))],
+    )?;
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    ctx.register_table("t_int", Arc::new(table))?;
+
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t_int ORDER BY v ASC NULLS FIRST LIMIT 1")
+        .await?
+        .collect()
+        .await?;
+    assert!(
+        result[0].column(0).is_null(0),
+        "integer NULL should be first"
+    );
+
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t_int ORDER BY v DESC NULLS LAST LIMIT 2")
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(result[0].num_rows(), 2);
+    assert!(!result[0].column(0).is_null(0));
+    assert!(!result[0].column(0).is_null(1));
 
     Ok(())
 }

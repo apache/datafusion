@@ -45,6 +45,7 @@ mod tests {
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::write::BatchSerializer;
     use datafusion_expr::{col, lit};
+    use datafusion_physical_plan::statistics::StatisticsArgs;
     use datafusion_physical_plan::{ExecutionPlan, collect};
 
     use arrow::array::{
@@ -114,6 +115,8 @@ mod tests {
             let len = bytes.len() as u64;
             let range = 0..len * self.max_iterations;
             let arc = self.iterations_detected.clone();
+            #[expect(clippy::result_large_err)]
+            // closure only ever returns Ok; Err type is never constructed
             let stream = futures::stream::repeat_with(move || {
                 let arc_inner = arc.clone();
                 *arc_inner.lock().unwrap() += 1;
@@ -213,9 +216,13 @@ mod tests {
         assert_eq!(tt_batches, 50 /* 100/2 */);
 
         // test metadata
-        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
         assert_eq!(
-            exec.partition_statistics(None)?.total_byte_size,
+            exec.statistics_with_args(&StatisticsArgs::new())?.num_rows,
+            Precision::Absent
+        );
+        assert_eq!(
+            exec.statistics_with_args(&StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent
         );
 

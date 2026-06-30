@@ -25,8 +25,6 @@ use std::path::PathBuf;
 
 use futures::StreamExt;
 
-// TODO: Add existence joins
-
 /// Run the Hash Join benchmark
 ///
 /// This micro-benchmark focuses on the performance characteristics of Hash Joins.
@@ -303,6 +301,131 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         build_size: "100K_(20%_dups)",
         probe_size: "60M",
     },
+    // RightSemi Join benchmarks with Int32 keys
+    //
+    // Fanout (average build rows matched per probe row, as measured by running
+    // the equivalent INNER JOIN under `EXPLAIN ANALYZE` and reading the
+    // `HashJoinExec` metrics): 1 for Q16-Q18. Build keys here are primary
+    // keys (`n_nationkey`, `s_suppkey`), so each probe row matches at most
+    // one build row. `prob_hit` controls what fraction of probe rows find
+    // that one match.
+    //
+    // Fanout still matters because semi joins short-circuit after the first
+    // match. Coverage of fanout > 1 (build-side duplicates) is left for a
+    // follow-up.
+    //
+    // Q16: RightSemi, Small build (25 rows), 100% Hit rate
+    // Build Side: nation (25 rows) | Probe Side: customer (1.5M rows)
+    HashJoinQuery {
+        sql: r###"SELECT c.k
+        FROM (SELECT CAST(n_nationkey AS INT) as k FROM nation) n
+        RIGHT SEMI JOIN (SELECT CAST(c_nationkey AS INT) as k FROM customer) c
+        ON n.k = c.k"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "25",
+        probe_size: "1.5M_RightSemi",
+    },
+    // Q17: RightSemi, Medium build (100K rows), 100% Hit rate
+    // Build Side: supplier (100K rows) | Probe Side: lineitem (60M rows)
+    HashJoinQuery {
+        sql: r###"SELECT l.k
+        FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s
+        RIGHT SEMI JOIN (SELECT CAST(l_suppkey AS INT) as k FROM lineitem) l
+        ON s.k = l.k"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "100K",
+        probe_size: "60M_RightSemi",
+    },
+    // Q18: RightSemi, Medium build (100K rows), 10% Hit rate
+    // Build Side: supplier (100K rows) | Probe Side: lineitem (60M rows)
+    HashJoinQuery {
+        sql: r###"SELECT l.k
+        FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s
+        RIGHT SEMI JOIN (
+          SELECT CAST(CASE WHEN l_suppkey % 10 = 0 THEN l_suppkey ELSE l_suppkey + 1000000 END AS INT) as k
+          FROM lineitem
+        ) l
+        ON s.k = l.k"###,
+        density: 1.0,
+        prob_hit: 0.1,
+        build_size: "100K",
+        probe_size: "60M_RightSemi",
+    },
+    // RightAnti Join benchmarks with Int32 keys
+    //
+    // Fanout (average build rows matched per probe row, as measured by running
+    // the equivalent INNER JOIN under `EXPLAIN ANALYZE` and reading the
+    // `HashJoinExec` metrics): 1 for Q19-Q21. Build keys here are primary
+    // keys (`n_nationkey`, `s_suppkey`), so each probe row matches at most
+    // one build row. `prob_hit` controls what fraction of probe rows find
+    // that one match (and are therefore filtered *out* by anti).
+    //
+    // Fanout still matters because anti joins short-circuit after the first
+    // match. Coverage of fanout > 1 (build-side duplicates) is left for a
+    // follow-up.
+    //
+    // Q19: RightAnti, Small build (25 rows), 100% Hit rate (no output)
+    // Build Side: nation (25 rows) | Probe Side: customer (1.5M rows)
+    HashJoinQuery {
+        sql: r###"SELECT c.k
+        FROM (SELECT CAST(n_nationkey AS INT) as k FROM nation) n
+        RIGHT ANTI JOIN (SELECT CAST(c_nationkey AS INT) as k FROM customer) c
+        ON n.k = c.k"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "25",
+        probe_size: "1.5M_RightAnti",
+    },
+    // Q20: RightAnti, Medium build (100K rows), 100% Hit rate (no output)
+    // Build Side: supplier (100K rows) | Probe Side: lineitem (60M rows)
+    HashJoinQuery {
+        sql: r###"SELECT l.k
+        FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s
+        RIGHT ANTI JOIN (SELECT CAST(l_suppkey AS INT) as k FROM lineitem) l
+        ON s.k = l.k"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "100K",
+        probe_size: "60M_RightAnti",
+    },
+    // Q21: RightAnti, Medium build (100K rows), 10% Hit rate (90% output)
+    // Build Side: supplier (100K rows) | Probe Side: lineitem (60M rows)
+    HashJoinQuery {
+        sql: r###"SELECT l.k
+        FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s
+        RIGHT ANTI JOIN (
+          SELECT CAST(CASE WHEN l_suppkey % 10 = 0 THEN l_suppkey ELSE l_suppkey + 1000000 END AS INT) as k
+          FROM lineitem
+        ) l
+        ON s.k = l.k"###,
+        density: 1.0,
+        prob_hit: 0.1,
+        build_size: "100K",
+        probe_size: "60M_RightAnti",
+    },
+    // Q22: RightSemi, Medium build (100K rows), ~1% Hit rate, fanout ~100
+    //
+    // Build Side: supplier (100K rows) collapsed onto 1K distinct keys
+    // Probe Side: lineitem (60M rows). Each matching probe row produces many
+    // duplicate probe indices before RightSemi deduplication.
+    HashJoinQuery {
+        sql: r###"SELECT l.k
+        FROM (
+          SELECT CAST(((s_suppkey - 1) % 1000) + 1 AS INT) as k
+          FROM supplier
+        ) s
+        RIGHT SEMI JOIN (
+          SELECT CAST(l_suppkey AS INT) as k
+          FROM lineitem
+        ) l
+        ON s.k = l.k"###,
+        density: 1.0,
+        prob_hit: 0.01,
+        build_size: "100K_(fanout_100)",
+        probe_size: "60M_RightSemi",
+    },
 ];
 
 impl RunOpt {
@@ -323,9 +446,11 @@ impl RunOpt {
             None => 1..=HASH_QUERIES.len(),
         };
 
-        let config = self.common.config()?;
-        let rt_builder = self.common.runtime_env_builder()?;
-        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
+        let mut config = self.common.config()?;
+        // Disable join reordering to ensure the optimizer doesn't swap join sides
+        config.options_mut().optimizer.join_reordering = false;
+        let rt = self.common.build_runtime()?;
+        let ctx = SessionContext::new_with_config_rt(config, rt);
 
         if let Some(path) = &self.path {
             for table in &["lineitem", "supplier", "nation", "customer"] {

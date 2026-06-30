@@ -18,7 +18,7 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use arrow::array::{ArrayRef, BooleanArray};
-use datafusion_common::{Result, not_impl_err};
+use datafusion_common::{Result, not_impl_err, utils::split_vec_min_alloc};
 
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,13 +45,7 @@ impl EmitTo {
                 // Take the entire vector, leave new (empty) vector
                 std::mem::take(v)
             }
-            Self::First(n) => {
-                // get end n+1,.. values into t
-                let mut t = v.split_off(*n);
-                // leave n+1,.. in v
-                std::mem::swap(v, &mut t);
-                t
-            }
+            Self::First(n) => split_vec_min_alloc(v, *n),
         }
     }
 }
@@ -108,7 +102,7 @@ impl EmitTo {
 ///
 /// [`Accumulator`]: crate::accumulator::Accumulator
 /// [Aggregating Millions of Groups Fast blog]: https://arrow.apache.org/blog/2023/08/05/datafusion_fast_grouping/
-pub trait GroupsAccumulator: Send {
+pub trait GroupsAccumulator: Send + std::any::Any {
     /// Updates the accumulator's state from its arguments, encoded as
     /// a vector of [`ArrayRef`]s.
     ///
@@ -189,12 +183,14 @@ pub trait GroupsAccumulator: Send {
     ///
     /// * `values`: arrays produced from previously calling `state` on other accumulators.
     ///
-    /// Other arguments are the same as for [`Self::update_batch`].
+    /// Other arguments are the same as for [`Self::update_batch`], except that
+    /// there is no `opt_filter` — aggregate filters are applied during the
+    /// partial (update) phase, so by the time intermediate states are merged
+    /// no per-row filtering is needed.
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()>;
 
@@ -253,4 +249,54 @@ pub trait GroupsAccumulator: Send {
     /// This function is called once per batch, so it should be `O(n)` to
     /// compute, not `O(num_groups)`
     fn size(&self) -> usize;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EmitTo;
+
+    /// When `n` is small relative to `len`, the old `split_off(n) + swap` pattern had
+    /// two allocation problems:
+    ///
+    /// 1. The returned Vec kept the original large backing allocation even though it
+    ///    only contains `n` elements (wasted capacity on a short-lived value).
+    /// 2. `split_off` allocated a fresh Vec for the `len - n` remaining elements,
+    ///    even though that side is much larger than `n` — the expensive side to
+    ///    allocate.
+    ///
+    /// `split_vec_min_alloc` fixes both: when `n * 2 <= len` it uses
+    /// `drain(0..n).collect()`, allocating only `n` elements for the emitted prefix
+    /// and keeping the original large backing in the remaining accumulator.
+    #[test]
+    fn take_needed_first_small_n_allocates_minimally() {
+        let mut v: Vec<i32> = Vec::with_capacity(128);
+        v.extend(0..20i32);
+        let original_capacity = v.capacity(); // 128
+
+        // n=4, n*2=8 <= len=20 -> drain branch in split_vec_min_alloc
+        let emitted = EmitTo::First(4).take_needed(&mut v);
+
+        assert_eq!(emitted, vec![0, 1, 2, 3]);
+        assert_eq!(v, (4..20i32).collect::<Vec<_>>());
+
+        // The emitted prefix must NOT carry the original large allocation.
+        // Old split_off+swap returned a Vec with capacity=128 for only 4 elements.
+        assert!(
+            emitted.capacity() <= 4,
+            "emitted prefix capacity {} should be ~n=4, not the original {}",
+            emitted.capacity(),
+            original_capacity,
+        );
+
+        // The remaining accumulator must retain the original large allocation so
+        // that incoming groups don't immediately force a realloc.
+        // Old split_off+swap left the remaining vec with a small fresh allocation.
+        assert_eq!(
+            v.capacity(),
+            original_capacity,
+            "remaining vec capacity {} should equal original {}",
+            v.capacity(),
+            original_capacity,
+        );
+    }
 }

@@ -34,7 +34,6 @@ use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
-use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -45,6 +44,7 @@ define_udwf_and_expr!(
     First,
     first_value,
     [arg],
+    first_value_udwf,
     "Returns the first value in the window frame",
     NthValue::first
 );
@@ -52,12 +52,14 @@ define_udwf_and_expr!(
     Last,
     last_value,
     [arg],
+    last_value_udwf,
     "Returns the last value in the window frame",
     NthValue::last
 );
 get_or_init_udwf!(
     NthValue,
     nth_value,
+    nth_value_udwf,
     "Returns the nth value in the window frame",
     NthValue::nth
 );
@@ -121,6 +123,14 @@ impl NthValue {
     pub fn kind(&self) -> &NthValueKind {
         &self.kind
     }
+}
+
+fn validate_nth_value_n(n: i64) -> Result<i64> {
+    if n == i64::MIN {
+        return exec_err!("The second argument of nth_value must not be i64::MIN");
+    }
+
+    Ok(n)
 }
 
 static FIRST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
@@ -248,10 +258,6 @@ fn get_nth_value_doc() -> &'static Documentation {
 }
 
 impl WindowUDFImpl for NthValue {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.kind.name()
     }
@@ -289,6 +295,7 @@ impl WindowUDFImpl for NthValue {
         .map(|v| get_signed_integer(&v))
         {
             Some(Ok(n)) => {
+                let n = validate_nth_value_n(n)?;
                 if partition_evaluator_args.is_reversed() {
                     -n
                 } else {
@@ -310,14 +317,22 @@ impl WindowUDFImpl for NthValue {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
-        let return_type = field_args
-            .input_fields()
-            .first()
-            .map(|f| f.data_type())
-            .cloned()
-            .unwrap_or(DataType::Null);
+        let input_field =
+            field_args
+                .input_fields()
+                .first()
+                .cloned()
+                .unwrap_or_else(|| {
+                    Arc::new(Field::new(field_args.name(), DataType::Null, true))
+                });
 
-        Ok(Field::new(field_args.name(), return_type, true).into())
+        // Clone the input field to preserve metadata, update name and nullability
+        Ok(input_field
+            .as_ref()
+            .clone()
+            .with_name(field_args.name())
+            .with_nullable(true)
+            .into())
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {
@@ -543,8 +558,6 @@ mod tests {
     use arrow::array::*;
     use datafusion_common::cast::as_int32_array;
     use datafusion_physical_expr::expressions::{Column, Literal};
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use std::sync::Arc;
 
     fn test_i32_result(
         expr: NthValue,
@@ -565,7 +578,7 @@ mod tests {
             .iter()
             .map(|range| evaluator.evaluate(&values, range))
             .collect::<Result<Vec<ScalarValue>>>()?;
-        let result = ScalarValue::iter_to_array(result.into_iter())?;
+        let result = ScalarValue::iter_to_array(result)?;
         let result = as_int32_array(&result)?;
         assert_eq!(expected, *result);
         Ok(())
@@ -655,5 +668,25 @@ mod tests {
             ]),
         )?;
         Ok(())
+    }
+
+    #[test]
+    fn nth_value_i64_min_returns_error() {
+        let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let n_value = Arc::new(Literal::new(ScalarValue::Int64(Some(i64::MIN))))
+            as Arc<dyn PhysicalExpr>;
+
+        let err = NthValue::nth()
+            .partition_evaluator(PartitionEvaluatorArgs::new(
+                &[expr, n_value],
+                &[Field::new("f", DataType::Int32, true).into()],
+                false,
+                false,
+            ))
+            .unwrap_err();
+
+        assert!(err.to_string().starts_with(
+            "Execution error: The second argument of nth_value must not be i64::MIN"
+        ));
     }
 }

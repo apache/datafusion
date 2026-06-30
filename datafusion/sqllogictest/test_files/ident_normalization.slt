@@ -75,7 +75,7 @@ A Int64 NO
 
 # Expect error as 'a' is not a column -- "A" is and the identifiers
 # are not normalized
-query error DataFusion error: Schema error: No field named a\. Valid fields are x\."A"\.
+query error DataFusion error: Schema error: No field named a\. Did you mean 'x\."A"'\?\nColumn names are case sensitive\. You can use double quotes to refer to the x\."A" column or disable the datafusion\.sql_parser\.enable_ident_normalization configuration\.\nValid fields are x\."A"\.
 select a from x;
 
 # should work (note the uppercase 'A')
@@ -136,6 +136,10 @@ HelloWorld
 # Restore default setting
 statement ok
 set datafusion.sql_parser.enable_ident_normalization = true;
+
+# Config reset
+statement ok
+RESET datafusion.catalog.information_schema;
 
 ##########
 ## Constraint Column Name Normalization

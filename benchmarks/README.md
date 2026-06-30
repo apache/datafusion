@@ -95,7 +95,7 @@ Generate the data required for the compile profile helper (TPC-H SF=1):
 ./bench.sh data compile_profile
 ```
 
-Run the benchmark across all default Cargo profiles (`dev`, `release`, `ci`, `release-nonlto`):
+Run the benchmark across all default Cargo profiles (`dev`, `release`, `ci`, `ci-optimized`, `release-nonlto`, `profiling`):
 
 ```shell
 ./bench.sh run compile_profile
@@ -558,7 +558,15 @@ Test performance of end-to-end sort SQL queries. (While the `Sort` benchmark foc
 
 Sort integration benchmark runs whole table sort queries on TPCH `lineitem` table, with different characteristics. For example, different number of sort keys, different sort key cardinality, different number of payload columns, etc.
 
-If the TPCH tables have been converted as sorted on their first column (see [Sorted Conversion](#sorted-conversion)), you can use the `--sorted` flag to indicate that the input data is pre-sorted, allowing DataFusion to leverage that order during query execution.
+The `--sorted` flag does not sort or rewrite the input files. It declares that the `lineitem` Parquet input is already sorted ascending by its first column (`l_orderkey`). DataFusion can then leverage that ordering during query execution.
+
+To generate the expected TPC-H SF=1 Parquet input for this benchmark, run:
+
+```bash
+./bench.sh data tpch
+```
+
+For the `lineitem` table used by `sort-tpch`, this uses `tpchgen-cli` to generate Parquet data that is already ordered by `l_orderkey`. If you use a different input directory, only pass `--sorted` when the `lineitem` files already have that ordering.
 
 Additionally, an optional `--limit` flag is available for the sort benchmark. When specified, this flag appends a `LIMIT n` clause to the SQL query, effectively converting the query into a TopK query. Combining the `--sorted` and `--limit` options enables benchmarking of TopK queries on pre-sorted inputs.
 
@@ -578,7 +586,7 @@ See [`sort_tpch.rs`](src/sort_tpch.rs) for more details.
  cargo run --release --bin dfbench -- sort-tpch -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json' --query 2
 ```
 
-3. Run all queries as TopK queries on presorted data:
+3. Run all queries as TopK queries on already sorted data:
 
 ```bash
  cargo run --release --bin dfbench -- sort-tpch --sorted --limit 10 -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json'
@@ -597,6 +605,14 @@ In addition, topk_tpch is available from the bench.sh script:
 ```bash
 ./bench.sh run topk_tpch
 ```
+
+To benchmark TopK queries on TPC-H `lineitem` input ordered by `l_orderkey`, use:
+
+```bash
+./bench.sh run topk_sorted_tpch
+```
+
+This runs `dfbench sort-tpch --sorted --limit 100` through the benchmark script, using `--sorted` to declare the existing `l_orderkey` ordering.
 
 ## IMDB
 
@@ -619,6 +635,59 @@ This benchmarks is derived from the [TPC-H][1] version
 [1]: http://www.tpc.org/tpch/
 [2]: https://github.com/databricks/tpch-dbgen.git,
 [2.17.1]: https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf
+
+## Wide-schema benchmark
+
+`wide_schema` measures the per-file metadata overhead of a wide schema
+in selective parquet scans — the regime where most of the work is
+loading footers / column-chunk metadata rather than reading row data,
+and that cost scales linearly with the number of column chunks in the
+dataset rather than with the number of columns the query references.
+
+The suite has two subgroups, selected via `BENCH_SUBGROUP`:
+
+- **`wide`** — runs against a 1024-col synthetic dataset. This is the
+  actual workload.
+- **`narrow`** — runs the same SQL against an 8-col version of the same
+  dataset (same row count, file count, per-file row-group shape).
+  This subgroup exists **only as a baseline for the wide subgroup** —
+  reading its numbers in isolation tells you very little. The
+  per-query wide-vs-narrow ratio is what isolates the schema-width
+  cost.
+
+All queries reference only base columns (no suffix-renamed copies),
+so each one runs on both subgroups and produces a directly comparable
+wide-vs-narrow pair.
+
+The data preparation step (`gen_wide_data`) synthesizes a generic
+8-column base schema (`id`, `value`, `count`, `ts`, `category`,
+`flag`, `status`, `text`) with deterministic data, then replicates it
+128× via suffix renaming (`_2`, `_3`, …) for 1024 columns total —
+written across 256 files at 50 k rows per file with one row group per
+file and ZSTD(1) compression. Copies 2..128 are zero-filled arrays so
+the schema is wide (every column still has its own footer / page
+index / column-chunk metadata) but the on-disk size stays around
+225 MB. The narrow dataset is written the same way without the suffix
+copies. The only variable between wide and narrow is schema width.
+
+```shell
+./benchmarks/bench.sh data wide_schema    # synthesizes wide (1024 cols × 256 files) + narrow (8 cols × 256 files), ~60 s, ~335 MB
+./benchmarks/bench.sh run  wide_schema    # runs both 'wide' and 'narrow' subgroups; compare the per-query times for the slowdown ratio
+```
+
+The queries are deliberately small-projection (touch ≤ 4 columns) so
+the wide-schema overhead is the dominant signal. Coverage:
+
+- `Q01` — filter + project + `ORDER BY` + `LIMIT` (TopK shortcut)
+- `Q02` — project 1 column with a tight filter and `LIMIT 1`
+- `Q03` — tight filter + small projection, no sort
+- `Q04` — two low-cardinality string filters + a non-stat-prunable
+  modulo predicate for tight selectivity, project two columns, no
+  `LIMIT` or `ORDER BY`
+
+For cold-start measurements that include planner setup (the regime
+where this overhead is most visible), invoke `datafusion-cli`
+directly against `data/wide_schema/{wide,narrow}/`.
 
 ## TPCDS
 
@@ -879,13 +948,13 @@ The benchmark includes queries that:
 
 The sorted dataset is automatically generated from the ClickBench partitioned dataset. You can configure the memory used during the sorting process with the `DATAFUSION_MEMORY_GB` environment variable. The default memory limit is 12GB.
 ```bash
-./bench.sh data data_sorted_clickbench
+./bench.sh data clickbench_sorted
 ```
 
 To create the sorted dataset, for example with 16GB of memory, run:
 
 ```bash
-DATAFUSION_MEMORY_GB=16 ./bench.sh data data_sorted_clickbench
+DATAFUSION_MEMORY_GB=16 ./bench.sh data clickbench_sorted
 ```
 
 This command will:
@@ -896,7 +965,48 @@ This command will:
 #### Running the Benchmark
 
 ```bash
-./bench.sh run data_sorted_clickbench
+./bench.sh run clickbench_sorted
 ```
 
 This runs queries against the pre-sorted dataset with the `--sorted-by EventTime` flag, which informs DataFusion that the data is pre-sorted, allowing it to optimize away redundant sort operations.
+
+## Sort Pushdown
+
+Benchmarks for sort pushdown optimizations on TPC-H lineitem data (SF=1).
+
+### Variants
+
+| Benchmark | Description |
+|-----------|-------------|
+| `sort_pushdown` | Baseline — no `WITH ORDER`, tests standard sort behavior |
+| `sort_pushdown_sorted` | With `WITH ORDER` — tests sort elimination on sorted files |
+| `sort_pushdown_inexact` | Inexact path (`--sorted` DESC) — multi-file with scrambled RGs, tests reverse scan + RG reorder |
+| `sort_pushdown_inexact_unsorted` | No `WITH ORDER` — same data, tests Unsupported path + RG reorder |
+| `sort_pushdown_inexact_overlap` | Multi-file scrambled RGs — streaming data scenario |
+
+### Queries
+
+**sort_pushdown / sort_pushdown_sorted** (q1-q8):
+- q1-q4: ASC queries (sort elimination with `--sorted`)
+- q5-q8: DESC LIMIT queries (reverse scan + TopK optimization with `--sorted`)
+
+**sort_pushdown_inexact** (q1-q4): DESC LIMIT queries on scrambled data
+
+### Data Generation
+
+The inexact/overlap data requires pyarrow (`pip install pyarrow`) to generate
+multi-file parquet with scrambled row group order. DataFusion's COPY cannot produce
+narrow-range RGs in scrambled order because the parquet writer merges rows from
+adjacent chunks at RG boundaries.
+
+### Running
+
+```bash
+# Generate data and run all sort pushdown benchmarks
+./bench.sh data sort_pushdown
+./bench.sh data sort_pushdown_inexact
+./bench.sh run sort_pushdown
+./bench.sh run sort_pushdown_sorted
+./bench.sh run sort_pushdown_inexact
+./bench.sh run sort_pushdown_inexact_overlap
+```

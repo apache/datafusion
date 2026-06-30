@@ -28,16 +28,16 @@ use arrow::datatypes::DataType::{LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::utils::ListCoercion;
+use datafusion_common::utils::{ListCoercion, normalize_float_zero};
 use datafusion_common::{
     Result, assert_eq_or_internal_err, exec_err, internal_err, utils::take_function_args,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use hashbrown::HashSet;
-use std::any::Any;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -119,10 +119,6 @@ impl ArrayUnion {
 }
 
 impl ScalarUDFImpl for ArrayUnion {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_union"
     }
@@ -140,10 +136,7 @@ impl ScalarUDFImpl for ArrayUnion {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_union_inner)(&args.args)
     }
 
@@ -209,10 +202,6 @@ impl ArrayIntersect {
 }
 
 impl ScalarUDFImpl for ArrayIntersect {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_intersect"
     }
@@ -230,10 +219,7 @@ impl ScalarUDFImpl for ArrayIntersect {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_intersect_inner)(&args.args)
     }
 
@@ -285,10 +271,6 @@ impl Default for ArrayDistinct {
 }
 
 impl ScalarUDFImpl for ArrayDistinct {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_distinct"
     }
@@ -301,10 +283,7 @@ impl ScalarUDFImpl for ArrayDistinct {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_distinct_inner)(&args.args)
     }
 
@@ -370,14 +349,32 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
         "{set_op:?} is not implemented for '{l:?}' and '{r:?}'"
     );
 
-    // Convert all values to rows in batch for performance.
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
-    let rows_l = converter.convert_columns(&[Arc::clone(l.values())])?;
-    let rows_r = converter.convert_columns(&[Arc::clone(r.values())])?;
 
-    // Combine value arrays so indices from both sides share a single index space.
-    let combined_values = concat(&[l.values().as_ref(), r.values().as_ref()])?;
-    let r_offset = l.values().len();
+    // Normalize -0.0 → +0.0 so RowConverter (which uses IEEE 754 totalOrder
+    // and treats ±0 as distinct) groups them together. Use the normalized
+    // arrays for both row conversion and the final output values.
+    let l_values_norm = normalize_float_zero(l.values());
+    let r_values_norm = normalize_float_zero(r.values());
+
+    // Only convert the visible portion of the values array. For sliced
+    // ListArrays, values() returns the full underlying array but only
+    // elements between the first and last offset are referenced.
+    let l_first = l.offsets()[0].as_usize();
+    let l_len = l.offsets()[l.len()].as_usize() - l_first;
+    let l_values = l_values_norm.slice(l_first, l_len);
+    let rows_l = converter.convert_columns(&[Arc::clone(&l_values)])?;
+
+    let r_first = r.offsets()[0].as_usize();
+    let r_len = r.offsets()[r.len()].as_usize() - r_first;
+    let r_values = r_values_norm.slice(r_first, r_len);
+    let rows_r = converter.convert_columns(&[Arc::clone(&r_values)])?;
+
+    // Indices from the row converter are 0-based in the per-side slice;
+    // concatenating those same slices lets indices map directly into the
+    // combined values array.
+    let combined_values = concat(&[l_values.as_ref(), r_values.as_ref()])?;
+    let r_offset = l_len;
 
     match set_op {
         SetOp::Union => generic_set_loop::<OffsetSize, true>(
@@ -414,6 +411,8 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait, const IS_UNION: bool>(
 ) -> Result<ArrayRef> {
     let l_offsets = l.value_offsets();
     let r_offsets = r.value_offsets();
+    let l_first = l.offsets()[0].as_usize();
+    let r_first = r.offsets()[0].as_usize();
 
     let mut result_offsets = Vec::with_capacity(l.len() + 1);
     result_offsets.push(OffsetSize::usize_as(0));
@@ -438,10 +437,10 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait, const IS_UNION: bool>(
             continue;
         }
 
-        let l_start = l_offsets[i].as_usize();
-        let l_end = l_offsets[i + 1].as_usize();
-        let r_start = r_offsets[i].as_usize();
-        let r_end = r_offsets[i + 1].as_usize();
+        let l_start = l_offsets[i].as_usize() - l_first;
+        let l_end = l_offsets[i + 1].as_usize() - l_first;
+        let r_start = r_offsets[i].as_usize() - r_first;
+        let r_end = r_offsets[i + 1].as_usize() - r_first;
 
         seen.clear();
 
@@ -564,9 +563,21 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     let mut offsets = Vec::with_capacity(array.len() + 1);
     offsets.push(OffsetSize::usize_as(0));
 
-    // Convert all values to row format in a single batch for performance
     let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
-    let rows = converter.convert_columns(&[Arc::clone(array.values())])?;
+
+    // Normalize -0.0 → +0.0 so RowConverter (which uses IEEE 754 totalOrder
+    // and treats ±0 as distinct) groups them together, and so the output
+    // carries the canonical sign.
+    let values_norm = normalize_float_zero(array.values());
+
+    // Only convert the visible portion of the values array. For sliced
+    // ListArrays, values() returns the full underlying array but only
+    // elements between the first and last offset are referenced.
+    let first_offset = value_offsets[0].as_usize();
+    let visible_len = value_offsets[array.len()].as_usize() - first_offset;
+    let rows =
+        converter.convert_columns(&[values_norm.slice(first_offset, visible_len)])?;
+
     let mut indices: Vec<usize> = Vec::with_capacity(rows.num_rows());
     let mut seen = HashSet::new();
     for i in 0..array.len() {
@@ -578,8 +589,8 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
             continue;
         }
 
-        let start = value_offsets[i].as_usize();
-        let end = value_offsets[i + 1].as_usize();
+        let start = value_offsets[i].as_usize() - first_offset;
+        let end = value_offsets[i + 1].as_usize() - first_offset;
         seen.clear();
         seen.reserve(end - start);
 
@@ -587,24 +598,26 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         for idx in start..end {
             let row = rows.row(idx);
             if seen.insert(row) {
-                indices.push(idx);
+                indices.push(idx + first_offset);
             }
         }
         offsets.push(last_offset + OffsetSize::usize_as(seen.len()));
     }
 
     // Gather distinct values in a single pass, using the computed `indices`.
+    // Indices are absolute positions in the (normalized) values array, so we
+    // can take directly from the full values.
     // Use UInt64Array for LargeList to support values arrays exceeding u32::MAX.
     let final_values = if indices.is_empty() {
         new_empty_array(&dt)
     } else if OffsetSize::IS_LARGE {
         let indices =
             UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
-        take(array.values().as_ref(), &indices, None)?
+        take(values_norm.as_ref(), &indices, None)?
     } else {
         let indices =
             UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
-        take(array.values().as_ref(), &indices, None)?
+        take(values_norm.as_ref(), &indices, None)?
     };
 
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
@@ -621,14 +634,132 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::{
-        array::{Int32Array, ListArray},
+        array::{Array, AsArray, Int32Array, ListArray},
         buffer::OffsetBuffer,
-        datatypes::{DataType, Field},
+        datatypes::{DataType, Field, Int32Type},
     };
-    use datafusion_common::{DataFusionError, config::ConfigOptions};
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+    use datafusion_common::{DataFusionError, Result, config::ConfigOptions};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
-    use crate::set_ops::array_distinct_udf;
+    use crate::set_ops::{ArrayDistinct, ArrayIntersect, ArrayUnion, array_distinct_udf};
+
+    /// Build two sliced ListArrays and return them along with the shared list
+    /// field.
+    ///
+    /// l: [[1,2], [3,4], [5,6], [7,8]]  →  slice(1,2)  →  [[3,4], [5,6]]
+    /// r: [[1,3], [3,5], [5,7], [7,1]]  →  slice(1,2)  →  [[3,5], [5,7]]
+    fn make_sliced_pair() -> (ListArray, ListArray, Arc<Field>) {
+        let l = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4)]),
+            Some(vec![Some(5), Some(6)]),
+            Some(vec![Some(7), Some(8)]),
+        ]);
+        let r = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(3)]),
+            Some(vec![Some(3), Some(5)]),
+            Some(vec![Some(5), Some(7)]),
+            Some(vec![Some(7), Some(1)]),
+        ]);
+        let field = Arc::new(Field::new("item", l.data_type().clone(), true));
+        (l.slice(1, 2), r.slice(1, 2), field)
+    }
+
+    fn collect_i32_list(list: &ListArray) -> Vec<Vec<i32>> {
+        (0..list.len())
+            .map(|i| {
+                let arr = list.value(i);
+                arr.as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_array_union_sliced_lists() -> Result<()> {
+        let (l, r, field) = make_sliced_pair();
+
+        let result = ArrayUnion::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(l)),
+                ColumnarValue::Array(Arc::new(r)),
+            ],
+            arg_fields: vec![Arc::clone(&field), Arc::clone(&field)],
+            number_rows: 2,
+            return_field: Arc::clone(&field),
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        let output = result.into_array(2)?;
+        let output = output.as_list::<i32>();
+        let rows = collect_i32_list(output);
+
+        // Row 0: union([3,4], [3,5]) = [3,4,5]
+        assert_eq!(rows[0], vec![3, 4, 5]);
+        // Row 1: union([5,6], [5,7]) = [5,6,7]
+        assert_eq!(rows[1], vec![5, 6, 7]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_intersect_sliced_lists() -> Result<()> {
+        let (l, r, field) = make_sliced_pair();
+
+        let result = ArrayIntersect::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(l)),
+                ColumnarValue::Array(Arc::new(r)),
+            ],
+            arg_fields: vec![Arc::clone(&field), Arc::clone(&field)],
+            number_rows: 2,
+            return_field: Arc::clone(&field),
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        let output = result.into_array(2)?;
+        let output = output.as_list::<i32>();
+        let rows = collect_i32_list(output);
+
+        // Row 0: intersect([3,4], [3,5]) = [3]
+        assert_eq!(rows[0], vec![3]);
+        // Row 1: intersect([5,6], [5,7]) = [5]
+        assert_eq!(rows[1], vec![5]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_distinct_sliced_list() -> Result<()> {
+        // [[1,1], [3,3,4], [5,5,6], [7,7]]  →  slice(1,2)  →  [[3,3,4], [5,5,6]]
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(1)]),
+            Some(vec![Some(3), Some(3), Some(4)]),
+            Some(vec![Some(5), Some(5), Some(6)]),
+            Some(vec![Some(7), Some(7)]),
+        ]);
+        let sliced = list.slice(1, 2);
+        let field = Arc::new(Field::new("item", sliced.data_type().clone(), true));
+
+        let result = ArrayDistinct::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![ColumnarValue::Array(Arc::new(sliced))],
+            arg_fields: vec![Arc::clone(&field)],
+            number_rows: 2,
+            return_field: field,
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        let output = result.into_array(2)?;
+        let output = output.as_list::<i32>();
+        let rows = collect_i32_list(output);
+
+        // Row 0: distinct([3,3,4]) = [3,4]
+        assert_eq!(rows[0], vec![3, 4]);
+        // Row 1: distinct([5,5,6]) = [5,6]
+        assert_eq!(rows[1], vec![5, 6]);
+        Ok(())
+    }
 
     #[test]
     fn test_array_distinct_inner_nullability_result_type_match_return_type()

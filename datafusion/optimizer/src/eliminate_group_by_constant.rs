@@ -152,7 +152,6 @@ mod tests {
     use crate::test::*;
 
     use arrow::datatypes::DataType;
-    use datafusion_common::Result;
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{
         ColumnarValue, LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
@@ -193,9 +192,6 @@ mod tests {
     }
 
     impl ScalarUDFImpl for ScalarUDFMock {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
         fn name(&self) -> &str {
             "scalar_fn_mock"
         }

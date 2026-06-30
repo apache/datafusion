@@ -32,18 +32,17 @@
 //!           DeltaScan
 //! ```
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::common::Result;
 use datafusion::common::internal_err;
-use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec,
+    PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf;
 
@@ -103,10 +102,6 @@ impl ExecutionPlan for ParentExec {
         "ParentExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
         unreachable!()
     }
@@ -129,15 +124,6 @@ impl ExecutionPlan for ParentExec {
     ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         unreachable!()
     }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(
-            &dyn datafusion::physical_plan::PhysicalExpr,
-        ) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
 }
 
 /// A PhysicalExtensionCodec that can serialize and deserialize ParentExec
@@ -150,6 +136,7 @@ impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         _ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if buf == "ParentExec".as_bytes() {
             Ok(Arc::new(ParentExec {
@@ -160,8 +147,13 @@ impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
         }
     }
 
-    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        if node.as_any().downcast_ref::<ParentExec>().is_some() {
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<()> {
+        if node.is::<ParentExec>() {
             buf.extend_from_slice("ParentExec".as_bytes());
             Ok(())
         } else {
@@ -188,10 +180,6 @@ impl ExecutionPlan for ChildExec {
         "ChildExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
         unreachable!()
     }
@@ -214,15 +202,6 @@ impl ExecutionPlan for ChildExec {
     ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         unreachable!()
     }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(
-            &dyn datafusion::physical_plan::PhysicalExpr,
-        ) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
 }
 
 /// A PhysicalExtensionCodec that can serialize and deserialize ChildExec
@@ -235,6 +214,7 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
         buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
         _ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if buf == "ChildExec".as_bytes() {
             Ok(Arc::new(ChildExec {}))
@@ -243,8 +223,13 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
         }
     }
 
-    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        if node.as_any().downcast_ref::<ChildExec>().is_some() {
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<()> {
+        if node.is::<ChildExec>() {
             buf.extend_from_slice("ChildExec".as_bytes());
             Ok(())
         } else {

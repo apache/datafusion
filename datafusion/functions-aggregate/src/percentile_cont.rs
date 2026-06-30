@@ -38,7 +38,8 @@ use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 
 use crate::min_max::{max_udaf, min_udaf};
 use datafusion_common::{
-    Result, ScalarValue, internal_datafusion_err, utils::take_function_args,
+    Result, ScalarValue, exec_datafusion_err, internal_datafusion_err,
+    utils::take_function_args,
 };
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -163,10 +164,6 @@ impl PercentileCont {
 }
 
 impl AggregateUDFImpl for PercentileCont {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "percentile_cont"
     }
@@ -424,7 +421,12 @@ where
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
-        self.all_values.reserve(values.len() - values.null_count());
+        let additional = values.len() - values.null_count();
+        self.all_values.try_reserve(additional).map_err(|e| {
+            exec_datafusion_err!(
+                "failed to reserve {additional} values for percentile_cont accumulator: {e}"
+            )
+        })?;
         self.all_values.extend(values.iter().flatten());
         Ok(())
     }
@@ -445,18 +447,16 @@ where
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let mut to_remove: HashMap<ScalarValue, usize> = HashMap::new();
-        for i in 0..values[0].len() {
-            let v = ScalarValue::try_from_array(&values[0], i)?;
-            if !v.is_null() {
-                *to_remove.entry(v).or_default() += 1;
-            }
+        let mut to_remove: HashMap<Hashable<T::Native>, usize> = HashMap::new();
+
+        let arr = values[0].as_primitive::<T>();
+        for value in arr.iter().flatten() {
+            *to_remove.entry(Hashable(value)).or_default() += 1;
         }
 
         let mut i = 0;
         while i < self.all_values.len() {
-            let k =
-                ScalarValue::new_primitive::<T>(Some(self.all_values[i]), &T::DATA_TYPE)?;
+            let k = Hashable(self.all_values[i]);
             if let Some(count) = to_remove.get_mut(&k)
                 && *count > 0
             {
@@ -537,8 +537,6 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        // Since aggregate filter should be applied in partial stage, in final stage there should be no filter
-        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");

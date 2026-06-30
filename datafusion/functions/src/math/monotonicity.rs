@@ -262,11 +262,11 @@ Can be a constant, column, or function, and any combination of arithmetic operat
     )
     .with_sql_example(r#"```sql
 > SELECT atan2(1, 1);
-+------------+
-| atan2(1,1) |
-+------------+
-| 0.7853982  |
-+------------+
++--------------------+
+| atan2(1,1)         |
++--------------------+
+| 0.7853981633974483 |
++--------------------+
 ```"#)
     .build()
     });
@@ -737,7 +737,6 @@ pub fn get_tanh_doc() -> &'static Documentation {
 #[cfg(test)]
 mod tests {
     use arrow::compute::SortOptions;
-    use datafusion_common::Result;
 
     use super::*;
 

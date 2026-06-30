@@ -22,8 +22,8 @@ mod tests {
     use arrow::array::{Array, AsArray};
     use arrow::datatypes::DataType;
     use datafusion::common::record_batch;
-    use datafusion::error::{DataFusionError, Result};
-    use datafusion::logical_expr::{ScalarUDF, ScalarUDFImpl};
+    use datafusion::error::Result;
+    use datafusion::logical_expr::{ExpressionPlacement, ScalarUDF, ScalarUDFImpl};
     use datafusion::prelude::{SessionContext, col};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::lit;
@@ -38,13 +38,7 @@ mod tests {
     async fn test_scalar_udf() -> Result<()> {
         let module = get_module()?;
 
-        let ffi_abs_func =
-            module
-                .create_scalar_udf()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External table provider failed to implement create_scalar_udf"
-                        .to_string(),
-                ))?();
+        let ffi_abs_func = (module.create_scalar_udf)();
         let foreign_abs_func: Arc<dyn ScalarUDFImpl> = (&ffi_abs_func).into();
 
         let udf = ScalarUDF::new_from_shared_impl(foreign_abs_func);
@@ -76,13 +70,7 @@ mod tests {
     async fn test_nullary_scalar_udf() -> Result<()> {
         let module = get_module()?;
 
-        let ffi_abs_func =
-            module
-                .create_nullary_udf()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External table provider failed to implement create_scalar_udf"
-                        .to_string(),
-                ))?();
+        let ffi_abs_func = (module.create_nullary_udf)();
         let foreign_abs_func: Arc<dyn ScalarUDFImpl> = (&ffi_abs_func).into();
 
         let udf = ScalarUDF::new_from_shared_impl(foreign_abs_func);
@@ -103,16 +91,36 @@ mod tests {
         Ok(())
     }
 
+    /// This test validates that a producer's `placement` override survives the
+    /// FFI boundary instead of collapsing to the default `KeepInPlace`.
+    #[tokio::test]
+    async fn test_scalar_udf_placement() -> Result<()> {
+        let module = get_module()?;
+
+        let ffi_placement_func = (module.create_placement_udf)();
+        let foreign_func: Arc<dyn ScalarUDFImpl> = (&ffi_placement_func).into();
+
+        // The override pushes to the leaves only for (Column, Literal), so these
+        // also check the arguments cross the boundary in order.
+        assert_eq!(
+            foreign_func
+                .placement(&[ExpressionPlacement::Column, ExpressionPlacement::Literal]),
+            ExpressionPlacement::MoveTowardsLeafNodes
+        );
+        assert_eq!(
+            foreign_func
+                .placement(&[ExpressionPlacement::Literal, ExpressionPlacement::Column]),
+            ExpressionPlacement::KeepInPlace
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_config_on_scalar_udf() -> Result<()> {
         let module = get_module()?;
 
-        let ffi_udf =
-            module
-                .create_timezone_udf()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External module failed to implement create_timezone_udf".to_string(),
-                ))?();
+        let ffi_udf = (module.create_timezone_udf)();
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
 
         let udf = ScalarUDF::new_from_shared_impl(foreign_udf);

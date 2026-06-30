@@ -25,7 +25,6 @@
 //! This plan uses the [`OneSideHashJoiner`] object to facilitate join calculations
 //! for both its children.
 
-use std::any::Any;
 use std::fmt::{self, Debug};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
@@ -45,12 +44,13 @@ use crate::joins::utils::{
     BatchSplitter, BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn,
     JoinOnRef, NoopBatchTransformer, StatefulStreamResult, apply_join_filter_to_indices,
     build_batch_from_indices, build_join_schema, check_join_is_valid, equal_rows_arr,
-    symmetric_join_output_partitioning, update_hash,
+    matchable_join_keys, symmetric_join_output_partitioning, update_hash,
 };
 use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_filter, update_join_on,
 };
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream,
@@ -66,7 +66,6 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::bisect;
 use datafusion_common::{
     HashSet, JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err,
@@ -80,10 +79,9 @@ use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{Stream, StreamExt, ready};
-use parking_lot::Mutex;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 
@@ -239,7 +237,7 @@ impl SymmetricHashJoinExec {
             build_join_schema(&left_schema, &right_schema, join_type);
 
         // Initialize the random state for the join operation:
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = RandomState::with_seed(0);
         let schema = Arc::new(schema);
         let cache = Self::compute_properties(&left, &right, schema, *join_type, &on)?;
         Ok(SymmetricHashJoinExec {
@@ -423,10 +421,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         "SymmetricHashJoinExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -463,23 +457,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to join keys from both sides
-        let mut tnr = TreeNodeRecursion::Continue;
-        for (left, right) in &self.on {
-            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
-            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
-        }
-        // Apply to join filter expressions if present
-        if let Some(filter) = &self.filter {
-            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
-        }
-        Ok(tnr)
     }
 
     fn with_new_children(
@@ -554,12 +531,12 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         let enforce_batch_size_in_joins =
             context.session_config().enforce_batch_size_in_joins();
 
-        let reservation = Arc::new(Mutex::new(
+        let reservation = Arc::new(
             MemoryConsumer::new(format!("SymmetricHashJoinStream[{partition}]"))
                 .register(context.memory_pool()),
-        ));
+        );
         if let Some(g) = graph.as_ref() {
-            reservation.lock().try_grow(g.size())?;
+            reservation.try_grow(g.size())?;
         }
 
         if enforce_batch_size_in_joins {
@@ -1136,8 +1113,20 @@ fn lookup_join_hashmap(
     //     (5,1)
     //
     // With this approach, the lexicographic order on both the probe side and the build side is preserved.
+    //
+    // Probe rows whose key contains a NULL cannot match any build row and are
+    // skipped without a map lookup.
+    let valid_keys = matchable_join_keys(&keys_values, null_equality);
     let (mut matched_probe, mut matched_build) = build_hashmap.get_matched_indices(
-        Box::new(hash_values.iter().enumerate().rev()),
+        Box::new(
+            hash_values
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| {
+                    valid_keys.as_ref().is_none_or(|valid| valid.is_valid(*i))
+                })
+                .rev(),
+        ),
         deleted_offset,
     );
 
@@ -1214,6 +1203,7 @@ impl OneSideHashJoiner {
     ///
     /// * `batch` - The incoming [RecordBatch] to be merged with the internal input buffer
     /// * `random_state` - The random state used to hash values
+    /// * `null_equality` - Null semantics to use
     ///
     /// # Returns
     ///
@@ -1222,6 +1212,7 @@ impl OneSideHashJoiner {
         &mut self,
         batch: &RecordBatch,
         random_state: &RandomState,
+        null_equality: NullEquality,
     ) -> Result<()> {
         // Merge the incoming batch with the existing input buffer:
         self.input_buffer = concat_batches(&batch.schema(), [&self.input_buffer, batch])?;
@@ -1238,6 +1229,7 @@ impl OneSideHashJoiner {
             &mut self.hashes_buffer,
             self.deleted_offset,
             false,
+            null_equality,
         )?;
         Ok(())
     }
@@ -1412,6 +1404,19 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
         }
     }
+
+    /// Release the right input pipeline's resources.
+    fn cleanup_depleted_right_stream(&mut self) {
+        let right_schema = self.right_stream.schema();
+        self.right_stream = Box::pin(EmptyRecordBatchStream::new(right_schema));
+    }
+
+    /// Release the left input pipeline's resources.
+    fn cleanup_depleted_left_stream(&mut self) {
+        let left_schema = self.left_stream.schema();
+        self.left_stream = Box::pin(EmptyRecordBatchStream::new(left_schema));
+    }
+
     /// Asynchronously pulls the next batch from the right stream.
     ///
     /// This default implementation checks for the next value in the right stream.
@@ -1435,6 +1440,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_right_stream();
                 self.set_state(SHJStreamState::RightExhausted);
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
@@ -1464,6 +1470,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_left_stream();
                 self.set_state(SHJStreamState::LeftExhausted);
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
@@ -1493,6 +1500,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_left_stream();
                 self.set_state(SHJStreamState::BothExhausted {
                     final_result: false,
                 });
@@ -1524,6 +1532,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_right_stream();
                 self.set_state(SHJStreamState::BothExhausted {
                     final_result: false,
                 });
@@ -1694,7 +1703,11 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
         probe_side_metrics.input_batches.add(1);
         probe_side_metrics.input_rows.add(probe_batch.num_rows());
         // Update the internal state of the hash joiner for the build side:
-        probe_hash_joiner.update_internal_state(probe_batch, &self.random_state)?;
+        probe_hash_joiner.update_internal_state(
+            probe_batch,
+            &self.random_state,
+            self.null_equality,
+        )?;
         // Join the two sides:
         let equal_result = join_with_probe_batch(
             build_hash_joiner,
@@ -1750,7 +1763,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
         let result = combine_two_batches(&self.schema, equal_result, anti_result)?;
         let capacity = self.size();
         self.metrics.stream_memory_usage.set(capacity);
-        self.reservation.lock().try_resize(capacity)?;
+        self.reservation.try_resize(capacity)?;
         Ok(result)
     }
 }

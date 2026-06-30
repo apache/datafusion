@@ -31,10 +31,9 @@ use datafusion_common::exec_err;
 use datafusion_common::utils::{ListCoercion, take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -90,9 +89,6 @@ impl Default for Cardinality {
     }
 }
 impl ScalarUDFImpl for Cardinality {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "cardinality"
     }
@@ -105,10 +101,7 @@ impl ScalarUDFImpl for Cardinality {
         Ok(UInt64)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(cardinality_inner)(&args.args)
     }
 

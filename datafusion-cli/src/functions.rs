@@ -31,7 +31,7 @@ use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion::catalog::{Session, TableFunctionImpl};
+use datafusion::catalog::{Session, TableFunctionArgs, TableFunctionImpl};
 use datafusion::common::{Column, plan_err};
 use datafusion::datasource::TableProvider;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -42,6 +42,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 
 use async_trait::async_trait;
+use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use parquet::basic::ConvertedType;
 use parquet::data_type::{ByteArray, FixedLenByteArray};
 use parquet::file::reader::FileReader;
@@ -229,10 +230,6 @@ struct ParquetMetadataTable {
 
 #[async_trait]
 impl TableProvider for ParquetMetadataTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -326,7 +323,8 @@ fn fixed_len_byte_array_to_string(val: Option<&FixedLenByteArray>) -> Option<Str
 pub struct ParquetMetadataFunc {}
 
 impl TableFunctionImpl for ParquetMetadataFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         let filename = match exprs.first() {
             Some(Expr::Literal(ScalarValue::Utf8(Some(s)), _)) => s, // single quote: parquet_metadata('x.parquet')
             Some(Expr::Column(Column { name, .. })) => name, // double quote: parquet_metadata("x.parquet")
@@ -478,10 +476,6 @@ struct MetadataCacheTable {
 
 #[async_trait]
 impl TableProvider for MetadataCacheTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -517,7 +511,8 @@ impl MetadataCacheFunc {
 }
 
 impl TableFunctionImpl for MetadataCacheFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         if !exprs.is_empty() {
             return plan_err!("metadata_cache should have no arguments");
         }
@@ -552,15 +547,17 @@ impl TableFunctionImpl for MetadataCacheFunc {
         for (path, entry) in cached_entries {
             path_arr.push(path.to_string());
             file_modified_arr
-                .push(Some(entry.object_meta.last_modified.timestamp_millis()));
-            file_size_bytes_arr.push(entry.object_meta.size);
-            e_tag_arr.push(entry.object_meta.e_tag);
-            version_arr.push(entry.object_meta.version);
+                .push(Some(entry.value.meta.last_modified.timestamp_millis()));
+            file_size_bytes_arr.push(entry.value.meta.size);
+            e_tag_arr.push(entry.value.meta.e_tag);
+            version_arr.push(entry.value.meta.version);
             metadata_size_bytes.push(entry.size_bytes as u64);
             hits_arr.push(entry.hits as u64);
 
             let mut extra = entry
-                .extra
+                .value
+                .file_metadata
+                .extra_info()
                 .iter()
                 .map(|(k, v)| format!("{k}={v}"))
                 .collect::<Vec<_>>();
@@ -596,10 +593,6 @@ struct StatisticsCacheTable {
 
 #[async_trait]
 impl TableProvider for StatisticsCacheTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -635,13 +628,15 @@ impl StatisticsCacheFunc {
 }
 
 impl TableFunctionImpl for StatisticsCacheFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         if !exprs.is_empty() {
             return plan_err!("statistics_cache should have no arguments");
         }
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("path", DataType::Utf8, false),
+            Field::new("table", DataType::Utf8, false),
             Field::new(
                 "file_modified",
                 DataType::Timestamp(TimeUnit::Millisecond, None),
@@ -658,6 +653,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
 
         // construct record batch from metadata
         let mut path_arr = vec![];
+        let mut table_arr = vec![];
         let mut file_modified_arr = vec![];
         let mut file_size_bytes_arr = vec![];
         let mut e_tag_arr = vec![];
@@ -670,16 +666,26 @@ impl TableFunctionImpl for StatisticsCacheFunc {
         if let Some(file_statistics_cache) = self.cache_manager.get_file_statistic_cache()
         {
             for (path, entry) in file_statistics_cache.list_entries() {
-                path_arr.push(path.to_string());
+                path_arr.push(path.path.to_string());
+                table_arr
+                    .push(path.table.map_or_else(|| "".to_string(), |t| t.to_string()));
                 file_modified_arr
-                    .push(Some(entry.object_meta.last_modified.timestamp_millis()));
-                file_size_bytes_arr.push(entry.object_meta.size);
-                e_tag_arr.push(entry.object_meta.e_tag);
-                version_arr.push(entry.object_meta.version);
-                num_rows_arr.push(entry.num_rows.to_string());
-                num_columns_arr.push(entry.num_columns as u64);
-                table_size_bytes_arr.push(entry.table_size_bytes.to_string());
-                statistics_size_bytes_arr.push(entry.statistics_size_bytes as u64);
+                    .push(Some(entry.value.meta.last_modified.timestamp_millis()));
+                file_size_bytes_arr.push(entry.value.meta.size);
+                e_tag_arr.push(entry.value.meta.e_tag);
+                version_arr.push(entry.value.meta.version);
+                num_rows_arr.push(entry.value.statistics.num_rows.to_string());
+                num_columns_arr
+                    .push(entry.value.statistics.column_statistics.len() as u64);
+                table_size_bytes_arr
+                    .push(entry.value.statistics.total_byte_size.to_string());
+                statistics_size_bytes_arr.push(
+                    entry
+                        .value
+                        .statistics
+                        .heap_size(&mut DFHeapSizeCtx::default())
+                        as u64,
+                );
             }
         }
 
@@ -687,6 +693,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
             schema.clone(),
             vec![
                 Arc::new(StringArray::from(path_arr)),
+                Arc::new(StringArray::from(table_arr)),
                 Arc::new(TimestampMillisecondArray::from(file_modified_arr)),
                 Arc::new(UInt64Array::from(file_size_bytes_arr)),
                 Arc::new(StringArray::from(e_tag_arr)),
@@ -731,10 +738,6 @@ struct ListFilesCacheTable {
 
 #[async_trait]
 impl TableProvider for ListFilesCacheTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -770,7 +773,8 @@ impl ListFilesCacheFunc {
 }
 
 impl TableFunctionImpl for ListFilesCacheFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         if !exprs.is_empty() {
             return plan_err!("list_files_cache should have no arguments");
         }
@@ -834,14 +838,14 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                         .map(|t| t.duration_since(now).as_millis() as i64),
                 );
 
-                for meta in entry.metas.files.iter() {
+                for meta in entry.value.files.iter() {
                     file_path_arr.push(meta.location.to_string());
                     file_modified_arr.push(meta.last_modified.timestamp_millis());
                     file_size_bytes_arr.push(meta.size);
                     etag_arr.push(meta.e_tag.clone());
                     version_arr.push(meta.version.clone());
                 }
-                current_offset += entry.metas.files.len() as i32;
+                current_offset += entry.value.files.len() as i32;
                 offsets.push(current_offset);
             }
         }

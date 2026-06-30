@@ -143,7 +143,7 @@ mod tests {
         LogicalField, LogicalFields, logical_boolean, logical_date, logical_float32,
         logical_float64, logical_int32, logical_int64, logical_null, logical_string,
     };
-    use arrow::datatypes::{DataType, Field, Fields};
+    use arrow::datatypes::{Field, Fields};
     use insta::assert_snapshot;
 
     #[test]

@@ -45,7 +45,6 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::prelude::{DataFrame, SessionContext};
 use futures::TryStreamExt;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Interfacing with a remote catalog (e.g. over a network)
@@ -224,10 +223,6 @@ impl RemoteTable {
 /// Implement the DataFusion Catalog API for [`RemoteTable`]
 #[async_trait]
 impl TableProvider for RemoteTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
