@@ -438,17 +438,22 @@ pub(super) fn lookup_join_hashmap(
             }
         }
     } else {
-        // Collision-free build side: every bucket holds a single key, so all
-        // pairs sharing one probe row (a contiguous run, since the chain walk
-        // emits a probe row's matches consecutively) have identical build
-        // keys. Check the key once per run at its head and accept or reject
-        // the whole run — turning F key comparisons per probe row into 1.
+        // Collision-free build side: all pairs in one probe row's run share
+        // the same build key, so checking the key once at the run head
+        // accepts or rejects the whole run (F comparisons per probe row -> 1).
         let builds = build_indices_buffer.as_slice();
         let probes = probe_indices_buffer.as_slice();
         let mut start = 0;
         while start < probes.len() {
             let probe_idx = probes[start];
-            let end = start + probes[start..].partition_point(|&p| p == probe_idx);
+            // Find the end of this probe row's run (equal probe indices are
+            // contiguous). Peek the next index for the common 1:1 case; fall
+            // back to a binary search for long runs (high fanout).
+            let end = if start + 1 >= probes.len() || probes[start + 1] != probe_idx {
+                start + 1
+            } else {
+                start + probes[start..].partition_point(|&p| p == probe_idx)
+            };
             if comparator.is_equal(builds[start] as usize, probe_idx as usize) {
                 build_out.extend_from_slice(&builds[start..end]);
                 probe_out.extend_from_slice(&probes[start..end]);
