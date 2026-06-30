@@ -146,14 +146,38 @@ fn generic_list_cardinality<O: OffsetSizeTrait>(
     let result = array
         .iter()
         .map(|arr| match arr {
-            Some(arr) if arr.is_empty() => Ok(Some(0u64)),
-            arr => match crate::utils::compute_array_dims(arr)? {
-                Some(vector) => {
-                    Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>()))
-                }
-                None => Ok(None),
-            },
+            Some(arr) => value_cardinality(arr).map(Some),
+            None => Ok(None),
         })
         .collect::<Result<UInt64Array>>()?;
     Ok(Arc::new(result) as ArrayRef)
+}
+
+fn value_cardinality(array: ArrayRef) -> Result<u64> {
+    match array.data_type() {
+        List(_) => {
+            let list = as_list_array(&array)?;
+            sum_list_cardinality(list.iter())
+        }
+        LargeList(_) => {
+            let list = as_large_list_array(&array)?;
+            sum_list_cardinality(list.iter())
+        }
+        _ => Ok(array.len() as u64),
+    }
+}
+
+fn sum_list_cardinality<I>(mut iter: I) -> Result<u64>
+where
+    I: Iterator<Item = Option<ArrayRef>>,
+{
+    iter.try_fold(0u64, |total, arr| {
+        let value_count = match arr {
+            Some(arr) => value_cardinality(arr)?,
+            None => 0,
+        };
+        total.checked_add(value_count).ok_or_else(|| {
+            datafusion_common::exec_datafusion_err!("cardinality overflowed u64")
+        })
+    })
 }
