@@ -63,6 +63,8 @@ impl AggregateHashTable<PartialMarker> {
     ) -> Result<Option<RecordBatch>> {
         let output_schema = Arc::clone(&self.output_schema);
         let batch_size = self.batch_size;
+        // Take ownership of the output state. `emit_next_materialized_batch`
+        // restores `self.state` to `OutputtingMaterialized` or `Done`.
         match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
             AggregateHashTableState::Outputting(state) => {
                 if state.group_values.is_empty() {
