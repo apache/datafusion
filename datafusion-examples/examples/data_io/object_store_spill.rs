@@ -184,14 +184,12 @@ impl SpillFile for ObjectStoreSpillFile {
 
         // Note: we use `stream::once` to defer the ObjectStore read until
         // DataFusion polls the returned stream.
-        let stream = stream::once(async move {
-            store
-                .get(&location)
-                .await
-                .map(|result| result.into_stream())
-        })
-        .try_flatten()
-        .map_err(Into::into);
+        let result_stream =
+            async move { store.get(&location).await.map(|r| r.into_stream()) };
+        // combine the result of get and the stream into a single stream
+        let stream = stream::once(result_stream)
+            .try_flatten()
+            .map_err(Into::into);
 
         Ok(Box::pin(stream))
     }
