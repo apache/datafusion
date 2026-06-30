@@ -26,7 +26,7 @@ use crate::aggregates::AggregateExec;
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState, FinalMarker,
-    MaterializedFinalOutput,
+    MaterializedAggregateOutput,
 };
 
 /// Methods specific to the aggregate hash table used in the final aggregation stage.
@@ -68,7 +68,7 @@ impl AggregateHashTable<FinalMarker> {
                 let output = self.materialize_final_output(state, output_schema)?;
                 Ok(self.emit_next_materialized_batch(output, batch_size))
             }
-            AggregateHashTableState::OutputtingMaterializedFinal(output) => {
+            AggregateHashTableState::OutputtingMaterialized(output) => {
                 Ok(self.emit_next_materialized_batch(output, batch_size))
             }
             AggregateHashTableState::Done => Ok(None),
@@ -82,7 +82,7 @@ impl AggregateHashTable<FinalMarker> {
         &self,
         mut state: AggregateHashTableBuffer,
         output_schema: SchemaRef,
-    ) -> Result<MaterializedFinalOutput> {
+    ) -> Result<MaterializedAggregateOutput> {
         // Final aggregate evaluation consumes accumulator state. Evaluate all
         // groups once, then slice the materialized batch on subsequent polls.
         let emit_to = EmitTo::All;
@@ -96,19 +96,19 @@ impl AggregateHashTable<FinalMarker> {
 
         let batch = RecordBatch::try_new(output_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
-        Ok(MaterializedFinalOutput::new(batch))
+        Ok(MaterializedAggregateOutput::new(batch))
     }
 
     fn emit_next_materialized_batch(
         &mut self,
-        mut output: MaterializedFinalOutput,
+        mut output: MaterializedAggregateOutput,
         batch_size: usize,
     ) -> Option<RecordBatch> {
         let batch = output.next_batch(batch_size);
         if output.is_exhausted() {
             self.state = AggregateHashTableState::Done;
         } else {
-            self.state = AggregateHashTableState::OutputtingMaterializedFinal(output);
+            self.state = AggregateHashTableState::OutputtingMaterialized(output);
         }
         batch
     }
