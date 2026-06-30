@@ -1734,13 +1734,10 @@ impl RepartitionExec {
                     partitioned_aggregation_partition(&batch, num_output_partitions)?
             {
                 let timer = metrics.send_time[partition].timer();
-                if let Some(output_channel) = output_channels.get_mut(&partition) {
-                    for batch in output_channel.coalesce(batch)? {
-                        if output_channel.send(batch).await.is_err() {
-                            output_channels.remove(&partition);
-                            break;
-                        }
-                    }
+                if let Some(output_channel) = output_channels.get_mut(&partition)
+                    && output_channel.send(batch).await.is_err()
+                {
+                    output_channels.remove(&partition);
                 }
                 timer.done();
                 continue;
