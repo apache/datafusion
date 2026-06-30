@@ -38,7 +38,7 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SpillFile, SpillWriter, TempFileFactory};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::exec_err;
-use futures::{Stream, StreamExt, stream};
+use futures::{Stream, StreamExt, TryStreamExt, stream};
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
@@ -184,9 +184,16 @@ impl SpillFile for ObjectStoreSpillFile {
 
         // Note: we use `stream::once` to defer the ObjectStore read until
         // DataFusion polls the returned stream.
-        Ok(Box::pin(stream::once(async move {
-            Ok(store.get(&location).await?.bytes().await?)
-        })))
+        let stream = stream::once(async move {
+            store
+                .get(&location)
+                .await
+                .map(|result| result.into_stream())
+        })
+        .try_flatten()
+        .map_err(Into::into);
+
+        Ok(Box::pin(stream))
     }
 
     /// Open a synchronous writer for this spill file.
