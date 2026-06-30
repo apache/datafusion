@@ -3228,15 +3228,6 @@ mod tests {
             vec![2, 1]
         );
         assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
-        assert_snapshot!(batches_to_sort_string(&batches), @r"
-        +-----+----------------------------+
-        | key | no_first_emit(value)[count] |
-        +-----+----------------------------+
-        | 1   | 1                          |
-        | 2   | 1                          |
-        | 3   | 1                          |
-        +-----+----------------------------+
-        ");
 
         Ok(())
     }
@@ -3298,6 +3289,15 @@ mod tests {
             vec![2, 1]
         );
         assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +-----+-----------------------------+
+        | key | no_first_emit(value)[count] |
+        +-----+-----------------------------+
+        | 1   | 1                           |
+        | 2   | 1                           |
+        | 3   | 1                           |
+        +-----+-----------------------------+
+        ");
 
         Ok(())
     }
