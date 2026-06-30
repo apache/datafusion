@@ -1267,9 +1267,15 @@ enum Nulls {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
+    use arrow::array::{
+        Array, ArrayRef, DictionaryArray, Int32Array, Int64Array, LargeStringArray,
+        RecordBatch, StringArray, StringDictionaryBuilder, StringViewArray,
+    };
+    use arrow::datatypes::{DataType, Field, Int8Type, Int32Type, Schema, SchemaRef};
+    use arrow::{
+        compute::{cast, concat_batches},
+        util::pretty::pretty_format_batches,
+    };
     use datafusion_common::utils::proxy::HashTableAllocExt;
     use datafusion_expr::EmitTo;
 
@@ -1360,19 +1366,13 @@ mod tests {
         }
     }
 
-    // Dictionary types are supported iff their value type is supported.
-    // Key type is irrelevant to the check — only the value type matters.
+    // supported types for dictionary values are subject to change, see the ticket listed below.
+    // https://github.com/apache/datafusion/issues/22715
     #[test]
-    fn group_column_supported_type_dictionary_supported_value_types() {
-        let supported: Vec<DataType> = vec![
-            DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::Utf8),
-            ),
-            DataType::Dictionary(
-                Box::new(DataType::Int8),
-                Box::new(DataType::Int64),
-            ),
+    fn group_column_supported_type_dictionary_value_types() {
+        let supported = vec![
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int64)),
             DataType::Dictionary(
                 Box::new(DataType::UInt16),
                 Box::new(DataType::LargeUtf8),
@@ -1385,46 +1385,25 @@ mod tests {
                 )),
             ),
         ];
-
         for dt in &supported {
-            assert!(
-                group_column_supported_type(dt),
-                "expected supported for {dt:?}"
-            );
+            assert!(group_column_supported_type(dt), "{dt:?}");
             let builder = make_group_column(&Field::new("c", dt.clone(), true))
-                .unwrap_or_else(|e| {
-                    panic!("make_group_column rejected supported dict type {dt:?}: {e}")
-                });
-            assert_eq!(builder.len(), 0, "fresh dictionary builder must have len 0");
+                .unwrap_or_else(|e| panic!("{dt:?}: {e}"));
+            assert_eq!(builder.len(), 0);
         }
-    }
 
-    // Dictionaries whose value type is not supported must be rejected by both
-    // group_column_supported_type and make_group_column.
-    #[test]
-    fn group_column_supported_type_dictionary_unsupported_value_types() {
-        let unsupported: Vec<DataType> = vec![
-            DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::Float16),
-            ),
+        let unsupported = vec![
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Float16)),
             DataType::Dictionary(
                 Box::new(DataType::Int32),
                 Box::new(DataType::Decimal256(76, 10)),
             ),
         ];
-
         for dt in &unsupported {
-            assert!(
-                !group_column_supported_type(dt),
-                "expected unsupported for {dt:?}"
-            );
+            assert!(!group_column_supported_type(dt), "{dt:?}");
             match make_group_column(&Field::new("c", dt.clone(), true)) {
-                Ok(_) => panic!("make_group_column should reject unsupported dict value type {dt:?}"),
-                Err(e) => assert!(
-                    e.to_string().contains("not supported"),
-                    "expected 'not supported' in error for {dt:?}, got: {e}"
-                ),
+                Ok(_) => panic!("should reject {dt:?}"),
+                Err(e) => assert!(e.to_string().contains("not supported"), "{e}"),
             }
         }
     }
@@ -1543,7 +1522,7 @@ mod tests {
         // `emit(EmitTo::First(4))` calls can `take_n` without panicking.
         // The hashmap entries below reference group indices 0..=11, so the
         // single column builder needs at least 12 rows to back them.
-        let seed: ArrayRef = Arc::new(arrow::array::Int32Array::from(vec![0_i32; 12]));
+        let seed: ArrayRef = Arc::new(Int32Array::from(vec![0_i32; 12]));
         for row in 0..12 {
             group_values.group_values[0]
                 .append_val(&seed, row)
@@ -2009,6 +1988,214 @@ mod tests {
             |(hash, _)| *hash,
             &mut group_values.map_size,
         );
+    }
+
+    fn dict_col(vals: &[Option<&str>]) -> ArrayRef {
+        let mut b = StringDictionaryBuilder::<Int32Type>::new();
+        for v in vals {
+            match v {
+                Some(s) => b.append_value(s),
+                None => b.append_null(),
+            }
+        }
+        Arc::new(b.finish())
+    }
+
+    fn assert_dict_str(arr: &ArrayRef, expected: &[Option<&str>]) {
+        let casted = cast(arr.as_ref(), &DataType::Utf8).unwrap();
+        let s = casted.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(s.len(), expected.len());
+        for (i, exp) in expected.iter().enumerate() {
+            match exp {
+                Some(v) => {
+                    assert!(!s.is_null(i), "row {i}");
+                    assert_eq!(s.value(i), *v, "row {i}");
+                }
+                None => assert!(s.is_null(i), "row {i}"),
+            }
+        }
+    }
+
+    fn dict_utf8() -> DataType {
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+    }
+
+    #[test]
+    fn test_group_dict_repeated_keys_mixed_types_non_streaming() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+                true,
+            ),
+            Field::new(
+                "b",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::LargeUtf8),
+                ),
+                true,
+            ),
+        ]));
+        let mut gv = GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+        let i8_utf8 = |vals: &[Option<&str>]| -> ArrayRef {
+            let mut b = StringDictionaryBuilder::<Int8Type>::new();
+            for v in vals {
+                match v {
+                    Some(s) => b.append_value(s),
+                    None => b.append_null(),
+                }
+            }
+            Arc::new(b.finish())
+        };
+        let i32_large = |keys: Vec<Option<i32>>, vals: &[&str]| -> ArrayRef {
+            Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(keys),
+                Arc::new(LargeStringArray::from(vals.to_vec())),
+            ))
+        };
+
+        let mut groups = vec![];
+        gv.intern(
+            &[
+                i8_utf8(&[Some("a"), Some("b"), Some("a")]),
+                i32_large(vec![Some(0), Some(1), Some(0)], &["x", "y"]),
+            ],
+            &mut groups,
+        )
+        .unwrap();
+        assert_eq!(groups, vec![0, 1, 0]);
+
+        gv.intern(
+            &[
+                i8_utf8(&[Some("b"), Some("c"), Some("c"), Some("a")]),
+                i32_large(vec![Some(0), Some(1), Some(1), Some(0)], &["y", "z"]),
+            ],
+            &mut groups,
+        )
+        .unwrap();
+        assert_eq!(groups, vec![1, 2, 2, 0]);
+
+        let out = gv.emit(EmitTo::All).unwrap();
+        assert_eq!(out[0].len(), 3);
+        assert_dict_str(&out[0], &[Some("a"), Some("b"), Some("c")]);
+        let s = cast(out[1].as_ref(), &DataType::LargeUtf8).unwrap();
+        let s = s.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        let got: Vec<Option<&str>> = (0..s.len())
+            .map(|i| if s.is_null(i) { None } else { Some(s.value(i)) })
+            .collect();
+        assert_eq!(got, vec![Some("x"), Some("y"), Some("z")]);
+    }
+
+    #[test]
+    fn test_group_dict_with_primitive_non_streaming() {
+        let dt = dict_utf8();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", dt.clone(), true),
+            Field::new("b", dt.clone(), true),
+            Field::new("c", DataType::Int64, true),
+        ]));
+        let mut gv = GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+        let mut groups = vec![];
+
+        gv.intern(
+            &[
+                dict_col(&[Some("a"), Some("b"), Some("a")]),
+                dict_col(&[Some("x"), Some("y"), Some("x")]),
+                Arc::new(Int64Array::from(vec![Some(1), Some(2), Some(1)])),
+            ],
+            &mut groups,
+        )
+        .unwrap();
+        assert_eq!(groups, vec![0, 1, 0]);
+
+        gv.intern(
+            &[
+                dict_col(&[Some("a"), Some("c")]),
+                dict_col(&[Some("x"), Some("z")]),
+                Arc::new(Int64Array::from(vec![Some(1), Some(3)])),
+            ],
+            &mut groups,
+        )
+        .unwrap();
+        assert_eq!(groups, vec![0, 2]);
+
+        let out = gv.emit(EmitTo::All).unwrap();
+        assert_dict_str(&out[0], &[Some("a"), Some("b"), Some("c")]);
+        assert_dict_str(&out[1], &[Some("x"), Some("y"), Some("z")]);
+        let c = out[2].as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(c.values(), &[1, 2, 3]);
+    }
+
+    // 3 dict cols with null values — nulls in different columns must form distinct groups
+    #[test]
+    fn test_group_three_dict_cols_with_nulls_non_streaming() {
+        let dt = dict_utf8();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", dt.clone(), true),
+            Field::new("b", dt.clone(), true),
+            Field::new("c", dt.clone(), true),
+        ]));
+        let mut gv = GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+        let mut groups = vec![];
+
+        gv.intern(
+            &[
+                dict_col(&[None, Some("a"), None, Some("a")]),
+                dict_col(&[Some("x"), None, Some("x"), None]),
+                dict_col(&[Some("p"), Some("p"), Some("p"), Some("q")]),
+            ],
+            &mut groups,
+        )
+        .unwrap();
+        assert_eq!(groups, vec![0, 1, 0, 2]);
+
+        let out = gv.emit(EmitTo::All).unwrap();
+        assert_dict_str(&out[0], &[None, Some("a"), Some("a")]);
+        assert_dict_str(&out[1], &[Some("x"), None, None]);
+        assert_dict_str(&out[2], &[Some("p"), Some("p"), Some("q")]);
+    }
+
+    // streaming=true covers the scalarized_intern code path
+    #[test]
+    fn test_group_dict_with_primitive_streaming() {
+        let dt = dict_utf8();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", dt.clone(), true),
+            Field::new("b", dt.clone(), true),
+            Field::new("c", DataType::Int64, true),
+        ]));
+        let mut gv = GroupValuesColumn::<true>::try_new(Arc::clone(&schema)).unwrap();
+        let mut groups = vec![];
+
+        gv.intern(
+            &[
+                dict_col(&[Some("a"), Some("b"), Some("a")]),
+                dict_col(&[Some("x"), Some("y"), Some("x")]),
+                Arc::new(Int64Array::from(vec![Some(10), Some(20), Some(10)])),
+            ],
+            &mut groups,
+        )
+        .unwrap();
+        assert_eq!(groups, vec![0, 1, 0]);
+
+        gv.intern(
+            &[
+                dict_col(&[Some("a"), Some("c")]),
+                dict_col(&[Some("x"), Some("z")]),
+                Arc::new(Int64Array::from(vec![Some(10), Some(30)])),
+            ],
+            &mut groups,
+        )
+        .unwrap();
+        assert_eq!(groups, vec![0, 2]);
+
+        let out = gv.emit(EmitTo::All).unwrap();
+        assert_dict_str(&out[0], &[Some("a"), Some("b"), Some("c")]);
+        assert_dict_str(&out[1], &[Some("x"), Some("y"), Some("z")]);
+        let c = out[2].as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(c.values(), &[10, 20, 30]);
     }
 
     fn insert_non_inline_group_index_view(
