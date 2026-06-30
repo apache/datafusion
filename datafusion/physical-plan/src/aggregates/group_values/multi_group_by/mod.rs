@@ -1948,4 +1948,67 @@ mod tests {
             &mut group_values.map_size,
         );
     }
+    #[test]
+    fn test_emit_all_clears_map() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let mut gv = GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+        let col_a: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("x"), Some("y"), Some("z")]));
+        let col_b: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("p"), Some("q"), Some("r")]));
+        let mut groups = vec![];
+        gv.intern(&[Arc::clone(&col_a), Arc::clone(&col_b)], &mut groups)
+            .unwrap();
+        assert_eq!(groups, vec![0, 1, 2]);
+
+        let _ = gv.emit(EmitTo::All).unwrap();
+
+        let col_a: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("x"), Some("y"), Some("z")]));
+        let col_b: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("p"), Some("q"), Some("r")]));
+        let mut groups = vec![];
+        gv.intern(&[Arc::clone(&col_a), Arc::clone(&col_b)], &mut groups)
+            .unwrap();
+        assert_eq!(groups, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_emit_all_clears_map_mixed_keys() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let mut gv = GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+        let col_a: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("x"), Some("y"), Some("z")]));
+        let col_b: ArrayRef = Arc::new(arrow::array::Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+        ]));
+        let mut groups = vec![];
+        gv.intern(&[Arc::clone(&col_a), Arc::clone(&col_b)], &mut groups)
+            .unwrap();
+        assert_eq!(groups, vec![0, 1, 2]);
+
+        let _ = gv.emit(EmitTo::All).unwrap();
+
+        let col_a: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("y"), Some("w"), Some("y")]));
+        let col_b: ArrayRef = Arc::new(arrow::array::Int32Array::from(vec![
+            Some(2),
+            Some(9),
+            Some(2),
+        ]));
+        let mut groups = vec![];
+        gv.intern(&[Arc::clone(&col_a), Arc::clone(&col_b)], &mut groups)
+            .unwrap();
+        assert_eq!(groups, vec![0, 1, 0]);
+    }
 }
