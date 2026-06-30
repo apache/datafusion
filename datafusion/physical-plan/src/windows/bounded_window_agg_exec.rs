@@ -36,8 +36,9 @@ use crate::windows::{
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, InputOrderMode, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, WindowExpr, check_if_same_properties,
+    ExecutionPlanProperties, InputOrderMode, PartitionExtrema, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
+    check_if_same_properties,
 };
 
 use arrow::compute::take_record_batch;
@@ -383,6 +384,18 @@ impl ExecutionPlan for BoundedWindowAggExec {
             args.compute_child_statistics(&self.input, args.partition())?,
         );
         Ok(Arc::new(self.statistics_helper(input_stat)?))
+    }
+
+    /// Passthrough: a bounded window aggregate processes the partition in
+    /// input order, preserves it, and appends new window-result columns on
+    /// the right. The leading sort expressions are the same physical
+    /// expressions in the input and the output, so the input's extrema
+    /// describe our output along the same ordering.
+    fn runtime_partition_extrema(
+        &self,
+        partition: usize,
+    ) -> Result<Option<PartitionExtrema>> {
+        self.input.runtime_partition_extrema(partition)
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
