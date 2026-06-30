@@ -1636,6 +1636,19 @@ config_namespace! {
         /// Default: true
         pub enable_sort_pushdown: bool, default = true
 
+        /// When set to true, eligible `SortPreservingMergeExec` operators are
+        /// replaced with a parallel merge that splits the locally sorted inputs
+        /// into key ranges (via regular sampling of the sorted runs) and merges
+        /// those ranges concurrently across `target_partitions` threads, before
+        /// concatenating them in order into a single sorted stream.
+        ///
+        /// This trades extra memory (the sorted inputs are materialized) for
+        /// parallelism in the otherwise single-threaded merge. It only applies
+        /// to merges without a fetch/limit over bounded, multi-partition inputs.
+        ///
+        /// Default: true
+        pub enable_parallel_sort_merge: bool, default = true
+
         /// When set to true, the optimizer will extract leaf expressions
         /// (such as `get_field`) from filter/sort/join nodes into projections
         /// closer to the leaf table scans, and push those projections down

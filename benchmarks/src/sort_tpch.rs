@@ -72,6 +72,12 @@ pub struct RunOpt {
     /// Append a `LIMIT n` clause to the query
     #[arg(short = 'l', long = "limit")]
     limit: Option<usize>,
+
+    /// Override `datafusion.optimizer.enable_parallel_sort_merge`.
+    /// When unset, the config default is used. Pass `--parallel-merge false`
+    /// to benchmark the single-threaded `SortPreservingMergeExec` baseline.
+    #[arg(long = "parallel-merge")]
+    parallel_merge: Option<bool>,
 }
 
 pub const SORT_TPCH_QUERY_START_ID: usize = 1;
@@ -208,7 +214,10 @@ impl RunOpt {
 
     /// Benchmark query `query_id` in `SORT_QUERIES`
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
-        let config = self.common.config()?;
+        let mut config = self.common.config()?;
+        if let Some(parallel_merge) = self.parallel_merge {
+            config.options_mut().optimizer.enable_parallel_sort_merge = parallel_merge;
+        }
         let rt = self.common.build_runtime()?;
         let state = SessionStateBuilder::new()
             .with_config(config)

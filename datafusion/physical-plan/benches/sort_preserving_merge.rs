@@ -25,7 +25,8 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, expressions::col};
 use datafusion_physical_plan::test::TestMemoryExec;
 use datafusion_physical_plan::{
-    collect, sorts::sort_preserving_merge::SortPreservingMergeExec,
+    collect, sorts::parallel_merge::ParallelSortPreservingMergeExec,
+    sorts::sort_preserving_merge::SortPreservingMergeExec,
 };
 
 use std::sync::Arc;
@@ -190,6 +191,26 @@ fn bench_merge_sorted_preserving(c: &mut Criterion) {
                 )
             },
         );
+        c.bench_function(&format!("bench_merge_sorted_parallel/{bench_name}"), |b| {
+            b.iter_batched(
+                || {
+                    let exec =
+                        TestMemoryExec::try_new_exec(&partitions, schema.clone(), None)
+                            .unwrap();
+                    Arc::new(ParallelSortPreservingMergeExec::new(
+                        sort_order.clone(),
+                        exec,
+                    ))
+                },
+                |merge_exec| {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(async {
+                        collect(merge_exec, task_ctx.clone()).await.unwrap();
+                    });
+                },
+                BatchSize::LargeInput,
+            )
+        });
     }
 }
 

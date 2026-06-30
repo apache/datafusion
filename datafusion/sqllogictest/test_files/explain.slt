@@ -250,6 +250,7 @@ physical_plan after LimitPushdown SAME TEXT AS ABOVE
 physical_plan after TopKRepartition SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after PushdownSort SAME TEXT AS ABOVE
+physical_plan after ParallelSortMerge SAME TEXT AS ABOVE
 physical_plan after EnsureCooperative SAME TEXT AS ABOVE
 physical_plan after FilterPushdown(Post) SAME TEXT AS ABOVE
 physical_plan after SanityCheckPlan SAME TEXT AS ABOVE
@@ -332,6 +333,7 @@ physical_plan after LimitPushdown DataSourceExec: file_groups={1 group: [[WORKSP
 physical_plan after TopKRepartition SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after PushdownSort SAME TEXT AS ABOVE
+physical_plan after ParallelSortMerge SAME TEXT AS ABOVE
 physical_plan after EnsureCooperative SAME TEXT AS ABOVE
 physical_plan after FilterPushdown(Post) SAME TEXT AS ABOVE
 physical_plan after SanityCheckPlan SAME TEXT AS ABOVE
@@ -378,6 +380,7 @@ physical_plan after LimitPushdown DataSourceExec: file_groups={1 group: [[WORKSP
 physical_plan after TopKRepartition SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after PushdownSort SAME TEXT AS ABOVE
+physical_plan after ParallelSortMerge SAME TEXT AS ABOVE
 physical_plan after EnsureCooperative SAME TEXT AS ABOVE
 physical_plan after FilterPushdown(Post) SAME TEXT AS ABOVE
 physical_plan after SanityCheckPlan SAME TEXT AS ABOVE
@@ -624,6 +627,7 @@ physical_plan after LimitPushdown SAME TEXT AS ABOVE
 physical_plan after TopKRepartition SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after PushdownSort SAME TEXT AS ABOVE
+physical_plan after ParallelSortMerge SAME TEXT AS ABOVE
 physical_plan after EnsureCooperative SAME TEXT AS ABOVE
 physical_plan after FilterPushdown(Post) SAME TEXT AS ABOVE
 physical_plan after SanityCheckPlan SAME TEXT AS ABOVE
