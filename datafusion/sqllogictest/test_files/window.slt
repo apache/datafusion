@@ -1867,7 +1867,7 @@ EXPLAIN SELECT count(*) as global_count FROM
                   ORDER BY c1 ) AS a
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*) AS global_count
+01)Projection: count(Int64(1)) AS global_count
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: a
 04)------Projection:
@@ -6816,7 +6816,7 @@ ORDER BY i;
 statement ok
 reset datafusion.execution.batch_size;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;
