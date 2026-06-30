@@ -214,15 +214,6 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     }
 }
 
-pub(super) fn emit_to_for_batch_size(batch_size: usize, group_count: usize) -> EmitTo {
-    debug_assert!(batch_size > 0);
-    if group_count <= batch_size {
-        EmitTo::All
-    } else {
-        EmitTo::First(batch_size)
-    }
-}
-
 /// State and argument information for a single Aggregate
 ///
 /// For example, for `SELECT COUNT(x), SUM(y WHERE z > 10) ...`  there would be two
