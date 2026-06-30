@@ -25,7 +25,8 @@ use arrow::array::{
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type,
-    Decimal128Type, Decimal256Type, Field, FieldRef, Int32Type, Int64Type,
+    Decimal128Type, Decimal256Type, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Field, FieldRef, Int32Type, Int64Type,
     IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
@@ -781,6 +782,18 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Decimal256(_, _) => {
                 Box::new(NumericHLLAccumulator::<Decimal256Type>::new())
             }
+            DataType::Duration(TimeUnit::Second) => {
+                Box::new(NumericHLLAccumulator::<DurationSecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                Box::new(NumericHLLAccumulator::<DurationMillisecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                Box::new(NumericHLLAccumulator::<DurationMicrosecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                Box::new(NumericHLLAccumulator::<DurationNanosecondType>::new())
+            }
             DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
@@ -848,6 +861,7 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
+            | DataType::Duration(_)
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
@@ -866,8 +880,9 @@ mod tests {
         use super::*;
         use arrow::array::{
             AsArray, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-            Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
-            IntervalYearMonthArray, StringViewArray,
+            DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+            DurationSecondArray, Int64Array, IntervalDayTimeArray,
+            IntervalMonthDayNanoArray, IntervalYearMonthArray, StringViewArray,
         };
         use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, i256};
         use std::sync::Arc;
@@ -1036,6 +1051,39 @@ mod tests {
             assert_count_numerical_acc_and_group_acc::<IntervalMonthDayNanoType>(
                 month_day_nano,
                 4,
+            );
+        }
+
+        #[test]
+        fn duration_support_numerical_acc_and_group_acc() {
+            let values = vec![1i64, 2, 2, 3, 3, 3, 0, 0, i64::MAX, i64::MIN, i64::MIN];
+
+            let duration_second: ArrayRef =
+                Arc::new(DurationSecondArray::from(values.clone()));
+            assert_count_numerical_acc_and_group_acc::<DurationSecondType>(
+                duration_second,
+                6,
+            );
+
+            let duration_millisecond: ArrayRef =
+                Arc::new(DurationMillisecondArray::from(values.clone()));
+            assert_count_numerical_acc_and_group_acc::<DurationMillisecondType>(
+                duration_millisecond,
+                6,
+            );
+
+            let duration_microsecond: ArrayRef =
+                Arc::new(DurationMicrosecondArray::from(values.clone()));
+            assert_count_numerical_acc_and_group_acc::<DurationMicrosecondType>(
+                duration_microsecond,
+                6,
+            );
+
+            let duration_nanosecond: ArrayRef =
+                Arc::new(DurationNanosecondArray::from(values));
+            assert_count_numerical_acc_and_group_acc::<DurationNanosecondType>(
+                duration_nanosecond,
+                6,
             );
         }
 
