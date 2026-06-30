@@ -54,8 +54,8 @@ impl GroupColumn for DictionaryGroupValuesColumn {
     }
     fn vectorized_append(
         &mut self,
-        array: &arrow::array::ArrayRef,
-        rows: &[usize],
+        _array: &arrow::array::ArrayRef,
+        _rows: &[usize],
     ) -> datafusion_common::Result<()> {
         Ok(())
     }
@@ -86,9 +86,9 @@ mod tests {
     use std::sync::Arc;
 
     fn utf8_col() -> DictionaryGroupValuesColumn {
-        DictionaryGroupValuesColumn::new(Box::new(
-            ByteGroupValueBuilder::<i32>::new(OutputType::Utf8),
-        ))
+        DictionaryGroupValuesColumn::new(Box::new(ByteGroupValueBuilder::<i32>::new(
+            OutputType::Utf8,
+        )))
     }
 
     fn dict_arr(keys: &[Option<i32>], values: &[&str]) -> ArrayRef {
@@ -221,7 +221,8 @@ mod tests {
         #[test]
         fn take_n_with_nulls_then_build() {
             let mut col = utf8_col();
-            let arr = dict_arr(&[None, Some(0), None, Some(1), Some(2)], &["a", "b", "c"]);
+            let arr =
+                dict_arr(&[None, Some(0), None, Some(1), Some(2)], &["a", "b", "c"]);
             for i in 0..5 {
                 col.append_val(&arr, i).unwrap();
             }
