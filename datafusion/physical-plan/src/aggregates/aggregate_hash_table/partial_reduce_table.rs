@@ -26,7 +26,7 @@ use crate::aggregates::AggregateExec;
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
-    MaterializedOutput, PartialReduceMarker,
+    MaterializedAggregateOutput, PartialReduceMarker,
 };
 
 /// Methods specific to the aggregate hash table used in the partial-reduce stage.
@@ -83,7 +83,7 @@ impl AggregateHashTable<PartialReduceMarker> {
         &self,
         mut state: AggregateHashTableBuffer,
         output_schema: SchemaRef,
-    ) -> Result<MaterializedOutput> {
+    ) -> Result<MaterializedAggregateOutput> {
         // `state(EmitTo::All)` consumes accumulator state. Emit all groups once,
         // then slice the materialized batch on subsequent polls.
         let emit_to_all = EmitTo::All;
@@ -97,12 +97,12 @@ impl AggregateHashTable<PartialReduceMarker> {
 
         let batch = RecordBatch::try_new(output_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
-        Ok(MaterializedOutput::new(batch))
+        Ok(MaterializedAggregateOutput::new(batch))
     }
 
     fn emit_next_materialized_batch(
         &mut self,
-        mut output: MaterializedOutput,
+        mut output: MaterializedAggregateOutput,
         batch_size: usize,
     ) -> Option<RecordBatch> {
         let batch = output.next_batch(batch_size);

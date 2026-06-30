@@ -25,8 +25,7 @@ use parking_lot::Mutex;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
-use datafusion_execution::disk_manager::RefCountedTempFile;
-use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, SpillFile};
 
 use super::in_progress_spill_file::InProgressSpillFile;
 use super::spill_manager::SpillManager;
@@ -179,7 +178,9 @@ impl SpillPoolWriter {
 
             let writer = spill_manager.create_in_progress_file("SpillPool")?;
             // Clone the file so readers can access it immediately
-            let file = writer.file().expect("InProgressSpillFile should always have a file when it is first created").clone();
+            let file = Arc::clone(writer.file().expect(
+                "InProgressSpillFile should always have a file when it is first created",
+            ));
 
             let file_shared = Arc::new(Mutex::new(ActiveSpillFileShared {
                 writer: Some(writer),
@@ -482,7 +483,7 @@ struct ActiveSpillFileShared {
     writer: Option<InProgressSpillFile>,
     /// The spill file, set when the writer finishes.
     /// Taken by the reader when creating a stream (the file stays open via file handles).
-    file: Option<RefCountedTempFile>,
+    file: Option<Arc<dyn SpillFile>>,
     /// Total number of batches written to this file
     batches_written: usize,
     /// Estimated size in bytes of data written to this file
@@ -507,25 +508,25 @@ impl ActiveSpillFileShared {
     }
 }
 
-/// Reader state for a SpillFile (owned by individual SpillFile instances).
+/// Reader state for a SpillPoolFile (owned by individual SpillPoolFile instances).
 /// This is kept separate from the shared state to avoid holding locks during I/O.
-struct SpillFileReader {
+struct SpillPoolFileReader {
     /// The actual stream reading from disk
     stream: SendableRecordBatchStream,
     /// Number of batches this reader has consumed
     batches_read: usize,
 }
 
-struct SpillFile {
+struct SpillPoolFile {
     /// Shared coordination state (contains writer and batch counts)
     shared: Arc<Mutex<ActiveSpillFileShared>>,
-    /// Reader state (lazy-initialized, owned by this SpillFile)
-    reader: Option<SpillFileReader>,
+    /// Reader state (lazy-initialized, owned by this SpillPoolFile)
+    reader: Option<SpillPoolFileReader>,
     /// Spill manager for creating readers
     spill_manager: Arc<SpillManager>,
 }
 
-impl Stream for SpillFile {
+impl Stream for SpillPoolFile {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -568,7 +569,7 @@ impl Stream for SpillFile {
                     .read_spill_as_stream_unbuffered(file, None)
                 {
                     Ok(stream) => {
-                        self.reader = Some(SpillFileReader {
+                        self.reader = Some(SpillPoolFileReader {
                             stream,
                             batches_read: 0,
                         });
@@ -627,8 +628,8 @@ impl Stream for SpillFile {
 pub struct SpillPoolReader {
     /// Shared reference to the spill pool
     shared: Arc<Mutex<SpillPoolShared>>,
-    /// Current SpillFile we're reading from
-    current_file: Option<SpillFile>,
+    /// Current SpillPoolFile we're reading from
+    current_file: Option<SpillPoolFile>,
     /// Schema of the spilled data
     schema: SchemaRef,
 }
@@ -706,12 +707,12 @@ impl Stream for SpillPoolReader {
 
             // Peek at the front of the queue (don't pop yet)
             if let Some(file_shared) = shared.files.front() {
-                // Create a SpillFile from the shared state
+                // Create a SpillPoolFile from the shared state
                 let spill_manager = Arc::clone(&shared.spill_manager);
                 let file_shared = Arc::clone(file_shared);
-                drop(shared); // Release lock before creating SpillFile
+                drop(shared); // Release lock before creating SpillPoolFile
 
-                self.current_file = Some(SpillFile {
+                self.current_file = Some(SpillPoolFile {
                     shared: file_shared,
                     reader: None,
                     spill_manager,
@@ -1463,7 +1464,7 @@ mod tests {
         let schema = create_test_schema();
         let spill_manager = Arc::new(SpillManager::new(runtime, metrics.clone(), schema));
 
-        let (writer, mut reader) = channel(batch_size, spill_manager);
+        let (writer, mut reader) = channel(batch_size - 1, spill_manager);
 
         // Step 3: Write NUM_BATCHES batches to create approximately NUM_BATCHES files
         for i in 0..NUM_BATCHES {
@@ -1474,10 +1475,8 @@ mod tests {
         // Check how many files were created (should be at least a few due to file rotation)
         let file_count = metrics.spill_file_count.value();
         assert_eq!(
-            file_count,
-            NUM_BATCHES - 1,
-            "Expected at {} files with rotation, got {file_count}",
-            NUM_BATCHES - 1
+            file_count, NUM_BATCHES,
+            "Expected at {NUM_BATCHES} files with rotation, got {file_count}"
         );
 
         // Step 4: Verify initial disk usage reflects all files

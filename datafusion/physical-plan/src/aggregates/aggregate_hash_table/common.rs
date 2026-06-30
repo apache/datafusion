@@ -216,15 +216,6 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     }
 }
 
-pub(super) fn emit_to_for_batch_size(batch_size: usize, group_count: usize) -> EmitTo {
-    debug_assert!(batch_size > 0);
-    if group_count <= batch_size {
-        EmitTo::All
-    } else {
-        EmitTo::First(batch_size)
-    }
-}
-
 /// State and argument information for a single Aggregate
 ///
 /// For example, for `SELECT COUNT(x), SUM(y WHERE z > 10) ...`  there would be two
@@ -306,25 +297,25 @@ pub(super) enum AggregateHashTableState {
     Building(AggregateHashTableBuffer),
     /// Emitting results directly from group keys and aggregate state.
     Outputting(AggregateHashTableBuffer),
-    /// Materialize all output rows, then incrementally output slices from the
-    /// `OutputtingMaterialized` state.
+    /// Materialize all the output results, and then incrementally output in the `OutputtingMaterialized` state.
     ///
     /// Note this is a temporary solution until the `GroupValues` issue is solved:
     /// Issue: <https://github.com/apache/datafusion/issues/23178>
-    OutputtingMaterialized(MaterializedOutput),
+    OutputtingMaterialized(MaterializedAggregateOutput),
     Done,
 }
 
-/// Fully materialized aggregate output and the next row offset to emit.
+/// Fully evaluated aggregate output and the next row offset to emit.
 ///
-/// Some output paths consume accumulator state when emitting. Materialize those
-/// rows once, then slice them to honor `batch_size` across output polls.
-pub(super) struct MaterializedOutput {
+/// Final aggregate evaluation consumes accumulator state, and partial terminal
+/// output should not repeatedly renumber group values with `EmitTo::First`.
+/// Materialize once and then slice to honor `batch_size` across output polls.
+pub(super) struct MaterializedAggregateOutput {
     batch: RecordBatch,
     offset: usize,
 }
 
-impl MaterializedOutput {
+impl MaterializedAggregateOutput {
     pub(super) fn new(batch: RecordBatch) -> Self {
         Self { batch, offset: 0 }
     }
@@ -499,7 +490,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn materialized_output_slices_batches_until_exhausted() -> Result<()> {
+    fn materialized_aggregate_output_slices_batches_until_exhausted() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "group_col",
             DataType::Int32,
@@ -509,7 +500,7 @@ mod tests {
             schema,
             vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
         )?;
-        let mut output = MaterializedOutput::new(batch);
+        let mut output = MaterializedAggregateOutput::new(batch);
 
         assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![1, 2]);
         assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![3, 4]);
