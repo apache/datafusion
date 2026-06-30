@@ -1099,14 +1099,28 @@ pub fn binary(
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
 }
 
+fn regex_escape_char(ch: char) -> &'static str {
+    match ch {
+        '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^'
+        | '$' => "\\",
+        _ => "",
+    }
+}
+
+// Translates a SQL `SIMILAR TO` pattern to a Rust regex. Only `%` and `_`
+// are wildcards; everything else is a literal. The wildcard translations
+// are wrapped in `(?s:...)` so newlines match.
 fn sql_similar_to_regex(pattern: &str) -> String {
-    let mut result = String::with_capacity(pattern.len() + 6);
+    let mut result = String::with_capacity(pattern.len() + 10);
     result.push_str("^(?:");
     for ch in pattern.chars() {
         match ch {
-            '%' => result.push_str(".*"),
-            '_' => result.push('.'),
-            c => result.push(c),
+            '%' => result.push_str("(?s:.*)"),
+            '_' => result.push_str("(?s:.)"),
+            c => {
+                result.push_str(regex_escape_char(c));
+                result.push(c);
+            }
         }
     }
     result.push_str(")$");
@@ -4904,9 +4918,91 @@ mod tests {
         apply_similar_to(&schema, vec!["abc", "a"], "a", false, false, &expected)
             .unwrap();
 
-        // Regex metacharacters pass through unchanged
-        let expected = [Some(true), Some(true), Some(false)].iter().collect();
-        apply_similar_to(&schema, vec!["a", "b", "c"], "a|b", false, false, &expected)
+        // `%` matches zero or more, so the empty string matches.
+        let expected = [Some(true), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["", "anything"], "%", false, false, &expected)
+            .unwrap();
+
+        // `_` requires exactly one character, so the empty string does not
+        // match.
+        let expected = [Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["", "x"], "_", false, false, &expected).unwrap();
+
+        // `%` at the start of the pattern is still anchored: the string
+        // must end where the trailing literal begins.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["abc", "abd"], "%c", false, false, &expected)
+            .unwrap();
+
+        // `%` and `_` together: `%` matches zero or more (including the
+        // empty string), `_` matches exactly one character.
+        let expected = [Some(true), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["a", "abc"], "a%", false, false, &expected)
+            .unwrap();
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["axb", "abc"], "a_b", false, false, &expected)
+            .unwrap();
+    }
+
+    // Regression: regex metacharacters in a SIMILAR TO pattern must be
+    // treated as SQL literals, not as regex operators. Without escaping,
+    // `a.` would match any `a` followed by any character (`ab`, `a1`, ...).
+    #[test]
+    fn test_similar_to_regex_metachars_are_literals() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        // `.` is a literal, not the regex "any character" operator.
+        let expected = [Some(true), Some(false), Some(false)].iter().collect();
+        apply_similar_to(
+            &schema,
+            vec!["a.", "ab", "a"],
+            "a.",
+            false,
+            false,
+            &expected,
+        )
+        .unwrap();
+
+        // `^` and `$` are literals and only match the literal `^` and `$`.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["^x$", "x"], r"^x$", false, false, &expected)
+            .unwrap();
+
+        // `|`, `(`, `)`, `*`, `+`, `?`, `[`, `]`, `{`, `}`, `\` are all
+        // literals too.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["a|b", "a"], "a|b", false, false, &expected)
+            .unwrap();
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["(a)", "a"], "(a)", false, false, &expected)
+            .unwrap();
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["a*", "aa"], "a*", false, false, &expected)
+            .unwrap();
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["[ab]", "a"], "[ab]", false, false, &expected)
+            .unwrap();
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec![r"a\d", "ad"], r"a\d", false, false, &expected)
+            .unwrap();
+    }
+
+    // Regression: `%` and `_` must match newlines, matching SQL semantics
+    // where these wildcards match "any character".
+    #[test]
+    fn test_similar_to_wildcards_match_newlines() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        // `%` crosses a newline. (`%` also matches zero characters, so `ab`
+        // matches `a%b` as well.)
+        let expected = [Some(true), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["a\nb", "ab"], "a%b", false, false, &expected)
+            .unwrap();
+
+        // `_` matches a single newline. (`_` requires exactly one character,
+        // so `ab` does not match `a_b`.)
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["a\nb", "ab"], "a_b", false, false, &expected)
             .unwrap();
     }
 

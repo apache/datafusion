@@ -71,26 +71,6 @@ p2
 p2e1
 p2m1e1
 
-# SIMILAR TO
-query T rowsort
-SELECT s FROM test WHERE s SIMILAR TO 'p[12].*';
-----
-p1
-p1e1
-p1m1e1
-p2
-p2e1
-p2m1e1
-
-# NOT SIMILAR TO
-query T rowsort
-SELECT s FROM test WHERE s NOT SIMILAR TO 'p[12].*';
-----
-P1
-P1e1
-P1m1e1
-e1
-
 # SIMILAR TO with `%` wildcard (zero or more characters)
 query T rowsort
 SELECT s FROM test WHERE s SIMILAR TO 'p1%';
@@ -111,6 +91,68 @@ query T rowsort
 SELECT s FROM test WHERE s SIMILAR TO 'p1';
 ----
 p1
+
+# SIMILAR TO treats regex metacharacters as literals (`. ^ $ | * + ? ( ) [ ] \`).
+query B
+SELECT 'a.' SIMILAR TO 'a.';
+----
+true
+
+query B
+SELECT 'ab' SIMILAR TO 'a.';
+----
+false
+
+query B
+SELECT 'a1' SIMILAR TO 'a.';
+----
+false
+
+query B
+SELECT '^x$' SIMILAR TO '^x$';
+----
+true
+
+query B
+SELECT 'x' SIMILAR TO '^x$';
+----
+false
+
+query B
+SELECT 'a|b' SIMILAR TO 'a|b';
+----
+true
+
+query B
+SELECT 'a' SIMILAR TO 'a|b';
+----
+false
+
+query B
+SELECT 'a*' SIMILAR TO 'a*';
+----
+true
+
+query B
+SELECT 'aa' SIMILAR TO 'a*';
+----
+false
+
+# SIMILAR TO wildcards match newlines.
+query B
+SELECT 'a' || chr(10) || 'b' SIMILAR TO 'a%b';
+----
+true
+
+query B
+SELECT 'a' || chr(10) || 'b' SIMILAR TO 'a_b';
+----
+true
+
+query B
+SELECT 'ab' SIMILAR TO 'a_b';
+----
+false
 
 # NOT LIKE
 query T rowsort
