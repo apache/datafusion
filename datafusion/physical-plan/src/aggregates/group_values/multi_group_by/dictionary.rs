@@ -279,4 +279,37 @@ mod tests {
             );
         }
     }
+
+    // Regression tests — add new cases here when a bug is fixed.
+    mod regressions {
+        use super::*;
+
+        #[test]
+        fn take_n_zero_is_noop() {
+            let mut col = utf8_col();
+            let arr = dict_arr(&[Some(0), Some(1)], &["a", "b"]);
+            col.append_val(&arr, 0).unwrap();
+            col.append_val(&arr, 1).unwrap();
+            assert_eq!(col.len(), 2);
+
+            let taken = col.take_n(0);
+            assert_eq!(taken.len(), 0);
+            assert_eq!(col.len(), 2);
+        }
+
+        #[test]
+        fn take_n_all_then_build_empty() {
+            let mut col = utf8_col();
+            let arr = dict_arr(&[Some(0), Some(1)], &["a", "b"]);
+            col.append_val(&arr, 0).unwrap();
+            col.append_val(&arr, 1).unwrap();
+
+            let taken = col.take_n(2);
+            assert_eq!(str_values(&taken), vec![Some("a".into()), Some("b".into())]);
+            assert_eq!(col.len(), 0);
+
+            let out = Box::new(col).build();
+            assert_eq!(out.len(), 0);
+        }
+    }
 }
