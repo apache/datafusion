@@ -515,6 +515,29 @@ impl PartialHashAggregateStream {
                 // True branch: a decision has been made to skip partial aggregation.
                 if self.should_skip_aggregation() {
                     let timer = elapsed_compute.timer();
+                    if original_state.hash_table().can_repartition_in_partial() {
+                        let result = original_state.hash_table_mut().skip_hash_group_by();
+                        timer.done();
+
+                        if let Err(e) = result {
+                            return ControlFlow::Break((
+                                Poll::Ready(Some(Err(e))),
+                                original_state,
+                            ));
+                        }
+
+                        if let Err(e) =
+                            self.resize_reservation(original_state.hash_table())
+                        {
+                            return ControlFlow::Break((
+                                Poll::Ready(Some(Err(e))),
+                                original_state,
+                            ));
+                        }
+
+                        return ControlFlow::Continue(original_state);
+                    }
+
                     let result = match original_state.hash_table().partial_skip_table() {
                         Ok(skip_hash_table) => self
                             .start_output(original_state.hash_table_mut(), false)
