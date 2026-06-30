@@ -2008,9 +2008,8 @@ impl BuildProbeJoinMetrics {
             .with_category(MetricCategory::Rows)
             .counter("build_input_rows", partition);
 
-        let build_mem_used = MetricBuilder::new(metrics)
-            .with_category(MetricCategory::Bytes)
-            .gauge("build_mem_used", partition);
+        let build_mem_used =
+            MetricBuilder::new(metrics).peak_memory_usage("build_mem_used", partition);
 
         let input_batches = MetricBuilder::new(metrics)
             .with_category(MetricCategory::Rows)
