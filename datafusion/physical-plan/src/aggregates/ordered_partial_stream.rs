@@ -114,6 +114,7 @@ impl OrderedPartialAggregateStream {
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
+        let batch_size = context.session_config().batch_size();
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
 
         // Preserve the existing aggregate metric surface for this plan node.
@@ -126,6 +127,7 @@ impl OrderedPartialAggregateStream {
             agg,
             partition,
             Arc::clone(&schema),
+            batch_size,
         )?;
         let reservation =
             MemoryConsumer::new(format!("OrderedPartialAggregateStream[{partition}]"))

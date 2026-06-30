@@ -53,6 +53,7 @@ impl OrderedAggregateTable<OrderedPartialMarker> {
         agg: &AggregateExec,
         partition: usize,
         output_schema: SchemaRef,
+        batch_size: usize,
     ) -> Result<Self> {
         let input_schema = agg.input().schema();
         Self::new_for_mode(
@@ -60,6 +61,7 @@ impl OrderedAggregateTable<OrderedPartialMarker> {
             partition,
             &input_schema,
             output_schema,
+            batch_size,
             &agg.input_order_mode,
             &AggregateMode::Partial,
             agg.filter_expr.iter().cloned().collect(),
@@ -127,10 +129,14 @@ impl OrderedAggregateTable<OrderedPartialMarker> {
         let Some(emit_to) = self.buffer.group_ordering.emit_to() else {
             return Ok(None);
         };
+        let (emit_to, should_remove_groups) =
+            self.clamp_emit_to(self.buffer.group_values.len(), emit_to);
 
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.buffer.group_values.emit(emit_to)?;
-        remove_emitted_groups(&mut self.buffer.group_ordering, emit_to);
+        if should_remove_groups {
+            remove_emitted_groups(&mut self.buffer.group_ordering, emit_to);
+        }
 
         for acc in &mut self.buffer.accumulators {
             output.extend(acc.state(emit_to)?);
