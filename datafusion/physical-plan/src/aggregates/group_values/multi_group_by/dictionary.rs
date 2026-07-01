@@ -32,7 +32,7 @@ pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> 
 }
 
 impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
-    pub fn new(inner: Box<dyn GroupColumn>, field: Field) -> Self {
+    pub fn new(inner: Box<dyn GroupColumn>, field: &Field) -> Self {
         let null_array = arrow::array::new_null_array(field.data_type(), 1);
         Self {
             inner,
@@ -41,7 +41,10 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
         }
     }
 
+    #[inline]
     fn into_dict(values: ArrayRef) -> ArrayRef {
+        // at some point in the future we may want to support bumping the key types
+        // https://github.com/apache/datafusion/issues/23127
         let keys: PrimitiveArray<K> = (0..values.len())
             .map(|i| {
                 if values.is_null(i) {
@@ -83,18 +86,18 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
     ) {
         let dict = array.as_dictionary::<K>();
         let keys = dict.keys();
+        let values = dict.values();
 
         if keys.null_count() == 0 {
             let key_indices: Vec<usize> =
                 rhs_rows.iter().map(|&r| keys.value(r).as_usize()).collect();
             self.inner.vectorized_equal_to(
                 lhs_rows,
-                dict.values(),
+                values,
                 &key_indices,
                 equal_to_results,
             );
         } else {
-            let values = dict.values();
             for (i, (lhs_row, rhs_row)) in lhs_rows.iter().zip(rhs_rows).enumerate() {
                 if equal_to_results.get_bit(i) {
                     let result = match dict.key(*rhs_row) {
@@ -160,7 +163,7 @@ mod tests {
         let field = Field::new("", DataType::Utf8, true);
         DictionaryGroupValuesColumn::<Int32Type>::new(
             Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
-            field,
+            &field,
         )
     }
 

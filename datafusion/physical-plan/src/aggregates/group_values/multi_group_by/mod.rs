@@ -955,7 +955,7 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Utf8View
             | DataType::BinaryView
             | DataType::Boolean
-    ) || matches!(data_type, DataType::Dictionary(_,v ) if group_column_supported_type(v)) // this doesnt support arbitrary nesting for now
+    ) || matches!(data_type, DataType::Dictionary(_,v ) if group_column_supported_type(v))
 }
 
 /// Build a [`GroupColumn`] for a single schema field.
@@ -1073,28 +1073,28 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
             let col: Box<dyn GroupColumn> = match key_dt.as_ref() {
                 DataType::Int8 => Box::new(dictionary::DictionaryGroupValuesColumn::<
                     Int8Type,
-                >::new(inner, new_field)),
+                >::new(inner, &new_field)),
                 DataType::Int16 => Box::new(dictionary::DictionaryGroupValuesColumn::<
                     Int16Type,
-                >::new(inner, new_field)),
+                >::new(inner, &new_field)),
                 DataType::Int32 => Box::new(dictionary::DictionaryGroupValuesColumn::<
                     Int32Type,
-                >::new(inner, new_field)),
+                >::new(inner, &new_field)),
                 DataType::Int64 => Box::new(dictionary::DictionaryGroupValuesColumn::<
                     Int64Type,
-                >::new(inner, new_field)),
+                >::new(inner, &new_field)),
                 DataType::UInt8 => Box::new(dictionary::DictionaryGroupValuesColumn::<
                     UInt8Type,
-                >::new(inner, new_field)),
+                >::new(inner, &new_field)),
                 DataType::UInt16 => Box::new(dictionary::DictionaryGroupValuesColumn::<
                     UInt16Type,
-                >::new(inner, new_field)),
+                >::new(inner, &new_field)),
                 DataType::UInt32 => Box::new(dictionary::DictionaryGroupValuesColumn::<
                     UInt32Type,
-                >::new(inner, new_field)),
+                >::new(inner, &new_field)),
                 DataType::UInt64 => Box::new(dictionary::DictionaryGroupValuesColumn::<
                     UInt64Type,
-                >::new(inner, new_field)),
+                >::new(inner, &new_field)),
                 _ => {
                     return not_impl_err!(
                         "Dictionary key type {key_dt} not supported in GroupValuesColumn"
