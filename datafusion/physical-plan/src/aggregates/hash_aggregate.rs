@@ -1003,7 +1003,7 @@ impl FinalHashAggregateStream {
     ) -> Result<FinalHashAggregateState> {
         dbg!(
             "load_next_partition_run, num_partitions:{}",
-            self.partition_run_state.unwrap().runs.len()
+            self.partition_run_state.as_ref().map(|state| state.runs.len()).unwrap_or(0)
         );
         let next_partition_id = self
             .partition_run_state
