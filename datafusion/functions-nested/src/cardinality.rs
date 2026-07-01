@@ -23,10 +23,15 @@ use arrow::array::{
 };
 use arrow::datatypes::{
     DataType,
-    DataType::{LargeList, List, Map, Null, UInt64},
+    DataType::{
+        FixedSizeList, LargeList, LargeListView, List, ListView, Map, Null, UInt64,
+    },
 };
 use datafusion_common::Result;
-use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
+use datafusion_common::cast::{
+    as_fixed_size_list_array, as_large_list_array, as_large_list_view_array,
+    as_list_array, as_list_view_array, as_map_array,
+};
 use datafusion_common::exec_err;
 use datafusion_common::utils::{ListCoercion, take_function_args};
 use datafusion_expr::{
@@ -146,14 +151,14 @@ fn generic_list_cardinality<O: OffsetSizeTrait>(
     let result = array
         .iter()
         .map(|arr| match arr {
-            Some(arr) => value_cardinality(arr).map(Some),
+            Some(arr) => value_cardinality(&arr).map(Some),
             None => Ok(None),
         })
         .collect::<Result<UInt64Array>>()?;
     Ok(Arc::new(result) as ArrayRef)
 }
 
-fn value_cardinality(array: ArrayRef) -> Result<u64> {
+fn value_cardinality(array: &ArrayRef) -> Result<u64> {
     match array.data_type() {
         List(_) => {
             let list = as_list_array(&array)?;
@@ -161,6 +166,18 @@ fn value_cardinality(array: ArrayRef) -> Result<u64> {
         }
         LargeList(_) => {
             let list = as_large_list_array(&array)?;
+            sum_list_cardinality(list.iter())
+        }
+        ListView(_) => {
+            let list = as_list_view_array(&array)?;
+            sum_list_cardinality(list.iter())
+        }
+        LargeListView(_) => {
+            let list = as_large_list_view_array(&array)?;
+            sum_list_cardinality(list.iter())
+        }
+        FixedSizeList(..) => {
+            let list = as_fixed_size_list_array(&array)?;
             sum_list_cardinality(list.iter())
         }
         _ => Ok(array.len() as u64),
@@ -173,7 +190,7 @@ where
 {
     iter.try_fold(0u64, |total, arr| {
         let value_count = match arr {
-            Some(arr) => value_cardinality(arr)?,
+            Some(arr) => value_cardinality(&arr)?,
             None => 0,
         };
         total.checked_add(value_count).ok_or_else(|| {
