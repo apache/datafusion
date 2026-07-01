@@ -971,7 +971,8 @@ fn test_string_concat_coercion() -> Result<()> {
         DataType::FixedSizeBinary(4),
         DataType::FixedSizeBinary(16),
         Operator::StringConcat,
-        DataType::Binary
+        DataType::FixedSizeBinary(4),
+        DataType::FixedSizeBinary(16)
     );
     test_coercion_binary_rule!(
         DataType::FixedSizeBinary(4),
