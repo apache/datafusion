@@ -75,8 +75,8 @@ pub trait ExprSchemable {
 /// - Type-only casts (i.e., target_field == DataType::SomeDataType.into_nullable_field())
 ///   propagate non extension-type metadata from the source. This is for backward compatibility
 ///   (casts have propagated source metadata for many if not all previous versions), recognizing
-///   that the return type of <some extension type>::<some non extension type> should have the
-///   return type of <some non extension type> (e.g., casting arrow.json to utf8).
+///   that the return type of `<some extension type>::<some non extension type>` should have the
+///   return type of `<some non extension type>` (e.g., casting arrow.json to utf8).
 /// - All other casts preserve target metadata exactly. This ensures in particular that output
 ///   metadata when casting to an extension type contains the extension information in the
 ///   output field. Callers that wish to have some mix of source and target metadata can use
