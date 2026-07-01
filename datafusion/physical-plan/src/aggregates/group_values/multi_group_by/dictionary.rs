@@ -20,6 +20,7 @@ use crate::aggregates::group_values::multi_group_by::GroupColumn;
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, DictionaryArray, PrimitiveArray,
 };
+use arrow::compute::concat;
 use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, Field};
 use datafusion_common::Result;
 use std::marker::PhantomData;
@@ -28,6 +29,8 @@ use std::sync::Arc;
 pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> {
     inner: Box<dyn GroupColumn>,
     null_array: ArrayRef,
+    cached_values: Option<ArrayRef>,
+    cached_combined: Option<ArrayRef>,
     _phantom: PhantomData<K>,
 }
 
@@ -37,8 +40,24 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
         Self {
             inner,
             null_array,
+            cached_values: None,
+            cached_combined: None,
             _phantom: PhantomData,
         }
+    }
+
+    #[inline]
+    fn get_combined(&mut self, values: &ArrayRef) -> Result<ArrayRef> {
+        let is_cached = self
+            .cached_values
+            .as_ref()
+            .is_some_and(|cached| Arc::ptr_eq(cached, values));
+        if !is_cached {
+            self.cached_combined =
+                Some(concat(&[values.as_ref(), self.null_array.as_ref()])?);
+            self.cached_values = Some(Arc::clone(values));
+        }
+        Ok(Arc::clone(self.cached_combined.as_ref().unwrap()))
     }
 
     #[inline]
@@ -119,14 +138,14 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                 rows.iter().map(|&r| keys.value(r).as_usize()).collect();
             self.inner.vectorized_append(dict.values(), &key_indices)
         } else {
-            let values = dict.values();
-            for &row in rows {
-                match dict.key(row) {
-                    None => self.inner.append_val(&self.null_array, 0)?,
-                    Some(k) => self.inner.append_val(values, k)?,
-                }
-            }
-            Ok(())
+            let combined = self.get_combined(dict.values())?;
+            // last element of combined is always the null sentinel appended by get_combined
+            let null_idx = combined.len() - 1;
+            let key_indices: Vec<usize> = rows
+                .iter()
+                .map(|&r| dict.key(r).unwrap_or(null_idx))
+                .collect();
+            self.inner.vectorized_append(&combined, &key_indices)
         }
     }
 
