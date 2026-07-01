@@ -5402,10 +5402,10 @@ LEFT JOIN issue_19067_right r ON l.join_key = r.join_key
 ORDER BY l.id;
 ----
 physical_plan
-01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[id@2 as id, join_key@3 as left_key, join_key@0 as right_key, value@1 as value]
-03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(join_key@0, join_key@1)]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[id@2 as id, join_key@3 as left_key, join_key@0 as right_key, value@1 as value]
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(join_key@0, join_key@1)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement count 0
@@ -5543,7 +5543,7 @@ statement count 0
 DROP TABLE t2;
 
 statement ok
-CREATE TABLE t1(a INT, b INT) AS VALUES 
+CREATE TABLE t1(a INT, b INT) AS VALUES
   (NULL, 1), (NULL, 2), (NULL, 3), (NULL, 4), (NULL, 5);
 
 statement ok
@@ -5555,7 +5555,7 @@ CREATE TABLE t2(c INT) AS VALUES (1), (2);
 query II
 SELECT sub.a, sub.b FROM (
   SELECT * FROM t1 ORDER BY b LIMIT 1
-) sub 
+) sub
 JOIN t2 ON sub.a = t2.c;
 ----
 

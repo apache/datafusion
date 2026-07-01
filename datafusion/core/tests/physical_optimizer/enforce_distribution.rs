@@ -1577,8 +1577,8 @@ fn multi_smj_joins() -> Result<()> {
                               SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                                 DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                             RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1, maintains_sort_order=true
-                              SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
-                                ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                              ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
                                   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                           RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
                             SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
@@ -1604,8 +1604,8 @@ fn multi_smj_joins() -> Result<()> {
                                   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                                 RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1, maintains_sort_order=true
-                                  SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
-                                    ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                  ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                    SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
                                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                           RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
                             SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
@@ -1627,8 +1627,8 @@ fn multi_smj_joins() -> Result<()> {
                               SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                                 DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                             RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1, maintains_sort_order=true
-                              SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
-                                ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                              ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
                                   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                           RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
                             SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
@@ -1655,8 +1655,8 @@ fn multi_smj_joins() -> Result<()> {
                                   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                                 RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1, maintains_sort_order=true
-                                  SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
-                                    ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                  ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                    SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
                                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                           RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
                             SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
@@ -1688,8 +1688,8 @@ fn multi_smj_joins() -> Result<()> {
                                       SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                                         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                                     RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1, maintains_sort_order=true
-                                      SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
-                                        ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                      ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                        SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
                                           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                                   RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
                                     SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
@@ -1708,8 +1708,8 @@ fn multi_smj_joins() -> Result<()> {
                                           SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                                             DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                                         RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1, maintains_sort_order=true
-                                          SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
-                                            ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                            SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
                                               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                                   RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
                                     SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
@@ -1733,8 +1733,8 @@ fn multi_smj_joins() -> Result<()> {
                                       SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                                         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                                     RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1, maintains_sort_order=true
-                                      SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
-                                        ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                      ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                        SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
                                           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                                   RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
                                     SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
@@ -1753,8 +1753,8 @@ fn multi_smj_joins() -> Result<()> {
                                           SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                                             DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                                         RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1, maintains_sort_order=true
-                                          SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
-                                            ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                            SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
                                               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                                   RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
                                     SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
@@ -1828,16 +1828,16 @@ fn smj_join_key_ordering() -> Result<()> {
     let plan_distrib = test_config.to_plan(join.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib, @r"
     SortMergeJoinExec: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
-      SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[true]
-        ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]
-          ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]
+      ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]
+        ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]
+          SortExec: expr=[b1@0 ASC, a1@1 ASC], preserve_partitioning=[true]
             AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]
               RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10
                 AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]
                   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-      SortExec: expr=[b2@1 ASC, a2@0 ASC], preserve_partitioning=[true]
-        ProjectionExec: expr=[a@1 as a2, b@0 as b2]
+      ProjectionExec: expr=[a@1 as a2, b@0 as b2]
+        SortExec: expr=[b@0 ASC, a@1 ASC], preserve_partitioning=[true]
           AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]
             RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10
               AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
@@ -1849,16 +1849,16 @@ fn smj_join_key_ordering() -> Result<()> {
     let plan_sort = test_config.to_plan(join, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_sort, @r"
     SortMergeJoinExec: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
-      SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[true]
-        ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]
-          ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]
+      ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]
+        ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]
+          SortExec: expr=[b1@0 ASC, a1@1 ASC], preserve_partitioning=[true]
             AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]
               RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10
                 AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]
                   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-      SortExec: expr=[b2@1 ASC, a2@0 ASC], preserve_partitioning=[true]
-        ProjectionExec: expr=[a@1 as a2, b@0 as b2]
+      ProjectionExec: expr=[a@1 as a2, b@0 as b2]
+        SortExec: expr=[b@0 ASC, a@1 ASC], preserve_partitioning=[true]
           AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]
             RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10
               AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
@@ -2476,8 +2476,8 @@ fn repartition_transitively_past_sort_with_projection() -> Result<()> {
     let plan_distrib = test_config.to_plan(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib,
                                                                                         @r"
-    SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
-      ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]
+    ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]
+      SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     ");
     // Since this projection is trivial, increasing parallelism is not beneficial
@@ -2551,8 +2551,8 @@ fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()>
     assert_plan!(plan_distrib,
                                                                                         @r"
     SortPreservingMergeExec: [a@0 ASC]
-      SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-        ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]
+      ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]
+        SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
           FilterExec: c@2 = 0
             RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
@@ -2566,8 +2566,8 @@ fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()>
     assert_plan!(plan_sort,
                                                                                         @r"
     SortPreservingMergeExec: [a@0 ASC]
-      SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-        ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]
+      ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]
+        SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
           FilterExec: c@2 = 0
             RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
