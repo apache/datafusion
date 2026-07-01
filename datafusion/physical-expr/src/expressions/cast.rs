@@ -65,16 +65,11 @@ pub struct CastExpr {
     /// Explicit metadata for the output field, or `None` to pass through source metadata
     /// (with extension type keys stripped).
     ///
-    /// When `merge_source_metadata` is `true`, this contains extension type metadata
-    /// to overlay on top of source's non-extension metadata.
-    /// When `merge_source_metadata` is `false`, this is the exact metadata to use.
+    /// When `Some`, this is the exact metadata to use for the output field.
+    /// When `None`, source metadata passes through (stripping extension keys).
     target_metadata: Option<HashMap<String, String>>,
     /// Explicit nullability for the output field, or `None` to pass through source nullability.
     target_nullable: Option<bool>,
-    /// When `true` and `target_metadata` is `Some`, merge source's non-extension metadata
-    /// with the target's extension metadata. When `false`, use `target_metadata` exactly
-    /// without consulting the source.
-    merge_source_metadata: bool,
     /// Cast options
     cast_options: CastOptions<'static>,
 }
@@ -86,7 +81,6 @@ impl PartialEq for CastExpr {
             && self.target_type.eq(&other.target_type)
             && self.target_metadata.eq(&other.target_metadata)
             && self.target_nullable.eq(&other.target_nullable)
-            && self.merge_source_metadata.eq(&other.merge_source_metadata)
             && self.cast_options.eq(&other.cast_options)
     }
 }
@@ -105,7 +99,6 @@ impl Hash for CastExpr {
             }
         }
         self.target_nullable.hash(state);
-        self.merge_source_metadata.hash(state);
         self.cast_options.hash(state);
     }
 }
@@ -130,7 +123,6 @@ impl CastExpr {
             target_type: cast_type,
             target_metadata: None,
             target_nullable: None,
-            merge_source_metadata: true,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
         }
     }
@@ -139,44 +131,16 @@ impl CastExpr {
     ///
     /// The provided `target_field` determines the output characteristics:
     /// - The field's data type becomes the cast target type
-    /// - The field's metadata is used to extract extension type information,
-    ///   which is then merged with source metadata (pass-through behavior)
+    /// - The field's metadata is used exactly as provided
     /// - The field's nullability is preserved
     ///
-    /// This is the preferred constructor when the caller already has field
-    /// information (for example, during logical-to-physical planning) but still
-    /// wants source metadata to pass through.
+    /// This is the preferred constructor when the caller has explicit field
+    /// information that should be used exactly (for example, during schema
+    /// enforcement or adapter layers).
     ///
-    /// See [`CastExpr::new`] for type-only casts and
-    /// [`CastExpr::new_with_exact_target_field`] for exact field matching.
+    /// See [`CastExpr::new`] for type-only casts where source metadata should
+    /// pass through.
     pub fn new_with_target_field(
-        expr: Arc<dyn PhysicalExpr>,
-        target_field: &FieldRef,
-        cast_options: Option<CastOptions<'static>>,
-    ) -> Self {
-        // Extract only extension type metadata from the target field to merge
-        // with source metadata (pass-through behavior with extension type overlay)
-        let extension_metadata = extract_extension_metadata(target_field.metadata());
-        Self {
-            expr,
-            target_type: target_field.data_type().clone(),
-            target_metadata: extension_metadata,
-            target_nullable: Some(target_field.is_nullable()),
-            merge_source_metadata: true,
-            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
-        }
-    }
-
-    /// Create a new `CastExpr` with an explicit target `FieldRef`, using the
-    /// target field exactly without merging source metadata.
-    ///
-    /// Unlike [`CastExpr::new_with_target_field`], this constructor does NOT
-    /// merge non-extension metadata from the source field. The target field's
-    /// metadata is used exactly as provided. This is useful when the cast
-    /// represents a complete type transformation where source metadata should
-    /// not propagate (e.g., rewriting placeholder functions like
-    /// `file_row_index()` to concrete column references).
-    pub fn new_with_exact_target_field(
         expr: Arc<dyn PhysicalExpr>,
         target_field: &FieldRef,
         cast_options: Option<CastOptions<'static>>,
@@ -186,7 +150,6 @@ impl CastExpr {
             target_type: target_field.data_type().clone(),
             target_metadata: Some(target_field.metadata().clone()),
             target_nullable: Some(target_field.is_nullable()),
-            merge_source_metadata: false,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
         }
     }
@@ -247,42 +210,32 @@ impl CastExpr {
     }
 
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        // If we're not merging with source AND both metadata and nullability are
-        // explicit, we can build the field without consulting the source expression.
-        // This is important for cases where the source references columns beyond
-        // the schema (e.g., virtual row-index columns appended at scan time).
-        if !self.merge_source_metadata
-            && let (Some(metadata), Some(nullable)) =
-                (&self.target_metadata, self.target_nullable)
+        // Try to get the source field for the name. If both metadata and nullability
+        // are explicit, we can fall back to an empty name if the source lookup fails
+        // (e.g., for virtual row-index columns appended at scan time).
+        let source_result = self.expr.return_field(input_schema);
+
+        if let (Some(metadata), Some(nullable)) =
+            (&self.target_metadata, self.target_nullable)
         {
+            // Both metadata and nullability are explicit
+            let name = source_result
+                .as_ref()
+                .map(|f| f.name().to_string())
+                .unwrap_or_default();
             return Ok(Arc::new(
-                Field::new("", self.target_type.clone(), nullable)
+                Field::new(name, self.target_type.clone(), nullable)
                     .with_metadata(metadata.clone()),
             ));
         }
 
-        self.expr.return_field(input_schema).map(|source_field| {
-            // Build metadata based on merge_source_metadata flag
-            let metadata = if self.merge_source_metadata {
-                // Merge mode: start with source non-extension metadata
-                let mut meta = source_field.metadata().clone();
-                meta.remove(EXTENSION_TYPE_NAME_KEY);
-                meta.remove(EXTENSION_TYPE_METADATA_KEY);
-                // Then overlay any explicit metadata (extension keys from target)
-                if let Some(explicit_metadata) = &self.target_metadata {
-                    meta.extend(
-                        explicit_metadata
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone())),
-                    );
-                }
-                meta
-            } else if let Some(explicit_metadata) = &self.target_metadata {
-                // Exact mode with explicit metadata: use it directly
+        // Need source field for metadata or nullability
+        source_result.map(|source_field| {
+            // Build metadata: use explicit if provided, otherwise pass through
+            // from source (stripping extension keys)
+            let metadata = if let Some(explicit_metadata) = &self.target_metadata {
                 explicit_metadata.clone()
             } else {
-                // Exact mode but no explicit metadata: pass through from source
-                // (stripping extension keys)
                 let mut meta = source_field.metadata().clone();
                 meta.remove(EXTENSION_TYPE_NAME_KEY);
                 meta.remove(EXTENSION_TYPE_METADATA_KEY);
@@ -331,25 +284,6 @@ impl CastExpr {
     /// Check if the cast is a widening cast (e.g. from `Int8` to `Int16`).
     pub fn is_bigger_cast(&self, src: &DataType) -> bool {
         Self::check_bigger_cast(self.cast_type(), src)
-    }
-}
-
-/// Extract only the extension type metadata keys from a metadata map.
-/// Returns `None` if no extension metadata is present (indicating pass-through).
-fn extract_extension_metadata(
-    metadata: &HashMap<String, String>,
-) -> Option<HashMap<String, String>> {
-    let mut ext_meta = HashMap::new();
-    if let Some(name) = metadata.get(EXTENSION_TYPE_NAME_KEY) {
-        ext_meta.insert(EXTENSION_TYPE_NAME_KEY.to_string(), name.clone());
-    }
-    if let Some(meta) = metadata.get(EXTENSION_TYPE_METADATA_KEY) {
-        ext_meta.insert(EXTENSION_TYPE_METADATA_KEY.to_string(), meta.clone());
-    }
-    if ext_meta.is_empty() {
-        None
-    } else {
-        Some(ext_meta)
     }
 }
 
@@ -418,7 +352,6 @@ impl PhysicalExpr for CastExpr {
             target_type: self.target_type.clone(),
             target_metadata: self.target_metadata.clone(),
             target_nullable: self.target_nullable,
-            merge_source_metadata: self.merge_source_metadata,
             cast_options: self.cast_options.clone(),
         }))
     }
@@ -1170,8 +1103,7 @@ mod tests {
 
     #[test]
     fn field_aware_cast_preserves_target_field_semantics() -> Result<()> {
-        // Non-extension metadata from target field should NOT be preserved.
-        // Only extension metadata from target is used.
+        // Target field metadata should be preserved exactly (no merging with source).
         let metadata = HashMap::from([("target_meta".to_string(), "1".to_string())]);
 
         for (child_nullable, target_nullable) in [(true, false), (false, true)] {
@@ -1180,11 +1112,8 @@ mod tests {
                 Field::new("cast_target", Int64, target_nullable)
                     .with_metadata(metadata.clone()),
             );
-            let expr = CastExpr::new_with_target_field(
-                col("a", &schema)?,
-                &target_field,
-                None,
-            );
+            let expr =
+                CastExpr::new_with_target_field(col("a", &schema)?, &target_field, None);
 
             let field = expr.return_field(&schema)?;
             // Field name comes from source
@@ -1192,10 +1121,11 @@ mod tests {
             assert_eq!(field.data_type(), &Int64);
             // Nullability comes from target
             assert_eq!(field.is_nullable(), target_nullable);
-            // Non-extension metadata from target should NOT propagate
-            assert!(
-                field.metadata().get("target_meta").is_none(),
-                "Non-extension metadata from target should not propagate"
+            // Target metadata should be preserved exactly
+            assert_eq!(
+                field.metadata().get("target_meta"),
+                Some(&"1".to_string()),
+                "Target metadata should be preserved exactly"
             );
             assert_eq!(expr.nullable(&schema)?, child_nullable || target_nullable);
         }
@@ -1434,8 +1364,8 @@ mod tests {
     }
 
     #[test]
-    fn field_aware_cast_applies_target_extension_metadata() -> Result<()> {
-        // When using field-aware cast, target's extension metadata should be applied
+    fn field_aware_cast_uses_exact_target_metadata() -> Result<()> {
+        // When using field-aware cast, target's metadata should be used exactly
         let source_meta = HashMap::from([
             (
                 EXTENSION_TYPE_NAME_KEY.to_string(),
@@ -1474,14 +1404,14 @@ mod tests {
             Some(&"target_ext_meta".to_string()),
             "Field-aware cast should use target's extension type metadata"
         );
-        assert_eq!(
-            field.metadata().get("source_key"),
-            Some(&"source_value".to_string()),
-            "Field-aware cast should preserve source's non-extension metadata"
-        );
         assert!(
-            field.metadata().get("target_key").is_none(),
-            "Field-aware cast should not preserve target's non-extension metadata"
+            field.metadata().get("source_key").is_none(),
+            "Field-aware cast should NOT preserve source metadata"
+        );
+        assert_eq!(
+            field.metadata().get("target_key"),
+            Some(&"target_value".to_string()),
+            "Field-aware cast should preserve target's non-extension metadata"
         );
 
         Ok(())

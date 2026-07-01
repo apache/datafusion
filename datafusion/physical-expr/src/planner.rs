@@ -648,7 +648,7 @@ mod tests {
         let schema = test_cast_schema();
 
         // Target field with both extension metadata and custom metadata.
-        // Per cast_output_field semantics, only extension metadata should propagate.
+        // With exact target metadata semantics, all target metadata should propagate.
         let target_field = Arc::new(
             Field::new("cast_target", DataType::Int64, true).with_metadata(
                 [
@@ -657,7 +657,7 @@ mod tests {
                         "arrow.json".to_string(),
                     ),
                     (EXTENSION_TYPE_METADATA_KEY.to_string(), "{}".to_string()),
-                    ("custom_target_meta".to_string(), "ignored".to_string()),
+                    ("custom_target_meta".to_string(), "custom_value".to_string()),
                 ]
                 .into(),
             ),
@@ -670,7 +670,7 @@ mod tests {
         let physical = lower_cast_expr(&cast_expr, &schema)?;
         let cast = as_planner_cast(&physical);
 
-        // The CastExpr stores the target type and extension metadata
+        // The CastExpr stores the target type and all target metadata
         assert_eq!(cast.cast_type(), &DataType::Int64);
         let target_metadata = cast.target_metadata().expect("should have metadata");
         assert_eq!(
@@ -683,8 +683,7 @@ mod tests {
         );
         assert_eq!(cast.target_nullable(), Some(true));
 
-        // But return_field should only propagate extension metadata from target,
-        // aligning with logical-layer cast_output_field semantics
+        // return_field should have all target metadata (exact semantics)
         let returned = physical.return_field(&schema)?;
         assert_eq!(
             returned.metadata().get(EXTENSION_TYPE_NAME_KEY),
@@ -694,10 +693,11 @@ mod tests {
             returned.metadata().get(EXTENSION_TYPE_METADATA_KEY),
             Some(&"{}".to_string())
         );
-        // Custom target metadata should NOT propagate
-        assert!(
-            returned.metadata().get("custom_target_meta").is_none(),
-            "Non-extension target metadata should not propagate"
+        // All target metadata should propagate with exact semantics
+        assert_eq!(
+            returned.metadata().get("custom_target_meta"),
+            Some(&"custom_value".to_string()),
+            "All target metadata should propagate with exact semantics"
         );
         assert!(physical.nullable(&schema)?);
 
@@ -726,7 +726,7 @@ mod tests {
         let schema = test_cast_schema();
 
         // Same-type cast with extension metadata on target.
-        // Per cast_output_field semantics, only extension metadata should propagate.
+        // With exact target metadata semantics, all target metadata should propagate.
         let target_field = Arc::new(
             Field::new("same_type_cast", DataType::Int32, true).with_metadata(
                 [
@@ -734,7 +734,7 @@ mod tests {
                         EXTENSION_TYPE_NAME_KEY.to_string(),
                         "arrow.opaque".to_string(),
                     ),
-                    ("custom_meta".to_string(), "ignored".to_string()),
+                    ("custom_meta".to_string(), "custom_value".to_string()),
                 ]
                 .into(),
             ),
@@ -747,7 +747,7 @@ mod tests {
         let physical = lower_cast_expr(&cast_expr, &schema)?;
         let cast = as_planner_cast(&physical);
 
-        // The CastExpr stores the target type and extension metadata
+        // The CastExpr stores the target type and all target metadata
         assert_eq!(cast.cast_type(), &DataType::Int32);
         let target_metadata = cast.target_metadata().expect("should have metadata");
         assert_eq!(
@@ -756,16 +756,17 @@ mod tests {
         );
         assert_eq!(cast.target_nullable(), Some(true));
 
-        // return_field should only have extension metadata from target
+        // return_field should have all target metadata (exact semantics)
         let returned = physical.return_field(&schema)?;
         assert_eq!(
             returned.metadata().get(EXTENSION_TYPE_NAME_KEY),
             Some(&"arrow.opaque".to_string())
         );
-        // Custom target metadata should NOT propagate
-        assert!(
-            returned.metadata().get("custom_meta").is_none(),
-            "Non-extension target metadata should not propagate"
+        // All target metadata should propagate with exact semantics
+        assert_eq!(
+            returned.metadata().get("custom_meta"),
+            Some(&"custom_value".to_string()),
+            "All target metadata should propagate with exact semantics"
         );
         assert!(physical.nullable(&schema)?);
 
