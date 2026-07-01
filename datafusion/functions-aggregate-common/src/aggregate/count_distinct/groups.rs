@@ -88,7 +88,7 @@ where
             EmitTo::All => {
                 self.seen.clear();
             }
-            EmitTo::First(n) => {
+            EmitTo::First(n) | EmitTo::FirstBlock(n) => {
                 let mut remaining = HashSet::default();
                 for (group_idx, value) in self.seen.drain() {
                     if group_idx >= n {
@@ -105,7 +105,7 @@ where
     fn state(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
         let num_emitted = match emit_to {
             EmitTo::All => self.counts.len(),
-            EmitTo::First(n) => n,
+            EmitTo::First(n) | EmitTo::FirstBlock(n) => n,
         };
 
         // Prefix-sum counts[..num_emitted] into offsets

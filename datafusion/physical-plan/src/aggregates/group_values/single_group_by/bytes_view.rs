@@ -95,11 +95,11 @@ impl GroupValues for GroupValuesBytesView {
                 self.num_groups -= map_contents.len();
                 map_contents
             }
-            EmitTo::First(n) if n == self.len() => {
+            EmitTo::First(n) | EmitTo::FirstBlock(n) if n == self.len() => {
                 self.num_groups -= map_contents.len();
                 map_contents
             }
-            EmitTo::First(n) => {
+            EmitTo::First(n) | EmitTo::FirstBlock(n) => {
                 // if we only wanted to take the first n, insert the rest back
                 // into the map we could potentially avoid this reallocation, at
                 // the expense of much more complex code.

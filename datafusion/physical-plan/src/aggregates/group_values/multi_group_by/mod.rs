@@ -1123,7 +1123,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                     .map(|v| v.build())
                     .collect::<Vec<_>>()
             }
-            EmitTo::First(n) => {
+            EmitTo::First(n) | EmitTo::FirstBlock(n) => {
                 let output = self
                     .group_values
                     .iter_mut()

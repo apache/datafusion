@@ -438,7 +438,7 @@ impl From<EmitTo> for FFI_EmitTo {
     fn from(value: EmitTo) -> Self {
         match value {
             EmitTo::All => Self::All,
-            EmitTo::First(v) => Self::First(v),
+            EmitTo::First(v) | EmitTo::FirstBlock(v) => Self::First(v),
         }
     }
 }
@@ -534,6 +534,17 @@ mod tests {
         test_emit_to_round_trip(EmitTo::All)?;
         test_emit_to_round_trip(EmitTo::First(10))?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_first_block_falls_back_to_first_for_ffi() -> Result<()> {
+        let ffi_value: FFI_EmitTo = EmitTo::FirstBlock(10).into();
+
+        let FFI_EmitTo::First(n) = ffi_value else {
+            panic!("FirstBlock should use the existing FFI First variant");
+        };
+        assert_eq!(n, 10);
         Ok(())
     }
 

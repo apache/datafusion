@@ -109,7 +109,7 @@ where
 
         let values = match emit_to {
             EmitTo::All => values,
-            EmitTo::First(n) => {
+            EmitTo::First(n) | EmitTo::FirstBlock(n) => {
                 let first_n: BooleanBuffer = values.iter().take(n).collect();
                 // put n+1 back into self.values
                 for v in values.iter().skip(n) {
