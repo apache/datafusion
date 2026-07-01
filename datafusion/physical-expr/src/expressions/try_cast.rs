@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -22,26 +23,35 @@ use std::sync::Arc;
 use crate::PhysicalExpr;
 use arrow::compute;
 use arrow::compute::CastOptions;
-use arrow::datatypes::{DataType, FieldRef, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_expr::ColumnarValue;
 
 /// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
-#[derive(Debug, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub struct TryCastExpr {
     /// The expression to cast
     expr: Arc<dyn PhysicalExpr>,
     /// The data type to cast to
     cast_type: DataType,
+    /// Explicit metadata for the output field, or `None` to pass through source metadata
+    /// (with extension type keys stripped).
+    ///
+    /// When `Some`, this is the exact metadata to use for the output field.
+    /// When `None`, source metadata passes through (stripping extension keys).
+    target_metadata: Option<HashMap<String, String>>,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
 impl PartialEq for TryCastExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.expr.eq(&other.expr) && self.cast_type == other.cast_type
+        self.expr.eq(&other.expr)
+            && self.cast_type == other.cast_type
+            && self.target_metadata == other.target_metadata
     }
 }
 
@@ -49,13 +59,51 @@ impl Hash for TryCastExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
         self.cast_type.hash(state);
+        // Hash the metadata by iterating over sorted keys for deterministic ordering
+        if let Some(metadata) = &self.target_metadata {
+            let mut entries: Vec<_> = metadata.iter().collect();
+            entries.sort_by_key(|(k, _)| *k);
+            for (k, v) in entries {
+                k.hash(state);
+                v.hash(state);
+            }
+        }
     }
 }
 
 impl TryCastExpr {
-    /// Create a new CastExpr
+    /// Create a new `TryCastExpr` using only a `DataType`.
+    ///
+    /// This constructor creates a type-only cast where metadata is passed through
+    /// from the source expression (with extension type keys stripped).
+    /// TRY_CAST results are always nullable since failed casts return NULL.
     pub fn new(expr: Arc<dyn PhysicalExpr>, cast_type: DataType) -> Self {
-        Self { expr, cast_type }
+        Self {
+            expr,
+            cast_type,
+            target_metadata: None,
+        }
+    }
+
+    /// Create a new `TryCastExpr` with an explicit target `FieldRef`.
+    ///
+    /// The provided `target_field` determines the output characteristics:
+    /// - The field's data type becomes the cast target type
+    /// - The field's metadata is used exactly as provided
+    ///
+    /// TRY_CAST results are always nullable since failed casts return NULL.
+    ///
+    /// See [`TryCastExpr::new`] for type-only casts where source metadata should
+    /// pass through.
+    pub fn new_with_target_field(
+        expr: Arc<dyn PhysicalExpr>,
+        target_field: &FieldRef,
+    ) -> Self {
+        Self {
+            expr,
+            cast_type: target_field.data_type().clone(),
+            target_metadata: Some(target_field.metadata().clone()),
+        }
     }
 
     /// The expression to cast
@@ -66,6 +114,20 @@ impl TryCastExpr {
     /// The data type to cast to
     pub fn cast_type(&self) -> &DataType {
         &self.cast_type
+    }
+
+    /// Explicit metadata for the output field, or `None` to pass through source metadata.
+    pub fn target_metadata(&self) -> Option<&HashMap<String, String>> {
+        self.target_metadata.as_ref()
+    }
+
+    /// Returns a computed target `FieldRef` for compatibility with existing callers.
+    ///
+    /// This synthesizes a field based on the current configuration. TRY_CAST
+    /// results are always nullable.
+    pub fn target_field(&self) -> FieldRef {
+        let metadata = self.target_metadata.clone().unwrap_or_default();
+        Arc::new(Field::new("", self.cast_type.clone(), true).with_metadata(metadata))
     }
 }
 
@@ -94,10 +156,37 @@ impl PhysicalExpr for TryCastExpr {
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        self.expr
-            .return_field(input_schema)
-            .map(|f| f.as_ref().clone().with_data_type(self.cast_type.clone()))
-            .map(Arc::new)
+        // If metadata is explicit, we can build the field without source
+        // (though we still try to get source for the name)
+        let source_result = self.expr.return_field(input_schema);
+
+        if let Some(metadata) = &self.target_metadata {
+            // Explicit metadata: use it exactly, TRY_CAST is always nullable
+            let name = source_result
+                .as_ref()
+                .map(|f| f.name().to_string())
+                .unwrap_or_default();
+            return Ok(Arc::new(
+                Field::new(name, self.cast_type.clone(), true)
+                    .with_metadata(metadata.clone()),
+            ));
+        }
+
+        // Pass-through metadata from source (stripping extension keys)
+        source_result.map(|source_field| {
+            let mut metadata = source_field.metadata().clone();
+            metadata.remove(EXTENSION_TYPE_NAME_KEY);
+            metadata.remove(EXTENSION_TYPE_METADATA_KEY);
+
+            Arc::new(
+                source_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(self.cast_type.clone())
+                    .with_nullable(true) // TRY_CAST is always nullable
+                    .with_metadata(metadata),
+            )
+        })
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -108,10 +197,11 @@ impl PhysicalExpr for TryCastExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(TryCastExpr::new(
-            Arc::clone(&children[0]),
-            self.cast_type.clone(),
-        )))
+        Ok(Arc::new(TryCastExpr {
+            expr: Arc::clone(&children[0]),
+            cast_type: self.cast_type.clone(),
+            target_metadata: self.target_metadata.clone(),
+        }))
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
