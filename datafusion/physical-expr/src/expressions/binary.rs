@@ -274,6 +274,87 @@ where
     }
 }
 
+/// Returns true for `time + interval` or `interval + time`.
+fn is_time_plus_interval(lhs: &DataType, rhs: &DataType) -> bool {
+    matches!(
+        (lhs, rhs),
+        (
+            DataType::Time32(_) | DataType::Time64(_),
+            DataType::Interval(_)
+        ) | (
+            DataType::Interval(_),
+            DataType::Time32(_) | DataType::Time64(_)
+        )
+    )
+}
+
+/// Returns true for `time - interval`.
+fn is_time_minus_interval(lhs: &DataType, rhs: &DataType) -> bool {
+    matches!(
+        (lhs, rhs),
+        (
+            DataType::Time32(_) | DataType::Time64(_),
+            DataType::Interval(_)
+        )
+    )
+}
+
+/// Evaluates `time + interval`, `interval + time`, or `time - interval`, returning
+/// a `time` wrapped within the 24-hour clock to match PostgreSQL and DuckDB
+/// (e.g. `time '23:30' + interval '2 hours'` is `01:30:00`). arrow's arithmetic
+/// kernels do not implement time-of-day arithmetic, so it is handled here.
+///
+/// Only the sub-day portion of the interval (its `nanoseconds`) affects a
+/// time-of-day; whole months and days are ignored, matching PostgreSQL.
+fn apply_time_interval(
+    lhs: &ColumnarValue,
+    rhs: &ColumnarValue,
+    subtract: bool,
+    num_rows: usize,
+) -> Result<ColumnarValue> {
+    /// Nanoseconds in a 24-hour day.
+    const DAY_NANOS: i128 = 86_400_000_000_000;
+
+    let left = lhs.to_array(num_rows)?;
+    let right = rhs.to_array(num_rows)?;
+
+    // The `time` operand determines the result type; the other is the interval.
+    let left_is_time =
+        matches!(left.data_type(), DataType::Time32(_) | DataType::Time64(_));
+    let (time_array, interval_array) = if left_is_time {
+        (&left, &right)
+    } else {
+        (&right, &left)
+    };
+    let time_type = time_array.data_type().clone();
+
+    // Normalize to a single representation: time as Time64(ns), interval as MonthDayNano.
+    let time_ns_arr = cast(time_array, &DataType::Time64(TimeUnit::Nanosecond))?;
+    let time_ns = time_ns_arr.as_primitive::<Time64NanosecondType>();
+    let interval_arr = cast(
+        interval_array,
+        &DataType::Interval(IntervalUnit::MonthDayNano),
+    )?;
+    let interval = interval_arr.as_primitive::<IntervalMonthDayNanoType>();
+
+    let wrapped: Time64NanosecondArray =
+        arrow::compute::binary(time_ns, interval, |t, iv| {
+            let delta = iv.nanoseconds as i128;
+            let total = if subtract {
+                t as i128 - delta
+            } else {
+                t as i128 + delta
+            };
+            // Rust's `%` keeps the sign of the dividend, so add a day before the
+            // final modulo to always land in `[0, DAY_NANOS)`.
+            (((total % DAY_NANOS) + DAY_NANOS) % DAY_NANOS) as i64
+        })?;
+
+    // Restore the original time unit (e.g. Time32(Second)).
+    let result = cast(&(Arc::new(wrapped) as ArrayRef), &time_type)?;
+    Ok(ColumnarValue::Array(result))
+}
+
 impl PhysicalExpr for BinaryExpr {
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         BinaryTypeCoercer::new(
@@ -356,6 +437,18 @@ impl PhysicalExpr for BinaryExpr {
         let input_schema = schema.as_ref();
 
         match self.op {
+            // `time ± interval` returns a wrapped `time` (PostgreSQL/DuckDB
+            // semantics); arrow's arithmetic kernels don't implement it.
+            Operator::Plus
+                if is_time_plus_interval(&left_data_type, &right_data_type) =>
+            {
+                return apply_time_interval(&lhs, &rhs, false, batch.num_rows());
+            }
+            Operator::Minus
+                if is_time_minus_interval(&left_data_type, &right_data_type) =>
+            {
+                return apply_time_interval(&lhs, &rhs, true, batch.num_rows());
+            }
             Operator::Plus if self.fail_on_overflow => return apply(&lhs, &rhs, add),
             Operator::Plus => return apply(&lhs, &rhs, add_wrapping),
             // Special case: Date - Date returns Int64 (days difference)
