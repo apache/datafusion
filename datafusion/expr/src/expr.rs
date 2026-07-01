@@ -3275,7 +3275,37 @@ impl Display for SqlDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right),)
+                // Add parentheses around child binary expressions to correctly reflect
+                // precedence. Same logic as BinaryExpr Display impl.
+                fn write_child(
+                    f: &mut Formatter<'_>,
+                    expr: &Expr,
+                    precedence: u8,
+                    is_right: bool,
+                ) -> fmt::Result {
+                    match expr {
+                        Expr::BinaryExpr(child) => {
+                            let p = child.op.precedence();
+                            if p == 0 || p < precedence {
+                                write!(f, "({})", SqlDisplay(expr))?;
+                            } else if is_right && p == precedence {
+                                // Right-hand child with equal precedence and a
+                                // left-associative parent op (+ / -) needs
+                                // parens so `a - (b - c)` != `a - b - c`.
+                                write!(f, "({})", SqlDisplay(expr))?;
+                            } else {
+                                write!(f, "{}", SqlDisplay(expr))?;
+                            }
+                        }
+                        _ => write!(f, "{}", SqlDisplay(expr))?,
+                    }
+                    Ok(())
+                }
+
+                let precedence = op.precedence();
+                write_child(f, left, precedence, false)?;
+                write!(f, " {} ", op)?;
+                write_child(f, right, precedence, true)
             }
             Expr::Case(Case {
                 expr,
@@ -4298,6 +4328,36 @@ mod test {
 
         assert_eq!(format!("{expr}"), "a > ANY (<subquery>)");
         assert_eq!(format!("{}", expr.human_display()), "a > ANY (<subquery>)");
+    }
+
+    #[test]
+    fn test_human_display_binary_expr_parens() {
+        // Test that binary expressions include parentheses to correctly reflect precedence
+        // https://github.com/apache/datafusion/issues/16054
+
+        // (1 + 2) * 3 displays with parentheses because + has lower precedence than *
+        let expr = (lit(1) + lit(2)) * lit(3);
+        assert_eq!(format!("{}", expr.human_display()), "(1 + 2) * 3");
+
+        // 1 + 2 * 3 displays without parentheses because * has higher precedence
+        let expr = lit(1) + lit(2) * lit(3);
+        assert_eq!(format!("{}", expr.human_display()), "1 + 2 * 3");
+
+        // a AND b OR c — AND has higher precedence than OR, so no parens needed
+        let expr = col("a").and(col("b")).or(col("c"));
+        assert_eq!(format!("{}", expr.human_display()), "a AND b OR c");
+
+        // Right-assoc: a - (b - c) must preserve parens (left-assoc - is right-assoc in AST eval)
+        let expr = lit(1) - (lit(2) - lit(3));
+        assert_eq!(format!("{}", expr.human_display()), "1 - (2 - 3)");
+
+        // Right-assoc: a / (b / c) must preserve parens
+        let expr = lit(1) / (lit(2) / lit(3));
+        assert_eq!(format!("{}", expr.human_display()), "1 / (2 / 3)");
+
+        // Same-precedence left chain has no parens: (a - b) - c = a - b - c
+        let expr = (lit(1) - lit(2)) - lit(3);
+        assert_eq!(format!("{}", expr.human_display()), "1 - 2 - 3");
     }
 
     #[test]
