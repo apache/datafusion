@@ -698,7 +698,7 @@ VALUES (1, 1.1), (2, 2.2), (3, 3.3), (2, 4.4), (1, 5.5);
 statement ok
 CREATE TABLE t(id int) as values (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
 
-query IL
+query IR
 SELECT i, sum(d)
 FROM decimal_table CROSS JOIN t
 GROUP BY i

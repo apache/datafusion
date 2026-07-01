@@ -337,7 +337,7 @@ query error DataFusion error: This feature is not implemented: CEIL with datetim
 select ceil(100.1234 to year)
 
 # ceil with decimal argument
-query LLLL
+query RRRR
 select
   ceil(arrow_cast(1.23,'Decimal128(10,2)')),
   ceil(arrow_cast(-1.23,'Decimal128(10,2)')),
@@ -532,7 +532,7 @@ query error DataFusion error: This feature is not implemented: FLOOR with dateti
 select floor(a to year)
 
 # floor with decimal argument
-query LLLL
+query RRRR
 select
   floor(arrow_cast(1.23,'Decimal128(10,2)')),
   floor(arrow_cast(-1.23,'Decimal128(10,2)')),
@@ -1031,14 +1031,14 @@ select round(column1, column2) from values (3.14, 2), (3.14, 3), (3.14, 21474836
 
 # round decimal should not cast to float
 # scale reduces to match decimal_places
-query TL
+query TR
 select arrow_typeof(round('173975140545.855'::decimal(38,10), 2)),
        round('173975140545.855'::decimal(38,10), 2);
 ----
 Decimal128(38, 2) 173975140545.86
 
 # round decimal ties away from zero
-query LLLL
+query RRRR
 select round('1.5'::decimal(2,1), 0),
        round('-1.5'::decimal(2,1), 0),
        round('2.5'::decimal(2,1), 0),
@@ -1047,21 +1047,21 @@ select round('1.5'::decimal(2,1), 0),
 2 -2 3 -3
 
 # round decimal negative places (left of decimal)
-query TL
+query TR
 select arrow_typeof(round('12345.55'::decimal(10,2), -1)),
        round('12345.55'::decimal(10,2), -1);
 ----
 Decimal128(10, 0) 12350
 
 # round decimal scale 0 negative places (carry can require extra precision)
-query TL
+query TR
 select arrow_typeof(round('99'::decimal(2,0), -1)),
        round('99'::decimal(2,0), -1);
 ----
 Decimal128(3, 0) 100
 
 # round decimal256 keeps decimals
-query TL
+query TR
 select arrow_typeof(round('1234.5678'::decimal(50,4), 2)),
        round('1234.5678'::decimal(50,4), 2);
 ----
@@ -1069,7 +1069,7 @@ Decimal256(50, 2) 1234.57
 
 # round decimal with carry-over (reduce scale)
 # Scale reduces from 1 to 0, allowing extra digit for carry-over
-query TLLL
+query TRRR
 select arrow_typeof(round('999.9'::decimal(4,1))),
        round('999.9'::decimal(4,1)),
        round('-999.9'::decimal(4,1)),
@@ -1079,14 +1079,14 @@ Decimal128(4, 0) 1000 -1000 100
 
 # round decimal with carry-over and non-literal decimal_places (increase precision)
 # Scale can't be reduced when decimal_places isn't a constant, so precision increases.
-query TL
+query TR
 select arrow_typeof(round(val, dp)), round(val, dp)
 from (values (cast('999.9' as decimal(4,1)), 0)) as t(val, dp);
 ----
 Decimal128(5, 1) 1000
 
 # round decimal at max precision now works (scale reduction handles overflow)
-query TL
+query TR
 select arrow_typeof(round('9999999999999999999999999999999999999.9'::decimal(38,1))),
        round('9999999999999999999999999999999999999.9'::decimal(38,1));
 ----
@@ -1098,7 +1098,7 @@ select round(val, dp)
 from (values (cast('9999999999999999999999999999999999999.9' as decimal(38,1)), 0)) as t(val, dp);
 
 # round decimal with negative scale
-query TLLL
+query TRRR
 select arrow_typeof(round(cast(500 as decimal(10,-2)), -3)),
        round(cast(500 as decimal(10,-2)), -3),
        round(cast(400 as decimal(10,-2)), -3),
@@ -1107,14 +1107,14 @@ select arrow_typeof(round(cast(500 as decimal(10,-2)), -3)),
 Decimal128(10, -3) 1000 0 -1000
 
 # round decimal with negative scale and carry-over
-query TL
+query TR
 select arrow_typeof(round(cast(999999999900 as decimal(10,-2)), -3)),
        round(cast(999999999900 as decimal(10,-2)), -3);
 ----
 Decimal128(10, -3) 1000000000000
 
 # round decimal with very small decimal_places (i32::MIN) should not error
-query TL
+query TR
 select arrow_typeof(round('123.45'::decimal(5,2), -2147483648)),
        round('123.45'::decimal(5,2), -2147483648);
 ----

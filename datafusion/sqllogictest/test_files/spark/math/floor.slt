@@ -69,18 +69,18 @@ SELECT floor(arrow_cast(-1000, 'Int64')), arrow_typeof(floor(arrow_cast(-1000, '
 
 # Decimal128 tests - returns Decimal128(p-s+1, 0)
 # Decimal(5,2) -> Decimal(4,0)
-query LT
+query RT
 SELECT floor(arrow_cast(123.45, 'Decimal128(5,2)')), arrow_typeof(floor(arrow_cast(123.45, 'Decimal128(5,2)')));
 ----
 123 Decimal128(4, 0)
 
-query LT
+query RT
 SELECT floor(arrow_cast(-123.45, 'Decimal128(5,2)')), arrow_typeof(floor(arrow_cast(-123.45, 'Decimal128(5,2)')));
 ----
 -124 Decimal128(4, 0)
 
 # Decimal with scale 0 - unchanged precision
-query LT
+query RT
 SELECT floor(arrow_cast(123, 'Decimal128(10,0)')), arrow_typeof(floor(arrow_cast(123, 'Decimal128(10,0)')));
 ----
 123 Decimal128(10, 0)
@@ -135,7 +135,7 @@ SELECT floor(i32_col) FROM floor_test;
 NULL
 
 # Decimal array
-query L
+query R
 SELECT floor(dec_col) FROM floor_test;
 ----
 123
@@ -186,13 +186,13 @@ SELECT floor(arrow_cast(9223372036854775807, 'Int64')), floor(arrow_cast(-922337
 9223372036854775807 -9223372036854775808
 
 # Decimal128 negative NULL scalar at given precision/scale
-query LT
+query RT
 SELECT floor(NULL::DECIMAL(5,2)), arrow_typeof(floor(NULL::DECIMAL(5,2)));
 ----
 NULL Decimal128(4, 0)
 
 # Decimal128 array with explicit precision (5,2) — values 123.45, 125.00, -129.99
-query L
+query R
 SELECT floor(a) FROM (VALUES (123.45::DECIMAL(5,2)), (125.00::DECIMAL(5,2)), (-129.99::DECIMAL(5,2)), (NULL::DECIMAL(5,2))) AS t(a);
 ----
 123
@@ -201,7 +201,7 @@ SELECT floor(a) FROM (VALUES (123.45::DECIMAL(5,2)), (125.00::DECIMAL(5,2)), (-1
 NULL
 
 # Decimal128 array with scale 0 — passes through unchanged
-query LT
+query RT
 SELECT floor(a), arrow_typeof(floor(a))
 FROM (VALUES (123::DECIMAL(10,0)), (-456::DECIMAL(10,0)), (NULL::DECIMAL(10,0))) AS t(a);
 ----
@@ -210,12 +210,12 @@ FROM (VALUES (123::DECIMAL(10,0)), (-456::DECIMAL(10,0)), (NULL::DECIMAL(10,0)))
 NULL Decimal128(10, 0)
 
 # Decimal128 scale > 0 returns Decimal128(p-s+1, 0)
-query LT
+query RT
 SELECT floor(56.7::DECIMAL(3,1)), arrow_typeof(floor(56.7::DECIMAL(3,1)));
 ----
 56 Decimal128(3, 0)
 
-query LT
+query RT
 SELECT floor(-56.7::DECIMAL(3,1)), arrow_typeof(floor(-56.7::DECIMAL(3,1)));
 ----
 -57 Decimal128(3, 0)
@@ -284,13 +284,13 @@ SELECT floor(-1e-300::DOUBLE);
 -1
 
 # Decimal precision lower-bound clamp: DECIMAL(38, 38) → Decimal128(1, 0)
-query LT
+query RT
 SELECT floor(0.5::DECIMAL(38,38)), arrow_typeof(floor(0.5::DECIMAL(38,38)));
 ----
 0 Decimal128(1, 0)
 
 # Decimal value at the boundary between two integers (just under .5 vs just over)
-query LL
+query RR
 SELECT floor(0.49::DECIMAL(3,2)), floor(-0.49::DECIMAL(3,2));
 ----
 0 -1

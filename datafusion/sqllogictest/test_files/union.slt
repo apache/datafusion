@@ -483,7 +483,7 @@ physical_plan
 08)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], file_type=csv, has_header=true
 
-query TL
+query TR
 SELECT c1, c9 FROM aggregate_test_100 UNION ALL SELECT c1, c3 FROM aggregate_test_100 ORDER BY c9 DESC LIMIT 5
 ----
 c 4268716378

@@ -15,21 +15,21 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query TL
+query TR
 select arrow_typeof(cast(1.23 as decimal(10,4))),
        cast(1.23 as decimal(10,4));
 ----
 Decimal128(10, 4) 1.23
 
 
-query TL
+query TR
 select arrow_typeof(cast(cast(1.23 as decimal(10,3)) as decimal(10,4))),
        cast(cast(1.23 as decimal(10,3)) as decimal(10,4));
 ----
 Decimal128(10, 4) 1.23
 
 
-query TL
+query TR
 select arrow_typeof(cast(1.2345 as decimal(24,2))), cast(1.2345 as decimal(24,2));
 ----
 Decimal128(24, 2) 1.23
@@ -54,7 +54,7 @@ select arrow_typeof(c1), arrow_typeof(c5) from decimal_simple where c1 > c5 limi
 Decimal128(10, 6) Decimal128(12, 7)
 
 
-query L rowsort
+query R rowsort
 SELECT c1 from decimal_simple;
 ----
 0.00001
@@ -74,7 +74,7 @@ SELECT c1 from decimal_simple;
 0.00005
 
 
-query L rowsort
+query R rowsort
 select c1 from decimal_simple where c1 > 0.000030;
 ----
 0.00004
@@ -88,7 +88,7 @@ select c1 from decimal_simple where c1 > 0.000030;
 0.00005
 
 
-query LRIBL rowsort
+query RRIBR rowsort
 select * from decimal_simple where c1 > c5;
 ----
 0.00002 0.000000000002 3 false 0.000019
@@ -96,13 +96,13 @@ select * from decimal_simple where c1 > c5;
 0.00005 0.000000000005 8 false 0.000033
 
 
-query TL
+query TR
 select arrow_typeof(min(c1)), min(c1) from decimal_simple where c4=false;
 ----
 Decimal128(10, 6) 0.00002
 
 
-query TL
+query TR
 select arrow_typeof(max(c1)), max(c1) from decimal_simple where c4=false;
 ----
 Decimal128(10, 6) 0.00005
@@ -110,7 +110,7 @@ Decimal128(10, 6) 0.00005
 
 # inferred precision is 10+10
 # inferred scale is the original scale
-query TL
+query TR
 select arrow_typeof(sum(c1)), sum(c1) from decimal_simple;
 ----
 Decimal128(20, 6) 0.00055
@@ -118,19 +118,19 @@ Decimal128(20, 6) 0.00055
 
 # inferred precision is original precision + 4
 # inferred scale is the original scale + 4
-query TL
+query TR
 select arrow_typeof(avg(c1)), avg(c1) from decimal_simple;
 ----
 Decimal128(14, 10) 0.0000366666
 
 
-query TL
+query TR
 select arrow_typeof(median(c1)), median(c1) from decimal_simple;
 ----
 Decimal128(10, 6) 0.00004
 
 
-query LRIBL rowsort
+query RRIBR rowsort
 select * from decimal_simple where c1=CAST(0.00002 as Decimal(10,8));
 ----
 0.00002 0.000000000002 2 true 0.000025
@@ -155,13 +155,13 @@ select c2,c3 from decimal_simple where c1!=0.00002;
 0.000000000005 9
 
 
-query LRIBL
+query RRIBR
 select * from decimal_simple where 0.00002 > c1;
 ----
 0.00001 0.000000000001 1 true 0.000014
 
 
-query LRIBL rowsort
+query RRIBR rowsort
 select * from decimal_simple where c1 <= 0.00002;
 ----
 0.00001 0.000000000001 1 true 0.000014
@@ -169,7 +169,7 @@ select * from decimal_simple where c1 <= 0.00002;
 0.00002 0.000000000002 3 false 0.000019
 
 
-query LRIBL rowsort
+query RRIBR rowsort
 select * from decimal_simple where c1 > 0.00002;
 ----
 0.00003 0.000000000003 4 true 0.000032
@@ -186,7 +186,7 @@ select * from decimal_simple where c1 > 0.00002;
 0.00005 0.000000000005 9 true 0.000052
 
 
-query LRIBL rowsort
+query RRIBR rowsort
 select * from decimal_simple where c1 >= 0.00002;
 ----
 0.00002 0.000000000002 2 true 0.000025
@@ -211,7 +211,7 @@ select arrow_typeof(c1+1) from decimal_simple limit 1;
 Decimal128(27, 6)
 
 
-query L rowsort
+query R rowsort
 select c1+1 from decimal_simple;
 ----
 1.00001
@@ -238,7 +238,7 @@ select arrow_typeof(c1+c5) from decimal_simple limit 1;
 Decimal128(13, 7)
 
 
-query L rowsort
+query R rowsort
 select c1+c5 from decimal_simple;
 ----
 0.000024
@@ -264,7 +264,7 @@ select arrow_typeof(c1-1) from decimal_simple limit 1;
 Decimal128(27, 6)
 
 
-query L rowsort
+query R rowsort
 select c1-1 from decimal_simple;
 ----
 -0.99995
@@ -290,7 +290,7 @@ select arrow_typeof(c1-c5) from decimal_simple limit 1;
 Decimal128(13, 7)
 
 
-query L rowsort
+query R rowsort
 select c1-c5 from decimal_simple;
 ----
 -0.000002
@@ -316,7 +316,7 @@ select arrow_typeof(c1*20) from decimal_simple limit 1;
 Decimal128(31, 6)
 
 
-query L rowsort
+query R rowsort
 select c1*20 from decimal_simple;
 ----
 0.0002
@@ -342,7 +342,7 @@ select arrow_typeof(c1*c5) from decimal_simple limit 1;
 Decimal128(23, 13)
 
 
-query L rowsort
+query R rowsort
 select c1*c5 from decimal_simple;
 ----
 0.00000000014
@@ -368,7 +368,7 @@ select arrow_typeof(c1/cast(0.00001 as decimal(5,5))) from decimal_simple limit 
 Decimal128(19, 10)
 
 
-query L rowsort
+query R rowsort
 select c1/cast(0.00001 as decimal(5,5)) from decimal_simple;
 ----
 1
@@ -394,7 +394,7 @@ select arrow_typeof(c1/c5) from decimal_simple limit 1;
 Decimal128(21, 10)
 
 
-query L rowsort
+query R rowsort
 select c1/c5 from decimal_simple;
 ----
 0.5
@@ -420,7 +420,7 @@ select arrow_typeof(c5%cast(0.00001 as decimal(5,5))) from decimal_simple limit 
 Decimal128(7, 7)
 
 
-query L rowsort
+query R rowsort
 select c5%cast(0.00001 as decimal(5,5)) from decimal_simple;
 ----
 0
@@ -446,7 +446,7 @@ select arrow_typeof(c1%c5) from decimal_simple limit 1;
 Decimal128(11, 7)
 
 
-query L rowsort
+query R rowsort
 select c1%c5 from decimal_simple;
 ----
 0
@@ -472,7 +472,7 @@ select arrow_typeof(abs(c1)) from decimal_simple limit 1;
 Decimal128(10, 6)
 
 
-query L rowsort
+query R rowsort
 SELECT abs(c1) from decimal_simple;
 ----
 0.00001
@@ -492,7 +492,7 @@ SELECT abs(c1) from decimal_simple;
 0.00005
 
 
-query LRIBL
+query RRIBR
 select * from decimal_simple where c1 >= 0.00004 order by c1;
 ----
 0.00004 0.000000000004 5 true 0.000044
@@ -506,7 +506,7 @@ select * from decimal_simple where c1 >= 0.00004 order by c1;
 0.00005 0.000000000005 1 false 0.0001
 
 
-query LRIBL
+query RRIBR
 select * from decimal_simple where c1 >= 0.00004 order by c1, c3 limit 10;
 ----
 0.00004 0.000000000004 5 true 0.000044
@@ -519,7 +519,7 @@ select * from decimal_simple where c1 >= 0.00004 order by c1, c3 limit 10;
 0.00005 0.000000000005 9 true 0.000052
 0.00005 0.000000000005 100 true 0.000068
 
-query LRIBL
+query RRIBR
 select * from decimal_simple where c1 >= 0.00004 order by c1, c3 limit 5;
 ----
 0.00004 0.000000000004 5 true 0.000044
@@ -529,7 +529,7 @@ select * from decimal_simple where c1 >= 0.00004 order by c1, c3 limit 5;
 0.00005 0.000000000005 1 false 0.0001
 
 
-query LRIBL
+query RRIBR
 select * from decimal_simple where c1 >= 0.00004 order by c1 desc;
 ----
 0.00005 0.000000000005 9 true 0.000052
@@ -543,7 +543,7 @@ select * from decimal_simple where c1 >= 0.00004 order by c1 desc;
 0.00004 0.000000000004 8 false 0.000044
 
 
-query LRIBL
+query RRIBR
 select * from decimal_simple where c1 < 0.00003 order by c1 desc,c4;
 ----
 0.00002 0.000000000002 3 false 0.000019
@@ -551,7 +551,7 @@ select * from decimal_simple where c1 < 0.00003 order by c1 desc,c4;
 0.00001 0.000000000001 1 true 0.000014
 
 
-query IL
+query IR
 select count(*),c1 from decimal_simple group by c1 order by c1;
 ----
 1 0.00001
@@ -561,7 +561,7 @@ select count(*),c1 from decimal_simple group by c1 order by c1;
 5 0.00005
 
 
-query ILB
+query IRB
 select count(*),c1,c4 from decimal_simple group by c1,c4 order by c1,c4;
 ----
 1 0.00001 true
@@ -575,7 +575,7 @@ select count(*),c1,c4 from decimal_simple group by c1,c4 order by c1,c4;
 3 0.00005 true
 
 
-query TL
+query TR
 select arrow_typeof(cast(400420638.54 as decimal(12,2))), cast(400420638.54 as decimal(12,2));
 ----
 Decimal128(12, 2) 400420638.54
@@ -598,7 +598,7 @@ select arrow_typeof(null <= a), null <= a from (values (1.1::decimal)) as t(a);
 ----
 Boolean NULL
 
-query L
+query R
 select try_cast(1234567 as decimal(7,3));
 ----
 NULL
@@ -609,12 +609,12 @@ create table foo (a DECIMAL(38, 20), b DECIMAL(38, 0));
 statement ok
 insert into foo VALUES (1, 5);
 
-query L
+query R
 select a / b from foo;
 ----
 0.2
 
-query L
+query R
 select AVG(column1) from values (arrow_cast(123, 'Decimal256(5,2)'));
 ----
 123
@@ -636,7 +636,7 @@ select arrow_typeof(c1), arrow_typeof(c5) from decimal256_simple limit 1;
 ----
 Decimal256(50, 6) Decimal256(52, 7)
 
-query L rowsort
+query R rowsort
 SELECT c1 from decimal256_simple;
 ----
 0.00001
@@ -655,7 +655,7 @@ SELECT c1 from decimal256_simple;
 0.00005
 0.00005
 
-query L rowsort
+query R rowsort
 select c1 from decimal256_simple where c1 > 0.000030;
 ----
 0.00004
@@ -668,39 +668,39 @@ select c1 from decimal256_simple where c1 > 0.000030;
 0.00005
 0.00005
 
-query LRIBL rowsort
+query RRIBR rowsort
 select * from decimal256_simple where c1 > c5;
 ----
 0.00002 0.000000000002 3 false 0.000019
 0.00003 0.000000000003 5 true 0.000011
 0.00005 0.000000000005 8 false 0.000033
 
-query TL
+query TR
 select arrow_typeof(avg(c1)), avg(c1) from decimal256_simple;
 ----
 Decimal256(54, 10) 0.0000366666
 
-query TL
+query TR
 select arrow_typeof(min(c1)), min(c1) from decimal256_simple where c4=false;
 ----
 Decimal256(50, 6) 0.00002
 
-query TL
+query TR
 select arrow_typeof(max(c1)), max(c1) from decimal256_simple where c4=false;
 ----
 Decimal256(50, 6) 0.00005
 
-query TL
+query TR
 select arrow_typeof(sum(c1)), sum(c1) from decimal256_simple;
 ----
 Decimal256(60, 6) 0.00055
 
-query TL
+query TR
 select arrow_typeof(median(c1)), median(c1) from decimal256_simple;
 ----
 Decimal256(50, 6) 0.00004
 
-query IL
+query IR
 select count(*),c1 from decimal256_simple group by c1 order by c1;
 ----
 1 0.00001
@@ -725,40 +725,40 @@ drop table decimal256_simple;
 
 
 # https://github.com/apache/datafusion/issues/12870
-query L
+query R
 SELECT CAST('0' AS decimal(38,0));
 ----
 0
 
-query LL
+query RR
 SELECT
     cast(cast('0' as decimal(3,0)) as decimal(2,0)),
     cast(cast('5.20' as decimal(4,2)) as decimal(3,2))
 ----
 0 5.2
 
-query LL
+query RR
 SELECT
     arrow_cast(1.23,'Decimal128(3,2)') -  arrow_cast(123, 'UInt64') as subtration_uint,
     arrow_cast(1.23,'Decimal128(3,2)') -  arrow_cast(123, 'Int64') as subtration_int
 ----
 -121.77 -121.77
 
-query LL
+query RR
 SELECT
     arrow_cast(1.23,'Decimal128(3,2)') +  arrow_cast(123, 'UInt64') as addition_uint,
     arrow_cast(1.23,'Decimal128(3,2)') +  arrow_cast(123, 'Int64') as addition_int
 ----
 124.23 124.23
 
-query LL
+query RR
 SELECT
     arrow_cast(1.23,'Decimal128(3,2)') *  arrow_cast(123, 'UInt64') as mulitplication_uint,
     arrow_cast(1.23,'Decimal128(3,2)') *  arrow_cast(123, 'Int64') as multiplication_int
 ----
 151.29 151.29
 
-query LL
+query RR
 SELECT
     arrow_cast(1.23,'Decimal128(3,2)') /  arrow_cast(123, 'UInt64') as divison_uint,
     arrow_cast(1.23,'Decimal128(3,2)') /  arrow_cast(123, 'Int64') as divison_int
@@ -778,14 +778,14 @@ statement ok
 set datafusion.sql_parser.parse_float_as_decimal = true;
 
 # round should keep decimals when parse_float_as_decimal is enabled
-query TL
+query TR
 select arrow_typeof(round(173975140545.855, 2)),
        round(173975140545.855, 2);
 ----
 Decimal128(15, 2) 173975140545.86
 
 # smoke test for decimal parsing
-query LT
+query RT
 select 100000000000000000000000000000000000::decimal(38,0), arrow_typeof(100000000000000000000000000000000000::decimal(38,0));
 ----
 100000000000000000000000000000000000 Decimal128(38, 0)
@@ -1195,7 +1195,7 @@ SELECT power(2::decimal(38, 0), null), arrow_typeof(power(2::decimal(38, 0), nul
 NULL Float64
 
 # Array variants of power function
-query LR rowsort
+query RR rowsort
 SELECT distinct c1*100000, power(c1*100000, 2) from decimal_simple;
 ----
 1 1
@@ -1204,7 +1204,7 @@ SELECT distinct c1*100000, power(c1*100000, 2) from decimal_simple;
 4 16
 5 25
 
-query LR rowsort
+query RR rowsort
 SELECT distinct c1*100000, power(c1*100000, 2.0) from decimal_simple;
 ----
 1 1
@@ -1218,7 +1218,7 @@ statement ok
 set datafusion.sql_parser.parse_float_as_decimal = false;
 
 # smoke test for decimal parsing
-query L
+query R
 select 100000000000000000000000000000000000::decimal(38,0)
 ----
 99999999999999996863366107917975552

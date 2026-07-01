@@ -73,9 +73,6 @@ OPTIONS ('format.has_header' 'true');
 
 
 
-# DataFusion and Postgres infer different numeric return types here
-# (Float64 vs NUMERIC); this record checks DataFusion's type/value output.
-skipif postgres
 query RRRRR
 SELECT
   abs(-1.1) as abs,
@@ -319,9 +316,6 @@ ORDER BY c5 ASC, c4 DESC, c10;
 2143473091 -14704 4602675983996931623
 
 
-# DataFusion and Postgres infer different numeric return types here
-# (Float64 vs NUMERIC); this record checks DataFusion's type/value output.
-skipif postgres
 query IRII rowsort
 SELECT * FROM
 (VALUES (1,2.0,-3,1+1),(10,20.0,-30,2+2))
@@ -331,9 +325,6 @@ AS tbl(int_col, float_col, negative_col, summation);
 10 20 -30 4
 
 
-# DataFusion and Postgres infer different numeric return types here
-# (Float64 vs NUMERIC); this record checks DataFusion's type/value output.
-skipif postgres
 query IIRIIIIII
 SELECT
   count(*) AS count_all,
@@ -350,9 +341,6 @@ FROM aggregate_test_100_by_sql;
 100 100 7.81 781 125 -117 0 -1 -61
 
 
-# DataFusion and Postgres infer different numeric return types here
-# (Float64 vs NUMERIC); this record checks DataFusion's type/value output.
-skipif postgres
 query IIRIIIIII
 select
   c2,

@@ -2448,7 +2448,7 @@ STORED AS PARQUET
 LOCATION 'test_files/scratch/subquery/count_scalar_sq/orders.parquet';
 
 # Inner query result: 2 distinct cntrycodes survive the filters/anti-join.
-query TIL
+query TIR
 select cntrycode, count(*) as numcust, sum(c_acctbal) as totacctbal
 from (
     select substring(c_phone from 1 for 2) as cntrycode, c_acctbal

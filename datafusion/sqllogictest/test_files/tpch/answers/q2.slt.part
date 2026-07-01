@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query LTTITTTT
+query RTTITTTT
 select
     s_acctbal,
     s_name,

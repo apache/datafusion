@@ -6281,7 +6281,7 @@ INSERT INTO issue_20194_t1 (value_1_1, value_1_2, value_1_3) VALUES (6774502793,
 statement ok
 INSERT INTO issue_20194_t2 (value_2_1, value_2_2, value_2_3) VALUES (1120, '0', '0');
 
-query LII
+query RII
 SELECT
   t1.value_1_1, t1.value_1_2,
   ROW_NUMBER() OVER (
@@ -6508,7 +6508,7 @@ SELECT COUNT(*) OVER (
 1
 
 # ASC + PRECEDING
-query LLL
+query RRR
 SELECT a,
        first_value(a) OVER (ORDER BY a ASC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW),
        last_value(a)  OVER (ORDER BY a ASC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
@@ -6524,7 +6524,7 @@ ORDER BY a;
 3 2 3
 
 # ASC + FOLLOWING
-query LLL
+query RRR
 SELECT a,
        first_value(a) OVER (ORDER BY a ASC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING),
        last_value(a)  OVER (ORDER BY a ASC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING)
@@ -6540,7 +6540,7 @@ ORDER BY a;
 3 3 3
 
 # DESC + PRECEDING
-query LLL
+query RRR
 SELECT a,
        first_value(a) OVER (ORDER BY a DESC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW),
        last_value(a)  OVER (ORDER BY a DESC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
@@ -6556,7 +6556,7 @@ ORDER BY a DESC;
 1 2 1
 
 # DESC + FOLLOWING
-query LLL
+query RRR
 SELECT a,
        first_value(a) OVER (ORDER BY a DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING),
        last_value(a)  OVER (ORDER BY a DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING)
@@ -6572,7 +6572,7 @@ ORDER BY a DESC;
 1 1 1
 
 # Symmetric N PRECEDING AND N FOLLOWING
-query LLL
+query RRR
 SELECT a,
        first_value(a) OVER (ORDER BY a ASC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
        last_value(a)  OVER (ORDER BY a ASC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
@@ -6588,7 +6588,7 @@ ORDER BY a;
 3 2 3
 
 # Non-zero scale: Decimal(10,2)
-query LLL
+query RRR
 SELECT a,
        first_value(a) OVER (ORDER BY a ASC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
        last_value(a)  OVER (ORDER BY a ASC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
@@ -6799,7 +6799,7 @@ FROM (
 
 # Decimal variant — the integer-division path would otherwise panic on an
 # empty frame.
-query IL
+query IR
 SELECT i, AVG(v) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
 FROM (VALUES(1,CAST(1.5 AS DECIMAL(10,2))),
             (2,CAST(2.5 AS DECIMAL(10,2))),

@@ -850,7 +850,7 @@ CREATE TABLE IF NOT EXISTS partsupp (
 ) AS VALUES
 (63700, 7311, 100, 993.49, 'ven ideas. quickly even packages print. pending multipliers must have to are fluff');
 
-query ILLI
+query IRRI
 SELECT
     p_partkey,
     sum(l_extendedprice),

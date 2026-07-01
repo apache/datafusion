@@ -34,7 +34,7 @@
 
 ## Original Query: SELECT ceil(-0.1);
 ## PySpark 3.5.5 Result: {'CEIL(-0.1)': Decimal('0'), 'typeof(CEIL(-0.1))': 'decimal(1,0)', 'typeof(-0.1)': 'decimal(1,1)'}
-query LT
+query RT
 SELECT ceil(-0.1::decimal(1,1)), arrow_typeof(ceil(-0.1::decimal(1,1)));
 ----
 0 Decimal128(1, 0)
@@ -93,25 +93,25 @@ SELECT ceil(5::BIGINT), ceil(-3::BIGINT), ceil(NULL::BIGINT), arrow_typeof(ceil(
 
 # Scalar input: decimal128 with scale > 0 returns decimal with scale 0
 # ceil(1.50) = 2, ceil(-1.50) = -1, ceil(1.00) = 1
-query LLLT
+query RRRT
 SELECT ceil(1.50::DECIMAL(10, 2)), ceil(-1.50::DECIMAL(10, 2)), ceil(1.00::DECIMAL(10, 2)), arrow_typeof(ceil(1.50::DECIMAL(10, 2)));
 ----
 2 -1 1 Decimal128(9, 0)
 
 # ceil(-0.1) = 0 (smallest positive decimal rounds up to 0 for negatives)
-query LLT
+query RRT
 SELECT ceil(-0.1::DECIMAL(3, 1)), ceil(NULL::DECIMAL(10, 2)), arrow_typeof(ceil(-0.1::DECIMAL(3, 1)));
 ----
 0 NULL Decimal128(3, 0)
 
 # ceil(3.1411) = 4
-query LT
+query RT
 SELECT ceil(3.1411::DECIMAL(5, 4)), arrow_typeof(ceil(3.1411::DECIMAL(5, 4)));
 ----
 4 Decimal128(2, 0)
 
 # Scalar input: decimal128 with scale = 0 passes through unchanged
-query LLLT
+query RRRT
 SELECT ceil(5::DECIMAL(10, 0)), ceil(-3::DECIMAL(10, 0)), ceil(NULL::DECIMAL(10, 0)), arrow_typeof(ceil(5::DECIMAL(10, 0)));
 ----
 5 -3 NULL Decimal128(10, 0)
@@ -149,7 +149,7 @@ SELECT ceil(a) FROM (VALUES (5::INT), (-3::INT), (NULL::INT)) AS t(a);
 NULL
 
 # Array input: decimal128 with scale > 0
-query L
+query R
 SELECT ceil(a) FROM (VALUES (1.50::DECIMAL(10, 2)), (-1.50::DECIMAL(10, 2)), (1.00::DECIMAL(10, 2)), (NULL::DECIMAL(10, 2))) AS t(a);
 ----
 2

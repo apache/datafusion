@@ -284,7 +284,7 @@ pub fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
             DataType::Decimal32(_, _)
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _) => DFColumnType::Decimal,
+            | DataType::Decimal256(_, _) => DFColumnType::Float,
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
                 DFColumnType::Text
             }

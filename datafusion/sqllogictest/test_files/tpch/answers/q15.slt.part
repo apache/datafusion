@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query ITTTL
+query ITTTR
 with revenue0 (supplier_no, total_revenue) as (
 	select
 		l_suppkey,

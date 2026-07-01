@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query ILDI
+query IRDI
 select
     l_orderkey,
     sum(l_extendedprice * (1 - l_discount)) as revenue,

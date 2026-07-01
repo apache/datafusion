@@ -86,7 +86,7 @@ ORDER BY dept, rn, id;
 2 Bob 2 4
 
 # QUALIFY with LAG function
-query ITLL
+query ITRR
 SELECT id, name, salary, LAG(salary) OVER (PARTITION BY dept ORDER BY id) as prev_salary
 FROM users
 QUALIFY prev_salary IS NOT NULL AND salary > prev_salary
@@ -97,7 +97,7 @@ ORDER BY dept, id;
 7 Grace 75000 65000
 
 # QUALIFY with LEAD function
-query ITLL
+query ITRR
 SELECT id, name, salary, LEAD(salary) OVER (PARTITION BY dept ORDER BY id) as next_salary
 FROM users
 QUALIFY next_salary IS NOT NULL AND salary < next_salary
@@ -157,7 +157,7 @@ ORDER BY dept, rn, id;
 2 Bob 2 4 2
 
 # QUALIFY with arithmetic expressions
-query ITLI
+query ITRI
 SELECT id, name, salary,
        ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) as rn
 FROM users
@@ -192,7 +192,7 @@ ORDER BY dept, id;
 8 Henry 5
 
 # QUALIFY with HAVING
-query TL
+query TR
 SELECT dept, AVG(salary) OVER (PARTITION BY dept) as r
 FROM users
 WHERE salary > 5000
@@ -205,7 +205,7 @@ Marketing 70000
 Marketing 70000
 
 # QUALIFY with aggregate function reference from projection
-query TL
+query TR
 SELECT dept, SUM(salary) AS s
 FROM users
 GROUP BY dept
@@ -225,7 +225,7 @@ ORDER BY dept;
 Marketing
 
 # QUALIFY with aggregate function within window function
-query TL
+query TR
 SELECT dept, SUM(salary) AS s
 FROM users
 GROUP BY dept
@@ -235,7 +235,7 @@ ORDER BY dept;
 Engineering 279000
 
 # QUALIFY with aggregate function reference from projection within window function
-query TL
+query TR
 SELECT dept, SUM(salary) AS s
 FROM users
 GROUP BY dept

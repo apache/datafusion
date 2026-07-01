@@ -198,7 +198,7 @@ SELECT
 Decimal128(5, 2) Decimal256(5, 2)
 
 
-query LL
+query RR
 SELECT
   col_d128,
   col_d256
