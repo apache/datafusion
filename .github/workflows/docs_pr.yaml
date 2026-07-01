@@ -26,6 +26,9 @@ on:
   push:
     paths:
       - "docs/**"
+    branches:
+      - main
+      - branch-*
   pull_request:
     paths:
       - "docs/**"
