@@ -60,26 +60,42 @@ FROM test_table t
 group by 1, 2, 3
 ----
 logical_plan
-01)Projection: Int64(123), Int64(456), Int64(789), count(Int64(1)), avg(t.c12)
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), avg(t.c12)]]
-03)----SubqueryAlias: t
-04)------TableScan: test_table projection=[c12]
+01)Projection: Int64(123), Int64(456), Int64(789), __common_expr_2 AS count(Int64(1)), __common_expr_3 AS avg(t.c12)
+02)--Filter: __common_expr_2 > Int64(0)
+03)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS __common_expr_2, avg(t.c12) AS __common_expr_3]]
+04)------SubqueryAlias: t
+05)--------TableScan: test_table projection=[c12]
+
+# all-constant GROUP BY, no user count(1): the sentinel is its own count column
+query TT
+EXPLAIN
+SELECT 42, avg(c12)
+FROM test_table t
+GROUP BY 1
+----
+logical_plan
+01)Projection: Int64(42), avg(t.c12)
+02)--Filter: __row_count_sentinel_1 > Int64(0)
+03)----Aggregate: groupBy=[[]], aggr=[[avg(t.c12), count(Int64(1)) AS __row_count_sentinel_1]]
+04)------SubqueryAlias: t
+05)--------TableScan: test_table projection=[c12]
 
 query TT
-EXPLAIN 
+EXPLAIN
 SELECT to_date('2023-05-04') as dt, extract(day from now()) < 1000 as today_filter, count(1)
 FROM test_table t
 GROUP BY 1, 2
 ----
 logical_plan
-01)Projection: Date32("2023-05-04") AS dt, Boolean(true) AS today_filter, count(Int64(1))
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-03)----SubqueryAlias: t
-04)------TableScan: test_table projection=[]
+01)Projection: Date32("2023-05-04") AS dt, Boolean(true) AS today_filter, __common_expr_2 AS count(Int64(1))
+02)--Filter: __common_expr_2 > Int64(0)
+03)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS __common_expr_2]]
+04)------SubqueryAlias: t
+05)--------TableScan: test_table projection=[]
 
 query TT
-EXPLAIN 
-SELECT 
+EXPLAIN
+SELECT
     not (
         cast(
             extract(month from now()) AS INT
@@ -90,10 +106,11 @@ FROM test_table t
 GROUP BY 1
 ----
 logical_plan
-01)Projection: Boolean(true) AS NOT date_part(Utf8("MONTH"),now()) BETWEEN Int64(50) AND Int64(60), count(Int64(1))
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-03)----SubqueryAlias: t
-04)------TableScan: test_table projection=[]
+01)Projection: Boolean(true) AS NOT date_part(Utf8("MONTH"),now()) BETWEEN Int64(50) AND Int64(60), __common_expr_2 AS count(Int64(1))
+02)--Filter: __common_expr_2 > Int64(0)
+03)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS __common_expr_2]]
+04)------SubqueryAlias: t
+05)--------TableScan: test_table projection=[]
 
 query TT
 EXPLAIN 
@@ -119,7 +136,7 @@ logical_plan
 
 # Config reset
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;
