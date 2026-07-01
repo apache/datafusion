@@ -23,19 +23,19 @@ use std::sync::Arc;
 
 use crate::operator::Operator;
 
-use arrow::array::{Array, new_empty_array};
+use arrow::array::{new_empty_array, Array};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::IntervalUnit::MonthDayNano;
 use arrow::datatypes::TimeUnit::*;
 use arrow::datatypes::{
-    DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION,
-    DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType, Field, FieldRef, Fields,
-    TimeUnit,
+    DataType, Field, FieldRef,
+    Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION,
+    DECIMAL64_MAX_SCALE,
 };
 use datafusion_common::{
-    Diagnostic, Result, Span, Spans, exec_err, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err,
+    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Diagnostic, Result,
+    Span, Spans,
 };
 use itertools::Itertools;
 
@@ -237,7 +237,7 @@ impl<'a> BinaryTypeCoercer<'a> {
             })
         }
         StringConcat => {
-            string_concat_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
+            string_concat_coercion(lhs, rhs).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common string type for string concat operation {} {} {}", self.lhs, self.op, self.rhs
                 )
@@ -1635,9 +1635,21 @@ fn ree_coercion(
 /// 1. At least one side of lhs and rhs should be string type (Utf8 / LargeUtf8)
 /// 2. Data type of the other side should be able to cast to string type
 /// 3. Binary and string types cannot be mixed
-fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Signature> {
     use arrow::datatypes::DataType::*;
-    string_coercion(lhs_type, rhs_type).or_else(|| match (lhs_type, rhs_type) {
+
+    string_coercion(lhs_type, rhs_type).map(Signature::uniform).or_else(|| match (lhs_type, rhs_type) {
+        // Allow concatenation of mixed fixed size binary
+        (
+            FixedSizeBinary(l),
+            FixedSizeBinary(r),
+        ) => {
+            Some(Signature {
+                lhs: lhs_type.clone(),
+                rhs: rhs_type.clone(),
+                ret: FixedSizeBinary(l + r),
+            })
+        }
         // Allow pure binary + binary
         (
             Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
@@ -1653,7 +1665,7 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
                 FixedSizeBinary(_) => &Binary,
                 val => val,
             };
-            binary_coercion(lhs_type, rhs_type)
+            binary_coercion(lhs_type, rhs_type).map(Signature::uniform)
         }
         // Deny other mixed binary + string combinations
         (
@@ -1666,16 +1678,16 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
         ) => None,
         // Predicate-based coercion rules are following
         (Utf8View, from_type) | (from_type, Utf8View) => {
-            string_concat_internal_coercion(from_type, &Utf8View)
+            string_concat_internal_coercion(from_type, &Utf8View).map(Signature::uniform)
         }
         (Utf8, from_type) | (from_type, Utf8) => {
-            string_concat_internal_coercion(from_type, &Utf8)
+            string_concat_internal_coercion(from_type, &Utf8).map(Signature::uniform)
         }
         (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
-            string_concat_internal_coercion(from_type, &LargeUtf8)
+            string_concat_internal_coercion(from_type, &LargeUtf8).map(Signature::uniform)
         }
         (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
-            string_coercion(lhs_value_type, rhs_value_type).or(None)
+            string_coercion(lhs_value_type, rhs_value_type).or(None).map(Signature::uniform)
         }
         _ => None,
     })
