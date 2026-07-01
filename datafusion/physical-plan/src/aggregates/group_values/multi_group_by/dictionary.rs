@@ -197,313 +197,201 @@ mod tests {
         let plain = cast(arr.as_ref(), &DataType::Utf8).unwrap();
         let s = plain.as_any().downcast_ref::<StringArray>().unwrap();
         (0..s.len())
-            .map(|i| {
-                if s.is_null(i) {
-                    None
-                } else {
-                    Some(s.value(i).to_owned())
-                }
-            })
+            .map(|i| s.is_valid(i).then(|| s.value(i).to_owned()))
             .collect()
     }
 
     fn assert_is_dict_utf8(arr: &ArrayRef) {
         assert!(
-            matches!(
-                arr.data_type(),
+            matches!(arr.data_type(),
                 DataType::Dictionary(k, v)
-                    if k.as_ref() == &DataType::Int32 && v.as_ref() == &DataType::Utf8
-            ),
+                    if k.as_ref() == &DataType::Int32 && v.as_ref() == &DataType::Utf8),
             "expected Dictionary(Int32, Utf8), got {:?}",
             arr.data_type()
         );
     }
 
-    fn make_true_buf(n: usize) -> BooleanBufferBuilder {
+    fn true_buf(n: usize) -> BooleanBufferBuilder {
         let mut b = BooleanBufferBuilder::new(n);
         b.append_n(n, true);
         b
     }
 
-    fn to_vec(buf: &BooleanBufferBuilder) -> Vec<bool> {
+    fn buf_to_vec(buf: &BooleanBufferBuilder) -> Vec<bool> {
         (0..buf.len()).map(|i| buf.get_bit(i)).collect()
     }
 
-    mod null_handling {
-        use super::*;
-
-        #[test]
-        fn take_n_then_append_preserves_nulls() {
-            let mut col = utf8_col();
-            let arr = dict_arr(&[Some(0), None, Some(1)], &["a", "b"]);
-            for i in 0..3 {
-                col.append_val(&arr, i).unwrap();
-            }
-
-            let taken = col.take_n(2);
-            assert_eq!(str_values(&taken), vec![Some("a".into()), None]);
-            assert_eq!(col.len(), 1);
-
-            let arr2 = dict_arr(&[None, Some(0)], &["c"]);
-            col.append_val(&arr2, 0).unwrap();
-            col.append_val(&arr2, 1).unwrap();
-            assert_eq!(col.len(), 3);
-
-            assert!(col.equal_to(1, &arr2, 0));
-            assert!(!col.equal_to(1, &arr2, 1));
-            assert!(col.equal_to(2, &arr2, 1));
-
-            let out = Box::new(col).build();
-            assert_eq!(
-                str_values(&out),
-                vec![Some("b".into()), None, Some("c".into())]
-            );
+    // Null key (missing dict entry) and null value (null inside values array) are both
+    // treated as null by equal_to and vectorized_equal_to.
+    #[test]
+    fn null_key_and_null_value_are_both_null() {
+        let mut col = utf8_col();
+        // row 0: null key; row 1: key=0, null value in values; row 2: key=1, "b"
+        let arr: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![None, Some(0), Some(1)]),
+            Arc::new(StringArray::from(vec![None::<&str>, Some("b")])),
+        ));
+        for i in 0..3 {
+            col.append_val(&arr, i).unwrap();
         }
+        assert_eq!(col.len(), 3);
+        assert!(col.size() > 0);
 
-        #[test]
-        fn null_equal_to_all_combinations() {
-            let mut col = utf8_col();
-            let arr = dict_arr(&[None, Some(0)], &["a"]);
-            col.append_val(&arr, 0).unwrap();
-            col.append_val(&arr, 1).unwrap();
-            assert_eq!(col.len(), 2);
-            assert!(col.size() > 0);
+        assert!(col.equal_to(0, &arr, 0));
+        assert!(col.equal_to(1, &arr, 1));
+        assert!(col.equal_to(0, &arr, 1)); // null key == null value
+        assert!(col.equal_to(2, &arr, 2));
+        assert!(!col.equal_to(0, &arr, 2));
+        assert!(!col.equal_to(2, &arr, 0));
 
-            assert!(col.equal_to(0, &arr, 0));
-            assert!(!col.equal_to(0, &arr, 1));
-            assert!(!col.equal_to(1, &arr, 0));
-            assert!(col.equal_to(1, &arr, 1));
+        let mut buf = true_buf(3);
+        col.vectorized_equal_to(&[0, 1, 2], &arr, &[2, 2, 1], &mut buf);
+        assert_eq!(buf_to_vec(&buf), vec![false, false, false]);
 
-            let mut buf = make_true_buf(4);
-            col.vectorized_equal_to(&[0, 0, 1, 1], &arr, &[0, 1, 0, 1], &mut buf);
-            assert_eq!(to_vec(&buf), vec![true, false, false, true]);
-        }
-
-        // null in the values array: key 0 points to a null string in the values
-        #[test]
-        fn null_in_values_array() {
-            let mut col = utf8_col();
-            let arr: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
-                Int32Array::from(vec![Some(0), Some(1), Some(0)]),
-                Arc::new(StringArray::from(vec![None::<&str>, Some("a")])),
-            ));
-            for i in 0..3 {
-                col.append_val(&arr, i).unwrap(); // null, "a", null
-            }
-            assert_eq!(col.len(), 3);
-
-            assert!(col.equal_to(0, &arr, 0)); // null == null
-            assert!(!col.equal_to(0, &arr, 1)); // null != "a"
-            assert!(col.equal_to(2, &arr, 0)); // null == null
-            assert!(col.equal_to(1, &arr, 1)); // "a" == "a"
-
-            let out = Box::new(col).build();
-            assert_eq!(str_values(&out), vec![None, Some("a".into()), None]);
-        }
-
-        // null key (null dict entry) and null value (null in values array) coexist
-        #[test]
-        fn null_key_and_null_value() {
-            let mut col = utf8_col();
-            // row 0: null key, row 1: key=0 → null value, row 2: key=1 → "b"
-            let arr: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
-                Int32Array::from(vec![None, Some(0), Some(1)]),
-                Arc::new(StringArray::from(vec![None::<&str>, Some("b")])),
-            ));
-            for i in 0..3 {
-                col.append_val(&arr, i).unwrap();
-            }
-            assert_eq!(col.len(), 3);
-
-            assert!(col.equal_to(0, &arr, 0)); // null key == null key
-            assert!(col.equal_to(1, &arr, 1)); // null value == null value
-            assert!(col.equal_to(0, &arr, 1)); // null key == null value (both null)
-            assert!(col.equal_to(2, &arr, 2)); // "b" == "b"
-            assert!(!col.equal_to(0, &arr, 2)); // null != "b"
-            assert!(!col.equal_to(2, &arr, 1)); // "b" != null
-
-            let out = Box::new(col).build();
-            assert_eq!(str_values(&out), vec![None, None, Some("b".into())]);
-        }
+        let out = Box::new(col).build();
+        assert_is_dict_utf8(&out);
+        assert_eq!(str_values(&out), vec![None, None, Some("b".into())]);
     }
 
-    mod comparison {
-        use super::*;
+    // Full vectorized lifecycle using UInt64 values: vectorized_append,
+    // vectorized_equal_to, take_n, then a second intern round and build.
+    #[test]
+    fn vectorized_full_lifecycle_u64() {
+        use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
+        use arrow::array::UInt64Array;
+        use arrow::datatypes::{DataType, UInt64Type};
 
-        #[test]
-        fn append_and_equal_to() {
-            let mut col = utf8_col();
-            let arr = dict_arr(&[Some(0), Some(1), Some(0)], &["a", "b"]);
-            col.append_val(&arr, 0).unwrap();
-            col.append_val(&arr, 1).unwrap();
-            col.append_val(&arr, 2).unwrap();
-            assert_eq!(col.len(), 3);
+        let field = Field::new("", DataType::UInt64, true);
+        let mut col = DictionaryGroupValuesColumn::<Int32Type>::new(
+            Box::new(PrimitiveGroupValueBuilder::<UInt64Type, true>::new(
+                DataType::UInt64,
+            )),
+            &field,
+        );
 
-            assert!(col.equal_to(0, &arr, 0));
-            assert!(col.equal_to(0, &arr, 2));
-            assert!(!col.equal_to(0, &arr, 1));
+        // values=[10,20,30], keys=[0,1,null,2,0] appended as 10,20,null,30,10
+        let arr1: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), Some(1), None, Some(2), Some(0)]),
+            Arc::new(UInt64Array::from(vec![10u64, 20, 30])),
+        ));
+        col.vectorized_append(&arr1, &[0, 1, 2, 3, 4]).unwrap();
+        assert_eq!(col.len(), 5);
+        assert!(col.size() > 0);
 
-            let mut col2 = utf8_col();
-            let ooo = dict_arr(&[Some(1), Some(0)], &["first", "second"]);
-            col2.append_val(&ooo, 0).unwrap();
-            col2.append_val(&ooo, 1).unwrap();
-            assert!(col2.equal_to(0, &ooo, 0));
-            assert!(col2.equal_to(1, &ooo, 1));
-            assert!(!col2.equal_to(0, &ooo, 1));
-        }
+        let mut buf = true_buf(5);
+        col.vectorized_equal_to(&[0, 1, 2, 3, 4], &arr1, &[0, 1, 2, 3, 0], &mut buf);
+        assert_eq!(buf_to_vec(&buf), vec![true, true, true, true, true]);
 
-        #[test]
-        fn vectorized_append_and_equal_to() {
-            let mut col = utf8_col();
-            let arr = dict_arr(&[Some(0), Some(1), Some(0)], &["x", "y"]);
-            col.vectorized_append(&arr, &[0, 1, 2]).unwrap();
-            assert_eq!(col.len(), 3);
+        let mut buf2 = true_buf(2);
+        col.vectorized_equal_to(&[0, 4], &arr1, &[1, 1], &mut buf2);
+        assert_eq!(buf_to_vec(&buf2), vec![false, false]);
 
-            let mut buf = make_true_buf(3);
-            col.vectorized_equal_to(&[0, 1, 2], &arr, &[0, 1, 0], &mut buf);
-            assert_eq!(to_vec(&buf), vec![true, true, true]);
+        let out1 = col.take_n(3);
+        assert_eq!(col.len(), 2);
+        let d1 = out1.as_dictionary::<Int32Type>();
+        let vals1 = d1.values().as_any().downcast_ref::<UInt64Array>().unwrap();
+        assert_eq!(vals1.value(d1.key(0).unwrap()), 10);
+        assert_eq!(vals1.value(d1.key(1).unwrap()), 20);
+        assert!(d1.key(2).is_none());
 
-            let mut buf2 = make_true_buf(2);
-            col.vectorized_equal_to(&[0, 1], &arr, &[1, 0], &mut buf2);
-            assert_eq!(to_vec(&buf2), vec![false, false]);
-        }
+        let arr2: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![None, Some(0)]),
+            Arc::new(UInt64Array::from(vec![99u64])),
+        ));
+        col.vectorized_append(&arr2, &[0, 1]).unwrap();
+        assert_eq!(col.len(), 4);
+
+        let mut buf3 = true_buf(2);
+        col.vectorized_equal_to(&[2, 3], &arr2, &[0, 1], &mut buf3);
+        assert_eq!(buf_to_vec(&buf3), vec![true, true]);
+
+        let out2 = Box::new(col).build();
+        let d2 = out2.as_dictionary::<Int32Type>();
+        let vals2 = d2.values().as_any().downcast_ref::<UInt64Array>().unwrap();
+        assert_eq!(vals2.value(d2.key(0).unwrap()), 30);
+        assert_eq!(vals2.value(d2.key(1).unwrap()), 10);
+        assert!(d2.key(2).is_none());
+        assert_eq!(vals2.value(d2.key(3).unwrap()), 99);
     }
 
-    mod emit {
-        use super::*;
+    // vectorized_equal_to with null keys must handle mixed null/non-null rows
+    // and must not overwrite pre-existing false bits in equal_to_results.
+    #[test]
+    fn vectorized_equal_to_with_null_keys() {
+        let mut col = utf8_col();
+        let arr = dict_arr(&[None, Some(0), Some(1)], &["a", "b"]);
+        col.vectorized_append(&arr, &[0, 1, 2]).unwrap();
+        assert_eq!(col.len(), 3);
 
-        #[test]
-        fn take_n_with_nulls_then_build() {
-            let mut col = utf8_col();
-            let arr =
-                dict_arr(&[None, Some(0), None, Some(1), Some(2)], &["a", "b", "c"]);
-            for i in 0..5 {
-                col.append_val(&arr, i).unwrap();
-            }
-            assert_eq!(col.len(), 5);
+        let mut buf = true_buf(3);
+        col.vectorized_equal_to(&[0, 1, 2], &arr, &[0, 1, 1], &mut buf);
+        assert_eq!(buf_to_vec(&buf), vec![true, true, false]);
 
-            let taken = col.take_n(2);
-            assert_is_dict_utf8(&taken);
-            assert_eq!(str_values(&taken), vec![None, Some("a".into())]);
-            assert_eq!(col.len(), 3);
-
-            assert!(col.equal_to(0, &arr, 0));
-            assert!(col.equal_to(1, &arr, 3));
-
-            let arr2 = dict_arr(&[Some(0)], &["d"]);
-            col.append_val(&arr2, 0).unwrap();
-            assert_eq!(col.len(), 4);
-
-            let out = Box::new(col).build();
-            assert_is_dict_utf8(&out);
-            assert_eq!(
-                str_values(&out),
-                vec![None, Some("b".into()), Some("c".into()), Some("d".into())]
-            );
-        }
-
-        #[test]
-        fn interleaved_append_compare_take_build() {
-            let mut col = utf8_col();
-            let arr = dict_arr(&[Some(0), Some(1), Some(0)], &["alpha", "beta"]);
-            col.append_val(&arr, 0).unwrap();
-            col.append_val(&arr, 1).unwrap();
-            col.append_val(&arr, 2).unwrap();
-
-            assert!(col.equal_to(0, &arr, 0));
-            assert!(!col.equal_to(1, &arr, 2));
-
-            let taken = col.take_n(1);
-            assert_is_dict_utf8(&taken);
-            assert_eq!(str_values(&taken), vec![Some("alpha".into())]);
-            assert_eq!(col.len(), 2);
-
-            assert!(col.equal_to(0, &arr, 1));
-            assert!(!col.equal_to(0, &arr, 0));
-
-            let arr2 = dict_arr(&[Some(0)], &["gamma"]);
-            col.append_val(&arr2, 0).unwrap();
-            assert_eq!(col.len(), 3);
-
-            let out = Box::new(col).build();
-            assert_is_dict_utf8(&out);
-            assert_eq!(
-                str_values(&out),
-                vec![
-                    Some("beta".into()),
-                    Some("alpha".into()),
-                    Some("gamma".into())
-                ]
-            );
-        }
-
-        #[test]
-        fn build_output_is_exact_dict_type() {
-            let mut col = utf8_col();
-            let arr = dict_arr(&[Some(0), None, Some(1)], &["hello", "world"]);
-            for i in 0..3 {
-                col.append_val(&arr, i).unwrap();
-            }
-            let out = Box::new(col).build();
-            assert_is_dict_utf8(&out);
-            assert_eq!(
-                str_values(&out),
-                vec![Some("hello".into()), None, Some("world".into())]
-            );
-        }
-
-        #[test]
-        fn take_n_output_is_exact_dict_type() {
-            let mut col = utf8_col();
-            let arr = dict_arr(&[Some(0), None, Some(1), Some(0)], &["foo", "bar"]);
-            for i in 0..4 {
-                col.append_val(&arr, i).unwrap();
-            }
-            let taken = col.take_n(2);
-            assert_is_dict_utf8(&taken);
-            assert_eq!(str_values(&taken), vec![Some("foo".into()), None]);
-
-            let remaining = Box::new(col).build();
-            assert_is_dict_utf8(&remaining);
-            assert_eq!(
-                str_values(&remaining),
-                vec![Some("bar".into()), Some("foo".into())]
-            );
-        }
+        let mut buf2 = true_buf(3);
+        buf2.set_bit(0, false);
+        col.vectorized_equal_to(&[0, 1, 2], &arr, &[0, 1, 2], &mut buf2);
+        assert_eq!(buf_to_vec(&buf2), vec![false, true, true]);
     }
 
-    // Regression tests — add new cases here when a bug is fixed.
-    mod regressions {
-        use super::*;
+    // Repeated intern/take_n cycle; verifies len and size shrink after take_n
+    // and that surviving rows remain correct across emit boundaries.
+    #[test]
+    fn repeated_intern_emit_len_and_size() {
+        let mut col = utf8_col();
+        let arr1 = dict_arr(&[Some(0), None, Some(1), Some(0), None], &["cat", "dog"]);
+        col.vectorized_append(&arr1, &[0, 1, 2, 3, 4]).unwrap();
+        assert_eq!(col.len(), 5);
+        let size_after_first = col.size();
+        assert!(size_after_first > 0);
 
-        #[test]
-        fn take_n_zero_is_noop() {
-            let mut col = utf8_col();
-            let arr = dict_arr(&[Some(0), Some(1)], &["a", "b"]);
-            col.append_val(&arr, 0).unwrap();
-            col.append_val(&arr, 1).unwrap();
-            assert_eq!(col.len(), 2);
+        let out1 = col.take_n(3);
+        assert_is_dict_utf8(&out1);
+        assert_eq!(
+            str_values(&out1),
+            vec![Some("cat".into()), None, Some("dog".into())]
+        );
+        assert_eq!(col.len(), 2);
+        assert!(col.size() < size_after_first);
 
-            let taken = col.take_n(0);
-            assert_eq!(taken.len(), 0);
-            assert_eq!(col.len(), 2);
-        }
+        assert!(col.equal_to(0, &arr1, 0));
+        assert!(col.equal_to(1, &arr1, 1));
 
-        #[test]
-        fn take_n_all_then_build_empty() {
-            let mut col = utf8_col();
-            let arr = dict_arr(&[Some(0), Some(1)], &["a", "b"]);
-            col.append_val(&arr, 0).unwrap();
-            col.append_val(&arr, 1).unwrap();
+        let arr2 = dict_arr(&[Some(0), None], &["fish"]);
+        col.vectorized_append(&arr2, &[0, 1]).unwrap();
+        assert_eq!(col.len(), 4);
 
-            let taken = col.take_n(2);
-            assert_is_dict_utf8(&taken);
-            assert_eq!(str_values(&taken), vec![Some("a".into()), Some("b".into())]);
-            assert_eq!(col.len(), 0);
+        let out2 = col.take_n(4);
+        assert_is_dict_utf8(&out2);
+        assert_eq!(
+            str_values(&out2),
+            vec![Some("cat".into()), None, Some("fish".into()), None]
+        );
+        assert_eq!(col.len(), 0);
 
-            let out = Box::new(col).build();
-            assert_is_dict_utf8(&out);
-            assert_eq!(out.len(), 0);
-        }
+        let empty = Box::new(col).build();
+        assert_is_dict_utf8(&empty);
+        assert_eq!(empty.len(), 0);
+    }
+
+    // take_n(0) is a no-op; draining all rows leaves an empty dict of the correct type.
+    #[test]
+    fn take_n_edge_cases() {
+        let mut col = utf8_col();
+        let arr = dict_arr(&[Some(0), None], &["a"]);
+        col.vectorized_append(&arr, &[0, 1]).unwrap();
+        assert_eq!(col.len(), 2);
+
+        let nothing = col.take_n(0);
+        assert_eq!(nothing.len(), 0);
+        assert_eq!(col.len(), 2);
+
+        let all = col.take_n(2);
+        assert_is_dict_utf8(&all);
+        assert_eq!(str_values(&all), vec![Some("a".into()), None]);
+        assert_eq!(col.len(), 0);
+
+        let empty = Box::new(col).build();
+        assert_is_dict_utf8(&empty);
+        assert_eq!(empty.len(), 0);
     }
 }
