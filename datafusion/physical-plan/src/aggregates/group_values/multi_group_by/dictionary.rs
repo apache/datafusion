@@ -17,37 +17,66 @@
 
 use crate::aggregates::group_values::multi_group_by::GroupColumn;
 
-use arrow::array::{ArrayRef, BooleanBufferBuilder};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanBufferBuilder, DictionaryArray, PrimitiveArray,
+};
 use arrow::compute::cast;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, Field};
 use datafusion_common::Result;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
-pub struct DictionaryGroupValuesColumn {
+pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> {
     inner: Box<dyn GroupColumn>,
+    field: Field,
+    null_array: ArrayRef,
+    _phantom: PhantomData<K>,
 }
 
-impl DictionaryGroupValuesColumn {
-    pub fn new(inner: Box<dyn GroupColumn>) -> Self {
-        Self { inner }
-    }
-
-    fn resolve(array: &ArrayRef) -> ArrayRef {
-        if let DataType::Dictionary(_, value_type) = array.data_type() {
-            cast(array.as_ref(), value_type.as_ref()).expect("dict cast failed")
-        } else {
-            Arc::clone(array)
+impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
+    pub fn new(inner: Box<dyn GroupColumn>, field: Field) -> Self {
+        let null_array = arrow::array::new_null_array(field.data_type(), 1);
+        Self {
+            inner,
+            field,
+            null_array,
+            _phantom: PhantomData,
         }
     }
+
+    fn into_dict(values: ArrayRef) -> ArrayRef {
+        let keys: PrimitiveArray<K> = (0..values.len())
+            .map(|i| {
+                if values.is_null(i) {
+                    None
+                } else {
+                    Some(K::Native::usize_as(i))
+                }
+            })
+            .collect();
+        Arc::new(DictionaryArray::<K>::new(keys, values))
+    }
 }
 
-impl GroupColumn for DictionaryGroupValuesColumn {
+impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
+    for DictionaryGroupValuesColumn<K>
+{
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
-        self.inner.equal_to(lhs_row, &Self::resolve(array), rhs_row)
+        let dict = array.as_dictionary::<K>();
+        let values = Arc::clone(dict.values());
+        match dict.key(rhs_row) {
+            None => self.inner.equal_to(lhs_row, &self.null_array, 0),
+            Some(key) => self.inner.equal_to(lhs_row, &values.slice(key, 1), 0),
+        }
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
-        self.inner.append_val(&Self::resolve(array), row)
+        let dict = array.as_dictionary::<K>();
+        let values = Arc::clone(dict.values());
+        match dict.key(row) {
+            None => self.inner.append_val(&self.null_array, 0),
+            Some(key) => self.inner.append_val(&values.slice(key, 1), 0),
+        }
     }
 
     fn vectorized_equal_to(
@@ -57,16 +86,22 @@ impl GroupColumn for DictionaryGroupValuesColumn {
         rhs_rows: &[usize],
         equal_to_results: &mut BooleanBufferBuilder,
     ) {
-        self.inner.vectorized_equal_to(
-            lhs_rows,
-            &Self::resolve(array),
-            rhs_rows,
-            equal_to_results,
-        )
+        let dict = array.as_dictionary::<K>();
+        let (_keys, _values) = (dict.keys(), dict.values());
+        // TODO: use dict directly
+        let casted =
+            cast(array.as_ref(), self.field.data_type()).expect("dict cast failed");
+        self.inner
+            .vectorized_equal_to(lhs_rows, &casted, rhs_rows, equal_to_results)
     }
 
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
-        self.inner.vectorized_append(&Self::resolve(array), rows)
+        let dict = array.as_dictionary::<K>();
+        let (_keys, _values) = (dict.keys(), dict.values());
+        // TODO: use dict directly
+        let casted =
+            cast(array.as_ref(), self.field.data_type()).expect("dict cast failed");
+        self.inner.vectorized_append(&casted, rows)
     }
 
     fn len(&self) -> usize {
@@ -78,11 +113,11 @@ impl GroupColumn for DictionaryGroupValuesColumn {
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
-        self.inner.build()
+        Self::into_dict(self.inner.build())
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
-        self.inner.take_n(n)
+        Self::into_dict(self.inner.take_n(n))
     }
 }
 
@@ -98,10 +133,12 @@ mod tests {
     use datafusion_physical_expr::binary_map::OutputType;
     use std::sync::Arc;
 
-    fn utf8_col() -> DictionaryGroupValuesColumn {
-        DictionaryGroupValuesColumn::new(Box::new(ByteGroupValueBuilder::<i32>::new(
-            OutputType::Utf8,
-        )))
+    fn utf8_col() -> DictionaryGroupValuesColumn<Int32Type> {
+        let field = Field::new("", DataType::Utf8, true);
+        DictionaryGroupValuesColumn::<Int32Type>::new(
+            Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
+            field,
+        )
     }
 
     fn dict_arr(keys: &[Option<i32>], values: &[&str]) -> ArrayRef {
@@ -123,6 +160,18 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    fn assert_is_dict_utf8(arr: &ArrayRef) {
+        assert!(
+            matches!(
+                arr.data_type(),
+                DataType::Dictionary(k, v)
+                    if k.as_ref() == &DataType::Int32 && v.as_ref() == &DataType::Utf8
+            ),
+            "expected Dictionary(Int32, Utf8), got {:?}",
+            arr.data_type()
+        );
     }
 
     fn make_true_buf(n: usize) -> BooleanBufferBuilder {
@@ -184,6 +233,53 @@ mod tests {
             col.vectorized_equal_to(&[0, 0, 1, 1], &arr, &[0, 1, 0, 1], &mut buf);
             assert_eq!(to_vec(&buf), vec![true, false, false, true]);
         }
+
+        // null in the values array: key 0 points to a null string in the values
+        #[test]
+        fn null_in_values_array() {
+            let mut col = utf8_col();
+            let arr: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(vec![Some(0), Some(1), Some(0)]),
+                Arc::new(StringArray::from(vec![None::<&str>, Some("a")])),
+            ));
+            for i in 0..3 {
+                col.append_val(&arr, i).unwrap(); // null, "a", null
+            }
+            assert_eq!(col.len(), 3);
+
+            assert!(col.equal_to(0, &arr, 0)); // null == null
+            assert!(!col.equal_to(0, &arr, 1)); // null != "a"
+            assert!(col.equal_to(2, &arr, 0)); // null == null
+            assert!(col.equal_to(1, &arr, 1)); // "a" == "a"
+
+            let out = Box::new(col).build();
+            assert_eq!(str_values(&out), vec![None, Some("a".into()), None]);
+        }
+
+        // null key (null dict entry) and null value (null in values array) coexist
+        #[test]
+        fn null_key_and_null_value() {
+            let mut col = utf8_col();
+            // row 0: null key, row 1: key=0 → null value, row 2: key=1 → "b"
+            let arr: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(vec![None, Some(0), Some(1)]),
+                Arc::new(StringArray::from(vec![None::<&str>, Some("b")])),
+            ));
+            for i in 0..3 {
+                col.append_val(&arr, i).unwrap();
+            }
+            assert_eq!(col.len(), 3);
+
+            assert!(col.equal_to(0, &arr, 0)); // null key == null key
+            assert!(col.equal_to(1, &arr, 1)); // null value == null value
+            assert!(col.equal_to(0, &arr, 1)); // null key == null value (both null)
+            assert!(col.equal_to(2, &arr, 2)); // "b" == "b"
+            assert!(!col.equal_to(0, &arr, 2)); // null != "b"
+            assert!(!col.equal_to(2, &arr, 1)); // "b" != null
+
+            let out = Box::new(col).build();
+            assert_eq!(str_values(&out), vec![None, None, Some("b".into())]);
+        }
     }
 
     mod comparison {
@@ -242,6 +338,7 @@ mod tests {
             assert_eq!(col.len(), 5);
 
             let taken = col.take_n(2);
+            assert_is_dict_utf8(&taken);
             assert_eq!(str_values(&taken), vec![None, Some("a".into())]);
             assert_eq!(col.len(), 3);
 
@@ -253,6 +350,7 @@ mod tests {
             assert_eq!(col.len(), 4);
 
             let out = Box::new(col).build();
+            assert_is_dict_utf8(&out);
             assert_eq!(
                 str_values(&out),
                 vec![None, Some("b".into()), Some("c".into()), Some("d".into())]
@@ -271,6 +369,7 @@ mod tests {
             assert!(!col.equal_to(1, &arr, 2));
 
             let taken = col.take_n(1);
+            assert_is_dict_utf8(&taken);
             assert_eq!(str_values(&taken), vec![Some("alpha".into())]);
             assert_eq!(col.len(), 2);
 
@@ -282,6 +381,7 @@ mod tests {
             assert_eq!(col.len(), 3);
 
             let out = Box::new(col).build();
+            assert_is_dict_utf8(&out);
             assert_eq!(
                 str_values(&out),
                 vec![
@@ -289,6 +389,40 @@ mod tests {
                     Some("alpha".into()),
                     Some("gamma".into())
                 ]
+            );
+        }
+
+        #[test]
+        fn build_output_is_exact_dict_type() {
+            let mut col = utf8_col();
+            let arr = dict_arr(&[Some(0), None, Some(1)], &["hello", "world"]);
+            for i in 0..3 {
+                col.append_val(&arr, i).unwrap();
+            }
+            let out = Box::new(col).build();
+            assert_is_dict_utf8(&out);
+            assert_eq!(
+                str_values(&out),
+                vec![Some("hello".into()), None, Some("world".into())]
+            );
+        }
+
+        #[test]
+        fn take_n_output_is_exact_dict_type() {
+            let mut col = utf8_col();
+            let arr = dict_arr(&[Some(0), None, Some(1), Some(0)], &["foo", "bar"]);
+            for i in 0..4 {
+                col.append_val(&arr, i).unwrap();
+            }
+            let taken = col.take_n(2);
+            assert_is_dict_utf8(&taken);
+            assert_eq!(str_values(&taken), vec![Some("foo".into()), None]);
+
+            let remaining = Box::new(col).build();
+            assert_is_dict_utf8(&remaining);
+            assert_eq!(
+                str_values(&remaining),
+                vec![Some("bar".into()), Some("foo".into())]
             );
         }
     }
@@ -318,10 +452,12 @@ mod tests {
             col.append_val(&arr, 1).unwrap();
 
             let taken = col.take_n(2);
+            assert_is_dict_utf8(&taken);
             assert_eq!(str_values(&taken), vec![Some("a".into()), Some("b".into())]);
             assert_eq!(col.len(), 0);
 
             let out = Box::new(col).build();
+            assert_is_dict_utf8(&out);
             assert_eq!(out.len(), 0);
         }
     }
