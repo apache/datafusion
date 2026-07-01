@@ -1001,6 +1001,10 @@ impl FinalHashAggregateStream {
         &mut self,
         hash_table: AggregateHashTable<FinalMarker>,
     ) -> Result<FinalHashAggregateState> {
+        dbg!(
+            "load_next_partition_run, num_partitions:{}",
+            self.partition_run_state.unwrap().runs.len()
+        );
         let next_partition_id = self
             .partition_run_state
             .as_ref()
