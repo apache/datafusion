@@ -40,3 +40,17 @@ pub(crate) fn maybe_grow<R>(callback: impl FnOnce() -> R) -> R {
 pub(crate) fn maybe_grow<R>(callback: impl FnOnce() -> R) -> R {
     callback()
 }
+
+#[cfg(all(test, feature = "recursive_protection"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maybe_grow_does_not_mutate_recursive_minimum_stack_size() {
+        let before = recursive::get_minimum_stack_size();
+        let observed = maybe_grow(recursive::get_minimum_stack_size);
+
+        assert_eq!(observed, before);
+        assert_eq!(recursive::get_minimum_stack_size(), before);
+    }
+}

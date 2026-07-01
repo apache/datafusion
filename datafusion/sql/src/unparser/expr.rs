@@ -3397,6 +3397,65 @@ mod tests {
         handle.join().expect("unparsing thread should not panic");
     }
 
+    /// Regression test for https://github.com/apache/datafusion/issues/23246
+    ///
+    /// A concurrent `StackGuard` drop used to restore `recursive`'s
+    /// process-global red zone to 128 KiB while another thread was still
+    /// relying on DataFusion's 256 KiB SQL red zone. Keep the global value
+    /// churning at the default while deep unparsing runs to ensure the unparser
+    /// uses local stack-growth boundaries instead.
+    #[cfg(feature = "recursive_protection")]
+    #[test]
+    fn test_deeply_nested_expr_with_concurrent_recursive_minimum_churn() {
+        const DEPTH: usize = 2_000;
+        const DEFAULT_RECURSIVE_RED_ZONE: usize = 128 * 1024;
+
+        let previous_minimum = recursive::get_minimum_stack_size();
+        recursive::set_minimum_stack_size(DEFAULT_RECURSIVE_RED_ZONE);
+
+        let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+        let churner = std::thread::spawn({
+            let running = std::sync::Arc::clone(&running);
+            let barrier = std::sync::Arc::clone(&barrier);
+            move || {
+                barrier.wait();
+                while running.load(std::sync::atomic::Ordering::Relaxed) {
+                    recursive::set_minimum_stack_size(DEFAULT_RECURSIVE_RED_ZONE);
+                    std::thread::yield_now();
+                }
+            }
+        });
+
+        let worker = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn({
+                let barrier = std::sync::Arc::clone(&barrier);
+                move || {
+                    barrier.wait();
+
+                    let mut nested_fn: Expr = col("c");
+                    for _ in 0..DEPTH {
+                        nested_fn = array_has(nested_fn, lit("x"));
+                    }
+
+                    let pg = PostgreSqlDialect {};
+                    Unparser::new(&pg)
+                        .expr_to_sql(&nested_fn)
+                        .expect("deeply nested scalar function should unparse");
+                }
+            })
+            .unwrap();
+
+        let worker_result = worker.join();
+        running.store(false, std::sync::atomic::Ordering::Relaxed);
+        churner.join().expect("churner thread should not panic");
+        recursive::set_minimum_stack_size(previous_minimum);
+
+        worker_result.expect("unparsing thread should not panic");
+    }
+
     #[test]
     fn test_window_func_support_window_frame() -> Result<()> {
         let default_dialect: Arc<dyn Dialect> =
