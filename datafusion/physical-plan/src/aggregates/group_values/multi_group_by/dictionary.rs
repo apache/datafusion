@@ -20,7 +20,6 @@ use crate::aggregates::group_values::multi_group_by::GroupColumn;
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, DictionaryArray, PrimitiveArray,
 };
-use arrow::compute::cast;
 use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, Field};
 use datafusion_common::Result;
 use std::marker::PhantomData;
@@ -28,7 +27,6 @@ use std::sync::Arc;
 
 pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> {
     inner: Box<dyn GroupColumn>,
-    field: Field,
     null_array: ArrayRef,
     _phantom: PhantomData<K>,
 }
@@ -38,7 +36,6 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
         let null_array = arrow::array::new_null_array(field.data_type(), 1);
         Self {
             inner,
-            field,
             null_array,
             _phantom: PhantomData,
         }
@@ -63,19 +60,17 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
 {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         let dict = array.as_dictionary::<K>();
-        let values = Arc::clone(dict.values());
         match dict.key(rhs_row) {
             None => self.inner.equal_to(lhs_row, &self.null_array, 0),
-            Some(key) => self.inner.equal_to(lhs_row, &values.slice(key, 1), 0),
+            Some(key) => self.inner.equal_to(lhs_row, dict.values(), key),
         }
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
         let dict = array.as_dictionary::<K>();
-        let values = Arc::clone(dict.values());
         match dict.key(row) {
             None => self.inner.append_val(&self.null_array, 0),
-            Some(key) => self.inner.append_val(&values.slice(key, 1), 0),
+            Some(key) => self.inner.append_val(dict.values(), key),
         }
     }
 
@@ -87,21 +82,49 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         equal_to_results: &mut BooleanBufferBuilder,
     ) {
         let dict = array.as_dictionary::<K>();
-        let (_keys, _values) = (dict.keys(), dict.values());
-        // TODO: use dict directly
-        let casted =
-            cast(array.as_ref(), self.field.data_type()).expect("dict cast failed");
-        self.inner
-            .vectorized_equal_to(lhs_rows, &casted, rhs_rows, equal_to_results)
+        let keys = dict.keys();
+
+        if keys.null_count() == 0 {
+            let key_indices: Vec<usize> =
+                rhs_rows.iter().map(|&r| keys.value(r).as_usize()).collect();
+            self.inner.vectorized_equal_to(
+                lhs_rows,
+                dict.values(),
+                &key_indices,
+                equal_to_results,
+            );
+        } else {
+            let values = dict.values();
+            for (i, (lhs_row, rhs_row)) in lhs_rows.iter().zip(rhs_rows).enumerate() {
+                if equal_to_results.get_bit(i) {
+                    let result = match dict.key(*rhs_row) {
+                        None => self.inner.equal_to(*lhs_row, &self.null_array, 0),
+                        Some(key) => self.inner.equal_to(*lhs_row, values, key),
+                    };
+                    equal_to_results.set_bit(i, result);
+                }
+            }
+        }
     }
 
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
         let dict = array.as_dictionary::<K>();
-        let (_keys, _values) = (dict.keys(), dict.values());
-        // TODO: use dict directly
-        let casted =
-            cast(array.as_ref(), self.field.data_type()).expect("dict cast failed");
-        self.inner.vectorized_append(&casted, rows)
+        let keys = dict.keys();
+
+        if keys.null_count() == 0 {
+            let key_indices: Vec<usize> =
+                rows.iter().map(|&r| keys.value(r).as_usize()).collect();
+            self.inner.vectorized_append(dict.values(), &key_indices)
+        } else {
+            let values = dict.values();
+            for &row in rows {
+                match dict.key(row) {
+                    None => self.inner.append_val(&self.null_array, 0)?,
+                    Some(k) => self.inner.append_val(values, k)?,
+                }
+            }
+            Ok(())
+        }
     }
 
     fn len(&self) -> usize {
