@@ -72,10 +72,15 @@ pub trait ExprSchemable {
 /// Derives the output field for a cast expression from the source and target fields.
 ///
 /// Metadata handling:
-/// - Source field metadata is propagated by default
-/// - Extension type metadata keys (`ARROW:extension:name` and `ARROW:extension:metadata`)
-///   are taken from the target field, overwriting any extension metadata from the source.
-///   This ensures casting does not incorrectly propagate extension type identity.
+/// - Type-only casts (i.e., target_field == DataType::SomeDataType.into_nullable_field())
+///   propagate non extension-type metadata from the source. This is for backward compatibility
+///   (casts have propagated source metadata for many if not all previous versions), recognizing
+///   that the return type of <some extension type>::<some non extension type> should have the
+///   return type of <some non extension type> (e.g., casting arrow.json to utf8).
+/// - All other casts preserve target metdata exactly. This ensures in particular that output
+///   metadata when casting to an extension type contains the extension information in the
+///   output field. Callers that wish to have some mix of source and target metadata can use
+///   Alias or construct an output field themselves (whose metadata will be used directly).
 ///
 /// For `TryCast`, `force_nullable` is `true` since a failed cast returns NULL.
 fn cast_output_field(
@@ -85,21 +90,21 @@ fn cast_output_field(
 ) -> Arc<Field> {
     use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 
-    // Start with source metadata
-    let mut metadata = source_field.metadata().clone();
+    // Check if this is a "type-only" cast (target_field == DataType::X.into_nullable_field())
+    let is_type_only = target_field.name().is_empty()
+        && target_field.is_nullable()
+        && target_field.metadata().is_empty();
 
-    // Remove any extension type metadata from source - these should not propagate through casts
-    metadata.remove(EXTENSION_TYPE_NAME_KEY);
-    metadata.remove(EXTENSION_TYPE_METADATA_KEY);
-
-    // Add extension type metadata from the target field if present
-    let target_metadata = target_field.metadata();
-    if let Some(name) = target_metadata.get(EXTENSION_TYPE_NAME_KEY) {
-        metadata.insert(EXTENSION_TYPE_NAME_KEY.to_string(), name.clone());
-    }
-    if let Some(ext_meta) = target_metadata.get(EXTENSION_TYPE_METADATA_KEY) {
-        metadata.insert(EXTENSION_TYPE_METADATA_KEY.to_string(), ext_meta.clone());
-    }
+    let metadata = if is_type_only {
+        // Type-only cast: propagate source metadata, stripping extension type keys
+        let mut meta = source_field.metadata().clone();
+        meta.remove(EXTENSION_TYPE_NAME_KEY);
+        meta.remove(EXTENSION_TYPE_METADATA_KEY);
+        meta
+    } else {
+        // Explicit target field: use target metadata exactly
+        target_field.metadata().clone()
+    };
 
     let mut f = source_field
         .as_ref()
@@ -1303,7 +1308,7 @@ mod tests {
                 );
             }
 
-            // Test 2: Cast to a field with different extension type replaces extension metadata
+            // Test 2: Cast to a field with explicit metadata uses target metadata exactly
             let mut target_meta = HashMap::new();
             target_meta.insert(
                 EXTENSION_TYPE_NAME_KEY.to_string(),
@@ -1328,10 +1333,9 @@ mod tests {
                 Some(&"{}".to_string()),
                 "{cast_name}: Extension type metadata should come from target field"
             );
-            assert_eq!(
-                result_field.metadata().get("custom_key"),
-                Some(&"custom_value".to_string()),
-                "{cast_name}: Non-extension metadata should still be preserved from source"
+            assert!(
+                result_field.metadata().get("custom_key").is_none(),
+                "{cast_name}: Source metadata should NOT propagate when target has explicit metadata"
             );
             if use_try_cast {
                 assert!(

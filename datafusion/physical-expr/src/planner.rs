@@ -294,7 +294,6 @@ pub fn create_physical_expr(
                 };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
-        // TODO I think we need to check for the "default target field" here
         Expr::Cast(Cast { expr, field }) => expressions::cast_with_target_field(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
