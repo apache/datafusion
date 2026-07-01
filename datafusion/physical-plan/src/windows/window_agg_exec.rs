@@ -244,7 +244,7 @@ impl ExecutionPlan for WindowAggExec {
         if self.partition_keys().is_empty() {
             vec![Distribution::SinglePartition]
         } else {
-            vec![Distribution::HashPartitioned(self.partition_keys())]
+            vec![Distribution::KeyPartitioned(self.partition_keys())]
         }
     }
 

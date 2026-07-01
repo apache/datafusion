@@ -247,6 +247,10 @@ impl ExecutionPlan for OutputRequirementExec {
         args.compute_child_statistics(&self.input, args.partition())
     }
 
+    #[expect(
+        deprecated,
+        reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+    )]
     fn try_swapping_with_projection(
         &self,
         projection: &ProjectionExec,
@@ -272,7 +276,8 @@ impl ExecutionPlan for OutputRequirementExec {
         }
 
         let dist_req = match &self.required_input_distribution()[0] {
-            Distribution::HashPartitioned(exprs) => {
+            Distribution::HashPartitioned(exprs)
+            | Distribution::KeyPartitioned(exprs) => {
                 let mut updated_exprs = vec![];
                 for expr in exprs {
                     let Some(new_expr) = update_expr(expr, projection.expr(), false)?
@@ -281,7 +286,7 @@ impl ExecutionPlan for OutputRequirementExec {
                     };
                     updated_exprs.push(new_expr);
                 }
-                Distribution::HashPartitioned(updated_exprs)
+                Distribution::KeyPartitioned(updated_exprs)
             }
             dist => dist.clone(),
         };

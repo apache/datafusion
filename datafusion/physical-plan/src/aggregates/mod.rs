@@ -1709,7 +1709,7 @@ impl ExecutionPlan for AggregateExec {
                 vec![Distribution::UnspecifiedDistribution]
             }
             AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned => {
-                vec![Distribution::HashPartitioned(self.group_by.input_exprs())]
+                vec![Distribution::KeyPartitioned(self.group_by.input_exprs())]
             }
             AggregateMode::Final | AggregateMode::Single => {
                 vec![Distribution::SinglePartition]
