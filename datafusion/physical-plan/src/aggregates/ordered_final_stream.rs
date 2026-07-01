@@ -95,6 +95,7 @@ impl OrderedFinalAggregateStream {
 
         let schema = Arc::clone(&agg.schema);
         let input_schema = input.schema();
+        let batch_size = context.session_config().batch_size();
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
 
         // Preserve the existing aggregate metric surface for this plan node.
@@ -105,6 +106,7 @@ impl OrderedFinalAggregateStream {
             partition,
             &input_schema,
             Arc::clone(&schema),
+            batch_size,
             input_order_mode,
         )?;
         let reservation =

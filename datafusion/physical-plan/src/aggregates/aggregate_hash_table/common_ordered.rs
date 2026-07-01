@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 
@@ -64,6 +64,9 @@ pub(in crate::aggregates) struct OrderedAggregateTable<OrderedAggrMode> {
     /// Output schema: group columns followed by aggregate state or final values.
     pub(super) output_schema: SchemaRef,
 
+    /// Maximum rows per emitted output batch, from config `batch_size`.
+    pub(super) batch_size: usize,
+
     /// Grouping and accumulator-specific timing metrics.
     pub(super) group_by_metrics: GroupByMetrics,
 
@@ -103,15 +106,26 @@ pub(super) struct OrderedAggregateTableBuffer {
 
 /// Methods shared by all aggregate modes
 impl<AggrMode> OrderedAggregateTable<AggrMode> {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "keeps ordered partial and final table construction explicit"
+    )]
     pub(super) fn new_for_mode(
         agg: &AggregateExec,
         partition: usize,
         input_schema: &SchemaRef,
         output_schema: SchemaRef,
+        batch_size: usize,
         input_order_mode: &InputOrderMode,
         aggregate_mode: &AggregateMode,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
     ) -> Result<Self> {
+        if batch_size == 0 {
+            return internal_err!(
+                "OrderedAggregateTable requires config batch_size >= 1"
+            );
+        }
+
         let group_ordering = GroupOrdering::try_new(input_order_mode)?;
         let group_schema = agg.group_by.group_schema(input_schema)?;
         let group_values = new_group_values(group_schema, &group_ordering)?;
@@ -138,6 +152,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
 
         Ok(Self {
             output_schema,
+            batch_size,
             group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
             buffer: OrderedAggregateTableBuffer {
                 group_by: Arc::clone(&agg.group_by),
@@ -201,6 +216,24 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             + self.buffer.group_values.size()
             + self.buffer.group_ordering.size()
             + self.buffer.group_indices.allocated_size()
+    }
+
+    /// Returns the [`EmitTo`], clamped to the specified batch size
+    ///
+    /// Returns `(emit_to, should_remove_groups)`, where `emit_to` is the number
+    /// of groups to emit from `GroupValues` / accumulators, and
+    /// `should_remove_groups` indicates whether `GroupOrdering` must also shift
+    /// its tracked indexes.
+    pub(super) fn clamp_emit_to(
+        &self,
+        group_count: usize,
+        emit_to: EmitTo,
+    ) -> (EmitTo, bool) {
+        match emit_to {
+            EmitTo::First(n) => (EmitTo::First(n.min(self.batch_size)), true),
+            EmitTo::All if group_count <= self.batch_size => (EmitTo::All, false),
+            EmitTo::All => (EmitTo::First(self.batch_size), false),
+        }
     }
 }
 

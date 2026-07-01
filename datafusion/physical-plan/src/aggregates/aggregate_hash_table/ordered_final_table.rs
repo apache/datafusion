@@ -45,6 +45,7 @@ impl OrderedAggregateTable<OrderedFinalMarker> {
         partition: usize,
         input_schema: &SchemaRef,
         output_schema: SchemaRef,
+        batch_size: usize,
         input_order_mode: &InputOrderMode,
     ) -> Result<Self> {
         Self::new_for_mode(
@@ -52,6 +53,7 @@ impl OrderedAggregateTable<OrderedFinalMarker> {
             partition,
             input_schema,
             output_schema,
+            batch_size,
             input_order_mode,
             &AggregateMode::Final,
             vec![None; agg.aggr_expr.len()],
@@ -109,10 +111,14 @@ impl OrderedAggregateTable<OrderedFinalMarker> {
         let Some(emit_to) = self.buffer.group_ordering.emit_to() else {
             return Ok(None);
         };
+        let (emit_to, should_remove_groups) =
+            self.clamp_emit_to(self.buffer.group_values.len(), emit_to);
 
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.buffer.group_values.emit(emit_to)?;
-        remove_emitted_groups(&mut self.buffer.group_ordering, emit_to);
+        if should_remove_groups {
+            remove_emitted_groups(&mut self.buffer.group_ordering, emit_to);
+        }
 
         for acc in &mut self.buffer.accumulators {
             output.push(acc.evaluate(emit_to)?);
