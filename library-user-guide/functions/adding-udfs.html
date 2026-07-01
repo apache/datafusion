@@ -1169,6 +1169,33 @@ for the same input.</p></li>
 <li><p>The fifth argument is the function implementation. This is the function that we defined above.</p></li>
 <li><p>The sixth argument is the description of the state, which will by passed between execution stages.</p></li>
 </ul>
+</section>
+<section id="returning-multiple-values-from-an-aggregate-udf">
+<h3>Returning multiple values from an Aggregate UDF<a class="headerlink" href="#returning-multiple-values-from-an-aggregate-udf" title="Link to this heading">#</a></h3>
+<p>An aggregate UDF can return a <code class="docutils literal notranslate"><span class="pre">DataType::Struct</span></code> when one aggregate result needs
+to carry multiple values. This is useful for time-windowing extensions that
+need to return metadata such as the window start, window end, and the aggregate
+value together.</p>
+<p>Pass the relevant input columns to the aggregate so the accumulator has enough
+information to update and merge state normally in multi-stage aggregate plans.
+For example, rows can be grouped into time buckets with the built-in <code class="docutils literal notranslate"><span class="pre">date_bin</span></code>
+function, while a struct-returning aggregate computes the value and carries
+metadata about each bucket:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
+<span class="w">  </span><span class="n">augmented_avg</span><span class="p">(</span><span class="k">time</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">)[</span><span class="s1">&#39;window_start&#39;</span><span class="p">]</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">window_start</span><span class="p">,</span>
+<span class="w">  </span><span class="n">augmented_avg</span><span class="p">(</span><span class="k">time</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">)[</span><span class="s1">&#39;window_end&#39;</span><span class="p">]</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">window_end</span><span class="p">,</span>
+<span class="w">  </span><span class="n">augmented_avg</span><span class="p">(</span><span class="k">time</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">)[</span><span class="s1">&#39;window_duration&#39;</span><span class="p">]</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">window_duration</span><span class="p">,</span>
+<span class="w">  </span><span class="n">augmented_avg</span><span class="p">(</span><span class="k">time</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">)[</span><span class="s1">&#39;avg_value&#39;</span><span class="p">]</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">avg_value</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">t</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">date_bin</span><span class="p">(</span><span class="nb">INTERVAL</span><span class="w"> </span><span class="s1">&#39;30 seconds&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">time</span><span class="p">)</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">window_start</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>In this pattern <code class="docutils literal notranslate"><span class="pre">date_bin(...)</span></code> assigns rows to a time bucket, while
+<code class="docutils literal notranslate"><span class="pre">augmented_avg(time,</span> <span class="pre">value)</span></code> is a normal aggregate UDF whose accumulator stores
+mergeable state such as <code class="docutils literal notranslate"><span class="pre">window_start</span></code>, <code class="docutils literal notranslate"><span class="pre">window_end</span></code>, <code class="docutils literal notranslate"><span class="pre">sum</span></code>, and <code class="docutils literal notranslate"><span class="pre">count</span></code>.
+The aggregate’s <code class="docutils literal notranslate"><span class="pre">evaluate</span></code> method returns a <code class="docutils literal notranslate"><span class="pre">ScalarValue::Struct</span></code>, and callers
+can project individual fields from that struct.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">Volatility</span><span class="p">,</span><span class="w"> </span><span class="n">create_udaf</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">datatypes</span><span class="p">::</span><span class="n">DataType</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
@@ -1444,6 +1471,7 @@ validation of the input <code class="docutils literal notranslate"><span class="
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-an-aggregate-udf">Adding an Aggregate UDF</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#registering-an-aggregate-udf">Registering an Aggregate UDF</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#returning-multiple-values-from-an-aggregate-udf">Returning multiple values from an Aggregate UDF</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-a-table-udf">Adding a Table UDF</a><ul class="nav section-nav flex-column">
