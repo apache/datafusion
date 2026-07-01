@@ -77,7 +77,7 @@ pub trait ExprSchemable {
 ///   (casts have propagated source metadata for many if not all previous versions), recognizing
 ///   that the return type of <some extension type>::<some non extension type> should have the
 ///   return type of <some non extension type> (e.g., casting arrow.json to utf8).
-/// - All other casts preserve target metdata exactly. This ensures in particular that output
+/// - All other casts preserve target meatdata exactly. This ensures in particular that output
 ///   metadata when casting to an extension type contains the extension information in the
 ///   output field. Callers that wish to have some mix of source and target metadata can use
 ///   Alias or construct an output field themselves (whose metadata will be used directly).
