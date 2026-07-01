@@ -1106,6 +1106,16 @@ config_namespace! {
         /// the parquet file
         pub pruning: bool, default = true
 
+        /// (reading) If true, a scan restricted to a byte range of a parquet
+        /// file reads the proportional slice of rows from row groups that
+        /// partially overlap the range, so multiple partitions can decode
+        /// different rows of the same row group in parallel ("morsel"
+        /// splitting). This parallelizes reading of files with fewer row
+        /// groups than partitions, e.g. files with a single large row group.
+        /// If false, each row group is read entirely by the single partition
+        /// whose range contains the offset of its first data page.
+        pub split_row_groups_by_range: bool, default = true
+
         /// (reading) If true, the parquet reader skip the optional embedded metadata that may be in
         /// the file Schema. This setting can help avoid schema conflicts when querying
         /// multiple parquet files with schemas containing compatible types but different metadata

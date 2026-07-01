@@ -270,6 +270,12 @@ pub(super) struct ParquetMorselizer {
     pub enable_bloom_filter: bool,
     /// Should row group pruning be applied
     pub enable_row_group_stats_pruning: bool,
+    /// Should a file range that partially overlaps a row group read the
+    /// proportional slice of the row group's rows (via a `RowSelection`)
+    /// instead of assigning the entire row group to the range containing its
+    /// first data page. This allows partitions to decode disjoint parts of
+    /// the same row group in parallel.
+    pub split_row_groups_by_range: bool,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
     /// Optional timezone applied to INT96-coerced timestamps. When `Some`, the
@@ -444,6 +450,7 @@ struct PreparedParquetOpen {
     enable_page_index: bool,
     enable_bloom_filter: bool,
     enable_row_group_stats_pruning: bool,
+    split_row_groups_by_range: bool,
     limit: Option<usize>,
     coerce_int96: Option<TimeUnit>,
     coerce_int96_tz: Option<Arc<str>>,
@@ -843,6 +850,7 @@ impl ParquetMorselizer {
             enable_page_index: self.enable_page_index,
             enable_bloom_filter: self.enable_bloom_filter,
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+            split_row_groups_by_range: self.split_row_groups_by_range,
             limit: self.limit,
             coerce_int96: self.coerce_int96,
             coerce_int96_tz: self.coerce_int96_tz.clone(),
@@ -1093,7 +1101,14 @@ impl FiltersPreparedParquetOpen {
 
         // If there is a range restricting what parts of the file to read
         if let Some(range) = prepared.file_range.as_ref() {
-            row_groups.prune_by_range(rg_metadata, range);
+            if prepared.split_row_groups_by_range {
+                // Read the proportional slice of rows from row groups that
+                // partially overlap the range, so partitions can decode
+                // disjoint parts of the same row group in parallel.
+                row_groups.split_by_range(rg_metadata, range);
+            } else {
+                row_groups.prune_by_range(rg_metadata, range);
+            }
         }
 
         // If there is a predicate that can be evaluated against the metadata
@@ -1648,12 +1663,19 @@ fn should_load_page_index(
     page_pruning_predicate: Option<&Arc<PagePruningAccessPlanFilter>>,
     row_groups: &RowGroupAccessPlanFilter,
 ) -> bool {
-    page_pruning_predicate.is_some_and(|_| {
+    // Load to prune pages with the predicate, unless every surviving row
+    // group is already known to fully match it.
+    let for_page_pruning = page_pruning_predicate.is_some_and(|_| {
         let fully_matched = row_groups.is_fully_matched();
         row_groups
             .row_group_indexes()
             .any(|idx| !fully_matched[idx])
-    })
+    });
+
+    // Row selections (e.g. from `split_by_range`) need the offset index so
+    // the reader fetches and decodes only the pages covering the selected
+    // rows rather than entire column chunks.
+    for_page_pruning || row_groups.has_selection()
 }
 
 /// Returns a `ArrowReaderMetadata` with the page index loaded, loading
@@ -1749,6 +1771,7 @@ mod test {
         enable_page_index: bool,
         enable_bloom_filter: bool,
         enable_row_group_stats_pruning: bool,
+        split_row_groups_by_range: bool,
         coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
@@ -1857,6 +1880,7 @@ mod test {
                 enable_page_index: false,
                 enable_bloom_filter: false,
                 enable_row_group_stats_pruning: false,
+                split_row_groups_by_range: false,
                 coerce_int96: None,
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
@@ -1925,6 +1949,12 @@ mod test {
         /// Enable row group stats pruning.
         fn with_row_group_stats_pruning(mut self, enable: bool) -> Self {
             self.enable_row_group_stats_pruning = enable;
+            self
+        }
+
+        /// Enable splitting row groups that partially overlap a file range.
+        fn with_split_row_groups_by_range(mut self, enable: bool) -> Self {
+            self.split_row_groups_by_range = enable;
             self
         }
 
@@ -2025,6 +2055,7 @@ mod test {
                 enable_page_index: self.enable_page_index,
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+                split_row_groups_by_range: self.split_row_groups_by_range,
                 coerce_int96: self.coerce_int96,
                 // End-to-end coercion behavior (including timezone) is
                 // covered by parquet.slt. No opener-level test currently
@@ -2244,6 +2275,106 @@ mod test {
             expr.children().into_iter().map(Arc::clone).collect(),
             expr,
         ))
+    }
+
+    /// Read `test.parquet` through `num_ranges` byte ranges tiling the file
+    /// and return the values produced by each range.
+    async fn read_by_ranges(
+        opener: &ParquetMorselizer,
+        data_size: usize,
+        num_ranges: i64,
+    ) -> Vec<Vec<i32>> {
+        let chunk = (data_size as i64 + num_ranges - 1) / num_ranges;
+        let mut results = vec![];
+        for i in 0..num_ranges {
+            let file = PartitionedFile::new("test.parquet".to_string(), data_size as u64)
+                .with_range(i * chunk, ((i + 1) * chunk).min(data_size as i64));
+            let stream = open_file(opener, file).await.unwrap();
+            results.push(collect_int32_values(stream).await);
+        }
+        results
+    }
+
+    /// A file with a single row group scanned through byte ranges: with
+    /// `split_row_groups_by_range` each range decodes a disjoint slice of the
+    /// row group (so multiple partitions share the work), and every row is
+    /// read exactly once.
+    #[tokio::test]
+    async fn test_split_row_groups_by_range() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(arrow::array::Int32Array::from_iter_values(
+                0..1000,
+            ))],
+        )
+        .unwrap();
+        let data_size = write_parquet(Arc::clone(&store), "test.parquet", batch).await;
+
+        let make_opener = |split| {
+            ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_split_row_groups_by_range(split)
+                .build()
+        };
+
+        // With splitting: several ranges produce disjoint, contiguous slices
+        // that together cover the whole row group exactly once, in order.
+        let per_range = read_by_ranges(&make_opener(true), data_size, 4).await;
+        let non_empty = per_range.iter().filter(|v| !v.is_empty()).count();
+        assert!(
+            non_empty > 1,
+            "expected the row group to be split across ranges, got {non_empty} non-empty ranges"
+        );
+        let all_values: Vec<i32> = per_range.into_iter().flatten().collect();
+        assert_eq!(all_values, (0..1000).collect::<Vec<i32>>());
+
+        // Without splitting: the single row group is read entirely by the
+        // one range containing its first data page.
+        let per_range = read_by_ranges(&make_opener(false), data_size, 4).await;
+        let non_empty = per_range.iter().filter(|v| !v.is_empty()).count();
+        assert_eq!(non_empty, 1);
+        let all_values: Vec<i32> = per_range.into_iter().flatten().collect();
+        assert_eq!(all_values, (0..1000).collect::<Vec<i32>>());
+    }
+
+    /// Range splitting composes with predicate pushdown: rows are still read
+    /// exactly once and filters apply within each slice.
+    #[tokio::test]
+    async fn test_split_row_groups_by_range_with_predicate() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(arrow::array::Int32Array::from_iter_values(
+                0..1000,
+            ))],
+        )
+        .unwrap();
+        let data_size = write_parquet(Arc::clone(&store), "test.parquet", batch).await;
+
+        let expr = col("a").gt_eq(lit(100)).and(col("a").lt(lit(900)));
+        let predicate = logical2physical(&expr, &schema);
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_enable_page_index(true)
+            .with_split_row_groups_by_range(true)
+            .build();
+
+        let per_range = read_by_ranges(&opener, data_size, 4).await;
+        let all_values: Vec<i32> = per_range.into_iter().flatten().collect();
+        assert_eq!(all_values, (100..900).collect::<Vec<i32>>());
     }
 
     #[tokio::test]

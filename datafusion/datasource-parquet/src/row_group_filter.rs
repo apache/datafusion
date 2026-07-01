@@ -33,6 +33,7 @@ use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprSimplifier};
 use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::RowGroupMetaData;
 use parquet::schema::types::SchemaDescriptor;
 
@@ -58,6 +59,11 @@ impl RowGroupAccessPlanFilter {
     /// Return true if there are no row groups
     pub fn is_empty(&self) -> bool {
         self.access_plan.is_empty()
+    }
+
+    /// Return true if any row group is accessed via a row selection
+    pub fn has_selection(&self) -> bool {
+        self.access_plan.has_selection()
     }
 
     /// Return the number of row groups that are currently expected to be scanned
@@ -249,6 +255,92 @@ impl RowGroupAccessPlanFilter {
             }
         }
     }
+
+    /// Restrict the access plan to the given byte `range`, splitting row
+    /// groups that only partially overlap the range into proportional
+    /// [`RowSelection`]s.
+    ///
+    /// The byte span of a row group (first dictionary/data page offset plus
+    /// compressed size) is mapped linearly onto its rows: a range covering a
+    /// fraction of the span selects the corresponding fraction of rows.
+    /// Callers produce ranges that exactly tile the file (see
+    /// `FileGroupPartitioner`), and row boundaries are computed with the same
+    /// integer arithmetic on both sides of a range boundary, so every row of
+    /// every row group is assigned to exactly one range.
+    ///
+    /// This lets partitions decode disjoint slices of the same row group in
+    /// parallel, which parallelizes scans of files with fewer row groups than
+    /// partitions (e.g. a single large row group).
+    ///
+    /// # Panics
+    /// if `groups.len() != self.len()`
+    pub fn split_by_range(&mut self, groups: &[RowGroupMetaData], range: &FileRange) {
+        assert_eq!(groups.len(), self.access_plan.len());
+        for (idx, metadata) in groups.iter().enumerate() {
+            if !self.access_plan.should_scan(idx) {
+                continue;
+            }
+
+            // As in `prune_by_range`, the row group's span starts at its first
+            // dictionary/data page rather than at the file offset recorded in
+            // the metadata <https://github.com/apache/datafusion/issues/5995>
+            let col = metadata.column(0);
+            let rg_start = col
+                .dictionary_page_offset()
+                .unwrap_or_else(|| col.data_page_offset());
+            let rg_len = metadata.compressed_size();
+            let num_rows = metadata.num_rows();
+            if rg_len <= 0 || num_rows <= 0 {
+                // Degenerate row group: fall back to whole-group assignment.
+                if !range.contains(rg_start) {
+                    self.access_plan.skip(idx);
+                }
+                continue;
+            }
+            let rg_end = rg_start + rg_len;
+
+            let overlap_start = range.start.max(rg_start);
+            let overlap_end = range.end.min(rg_end);
+            if overlap_start >= overlap_end {
+                self.access_plan.skip(idx);
+                continue;
+            }
+
+            // Flooring byte→row mapping; evaluating it identically at both
+            // ends of each range keeps adjacent row intervals contiguous and
+            // non-overlapping.
+            let row_at = |pos: i64| -> i64 {
+                ((pos - rg_start) as i128 * num_rows as i128 / rg_len as i128) as i64
+            };
+            let start_row = row_at(overlap_start);
+            let end_row = if overlap_end >= rg_end {
+                num_rows
+            } else {
+                row_at(overlap_end)
+            };
+
+            if start_row >= end_row {
+                // The overlapping byte slice maps to zero whole rows; the
+                // rows near this boundary belong to a neighboring range.
+                self.access_plan.skip(idx);
+            } else if start_row > 0 || end_row < num_rows {
+                let selectors = [
+                    RowSelector::skip(start_row as usize),
+                    RowSelector::select((end_row - start_row) as usize),
+                    RowSelector::skip((num_rows - end_row) as usize),
+                ];
+                let selection: RowSelection = selectors
+                    .into_iter()
+                    .filter(|s| s.row_count > 0)
+                    .collect::<Vec<_>>()
+                    .into();
+                self.access_plan.scan_selection(idx, selection);
+            }
+            // else: the range covers the entire row group; leave the existing
+            // access (Scan or a prior Selection) untouched.
+        }
+    }
+
     /// Prune remaining row groups using min/max/null_count statistics and
     /// the [`PruningPredicate`] to determine if the predicate can not be true.
     ///
@@ -1433,5 +1525,198 @@ mod tests {
 
     fn assert_pruned(row_groups: RowGroupAccessPlanFilter, expected: ExpectedPruning) {
         expected.assert(&row_groups);
+    }
+
+    /// Build a row group with `num_rows` rows whose single column chunk
+    /// starts at `data_page_offset` and spans `compressed_size` bytes.
+    fn row_group_at(
+        schema_descr: &SchemaDescPtr,
+        data_page_offset: i64,
+        compressed_size: i64,
+        num_rows: i64,
+    ) -> RowGroupMetaData {
+        let column = ColumnChunkMetaData::builder(schema_descr.column(0))
+            .set_num_values(num_rows)
+            .set_data_page_offset(data_page_offset)
+            .set_total_compressed_size(compressed_size)
+            .build()
+            .unwrap();
+        RowGroupMetaData::builder(schema_descr.clone())
+            .set_num_rows(num_rows)
+            .set_total_byte_size(compressed_size)
+            .set_column_metadata(vec![column])
+            .build()
+            .unwrap()
+    }
+
+    /// Apply `split_by_range` for `range` against `groups` and return the
+    /// resulting per-row-group access.
+    fn split(groups: &[RowGroupMetaData], range: FileRange) -> Vec<RowGroupAccess> {
+        let mut filter =
+            RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(groups.len()));
+        filter.split_by_range(groups, &range);
+        filter.build().into_inner()
+    }
+
+    fn selection(selectors: Vec<RowSelector>) -> RowGroupAccess {
+        RowGroupAccess::Selection(RowSelection::from(selectors))
+    }
+
+    #[test]
+    fn test_split_by_range_tiles_row_group_exactly() {
+        let schema_descr = get_test_schema_descr(vec![PrimitiveTypeField::new(
+            "c1",
+            PhysicalType::INT32,
+        )]);
+        // Single row group of 1000 rows spanning bytes [4, 1004)
+        let groups = vec![row_group_at(&schema_descr, 4, 1000, 1000)];
+
+        // Ranges tiling the file [0, 1250) (the tail covers the footer)
+        let ranges = [
+            FileRange { start: 0, end: 300 },
+            FileRange {
+                start: 300,
+                end: 600,
+            },
+            FileRange {
+                start: 600,
+                end: 900,
+            },
+            FileRange {
+                start: 900,
+                end: 1250,
+            },
+        ];
+        let accesses: Vec<_> = ranges
+            .iter()
+            .map(|r| split(&groups, r.clone()).remove(0))
+            .collect();
+
+        // Each range selects the row interval proportional to its byte
+        // overlap with the row group, tiling all 1000 rows exactly.
+        assert_eq!(
+            accesses,
+            vec![
+                selection(vec![RowSelector::select(296), RowSelector::skip(704)]),
+                selection(vec![
+                    RowSelector::skip(296),
+                    RowSelector::select(300),
+                    RowSelector::skip(404),
+                ]),
+                selection(vec![
+                    RowSelector::skip(596),
+                    RowSelector::select(300),
+                    RowSelector::skip(104),
+                ]),
+                selection(vec![RowSelector::skip(896), RowSelector::select(104)]),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_split_by_range_full_coverage_keeps_scan() {
+        let schema_descr = get_test_schema_descr(vec![PrimitiveTypeField::new(
+            "c1",
+            PhysicalType::INT32,
+        )]);
+        let groups = vec![row_group_at(&schema_descr, 4, 1000, 1000)];
+        assert_eq!(
+            split(
+                &groups,
+                FileRange {
+                    start: 0,
+                    end: 2000
+                }
+            ),
+            vec![RowGroupAccess::Scan]
+        );
+    }
+
+    #[test]
+    fn test_split_by_range_no_overlap_skips() {
+        let schema_descr = get_test_schema_descr(vec![PrimitiveTypeField::new(
+            "c1",
+            PhysicalType::INT32,
+        )]);
+        let groups = vec![row_group_at(&schema_descr, 4, 1000, 1000)];
+        // Range beyond the row group (e.g. covering only the footer)
+        assert_eq!(
+            split(
+                &groups,
+                FileRange {
+                    start: 1004,
+                    end: 1250
+                }
+            ),
+            vec![RowGroupAccess::Skip]
+        );
+    }
+
+    #[test]
+    fn test_split_by_range_across_row_groups() {
+        let schema_descr = get_test_schema_descr(vec![PrimitiveTypeField::new(
+            "c1",
+            PhysicalType::INT32,
+        )]);
+        let groups = vec![
+            row_group_at(&schema_descr, 4, 1000, 1000),
+            row_group_at(&schema_descr, 1004, 1000, 1000),
+        ];
+        // A range covering the second half of row group 0 and the first
+        // half of row group 1
+        assert_eq!(
+            split(
+                &groups,
+                FileRange {
+                    start: 500,
+                    end: 1500
+                }
+            ),
+            vec![
+                selection(vec![RowSelector::skip(496), RowSelector::select(504)]),
+                selection(vec![RowSelector::select(496), RowSelector::skip(504)]),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_split_by_range_zero_row_slice_skips() {
+        let schema_descr = get_test_schema_descr(vec![PrimitiveTypeField::new(
+            "c1",
+            PhysicalType::INT32,
+        )]);
+        // 10 rows over 1000 bytes: a 50-byte slice maps to zero whole rows
+        let groups = vec![row_group_at(&schema_descr, 4, 1000, 10)];
+        assert_eq!(
+            split(&groups, FileRange { start: 4, end: 54 }),
+            vec![RowGroupAccess::Skip]
+        );
+    }
+
+    #[test]
+    fn test_split_by_range_respects_skipped_row_groups() {
+        let schema_descr = get_test_schema_descr(vec![PrimitiveTypeField::new(
+            "c1",
+            PhysicalType::INT32,
+        )]);
+        let groups = vec![
+            row_group_at(&schema_descr, 4, 1000, 1000),
+            row_group_at(&schema_descr, 1004, 1000, 1000),
+        ];
+        let mut plan = ParquetAccessPlan::new_all(2);
+        plan.skip(0);
+        let mut filter = RowGroupAccessPlanFilter::new(plan);
+        filter.split_by_range(
+            &groups,
+            &FileRange {
+                start: 0,
+                end: 3000,
+            },
+        );
+        // Row group 0 stays skipped even though the range covers it
+        assert_eq!(
+            filter.build().into_inner(),
+            vec![RowGroupAccess::Skip, RowGroupAccess::Scan]
+        );
     }
 }

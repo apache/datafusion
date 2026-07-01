@@ -360,6 +360,13 @@ impl ParquetAccessPlan {
         self.row_groups[idx].should_scan()
     }
 
+    /// Return true if any row group is accessed via a [`RowGroupAccess::Selection`]
+    pub fn has_selection(&self) -> bool {
+        self.row_groups
+            .iter()
+            .any(|rg| matches!(rg, RowGroupAccess::Selection(_)))
+    }
+
     /// Marks the i-th row group as fully matched.
     ///
     /// Fully matched row groups are still read according to their
