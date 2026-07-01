@@ -85,38 +85,21 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        // Reset the map to default, and convert it into a single array
-        let map_contents = self.map.take().into_state();
-
         let group_values = match emit_to {
             EmitTo::All => {
-                self.num_groups -= map_contents.len();
-                map_contents
+                self.num_groups = 0;
+                self.map.take().into_state()
             }
-            EmitTo::First(n) if n == self.len() => {
-                self.num_groups -= map_contents.len();
-                map_contents
+            EmitTo::First(n) if n >= self.num_groups => {
+                self.num_groups = 0;
+                self.map.take().into_state()
             }
             EmitTo::First(n) => {
-                // if we only wanted to take the first n, insert the rest back
-                // into the map we could potentially avoid this reallocation, at
-                // the expense of much more complex code.
-                // see https://github.com/apache/datafusion/issues/9195
-                let emit_group_values = map_contents.slice(0, n);
-                let remaining_group_values =
-                    map_contents.slice(n, map_contents.len() - n);
-
-                self.num_groups = 0;
-                let mut group_indexes = vec![];
-                self.intern(&[remaining_group_values], &mut group_indexes)?;
-
-                // Verify that the group indexes were assigned in the correct order
-                assert_eq!(0, group_indexes[0]);
-
-                emit_group_values
+                let group_values = self.map.emit(n);
+                self.num_groups -= n;
+                group_values
             }
         };
-
         Ok(vec![group_values])
     }
 
