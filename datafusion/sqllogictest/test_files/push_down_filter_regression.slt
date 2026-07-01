@@ -218,11 +218,12 @@ LOCATION 'test_files/scratch/push_down_filter_regression/agg_dyn/';
 statement ok
 set datafusion.execution.collect_statistics = true;
 
-# Suppress metrics: pruning counts are nondeterministic under parallel
-# execution (the order in which Partial aggregates publish dynamic filter
-# updates races against when the scan reads each partition). The original
-# Rust test only asserted matched < 4; the important invariant here is
-# that the DynamicFilter text is correct.
+# Suppress metrics and dynamic filter thresholds: pruning counts and the
+# threshold value are nondeterministic under parallel execution (the order in
+# which Partial aggregates publish dynamic filter updates races against when
+# the scan reads each partition). The original Rust test only asserted matched
+# < 4; the important invariant here is that the DynamicFilter is present and
+# contributes to the pruning predicate.
 statement ok
 set datafusion.explain.analyze_level = summary;
 
@@ -236,7 +237,7 @@ Plan with Metrics
 01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_dyn_e2e.column1)], metrics=[]
 02)--CoalescePartitionsExec, metrics=[]
 03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_dyn_e2e.column1)], metrics=[]
-04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_3.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 > 1 AND DynamicFilter [ column1@0 > 4 ], dynamic_rg_pruning=eligible, pruning_predicate=column1_null_count@1 != row_count@2 AND column1_max@0 > 1 AND column1_null_count@1 != row_count@2 AND column1_max@0 > 4, required_guarantees=[], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_3.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 > 1 AND DynamicFilter [ column1@0 > <slt:ignore> ], dynamic_rg_pruning=eligible, pruning_predicate=column1_null_count@1 != row_count@2 AND column1_max@0 > 1 AND column1_null_count@1 != row_count@2 AND column1_max@0 > <slt:ignore>, required_guarantees=[], metrics=[]
 
 statement ok
 reset datafusion.explain.analyze_categories;
