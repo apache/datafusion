@@ -17,8 +17,8 @@
 
 use arrow::array::Array;
 use arrow::{
-    array::{ArrayRef, BooleanBufferBuilder, RecordBatch},
-    compute::concat_batches,
+    array::{ArrayRef, BooleanBufferBuilder, RecordBatch, UInt64Array},
+    compute::{concat, interleave_record_batch, take_record_batch},
     util::bit_util,
 };
 use arrow_schema::{SchemaRef, SortOptions};
@@ -49,7 +49,9 @@ use crate::joins::piecewise_merge_join::classic_join::{
 use crate::joins::piecewise_merge_join::utils::{
     build_visited_indices_map, is_existence_join, is_right_existence_join,
 };
-use crate::joins::utils::asymmetric_join_output_partitioning;
+use crate::joins::utils::{
+    asymmetric_join_output_partitioning, build_batch_offsets, flat_index_to_batch_row,
+};
 use crate::metrics::MetricsSet;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlanProperties, check_if_same_properties,
@@ -665,27 +667,40 @@ async fn build_buffered_data(
         })
         .await?;
 
-    let single_batch = concat_batches(&schema, batches.iter())?;
+    // Keep the buffered batches un-concatenated. Rows are addressed by a flat index
+    // into their logical concatenation via these prefix-sum offsets.
+    let mut batches = batches;
+    if batches.is_empty() {
+        // Guarantee at least one batch so build-side column types are always
+        // available (e.g. for gathering rows on an empty buffered side).
+        batches.push(RecordBatch::new_empty(Arc::clone(&schema)));
+    }
+    let offsets = build_batch_offsets(batches.iter().map(RecordBatch::num_rows));
 
-    // Evaluate physical expression on the buffered side.
-    let buffered_values = on_buffered
-        .evaluate(&single_batch)?
-        .into_array(single_batch.num_rows())?;
+    // Evaluate the join key on each buffered batch and concatenate just that single
+    // (sorted) key column. The merge algorithm needs the key as one contiguous,
+    // globally-sorted array; concatenating one column is far cheaper than copying
+    // every column of the buffered side into a single batch.
+    let key_arrays = batches
+        .iter()
+        .map(|b| on_buffered.evaluate(b)?.into_array(b.num_rows()))
+        .collect::<Result<Vec<_>>>()?;
+    let buffered_values =
+        concat(&key_arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>())?;
 
-    // We add the single batch size + the memory of the join keys
-    // size of the size estimation
-    let size_estimation = get_record_batch_memory_size(&single_batch)
-        + buffered_values.get_array_memory_size();
+    // The buffered batches were already reserved as they were collected above; only
+    // the concatenated key column is newly allocated here.
+    let size_estimation = buffered_values.get_array_memory_size();
     reservation.try_grow(size_estimation)?;
     metrics.build_mem_used.add(size_estimation);
 
     // Created visited indices bitmap only if the join type requires it
     let visited_indices_bitmap = if build_map {
-        let bitmap_size = bit_util::ceil(single_batch.num_rows(), 8);
+        let bitmap_size = bit_util::ceil(num_rows, 8);
         reservation.try_grow(bitmap_size)?;
         metrics.build_mem_used.add(bitmap_size);
 
-        let mut bitmap_buffer = BooleanBufferBuilder::new(single_batch.num_rows());
+        let mut bitmap_buffer = BooleanBufferBuilder::new(num_rows);
         bitmap_buffer.append_n(num_rows, false);
         bitmap_buffer
     } else {
@@ -693,7 +708,8 @@ async fn build_buffered_data(
     };
 
     let buffered_data = BufferedSideData::new(
-        single_batch,
+        batches,
+        offsets,
         buffered_values,
         Mutex::new(visited_indices_bitmap),
         remaining_partitions,
@@ -704,7 +720,14 @@ async fn build_buffered_data(
 }
 
 pub(super) struct BufferedSideData {
-    pub(super) batch: RecordBatch,
+    /// Buffered (build-side) rows, kept as the original un-concatenated batches.
+    /// Rows are addressed by a flat index into their logical concatenation.
+    batches: Vec<RecordBatch>,
+    /// Prefix-sum offsets: `offsets[k]` is the first flat index of `batches[k]`,
+    /// and `offsets[batches.len()]` is the total row count.
+    offsets: Vec<usize>,
+    /// The (globally sorted) join-key column, concatenated across all buffered
+    /// batches into a single contiguous array for the merge.
     values: ArrayRef,
     pub(super) visited_indices_bitmap: SharedBitmapBuilder,
     pub(super) remaining_partitions: AtomicUsize,
@@ -713,14 +736,16 @@ pub(super) struct BufferedSideData {
 
 impl BufferedSideData {
     pub(super) fn new(
-        batch: RecordBatch,
+        batches: Vec<RecordBatch>,
+        offsets: Vec<usize>,
         values: ArrayRef,
         visited_indices_bitmap: SharedBitmapBuilder,
         remaining_partitions: usize,
         reservation: MemoryReservation,
     ) -> Self {
         Self {
-            batch,
+            batches,
+            offsets,
             values,
             visited_indices_bitmap,
             remaining_partitions: AtomicUsize::new(remaining_partitions),
@@ -728,12 +753,45 @@ impl BufferedSideData {
         }
     }
 
-    pub(super) fn batch(&self) -> &RecordBatch {
-        &self.batch
-    }
-
     pub(super) fn values(&self) -> &ArrayRef {
         &self.values
+    }
+
+    /// Gather a contiguous logical row range `[start, start + count)` of the
+    /// buffered side into a single batch. When the range lies within one batch
+    /// this is a zero-copy slice; otherwise it is materialized with `interleave`.
+    pub(super) fn gather_range(&self, start: usize, count: usize) -> Result<RecordBatch> {
+        if count == 0 {
+            return Ok(self.batches[0].slice(0, 0));
+        }
+        let (first_batch, first_row) = flat_index_to_batch_row(&self.offsets, start);
+        let (last_batch, _) = flat_index_to_batch_row(&self.offsets, start + count - 1);
+        if first_batch == last_batch {
+            // Range is within a single batch: slice it directly (zero-copy).
+            Ok(self.batches[first_batch].slice(first_row, count))
+        } else {
+            let pairs: Vec<(usize, usize)> = (start..start + count)
+                .map(|i| flat_index_to_batch_row(&self.offsets, i))
+                .collect();
+            let refs: Vec<&RecordBatch> = self.batches.iter().collect();
+            Ok(interleave_record_batch(&refs, &pairs)?)
+        }
+    }
+
+    /// Gather arbitrary buffered rows (by flat index) into a single batch.
+    pub(super) fn gather_indices(&self, indices: &UInt64Array) -> Result<RecordBatch> {
+        if self.batches.len() == 1 {
+            // Single batch: identical to the original `take_record_batch` path.
+            Ok(take_record_batch(&self.batches[0], indices)?)
+        } else {
+            let pairs: Vec<(usize, usize)> = indices
+                .values()
+                .iter()
+                .map(|&i| flat_index_to_batch_row(&self.offsets, i as usize))
+                .collect();
+            let refs: Vec<&RecordBatch> = self.batches.iter().collect();
+            Ok(interleave_record_batch(&refs, &pairs)?)
+        }
     }
 }
 
