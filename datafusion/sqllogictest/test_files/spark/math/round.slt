@@ -222,6 +222,18 @@ SELECT round(25::bigint, -1::int);
 ----
 30
 
+# round(bigint) should preserve exact values above Float64's exact integer range
+query IT
+SELECT round(arrow_cast(9007199254740993, 'Int64')), arrow_typeof(round(arrow_cast(9007199254740993, 'Int64')));
+----
+9007199254740993 Int64
+
+# round(bigint, positive scale) should also preserve exact values above Float64's exact integer range
+query IT
+SELECT round(arrow_cast(9007199254740993, 'Int64'), 2::int), arrow_typeof(round(arrow_cast(9007199254740993, 'Int64'), 2::int));
+----
+9007199254740993 Int64
+
 # round(smallint, -1)
 query I
 SELECT round(25::smallint, -1::int);
@@ -267,6 +279,18 @@ query I
 SELECT round(arrow_cast(25, 'UInt64'), -1::int);
 ----
 30
+
+# round(uint64) should preserve exact values above Float64's exact integer range
+query IT
+SELECT round(arrow_cast(18446744073709551615, 'UInt64')), arrow_typeof(round(arrow_cast(18446744073709551615, 'UInt64')));
+----
+18446744073709551615 UInt64
+
+# round(uint64, positive scale) should also preserve exact values above Float64's exact integer range
+query IT
+SELECT round(arrow_cast(18446744073709551615, 'UInt64'), 2::int), arrow_typeof(round(arrow_cast(18446744073709551615, 'UInt64'), 2::int));
+----
+18446744073709551615 UInt64
 
 # round(uint32, positive scale) — no-op for integers
 query I

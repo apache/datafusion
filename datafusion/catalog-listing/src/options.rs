@@ -23,6 +23,7 @@ use datafusion_datasource::file_format::FileFormat;
 use datafusion_expr::{Partitioning, SortExpr};
 use futures::StreamExt;
 use futures::TryStreamExt;
+use itertools::AllEqualValueError;
 use itertools::Itertools;
 use std::sync::Arc;
 
@@ -404,11 +405,10 @@ impl ListingOptions {
 
         match partition_keys.into_iter().all_equal_value() {
             Ok(v) => Ok(v),
-            Err(None) => Ok(vec![]),
-            Err(Some(diff)) => {
-                let mut sorted_diff = [diff.0, diff.1];
-                sorted_diff.sort();
-                plan_err!("Found mixed partition values on disk {:?}", sorted_diff)
+            Err(AllEqualValueError(None)) => Ok(vec![]),
+            Err(AllEqualValueError(Some(mut diff))) => {
+                diff.sort();
+                plan_err!("Found mixed partition values on disk {:?}", diff)
             }
         }
     }

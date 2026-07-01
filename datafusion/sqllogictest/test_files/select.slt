@@ -1591,15 +1591,14 @@ WHERE CAST(ROUND(b) as INT) = a
 ORDER BY CAST(ROUND(b) as INT);
 ----
 logical_plan
-01)Sort: CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) ASC NULLS LAST
-02)--Filter: CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) = annotated_data_finite2.a
-03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) = annotated_data_finite2.a]
+01)Sort: CAST(round(annotated_data_finite2.b) AS Int32) ASC NULLS LAST
+02)--Filter: CAST(round(annotated_data_finite2.b) AS Int32) = annotated_data_finite2.a
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[CAST(round(annotated_data_finite2.b) AS Int32) = annotated_data_finite2.a]
 physical_plan
-01)SortPreservingMergeExec: [CAST(round(CAST(b@2 AS Float64)) AS Int32) ASC NULLS LAST]
-02)--FilterExec: CAST(round(CAST(b@2 AS Float64)) AS Int32) = a@1
+01)SortPreservingMergeExec: [round(b@2) ASC NULLS LAST]
+02)--FilterExec: round(b@2) = a@1
 03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
-
 
 statement ok
 drop table annotated_data_finite2;
