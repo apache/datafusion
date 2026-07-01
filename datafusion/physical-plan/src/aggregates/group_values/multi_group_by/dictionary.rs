@@ -17,59 +17,72 @@
 
 use crate::aggregates::group_values::multi_group_by::GroupColumn;
 
-use arrow::array::Int32Array;
+use arrow::array::{ArrayRef, BooleanBufferBuilder};
+use arrow::compute::cast;
+use arrow::datatypes::DataType;
+use datafusion_common::Result;
 use std::sync::Arc;
+
 pub struct DictionaryGroupValuesColumn {
     inner: Box<dyn GroupColumn>,
 }
+
 impl DictionaryGroupValuesColumn {
     pub fn new(inner: Box<dyn GroupColumn>) -> Self {
         Self { inner }
     }
+
+    fn resolve(array: &ArrayRef) -> ArrayRef {
+        if let DataType::Dictionary(_, value_type) = array.data_type() {
+            cast(array.as_ref(), value_type.as_ref()).expect("dict cast failed")
+        } else {
+            Arc::clone(array)
+        }
+    }
 }
 
 impl GroupColumn for DictionaryGroupValuesColumn {
-    fn equal_to(
-        &self,
-        lhs_row: usize,
-        array: &arrow::array::ArrayRef,
-        rhs_row: usize,
-    ) -> bool {
-        false
+    fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
+        self.inner.equal_to(lhs_row, &Self::resolve(array), rhs_row)
     }
-    fn append_val(
-        &mut self,
-        array: &arrow::array::ArrayRef,
-        row: usize,
-    ) -> datafusion_common::Result<()> {
-        Ok(())
+
+    fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
+        self.inner.append_val(&Self::resolve(array), row)
     }
+
     fn vectorized_equal_to(
         &self,
         lhs_rows: &[usize],
-        array: &arrow::array::ArrayRef,
+        array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut arrow::array::BooleanBufferBuilder,
+        equal_to_results: &mut BooleanBufferBuilder,
     ) {
+        self.inner.vectorized_equal_to(
+            lhs_rows,
+            &Self::resolve(array),
+            rhs_rows,
+            equal_to_results,
+        )
     }
-    fn vectorized_append(
-        &mut self,
-        _array: &arrow::array::ArrayRef,
-        _rows: &[usize],
-    ) -> datafusion_common::Result<()> {
-        Ok(())
+
+    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
+        self.inner.vectorized_append(&Self::resolve(array), rows)
     }
+
     fn len(&self) -> usize {
-        0
+        self.inner.len()
     }
+
     fn size(&self) -> usize {
-        0
+        self.inner.size()
     }
-    fn build(self: Box<Self>) -> arrow::array::ArrayRef {
-        Arc::new(Int32Array::from(vec![12, 3, 3]))
+
+    fn build(self: Box<Self>) -> ArrayRef {
+        self.inner.build()
     }
-    fn take_n(&mut self, n: usize) -> arrow::array::ArrayRef {
-        Arc::new(Int32Array::from(vec![12, 3, 3]))
+
+    fn take_n(&mut self, n: usize) -> ArrayRef {
+        self.inner.take_n(n)
     }
 }
 
