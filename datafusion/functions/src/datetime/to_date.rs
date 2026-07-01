@@ -38,7 +38,7 @@ Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T0
 Returns the corresponding date.
 
 Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.",
-    syntax_example = "to_date('2017-05-31', '%Y-%m-%d')",
+    syntax_example = "to_date(expression[, ..., format_n])",
     sql_example = r#"```sql
 > select to_date('2023-01-31');
 +-------------------------------+
