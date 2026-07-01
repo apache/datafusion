@@ -1181,19 +1181,6 @@ impl SessionContext {
 
         let mut state = self.state.write();
 
-        if key == "max_spill_merge_fan_in" {
-            let fan_in = value.parse::<usize>().map_err(|e| {
-                DataFusionError::Plan(format!(
-                    "Failed to parse non-negative integer from '{variable}', value '{value}': {e}"
-                ))
-            })?;
-            state
-                .runtime_env()
-                .disk_manager
-                .set_max_spill_merge_fan_in(fan_in);
-            return Ok(());
-        }
-
         let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
         builder = match key {
             "memory_limit" => {
@@ -1221,6 +1208,18 @@ impl SessionContext {
                 let limit = Self::parse_capacity_limit(variable, value)?;
                 builder.with_file_statistics_cache_limit(limit)
             }
+            "max_spill_merge_fan_in" => {
+                let fan_in = value.parse::<usize>().map_err(|e| {
+                    DataFusionError::Plan(format!(
+                        "Failed to parse non-negative integer from '{variable}', value '{value}': {e}"
+                    ))
+                })?;
+                state
+                    .runtime_env()
+                    .disk_manager
+                    .set_max_spill_merge_fan_in(fan_in);
+                return Ok(());
+            }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
             // Remember to update `reset_runtime_variable()` when adding new options
         };
@@ -1236,14 +1235,6 @@ impl SessionContext {
         let key = variable.strip_prefix("datafusion.runtime.").unwrap();
 
         let mut state = self.state.write();
-
-        if key == "max_spill_merge_fan_in" {
-            state
-                .runtime_env()
-                .disk_manager
-                .set_max_spill_merge_fan_in(DEFAULT_MAX_SPILL_MERGE_FAN_IN);
-            return Ok(());
-        }
 
         let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
         match key {
@@ -1272,6 +1263,13 @@ impl SessionContext {
                 builder = builder.with_file_statistics_cache_limit(
                     DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
                 );
+            }
+            "max_spill_merge_fan_in" => {
+                state
+                    .runtime_env()
+                    .disk_manager
+                    .set_max_spill_merge_fan_in(DEFAULT_MAX_SPILL_MERGE_FAN_IN);
+                return Ok(());
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };

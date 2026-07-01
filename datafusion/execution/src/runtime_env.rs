@@ -90,11 +90,6 @@ impl Debug for RuntimeEnv {
     }
 }
 
-/// Creates runtime configuration entries with the provided values
-///
-/// This helper function defines the structure and metadata for all runtime configuration
-/// entries to avoid duplication between `RuntimeEnv::config_entries()` and
-/// `RuntimeEnvBuilder::entries()`.
 struct RuntimeConfigValues {
     memory_limit: Option<String>,
     max_temp_directory_size: Option<String>,
@@ -106,59 +101,66 @@ struct RuntimeConfigValues {
     file_statistics_cache_limit: Option<String>,
 }
 
-fn create_runtime_config_entries(values: RuntimeConfigValues) -> Vec<ConfigEntry> {
-    let RuntimeConfigValues {
-        memory_limit,
-        max_temp_directory_size,
-        max_spill_merge_fan_in,
-        temp_directory,
-        metadata_cache_limit,
-        list_files_cache_limit,
-        list_files_cache_ttl,
-        file_statistics_cache_limit,
-    } = values;
-    vec![
-        ConfigEntry {
-            key: "datafusion.runtime.memory_limit".to_string(),
-            value: memory_limit,
-            description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
-        },
-        ConfigEntry {
-            key: "datafusion.runtime.max_temp_directory_size".to_string(),
-            value: max_temp_directory_size,
-            description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
-        },
-        ConfigEntry {
-            key: "datafusion.runtime.max_spill_merge_fan_in".to_string(),
-            value: max_spill_merge_fan_in,
-            description: "Maximum number of spill files opened by one external merge pass. Use 0 for unlimited. Values below 2 still use 2 so a merge can make progress.",
-        },
-        ConfigEntry {
-            key: "datafusion.runtime.temp_directory".to_string(),
-            value: temp_directory,
-            description: "The path to the temporary file directory.",
-        },
-        ConfigEntry {
-            key: "datafusion.runtime.metadata_cache_limit".to_string(),
-            value: metadata_cache_limit,
-            description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
-        },
-        ConfigEntry {
-            key: "datafusion.runtime.list_files_cache_limit".to_string(),
-            value: list_files_cache_limit,
-            description: "Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
-        },
-        ConfigEntry {
-            key: "datafusion.runtime.list_files_cache_ttl".to_string(),
-            value: list_files_cache_ttl,
-            description: "TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.",
-        },
-        ConfigEntry {
-            key: "datafusion.runtime.file_statistics_cache_limit".to_string(),
-            value: file_statistics_cache_limit,
-            description: "Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
-        },
-    ]
+impl RuntimeConfigValues {
+    /// Creates runtime configuration entries with the provided values.
+    ///
+    /// This defines the structure and metadata for all runtime configuration
+    /// entries to avoid duplication between `RuntimeEnv::config_entries()` and
+    /// `RuntimeEnvBuilder::entries()`.
+    fn into_config_entries(self) -> Vec<ConfigEntry> {
+        let Self {
+            memory_limit,
+            max_temp_directory_size,
+            max_spill_merge_fan_in,
+            temp_directory,
+            metadata_cache_limit,
+            list_files_cache_limit,
+            list_files_cache_ttl,
+            file_statistics_cache_limit,
+        } = self;
+        vec![
+            ConfigEntry {
+                key: "datafusion.runtime.memory_limit".to_string(),
+                value: memory_limit,
+                description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.max_temp_directory_size".to_string(),
+                value: max_temp_directory_size,
+                description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.max_spill_merge_fan_in".to_string(),
+                value: max_spill_merge_fan_in,
+                description: "Maximum number of spill files opened by one external merge pass. Use 0 for unlimited. Values below 2 still use 2 so a merge can make progress.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.temp_directory".to_string(),
+                value: temp_directory,
+                description: "The path to the temporary file directory.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.metadata_cache_limit".to_string(),
+                value: metadata_cache_limit,
+                description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.list_files_cache_limit".to_string(),
+                value: list_files_cache_limit,
+                description: "Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.list_files_cache_ttl".to_string(),
+                value: list_files_cache_ttl,
+                description: "TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.file_statistics_cache_limit".to_string(),
+                value: file_statistics_cache_limit,
+                description: "Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
+            },
+        ]
+    }
 }
 
 impl RuntimeEnv {
@@ -329,7 +331,7 @@ impl RuntimeEnv {
                 .expect("File statistics cache size conversion failed"),
         );
 
-        create_runtime_config_entries(RuntimeConfigValues {
+        RuntimeConfigValues {
             memory_limit: memory_limit_value,
             max_temp_directory_size: Some(max_temp_dir_value),
             max_spill_merge_fan_in: Some(max_spill_merge_fan_in),
@@ -338,7 +340,8 @@ impl RuntimeEnv {
             list_files_cache_limit: Some(list_files_cache_value),
             list_files_cache_ttl,
             file_statistics_cache_limit: Some(file_statistics_cache_value),
-        })
+        }
+        .into_config_entries()
     }
 }
 
@@ -545,7 +548,7 @@ impl RuntimeEnvBuilder {
 
     /// Returns a list of all available runtime configurations with their current values and descriptions
     pub fn entries(&self) -> Vec<ConfigEntry> {
-        create_runtime_config_entries(RuntimeConfigValues {
+        RuntimeConfigValues {
             memory_limit: None,
             max_temp_directory_size: Some("100G".to_string()),
             max_spill_merge_fan_in: Some("0".to_string()),
@@ -554,7 +557,8 @@ impl RuntimeEnvBuilder {
             list_files_cache_limit: Some("1M".to_owned()),
             list_files_cache_ttl: None,
             file_statistics_cache_limit: Some("20M".to_owned()),
-        })
+        }
+        .into_config_entries()
     }
 
     /// Generate documentation that can be included in the user guide
