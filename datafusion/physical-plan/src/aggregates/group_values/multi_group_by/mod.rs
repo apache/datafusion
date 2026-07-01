@@ -2030,10 +2030,21 @@ mod tests {
         }
     }
 
+    fn assert_is_dict_utf8(arr: &ArrayRef, label: &str) {
+        assert!(
+            matches!(arr.data_type(),
+                DataType::Dictionary(k, v)
+                    if k.as_ref() == &DataType::Int32 && v.as_ref() == &DataType::Utf8),
+            "{label}: expected Dictionary(Int32, Utf8), got {:?}",
+            arr.data_type()
+        );
+    }
+
     fn dict_utf8() -> DataType {
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
     }
 
+    // Mixed key types (Int8/Int32) and value types (Utf8/LargeUtf8) in the same schema.
     #[test]
     fn test_group_dict_repeated_keys_mixed_types_non_streaming() {
         let schema = Arc::new(Schema::new(vec![
@@ -2092,16 +2103,16 @@ mod tests {
         assert_eq!(groups, vec![1, 2, 2, 0]);
 
         let out = gv.emit(EmitTo::All).unwrap();
-        assert_eq!(out[0].len(), 3);
         assert_dict_str(&out[0], &[Some("a"), Some("b"), Some("c")]);
         let s = cast(out[1].as_ref(), &DataType::LargeUtf8).unwrap();
         let s = s.as_any().downcast_ref::<LargeStringArray>().unwrap();
-        let got: Vec<Option<&str>> = (0..s.len())
-            .map(|i| if s.is_null(i) { None } else { Some(s.value(i)) })
+        let got: Vec<_> = (0..s.len())
+            .map(|i| s.is_valid(i).then(|| s.value(i)))
             .collect();
         assert_eq!(got, vec![Some("x"), Some("y"), Some("z")]);
     }
 
+    // Dict cols mixed with a primitive col; both non-streaming and streaming paths.
     #[test]
     fn test_group_dict_with_primitive_non_streaming() {
         let dt = dict_utf8();
@@ -2110,39 +2121,45 @@ mod tests {
             Field::new("b", dt.clone(), true),
             Field::new("c", DataType::Int64, true),
         ]));
-        let mut gv = GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
-        let mut groups = vec![];
 
-        gv.intern(
-            &[
-                dict_col(&[Some("a"), Some("b"), Some("a")]),
-                dict_col(&[Some("x"), Some("y"), Some("x")]),
-                Arc::new(Int64Array::from(vec![Some(1), Some(2), Some(1)])),
-            ],
-            &mut groups,
-        )
-        .unwrap();
-        assert_eq!(groups, vec![0, 1, 0]);
+        let run = |mut gv: Box<dyn GroupValues>| {
+            let mut groups = vec![];
+            gv.intern(
+                &[
+                    dict_col(&[Some("a"), Some("b"), Some("a")]),
+                    dict_col(&[Some("x"), Some("y"), Some("x")]),
+                    Arc::new(Int64Array::from(vec![1i64, 2, 1])),
+                ],
+                &mut groups,
+            )
+            .unwrap();
+            assert_eq!(groups, vec![0, 1, 0]);
+            gv.intern(
+                &[
+                    dict_col(&[Some("a"), Some("c")]),
+                    dict_col(&[Some("x"), Some("z")]),
+                    Arc::new(Int64Array::from(vec![1i64, 3])),
+                ],
+                &mut groups,
+            )
+            .unwrap();
+            assert_eq!(groups, vec![0, 2]);
+            let out = gv.emit(EmitTo::All).unwrap();
+            assert_dict_str(&out[0], &[Some("a"), Some("b"), Some("c")]);
+            assert_dict_str(&out[1], &[Some("x"), Some("y"), Some("z")]);
+            let c = out[2].as_any().downcast_ref::<Int64Array>().unwrap();
+            assert_eq!(c.values(), &[1, 2, 3]);
+        };
 
-        gv.intern(
-            &[
-                dict_col(&[Some("a"), Some("c")]),
-                dict_col(&[Some("x"), Some("z")]),
-                Arc::new(Int64Array::from(vec![Some(1), Some(3)])),
-            ],
-            &mut groups,
-        )
-        .unwrap();
-        assert_eq!(groups, vec![0, 2]);
-
-        let out = gv.emit(EmitTo::All).unwrap();
-        assert_dict_str(&out[0], &[Some("a"), Some("b"), Some("c")]);
-        assert_dict_str(&out[1], &[Some("x"), Some("y"), Some("z")]);
-        let c = out[2].as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(c.values(), &[1, 2, 3]);
+        run(Box::new(
+            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap(),
+        ));
+        run(Box::new(
+            GroupValuesColumn::<true>::try_new(Arc::clone(&schema)).unwrap(),
+        ));
     }
 
-    // 3 dict cols with null values — nulls in different columns must form distinct groups
+    // Nulls in different columns must form distinct groups.
     #[test]
     fn test_group_three_dict_cols_with_nulls_non_streaming() {
         let dt = dict_utf8();
@@ -2171,122 +2188,35 @@ mod tests {
         assert_dict_str(&out[2], &[Some("p"), Some("p"), Some("q")]);
     }
 
-    // Emitted dict columns must carry the exact schema DataType, not the inner value type.
+    // Emitted columns must carry the exact schema DataType via both build and take_n paths.
     #[test]
     fn test_emit_dict_output_exact_type() {
         let dt = dict_utf8();
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", dt.clone(), true),
-            Field::new("b", dt.clone(), true),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", dt.clone(), true)]));
+
+        // non-streaming: build path
         let mut gv = GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
         let mut groups = vec![];
-
-        gv.intern(
-            &[
-                dict_col(&[Some("x"), None, Some("y")]),
-                dict_col(&[None, Some("p"), Some("p")]),
-            ],
-            &mut groups,
-        )
-        .unwrap();
+        gv.intern(&[dict_col(&[Some("x"), None, Some("y")])], &mut groups)
+            .unwrap();
         assert_eq!(groups, vec![0, 1, 2]);
-
         let out = gv.emit(EmitTo::All).unwrap();
-        for (i, arr) in out.iter().enumerate() {
-            assert!(
-                matches!(
-                    arr.data_type(),
-                    DataType::Dictionary(k, v)
-                        if k.as_ref() == &DataType::Int32 && v.as_ref() == &DataType::Utf8
-                ),
-                "col {i}: expected Dictionary(Int32, Utf8), got {:?}",
-                arr.data_type()
-            );
-        }
+        assert_is_dict_utf8(&out[0], "build");
         assert_dict_str(&out[0], &[Some("x"), None, Some("y")]);
-        assert_dict_str(&out[1], &[None, Some("p"), Some("p")]);
-    }
 
-    // Streaming variant: same exact-type guarantee via take_n path
-    #[test]
-    fn test_emit_dict_output_exact_type_streaming() {
-        let dt = dict_utf8();
-        let schema = Arc::new(Schema::new(vec![Field::new("a", dt.clone(), true)]));
-        let mut gv = GroupValuesColumn::<true>::try_new(Arc::clone(&schema)).unwrap();
-        let mut groups = vec![];
-
-        gv.intern(
+        // streaming: take_n then build
+        let mut gv2 = GroupValuesColumn::<true>::try_new(Arc::clone(&schema)).unwrap();
+        gv2.intern(
             &[dict_col(&[Some("alpha"), Some("beta"), None])],
             &mut groups,
         )
         .unwrap();
-        assert_eq!(groups, vec![0, 1, 2]);
-
-        let out = gv.emit(EmitTo::First(2)).unwrap();
-        assert!(
-            matches!(
-                out[0].data_type(),
-                DataType::Dictionary(k, v)
-                    if k.as_ref() == &DataType::Int32 && v.as_ref() == &DataType::Utf8
-            ),
-            "take_n output: expected Dictionary(Int32, Utf8), got {:?}",
-            out[0].data_type()
-        );
-        assert_dict_str(&out[0], &[Some("alpha"), Some("beta")]);
-
-        let remaining = gv.emit(EmitTo::All).unwrap();
-        assert!(
-            matches!(
-                remaining[0].data_type(),
-                DataType::Dictionary(k, v)
-                    if k.as_ref() == &DataType::Int32 && v.as_ref() == &DataType::Utf8
-            ),
-            "build output: expected Dictionary(Int32, Utf8), got {:?}",
-            remaining[0].data_type()
-        );
+        let taken = gv2.emit(EmitTo::First(2)).unwrap();
+        assert_is_dict_utf8(&taken[0], "take_n");
+        assert_dict_str(&taken[0], &[Some("alpha"), Some("beta")]);
+        let remaining = gv2.emit(EmitTo::All).unwrap();
+        assert_is_dict_utf8(&remaining[0], "build after take_n");
         assert_dict_str(&remaining[0], &[None]);
-    }
-
-    // streaming=true covers the scalarized_intern code path
-    #[test]
-    fn test_group_dict_with_primitive_streaming() {
-        let dt = dict_utf8();
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", dt.clone(), true),
-            Field::new("b", dt.clone(), true),
-            Field::new("c", DataType::Int64, true),
-        ]));
-        let mut gv = GroupValuesColumn::<true>::try_new(Arc::clone(&schema)).unwrap();
-        let mut groups = vec![];
-
-        gv.intern(
-            &[
-                dict_col(&[Some("a"), Some("b"), Some("a")]),
-                dict_col(&[Some("x"), Some("y"), Some("x")]),
-                Arc::new(Int64Array::from(vec![Some(10), Some(20), Some(10)])),
-            ],
-            &mut groups,
-        )
-        .unwrap();
-        assert_eq!(groups, vec![0, 1, 0]);
-
-        gv.intern(
-            &[
-                dict_col(&[Some("a"), Some("c")]),
-                dict_col(&[Some("x"), Some("z")]),
-                Arc::new(Int64Array::from(vec![Some(10), Some(30)])),
-            ],
-            &mut groups,
-        )
-        .unwrap();
-        assert_eq!(groups, vec![0, 2]);
-
-        let out = gv.emit(EmitTo::All).unwrap();
-        assert_dict_str(&out[0], &[Some("a"), Some("b"), Some("c")]);
-        assert_dict_str(&out[1], &[Some("x"), Some("y"), Some("z")]);
-        let c = out[2].as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(c.values(), &[10, 20, 30]);
     }
 
     fn insert_non_inline_group_index_view(
