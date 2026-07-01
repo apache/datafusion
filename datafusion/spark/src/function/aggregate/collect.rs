@@ -18,7 +18,7 @@
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
@@ -32,6 +32,19 @@ use std::sync::Arc;
 // - ignores NULL inputs
 // - returns an empty list when all inputs are NULL
 // - does not support ordering
+
+/// Build an empty list `ScalarValue` for a `List(element_type)` data type.
+/// Used as the result for empty window frames and for groups whose inputs
+/// were all NULL, matching Spark's `collect_list` / `collect_set` semantics.
+fn empty_list_scalar(list_type: &DataType) -> Result<ScalarValue> {
+    let DataType::List(field) = list_type else {
+        return internal_err!(
+            "collect_list/collect_set expected List return type, got {list_type:?}"
+        );
+    };
+    let empty = arrow::array::new_empty_array(field.data_type());
+    Ok(SingleRowListArrayBuilder::new(empty).build_list_scalar())
+}
 
 // <https://spark.apache.org/docs/latest/api/sql/index.html#collect_list>
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -88,6 +101,10 @@ impl AggregateUDFImpl for SparkCollectList {
             ArrayAggAccumulator::try_new(&data_type, ignore_nulls)?,
             data_type,
         )))
+    }
+
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        empty_list_scalar(data_type)
     }
 }
 
@@ -147,6 +164,10 @@ impl AggregateUDFImpl for SparkCollectSet {
             data_type,
         )))
     }
+
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        empty_list_scalar(data_type)
+    }
 }
 
 /// Wrapper accumulator that returns an empty list instead of NULL when all inputs are NULL.
@@ -184,6 +205,14 @@ impl<T: Accumulator> Accumulator for NullToEmptyListAccumulator<T> {
         } else {
             Ok(result)
         }
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.inner.retract_batch(values)
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        self.inner.supports_retract_batch()
     }
 
     fn size(&self) -> usize {
