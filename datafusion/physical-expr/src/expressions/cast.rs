@@ -213,14 +213,22 @@ impl CastExpr {
             } else {
                 // Explicit target field with source metadata preservation:
                 // - Start with source's non-extension metadata
-                // - Then add all target metadata (including extension type metadata)
+                // - Add only extension type metadata from the target field
+                // This matches the logical layer's `cast_output_field` behavior.
                 let mut metadata = source_field.metadata().clone();
                 metadata.remove(EXTENSION_TYPE_NAME_KEY);
                 metadata.remove(EXTENSION_TYPE_METADATA_KEY);
 
-                // Target metadata takes precedence (including extension type metadata)
-                for (k, v) in self.target_field.metadata() {
-                    metadata.insert(k.clone(), v.clone());
+                // Add extension type metadata from the target field if present
+                let target_metadata = self.target_field.metadata();
+                if let Some(name) = target_metadata.get(EXTENSION_TYPE_NAME_KEY) {
+                    metadata.insert(EXTENSION_TYPE_NAME_KEY.to_string(), name.clone());
+                }
+                if let Some(ext_meta) = target_metadata.get(EXTENSION_TYPE_METADATA_KEY) {
+                    metadata.insert(
+                        EXTENSION_TYPE_METADATA_KEY.to_string(),
+                        ext_meta.clone(),
+                    );
                 }
 
                 Arc::new(self.target_field.as_ref().clone().with_metadata(metadata))
@@ -1322,6 +1330,7 @@ mod tests {
                 EXTENSION_TYPE_METADATA_KEY.to_string(),
                 "target_ext_meta".to_string(),
             ),
+            ("target_key".to_string(), "target_value".to_string()),
         ]);
         let schema = Schema::new(vec![
             Field::new("a", FixedSizeBinary(16), false).with_metadata(source_meta),
@@ -1347,6 +1356,10 @@ mod tests {
             field.metadata().get("source_key"),
             Some(&"source_value".to_string()),
             "Field-aware cast should preserve source's non-extension metadata"
+        );
+        assert!(
+            field.metadata().get("target_key").is_none(),
+            "Field-aware cast should not preserve target's non-extension metadata"
         );
 
         Ok(())

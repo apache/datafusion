@@ -598,6 +598,7 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field};
+    use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
     use datafusion_expr::col;
 
     use super::*;
@@ -645,9 +646,21 @@ mod tests {
     #[test]
     fn test_cast_lowering_preserves_target_field_metadata() -> Result<()> {
         let schema = test_cast_schema();
+
+        // Target field with both extension metadata and custom metadata.
+        // Per cast_output_field semantics, only extension metadata should propagate.
         let target_field = Arc::new(
-            Field::new("cast_target", DataType::Int64, true)
-                .with_metadata([("target_meta".to_string(), "1".to_string())].into()),
+            Field::new("cast_target", DataType::Int64, true).with_metadata(
+                [
+                    (
+                        EXTENSION_TYPE_NAME_KEY.to_string(),
+                        "arrow.json".to_string(),
+                    ),
+                    (EXTENSION_TYPE_METADATA_KEY.to_string(), "{}".to_string()),
+                    ("custom_target_meta".to_string(), "ignored".to_string()),
+                ]
+                .into(),
+            ),
         );
         let cast_expr = Expr::Cast(Cast::new_from_field(
             Box::new(col("a")),
@@ -657,8 +670,25 @@ mod tests {
         let physical = lower_cast_expr(&cast_expr, &schema)?;
         let cast = as_planner_cast(&physical);
 
+        // The CastExpr stores the target field as given
         assert_eq!(cast.target_field(), &target_field);
-        assert_eq!(physical.return_field(&schema)?, target_field);
+
+        // But return_field should only propagate extension metadata from target,
+        // aligning with logical-layer cast_output_field semantics
+        let returned = physical.return_field(&schema)?;
+        assert_eq!(
+            returned.metadata().get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"arrow.json".to_string())
+        );
+        assert_eq!(
+            returned.metadata().get(EXTENSION_TYPE_METADATA_KEY),
+            Some(&"{}".to_string())
+        );
+        // Custom target metadata should NOT propagate
+        assert!(
+            returned.metadata().get("custom_target_meta").is_none(),
+            "Non-extension target metadata should not propagate"
+        );
         assert!(physical.nullable(&schema)?);
 
         Ok(())
@@ -684,9 +714,19 @@ mod tests {
     #[test]
     fn test_cast_lowering_preserves_same_type_field_semantics() -> Result<()> {
         let schema = test_cast_schema();
+
+        // Same-type cast with extension metadata on target.
+        // Per cast_output_field semantics, only extension metadata should propagate.
         let target_field = Arc::new(
             Field::new("same_type_cast", DataType::Int32, true).with_metadata(
-                [("target_meta".to_string(), "same-type".to_string())].into(),
+                [
+                    (
+                        EXTENSION_TYPE_NAME_KEY.to_string(),
+                        "arrow.opaque".to_string(),
+                    ),
+                    ("custom_meta".to_string(), "ignored".to_string()),
+                ]
+                .into(),
             ),
         );
         let cast_expr = Expr::Cast(Cast::new_from_field(
@@ -698,7 +738,18 @@ mod tests {
         let cast = as_planner_cast(&physical);
 
         assert_eq!(cast.target_field(), &target_field);
-        assert_eq!(physical.return_field(&schema)?, target_field);
+
+        // return_field should only have extension metadata from target
+        let returned = physical.return_field(&schema)?;
+        assert_eq!(
+            returned.metadata().get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"arrow.opaque".to_string())
+        );
+        // Custom target metadata should NOT propagate
+        assert!(
+            returned.metadata().get("custom_meta").is_none(),
+            "Non-extension target metadata should not propagate"
+        );
         assert!(physical.nullable(&schema)?);
 
         Ok(())
