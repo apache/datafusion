@@ -297,7 +297,7 @@ pub fn create_physical_expr(
         Expr::Cast(Cast { expr, field }) => expressions::cast_with_target_field(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
-            Arc::clone(field),
+            field,
             None,
         ),
         Expr::TryCast(TryCast { expr, field }) => {
@@ -670,8 +670,18 @@ mod tests {
         let physical = lower_cast_expr(&cast_expr, &schema)?;
         let cast = as_planner_cast(&physical);
 
-        // The CastExpr stores the target field as given
-        assert_eq!(cast.target_field(), &target_field);
+        // The CastExpr stores the target type and extension metadata
+        assert_eq!(cast.cast_type(), &DataType::Int64);
+        let target_metadata = cast.target_metadata().expect("should have metadata");
+        assert_eq!(
+            target_metadata.get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"arrow.json".to_string())
+        );
+        assert_eq!(
+            target_metadata.get(EXTENSION_TYPE_METADATA_KEY),
+            Some(&"{}".to_string())
+        );
+        assert_eq!(cast.target_nullable(), Some(true));
 
         // But return_field should only propagate extension metadata from target,
         // aligning with logical-layer cast_output_field semantics
@@ -737,7 +747,14 @@ mod tests {
         let physical = lower_cast_expr(&cast_expr, &schema)?;
         let cast = as_planner_cast(&physical);
 
-        assert_eq!(cast.target_field(), &target_field);
+        // The CastExpr stores the target type and extension metadata
+        assert_eq!(cast.cast_type(), &DataType::Int32);
+        let target_metadata = cast.target_metadata().expect("should have metadata");
+        assert_eq!(
+            target_metadata.get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"arrow.opaque".to_string())
+        );
+        assert_eq!(cast.target_nullable(), Some(true));
 
         // return_field should only have extension metadata from target
         let returned = physical.return_field(&schema)?;

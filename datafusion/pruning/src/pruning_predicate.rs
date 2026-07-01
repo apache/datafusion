@@ -1124,9 +1124,10 @@ fn rewrite_expr_to_prunable(
             scalar_expr,
             schema,
         )?;
+        let target_field = cast.target_field();
         let left = Arc::new(phys_expr::CastExpr::new_with_target_field(
             left,
-            Arc::clone(cast.target_field()),
+            &target_field,
             None,
         ));
         // PruningPredicate does not support pruning on nested fields yet.

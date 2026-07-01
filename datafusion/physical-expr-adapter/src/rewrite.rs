@@ -104,7 +104,7 @@ pub fn rewrite_file_row_index_expr(
         let target_field = Arc::new(Field::new("file_row_index", DataType::Int64, true));
         Ok(Arc::new(CastExpr::new_with_exact_target_field(
             source,
-            target_field,
+            &target_field,
             None,
         )))
     })

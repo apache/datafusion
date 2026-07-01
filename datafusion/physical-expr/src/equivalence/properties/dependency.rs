@@ -940,7 +940,7 @@ mod tests {
         let col_c = col("c", schema.as_ref())?;
         let cast_c = Arc::new(CastExpr::new_with_target_field(
             col_c,
-            Arc::new(Field::new("c", DataType::Date32, true)),
+            &Arc::new(Field::new("c", DataType::Date32, true)),
             None,
         )) as _;
         let required_sort = vec![PhysicalSortExpr::new_default(col("c", &schema)?)];
