@@ -447,10 +447,9 @@ impl DefaultPhysicalExprAdapterRewriter {
             ))
         })?;
 
-        let target_field = Arc::new(logical_field.clone());
         Ok(Transformed::yes(Arc::new(CastExpr::new_with_target_field(
             Arc::new(resolved_column),
-            &target_field,
+            &Arc::new(logical_field.clone()),
             None,
         ))))
     }

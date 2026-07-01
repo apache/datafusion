@@ -584,10 +584,9 @@ mod tests {
             Arc::clone(&schema),
             vec![Arc::new(input_array) as ArrayRef],
         )?;
-        let target_field = Arc::new(target_field);
         let expr = CastExpr::new_with_target_field(
             col(column, schema.as_ref())?,
-            &target_field,
+            &Arc::new(target_field),
             None,
         );
 
