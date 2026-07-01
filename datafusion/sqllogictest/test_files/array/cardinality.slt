@@ -59,10 +59,20 @@ select cardinality([[1], [2, 3]]),
 ----
 3 3 2
 
-query I
-select cardinality(arrow_cast([[1], [2, 3]], 'LargeList(List(Int64))'));
+query IIII
+select cardinality(arrow_cast([[1], [2, 3]], 'ListView(List(Int64))')),
+       cardinality(arrow_cast([[1], [2, 3]], 'LargeListView(List(Int64))')),
+       cardinality(arrow_cast([[1, 2], [3, 4]], 'List(FixedSizeList(2, Int64))')),
+       cardinality(arrow_cast([[1], [2, 3]], 'LargeList(List(Int64))'));
 ----
-3
+3 3 4 3
+
+query III
+select cardinality(arrow_cast([[[1]], [[2, 3], []]], 'List(ListView(List(Int64)))')),
+       cardinality(arrow_cast([[[1]], [[2, 3], []]], 'List(LargeListView(List(Int64)))')),
+       cardinality(arrow_cast([[[1, 2]], [[3, 4]]], 'List(List(FixedSizeList(2, Int64)))'));
+----
+3 3 4
 
 query IIII
 select cardinality([[NULL], [1, 2]]),
