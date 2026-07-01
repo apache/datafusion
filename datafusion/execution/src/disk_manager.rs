@@ -128,6 +128,7 @@ impl DiskManagerBuilder {
             DiskManagerMode::Custom(factory) => Ok(DiskManager {
                 local_dirs: Mutex::new(None),
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
+                max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
                 active_files_count: Arc::new(AtomicUsize::new(0)),
                 factory: Some(factory),

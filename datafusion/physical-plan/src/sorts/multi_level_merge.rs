@@ -890,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn spill_merge_phase_respects_configured_fan_in() -> datafusion_common::Result<()> {
+    fn spill_merge_phase_respects_configured_fan_in() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
         let runtime = RuntimeEnvBuilder::new()
             .with_max_spill_merge_fan_in(2)
@@ -909,7 +909,7 @@ mod tests {
                     max_record_batch_memory: 1,
                 })
             })
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
         let expr = LexOrdering::new([PhysicalSortExpr::new_default(col("a", &schema)?)])
             .unwrap();
         let reservation =
@@ -931,8 +931,16 @@ mod tests {
         let mut merge_reservation = MemoryConsumer::new("spill_merge_fan_in_phase")
             .register(&runtime.memory_pool);
 
-        let (spills, buffer_len) =
-            builder.get_sorted_spill_files_to_merge(1, 2, &mut merge_reservation)?;
+        let (spills, buffer_len) = match builder.get_sorted_spill_files_to_merge(
+            1,
+            2,
+            &mut merge_reservation,
+        )? {
+            SpillFilesToMerge::Ready(spills, buffer_len) => (spills, buffer_len),
+            SpillFilesToMerge::SplitThenRetry(index) => {
+                panic!("expected ready spill files, got retry for index {index}")
+            }
+        };
 
         assert_eq!(spills.len(), 2);
         assert_eq!(buffer_len, 1);

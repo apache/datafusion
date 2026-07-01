@@ -1214,11 +1214,7 @@ impl SessionContext {
                         "Failed to parse non-negative integer from '{variable}', value '{value}': {e}"
                     ))
                 })?;
-                state
-                    .runtime_env()
-                    .disk_manager
-                    .set_max_spill_merge_fan_in(fan_in);
-                return Ok(());
+                builder.with_max_spill_merge_fan_in(fan_in)
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
             // Remember to update `reset_runtime_variable()` when adding new options
@@ -1265,11 +1261,8 @@ impl SessionContext {
                 );
             }
             "max_spill_merge_fan_in" => {
-                state
-                    .runtime_env()
-                    .disk_manager
-                    .set_max_spill_merge_fan_in(DEFAULT_MAX_SPILL_MERGE_FAN_IN);
-                return Ok(());
+                builder =
+                    builder.with_max_spill_merge_fan_in(DEFAULT_MAX_SPILL_MERGE_FAN_IN);
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };
