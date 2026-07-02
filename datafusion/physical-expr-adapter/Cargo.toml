@@ -28,3 +28,4 @@ itertools = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+arrow-schema = { workspace = true }

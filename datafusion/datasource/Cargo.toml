@@ -73,6 +73,7 @@ url = { workspace = true }
 zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
+arrow-schema = { workspace = true }
 criterion = { workspace = true }
 datafusion-functions = { workspace = true }
 insta = { workspace = true }
