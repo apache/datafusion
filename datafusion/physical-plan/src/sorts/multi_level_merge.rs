@@ -245,21 +245,17 @@ impl MultiLevelMergeBuilder {
             (0, 0) => {
                 let empty_stream =
                     Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)));
-                Ok(MergeStep::Stream(Box::pin(ObservedStream::new(
-                    empty_stream,
-                    self.metrics.clone(),
-                    None,
-                ))))
+                Ok(MergeStep::Stream(
+                    self.wrap_with_observed_stream(empty_stream),
+                ))
             }
 
             // Only in-memory stream, return that
             (0, 1) => {
                 let output_stream = self.sorted_streams.remove(0);
-                Ok(MergeStep::Stream(Box::pin(ObservedStream::new(
-                    output_stream,
-                    self.metrics.clone(),
-                    None,
-                ))))
+                Ok(MergeStep::Stream(
+                    self.wrap_with_observed_stream(output_stream),
+                ))
             }
 
             // Only single sorted spill file so return it
@@ -271,18 +267,16 @@ impl MultiLevelMergeBuilder {
                     .spill_manager
                     .read_spill_as_stream(spill_file.file, None)?;
 
-                Ok((MergeStep::Stream(Box::pin(ObservedStream::new(
-                    output_stream,
-                    self.metrics.clone(),
-                    None,
-                ))))
+                Ok(MergeStep::Stream(
+                    self.wrap_with_observed_stream(output_stream),
+                ))
             }
 
             // Only in memory streams, so merge them all in a single pass
             (0, _) => {
                 let sorted_stream = mem::take(&mut self.sorted_streams);
-              // No need to wrap with observed stream since merge sort will update the observed metrics
-              Ok(MergeStep::Stream(self.create_new_merge_sort(
+                // No need to wrap with observed stream since merge sort will update the observed metrics
+                Ok(MergeStep::Stream(self.create_new_merge_sort(
                     sorted_stream,
                     // If we have no sorted spill files left, this is the last run
                     true,
@@ -592,6 +586,13 @@ impl MultiLevelMergeBuilder {
         self.sorted_spill_files.swap(index, last);
 
         Ok(())
+    }
+
+    fn wrap_with_observed_stream(
+        &self,
+        stream: SendableRecordBatchStream,
+    ) -> SendableRecordBatchStream {
+        Box::pin(ObservedStream::new(stream, self.metrics.clone(), None))
     }
 }
 

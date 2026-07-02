@@ -476,9 +476,11 @@ impl ExternalSorter {
         // reserved again for the next spill.
         self.merge_reservation.free();
 
-        // No coalescing on the spill path: it raises per-run peak memory.
-        let mut sorted_stream =
-            self.in_mem_sort_stream(false, false)?;
+        let mut sorted_stream = self.in_mem_sort_stream(
+            false,
+            // No coalescing on the spill path: it raises per-run peak memory.
+            false,
+        )?;
         // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
         // to construct a globally sorted stream.
         assert_or_internal_err!(
@@ -595,15 +597,9 @@ impl ExternalSorter {
         if self.in_mem_batches.is_empty() {
             let empty_stream =
                 Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)));
-            return Ok(if is_output_stream {
-                Box::pin(ObservedStream::new(
-                    empty_stream,
-                    self.metrics.baseline.clone(),
-                    None,
-                ))
-            } else {
-                empty_stream
-            });
+            return Ok(
+                self.maybe_wrap_with_observed_stream(empty_stream, is_output_stream)
+            );
         }
 
         // The elapsed compute timer is updated when the value is dropped.
@@ -621,15 +617,9 @@ impl ExternalSorter {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
             let sorted_stream = self.sort_batch_stream(batch, reservation)?;
-            return Ok(if is_output_stream {
-                Box::pin(ObservedStream::new(
-                    sorted_stream,
-                    self.metrics.baseline.clone(),
-                    None,
-                ))
-            } else {
-                sorted_stream
-            });
+            return Ok(
+                self.maybe_wrap_with_observed_stream(sorted_stream, is_output_stream)
+            );
         }
 
         // If less than sort_in_place_threshold_bytes, concatenate and sort in place
@@ -642,15 +632,9 @@ impl ExternalSorter {
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
             let sorted_stream = self.sort_batch_stream(batch, reservation)?;
-            return Ok(if is_output_stream {
-                Box::pin(ObservedStream::new(
-                    sorted_stream,
-                    self.metrics.baseline.clone(),
-                    None,
-                ))
-            } else {
-                sorted_stream
-            });
+            return Ok(
+                self.maybe_wrap_with_observed_stream(sorted_stream, is_output_stream)
+            );
         }
 
         // For single-column sorts, coalesce the buffered batches into fewer,
@@ -852,6 +836,22 @@ impl ExternalSorter {
             // This is not an OOM error, so just return it as is.
             _ => e,
         }
+    }
+
+    fn maybe_wrap_with_observed_stream(
+        &self,
+        mut stream: SendableRecordBatchStream,
+        wrap: bool,
+    ) -> SendableRecordBatchStream {
+        if wrap {
+            stream = Box::pin(ObservedStream::new(
+                stream,
+                self.metrics.baseline.clone(),
+                None,
+            ))
+        }
+
+        stream
     }
 }
 
