@@ -322,11 +322,16 @@ mod tests {
 
         let plan = df.explain(false, false)?.collect().await?;
 
-        // Filters all the way to Parquet
+        // Filters all the way to Parquet. The parquet scan now accepts the
+        // pushable filter unconditionally so the `FilterExec` is removed —
+        // the predicate appears as `predicate=` on the `DataSourceExec`.
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
             .to_string();
-        assert!(formatted.contains("FilterExec: id@0 = 1"));
+        assert!(
+            formatted.contains("predicate=id@0 = 1"),
+            "expected predicate=id@0 = 1 in {formatted}"
+        );
         Ok(())
     }
 
