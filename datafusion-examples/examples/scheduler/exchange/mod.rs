@@ -163,11 +163,11 @@ mod tests {
 
     use datafusion::arrow::array::{Int32Array, RecordBatch};
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion::common::runtime::SpawnedTask;
     use datafusion::physical_expr::expressions::col;
     use datafusion::physical_plan::test::TestMemoryExec;
     use datafusion::physical_plan::{ExecutionPlan, Partitioning};
     use datafusion::prelude::SessionContext;
-    use datafusion_common_runtime::SpawnedTask;
     use futures::StreamExt;
 
     use super::InMemoryExchange;

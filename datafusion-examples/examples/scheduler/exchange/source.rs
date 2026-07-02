@@ -78,6 +78,7 @@ impl ExchangeSourceExec {
         })
     }
 
+    #[expect(clippy::wrong_self_convention)]
     pub fn from_stage_id(&self) -> usize {
         self.from_stage_id
     }

@@ -45,6 +45,7 @@ pub struct QueryStage {
     pub output_partition_count: usize,
     /// Ids of upstream stages this stage reads from via `ExchangeSourceExec`
     /// leaves in `plan`.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub input_stage_ids: Vec<StageId>,
 }
 

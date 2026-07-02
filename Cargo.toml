@@ -67,7 +67,7 @@ members = [
     "datafusion/macros",
     "datafusion/doc",
 ]
-exclude = ["dev/depcheck", "datafusion-scheduler"]
+exclude = ["dev/depcheck"]
 resolver = "2"
 
 [workspace.package]

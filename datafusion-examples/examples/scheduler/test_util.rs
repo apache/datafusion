@@ -20,7 +20,8 @@ use std::sync::Arc;
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::SessionContext;
 
-use crate::{SchedulerConfig, run_distributed};
+use crate::config::SchedulerConfig;
+use crate::run_distributed;
 
 /// Assert distributed execution yields the same multiset of rows as `collect`.
 pub async fn assert_distributed_eq(ctx: &SessionContext, plan: Arc<dyn ExecutionPlan>) {
@@ -31,10 +32,10 @@ pub async fn assert_distributed_eq(ctx: &SessionContext, plan: Arc<dyn Execution
         .await
         .expect("run_distributed");
     // Compare as sorted string rows via pretty-format for schema-agnostic equality.
-    let e = datafusion::arrow::util::pretty::pretty_format_batches(&expected)
+    let e = arrow::util::pretty::pretty_format_batches(&expected)
         .unwrap()
         .to_string();
-    let a = datafusion::arrow::util::pretty::pretty_format_batches(&actual)
+    let a = arrow::util::pretty::pretty_format_batches(&actual)
         .unwrap()
         .to_string();
     let mut el: Vec<&str> = e.lines().collect();

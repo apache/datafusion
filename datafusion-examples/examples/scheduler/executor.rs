@@ -29,8 +29,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
+use datafusion::common::runtime::SpawnedTask;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common_runtime::SpawnedTask;
 use futures::StreamExt;
 
 use crate::config::SchedulerConfig;

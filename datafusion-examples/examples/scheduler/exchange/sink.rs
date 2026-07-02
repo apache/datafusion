@@ -86,6 +86,7 @@ impl ExchangeSinkExec {
         self.stage_id
     }
 
+    #[cfg(test)]
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }

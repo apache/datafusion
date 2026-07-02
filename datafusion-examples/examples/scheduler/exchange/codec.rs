@@ -203,8 +203,7 @@ impl PhysicalExtensionCodec for ExchangeCodec {
                             "ExchangeCodec: failed to decode Schema: {e}"
                         ))
                     })?;
-                let schema: datafusion::arrow::datatypes::Schema =
-                    (&schema_proto).try_into()?;
+                let schema: arrow::datatypes::Schema = (&schema_proto).try_into()?;
 
                 let source = ExchangeSourceExec::try_new(
                     from_stage_id,
