@@ -80,9 +80,9 @@ use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::boolean::and;
 use arrow::compute::{filter, filter_record_batch, prep_null_mask_filter};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::instant::Instant;
+use datafusion_common::{Result, internal_err};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::utils::split_conjunction;
 use datafusion_physical_expr_common::physical_expr::is_volatile;
@@ -386,6 +386,12 @@ fn eval_conjuncts(
     if num_rows == 0 {
         return Ok(Arc::new(BooleanArray::from(Vec::<bool>::new())));
     }
+    // Live-row indices are tracked as `u32` (arrow's `filter`/`take` index
+    // space), so a batch cannot exceed `u32::MAX` rows here.
+    debug_assert!(
+        num_rows <= u32::MAX as usize,
+        "adaptive filter: batch exceeds u32::MAX rows"
+    );
 
     // `working` is the batch conjuncts are evaluated against. `acc` is the
     // accumulated (`AND`-combined, null-free) result over `working`'s rows since
@@ -461,10 +467,11 @@ fn eval_conjuncts(
                 Some(acc) => filter(&indices, &acc)?,
                 None => indices,
             };
-            let indices = indices
-                .as_any()
-                .downcast_ref::<UInt32Array>()
-                .expect("u32 live");
+            let Some(indices) = indices.as_any().downcast_ref::<UInt32Array>() else {
+                return internal_err!(
+                    "adaptive filter: live row indices are not a UInt32Array"
+                );
+            };
             let mut builder = BooleanBufferBuilder::new(num_rows);
             builder.append_n(num_rows, false);
             for &idx in indices.values() {
