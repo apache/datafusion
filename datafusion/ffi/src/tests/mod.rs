@@ -92,6 +92,8 @@ pub struct ForeignLibraryModule {
 
     pub create_placement_udf: extern "C" fn() -> FFI_ScalarUDF,
 
+    pub create_lex_ordering_udf: extern "C" fn() -> FFI_ScalarUDF,
+
     pub create_table_function:
         extern "C" fn(FFI_LogicalExtensionCodec) -> FFI_TableFunction,
 
@@ -254,6 +256,7 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_nullary_udf: create_ffi_random_func,
         create_timezone_udf: udf_udaf_udwf::create_timezone_func,
         create_placement_udf: udf_udaf_udwf::create_placement_func,
+        create_lex_ordering_udf: udf_udaf_udwf::create_lex_ordering_func,
         create_table_function: create_ffi_table_func,
         create_sum_udaf: create_ffi_sum_func,
         create_stddev_udaf: create_ffi_stddev_func,
