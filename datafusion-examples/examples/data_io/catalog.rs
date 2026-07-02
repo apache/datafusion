@@ -244,13 +244,7 @@ impl CatalogProvider for DirCatalog {
 
     fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
         let schemas = self.schemas.read().unwrap();
-        let maybe_schema = schemas.get(name);
-        Ok(if let Some(schema) = maybe_schema {
-            let schema = schema.clone() as Arc<dyn SchemaProvider>;
-            Some(schema)
-        } else {
-            None
-        })
+        Ok(schemas.get(name).cloned())
     }
 }
 
