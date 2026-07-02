@@ -205,9 +205,9 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Distributed
 
-| Subcommand            | File Path                                             | Description                                                                                          |
-| --------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| distributed_pipeline  | [`scheduler/main.rs`](examples/scheduler/main.rs)     | In-process model of stage-based distributed execution (stage splitting, per-task plan serialization) |
+| Subcommand           | File Path                                         | Description                                                                                          |
+| -------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| distributed_pipeline | [`scheduler/main.rs`](examples/scheduler/main.rs) | In-process model of stage-based distributed execution (stage splitting, per-task plan serialization) |
 
 ## SQL Ops Examples
 
