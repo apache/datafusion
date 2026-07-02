@@ -31,6 +31,7 @@ use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
@@ -88,8 +89,6 @@ fn cast_output_field(
     target_field: &FieldRef,
     force_nullable: bool,
 ) -> Arc<Field> {
-    use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
-
     // Check if this is a "type-only" cast (target_field == DataType::X.into_nullable_field())
     let is_type_only = target_field.name().is_empty()
         && target_field.is_nullable()

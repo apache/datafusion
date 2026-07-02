@@ -27,7 +27,7 @@ use crate::{
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::datatype::FieldExt;
-use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     DFSchema, Result, ScalarValue, TableReference, ToDFSchema, exec_err,
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
@@ -40,7 +40,7 @@ use datafusion_expr::expr::{
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::{
-    Between, BinaryExpr, Expr, ExprSchemable, Like, Operator, TryCast, binary_expr, lit,
+    Between, BinaryExpr, Expr, Like, Operator, TryCast, binary_expr, lit,
 };
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
@@ -301,22 +301,10 @@ pub fn create_physical_expr(
             None,
         ),
         Expr::TryCast(TryCast { expr, field }) => {
-            if !field.metadata().is_empty() {
-                let (_, src_field) = expr.to_field(input_dfschema)?;
-                return plan_err!(
-                    "TryCast from {} to {} is not supported",
-                    format_type_and_metadata(
-                        src_field.data_type(),
-                        Some(src_field.metadata()),
-                    ),
-                    format_type_and_metadata(field.data_type(), Some(field.metadata()))
-                );
-            }
-
-            expressions::try_cast(
+            expressions::try_cast_with_target_field(
                 create_physical_expr(expr, input_dfschema, execution_props)?,
                 input_schema,
-                field.data_type().clone(),
+                field,
             )
         }
         Expr::Not(expr) => {
@@ -618,6 +606,14 @@ mod tests {
             .expect("planner should lower logical CAST to CastExpr")
     }
 
+    fn as_planner_try_cast(
+        physical: &Arc<dyn PhysicalExpr>,
+    ) -> &expressions::TryCastExpr {
+        physical
+            .downcast_ref::<expressions::TryCastExpr>()
+            .expect("planner should lower logical TRY_CAST to TryCastExpr")
+    }
+
     #[test]
     fn test_create_physical_expr_scalar_input_output() -> Result<()> {
         let expr = col("letter").eq(lit("A"));
@@ -739,36 +735,70 @@ mod tests {
                 .into(),
             ),
         );
-        let cast_expr = Expr::Cast(Cast::new_from_field(
-            Box::new(col("a")),
-            Arc::clone(&target_field),
-        ));
 
-        let physical = lower_cast_expr(&cast_expr, &schema)?;
-        let cast = as_planner_cast(&physical);
+        for use_try_cast in [false, true] {
+            // For error labelling
+            let cast_name = if use_try_cast { "TRY_CAST" } else { "CAST" };
 
-        // The CastExpr stores the target type and all target metadata
-        assert_eq!(cast.cast_type(), &DataType::Int32);
-        let target_metadata = cast.target_metadata().expect("should have metadata");
-        assert_eq!(
-            target_metadata.get(EXTENSION_TYPE_NAME_KEY),
-            Some(&"arrow.opaque".to_string())
-        );
-        assert_eq!(cast.target_nullable(), Some(true));
+            let cast_expr = if use_try_cast {
+                Expr::TryCast(TryCast::new_from_field(
+                    Box::new(col("a")),
+                    Arc::clone(&target_field),
+                ))
+            } else {
+                Expr::Cast(Cast::new_from_field(
+                    Box::new(col("a")),
+                    Arc::clone(&target_field),
+                ))
+            };
 
-        // return_field should have all target metadata (exact semantics)
-        let returned = physical.return_field(&schema)?;
-        assert_eq!(
-            returned.metadata().get(EXTENSION_TYPE_NAME_KEY),
-            Some(&"arrow.opaque".to_string())
-        );
-        // All target metadata should propagate with exact semantics
-        assert_eq!(
-            returned.metadata().get("custom_meta"),
-            Some(&"custom_value".to_string()),
-            "All target metadata should propagate with exact semantics"
-        );
-        assert!(physical.nullable(&schema)?);
+            let physical = lower_cast_expr(&cast_expr, &schema)?;
+
+            // Extract common fields - both CastExpr and TryCastExpr have these
+            let (cast_type, target_metadata, target_nullable) = if use_try_cast {
+                let cast = as_planner_try_cast(&physical);
+                (cast.cast_type(), cast.target_metadata(), None)
+            } else {
+                let cast = as_planner_cast(&physical);
+                (
+                    cast.cast_type(),
+                    cast.target_metadata(),
+                    cast.target_nullable(),
+                )
+            };
+
+            // Verify the physical expression stores correct metadata (same for both)
+            assert_eq!(cast_type, &DataType::Int32, "{cast_name}: cast_type");
+            let target_metadata = target_metadata.expect("should have metadata");
+            assert_eq!(
+                target_metadata.get(EXTENSION_TYPE_NAME_KEY),
+                Some(&"arrow.opaque".to_string()),
+                "{cast_name}: extension type name"
+            );
+
+            // Only CastExpr tracks target_nullable (TryCast is always nullable)
+            if !use_try_cast {
+                assert_eq!(target_nullable, Some(true), "{cast_name}: target_nullable");
+            }
+
+            // return_field should have all target metadata (exact semantics)
+            let returned = physical.return_field(&schema)?;
+            assert_eq!(
+                returned.metadata().get(EXTENSION_TYPE_NAME_KEY),
+                Some(&"arrow.opaque".to_string()),
+                "{cast_name}: return_field extension type name"
+            );
+            // All target metadata should propagate with exact semantics
+            assert_eq!(
+                returned.metadata().get("custom_meta"),
+                Some(&"custom_value".to_string()),
+                "{cast_name}: All target metadata should propagate with exact semantics"
+            );
+            assert!(
+                physical.nullable(&schema)?,
+                "{cast_name}: should be nullable"
+            );
+        }
 
         Ok(())
     }

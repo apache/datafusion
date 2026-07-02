@@ -280,6 +280,50 @@ pub fn try_cast(
     }
 }
 
+/// Return a PhysicalExpression representing `expr` casted to `target_field`,
+/// preserving any explicit field semantics such as metadata.
+///
+/// TRY_CAST results are always nullable since failed casts return NULL.
+///
+/// If the input expression already has the same data type and the target field
+/// has no explicit metadata constraints, the original expression is returned
+/// unchanged.
+pub fn try_cast_with_target_field(
+    expr: Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+    target_field: &FieldRef,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let expr_type = expr.data_type(input_schema)?;
+    let cast_type = target_field.data_type();
+
+    // Check if this is a "default" target field (type-only cast with no explicit
+    // metadata constraints). This is the field created by `into_nullable_field_ref()`
+    // when only a DataType is known.
+    let is_type_only = target_field.name().is_empty()
+        && target_field.is_nullable()
+        && target_field.metadata().is_empty();
+
+    if expr_type == *cast_type && is_type_only {
+        return Ok(Arc::clone(&expr));
+    }
+
+    if !can_cast_types(&expr_type, cast_type) {
+        return not_impl_err!("Unsupported TRY_CAST from {expr_type} to {cast_type}");
+    }
+
+    // For type-only casts, use TryCastExpr::new which preserves source metadata.
+    // For explicit target fields, use new_with_target_field which applies the target's
+    // metadata exactly.
+    if is_type_only {
+        Ok(Arc::new(TryCastExpr::new(expr, cast_type.clone())))
+    } else {
+        Ok(Arc::new(TryCastExpr::new_with_target_field(
+            expr,
+            target_field,
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -729,6 +773,162 @@ mod tests {
         assert_eq!(display_string, "TRY_CAST(b@0 AS Int32)");
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         assert_eq!(sql_string, "TRY_CAST(b AS Int32)");
+
+        Ok(())
+    }
+
+    #[test]
+    fn field_aware_try_cast_uses_exact_target_metadata() -> Result<()> {
+        // When using field-aware cast, target's metadata should be used exactly
+        let source_meta = HashMap::from([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                "source.type".to_string(),
+            ),
+            ("source_key".to_string(), "source_value".to_string()),
+        ]);
+        let target_meta = HashMap::from([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                "target.type".to_string(),
+            ),
+            (
+                EXTENSION_TYPE_METADATA_KEY.to_string(),
+                "target_ext_meta".to_string(),
+            ),
+            ("target_key".to_string(), "target_value".to_string()),
+        ]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::FixedSizeBinary(16), false)
+                .with_metadata(source_meta),
+        ]);
+
+        let target_field =
+            Arc::new(Field::new("b", DataType::Utf8, true).with_metadata(target_meta));
+        let expr = TryCastExpr::new_with_target_field(col("a", &schema)?, &target_field);
+
+        let field = expr.return_field(&schema)?;
+        assert_eq!(
+            field.metadata().get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"target.type".to_string()),
+            "Field-aware try_cast should use target's extension type name"
+        );
+        assert_eq!(
+            field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
+            Some(&"target_ext_meta".to_string()),
+            "Field-aware try_cast should use target's extension type metadata"
+        );
+        assert!(
+            field.metadata().get("source_key").is_none(),
+            "Field-aware try_cast should NOT preserve source metadata"
+        );
+        assert_eq!(
+            field.metadata().get("target_key"),
+            Some(&"target_value".to_string()),
+            "Field-aware try_cast should preserve target's non-extension metadata"
+        );
+        // TRY_CAST is always nullable
+        assert!(field.is_nullable());
+
+        Ok(())
+    }
+
+    #[test]
+    fn field_aware_try_cast_preserves_target_field_semantics() -> Result<()> {
+        // Target field metadata should be preserved exactly (no merging with source).
+        // TRY_CAST is always nullable regardless of target field's nullability.
+        let metadata = HashMap::from([("target_meta".to_string(), "1".to_string())]);
+
+        for child_nullable in [true, false] {
+            let schema =
+                Schema::new(vec![Field::new("a", DataType::Int32, child_nullable)]);
+            let target_field = Arc::new(
+                Field::new("cast_target", DataType::Int64, false) // target says non-nullable
+                    .with_metadata(metadata.clone()),
+            );
+            let expr =
+                TryCastExpr::new_with_target_field(col("a", &schema)?, &target_field);
+
+            let field = expr.return_field(&schema)?;
+            // Field name comes from source
+            assert_eq!(field.name(), "a");
+            assert_eq!(field.data_type(), &DataType::Int64);
+            // TRY_CAST is ALWAYS nullable (ignores target field's nullability)
+            assert!(field.is_nullable(), "TRY_CAST should always be nullable");
+            // Target metadata should be preserved exactly
+            assert_eq!(
+                field.metadata().get("target_meta"),
+                Some(&"1".to_string()),
+                "Target metadata should be preserved exactly"
+            );
+            assert!(
+                expr.nullable(&schema)?,
+                "TRY_CAST should always be nullable"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn type_only_try_cast_strips_extension_keys() -> Result<()> {
+        // Type-only cast should strip extension keys but preserve other source metadata
+        let source_meta = HashMap::from([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                "source.extension".to_string(),
+            ),
+            (
+                EXTENSION_TYPE_METADATA_KEY.to_string(),
+                "ext_meta".to_string(),
+            ),
+            ("custom_key".to_string(), "custom_value".to_string()),
+        ]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false).with_metadata(source_meta),
+        ]);
+
+        let expr = TryCastExpr::new(col("a", &schema)?, DataType::Int64);
+        let field = expr.return_field(&schema)?;
+
+        // Extension keys should be stripped
+        assert!(
+            field.metadata().get(EXTENSION_TYPE_NAME_KEY).is_none(),
+            "Type-only try_cast should strip extension type name"
+        );
+        assert!(
+            field.metadata().get(EXTENSION_TYPE_METADATA_KEY).is_none(),
+            "Type-only try_cast should strip extension type metadata"
+        );
+        // Non-extension metadata should pass through
+        assert_eq!(
+            field.metadata().get("custom_key"),
+            Some(&"custom_value".to_string()),
+            "Type-only try_cast should preserve non-extension metadata"
+        );
+        // Field name preserved, type changed, always nullable
+        assert_eq!(field.name(), "a");
+        assert_eq!(field.data_type(), &DataType::Int64);
+        assert!(field.is_nullable());
+
+        Ok(())
+    }
+
+    #[test]
+    fn type_only_try_cast_is_always_nullable() -> Result<()> {
+        // TRY_CAST is always nullable even when source is non-nullable
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let expr = TryCastExpr::new(col("a", &schema)?, DataType::Int64);
+
+        let field = expr.return_field(&schema)?;
+
+        assert_eq!(field.name(), "a");
+        assert_eq!(field.data_type(), &DataType::Int64);
+        assert!(field.is_nullable(), "TRY_CAST should always be nullable");
+        assert!(
+            expr.nullable(&schema)?,
+            "TRY_CAST should always be nullable"
+        );
 
         Ok(())
     }
