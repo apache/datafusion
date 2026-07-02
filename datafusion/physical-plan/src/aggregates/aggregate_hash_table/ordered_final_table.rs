@@ -19,8 +19,6 @@
 //!
 //! See comments in [`super::ordered_partial_table`] for details.
 
-use std::sync::Arc;
-
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -29,7 +27,7 @@ use crate::InputOrderMode;
 use crate::aggregates::aggregate_hash_table::FinalMarker;
 use crate::aggregates::{AggregateExec, AggregateMode};
 
-use super::common_ordered::{OrderedAggregateTable, remove_emitted_groups};
+use super::common_ordered::OrderedAggregateTable;
 
 /// Implementation specific to final aggregation, where the table stores partial
 /// aggregate states and the input rows are also partial states.
@@ -66,67 +64,16 @@ impl OrderedAggregateTable<FinalMarker> {
         batch: &RecordBatch,
     ) -> Result<()> {
         let evaluated_batch = self.evaluate_batch(batch)?;
-        // `PhysicalGroupBy::as_final()` ensures it removes grouping set when
-        // planning final aggregate, so it's safe to reuse here.
+        // `PhysicalGroupBy::as_final()` removes grouping sets while planning
+        // final aggregation, so final ordered aggregation sees one grouping.
         debug_assert_eq!(evaluated_batch.grouping_set_args.len(), 1);
-
-        for group_values in &evaluated_batch.grouping_set_args {
-            let starting_num_groups = self.buffer.group_values.len();
-            self.buffer
-                .group_values
-                .intern(group_values, &mut self.buffer.group_indices)?;
-            let total_num_groups = self.buffer.group_values.len();
-            if total_num_groups > starting_num_groups {
-                self.buffer.group_ordering.new_groups(
-                    group_values,
-                    &self.buffer.group_indices,
-                    total_num_groups,
-                )?;
-            }
-
-            let timer = self.group_by_metrics.aggregation_time.timer();
-            for (acc, values) in self
-                .buffer
-                .accumulators
-                .iter_mut()
-                .zip(evaluated_batch.accumulator_args.iter())
-            {
-                acc.merge_batch(values, &self.buffer.group_indices, total_num_groups)?;
-            }
-            drop(timer);
-        }
-
-        Ok(())
+        self.aggregate_evaluated_batch(&evaluated_batch, true)
     }
 
     /// See comments in `ordered_partial_stream::next_output_batch`
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        if self.buffer.group_values.is_empty() {
-            return Ok(None);
-        }
-
-        let Some(emit_to) = self.buffer.group_ordering.emit_to() else {
-            return Ok(None);
-        };
-        let (emit_to, should_remove_groups) =
-            self.clamp_emit_to(self.buffer.group_values.len(), emit_to);
-
-        let timer = self.group_by_metrics.emitting_time.timer();
-        let mut output = self.buffer.group_values.emit(emit_to)?;
-        if should_remove_groups {
-            remove_emitted_groups(&mut self.buffer.group_ordering, emit_to);
-        }
-
-        for acc in &mut self.buffer.accumulators {
-            output.push(acc.evaluate(emit_to)?);
-        }
-        drop(timer);
-
-        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
-        debug_assert!(batch.num_rows() > 0);
-
-        Ok(Some(batch))
+        self.next_output_batch_for_mode(true)
     }
 }

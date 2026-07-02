@@ -25,6 +25,4 @@ mod partial_table;
 pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialSkipMarker,
 };
-pub(super) use common_ordered::{
-    OrderedAggregateTable, FinalMarker, PartialMarker,
-};
+pub(super) use common_ordered::OrderedAggregateTable;

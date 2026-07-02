@@ -117,7 +117,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
     ) -> Result<Self> {
         assert_or_internal_err!(
-            batch_size == 0,
+            batch_size > 0,
             "OrderedAggregateTable requires config batch_size >= 1"
         );
 
@@ -229,6 +229,103 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             EmitTo::All if group_count <= self.batch_size => (EmitTo::All, false),
             EmitTo::All => (EmitTo::First(self.batch_size), false),
         }
+    }
+    /// Aggregates one evaluated input batch.
+    ///
+    /// This common utility is used by ordered partial and ordered final aggregation.
+    ///
+    /// # Argument: `is_final`
+    ///
+    /// - `true`: merge partial aggregate states for final aggregation.
+    /// - `false`: update aggregate states from raw input for partial aggregation.
+    pub(super) fn aggregate_evaluated_batch(
+        &mut self,
+        evaluated_batch: &EvaluatedAggregateBatch,
+        is_final: bool,
+    ) -> Result<()> {
+        for group_values in &evaluated_batch.grouping_set_args {
+            let starting_num_groups = self.buffer.group_values.len();
+            self.buffer
+                .group_values
+                .intern(group_values, &mut self.buffer.group_indices)?;
+            let total_num_groups = self.buffer.group_values.len();
+            if total_num_groups > starting_num_groups {
+                self.buffer.group_ordering.new_groups(
+                    group_values,
+                    &self.buffer.group_indices,
+                    total_num_groups,
+                )?;
+            }
+
+            let timer = self.group_by_metrics.aggregation_time.timer();
+            for (acc, values) in self
+                .buffer
+                .accumulators
+                .iter_mut()
+                .zip(evaluated_batch.accumulator_args.iter())
+            {
+                if is_final {
+                    acc.merge_batch(
+                        values,
+                        &self.buffer.group_indices,
+                        total_num_groups,
+                    )?;
+                } else {
+                    acc.update_batch(
+                        values,
+                        &self.buffer.group_indices,
+                        total_num_groups,
+                    )?;
+                }
+            }
+            drop(timer);
+        }
+
+        Ok(())
+    }
+
+    /// Emits groups allowed by `GroupOrdering`, leaving only the current
+    /// unfinished ordered-key range buffered.
+    ///
+    /// This common utility is used by ordered partial and ordered final aggregation.
+    ///
+    /// # Argument: `is_final`
+    ///
+    /// - `true`: output final aggregate values.
+    /// - `false`: output partial accumulator states.
+    pub(super) fn next_output_batch_for_mode(
+        &mut self,
+        is_final: bool,
+    ) -> Result<Option<RecordBatch>> {
+        if self.buffer.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let Some(emit_to) = self.buffer.group_ordering.emit_to() else {
+            return Ok(None);
+        };
+        let (emit_to, should_remove_groups) =
+            self.clamp_emit_to(self.buffer.group_values.len(), emit_to);
+
+        let timer = self.group_by_metrics.emitting_time.timer();
+        let mut output = self.buffer.group_values.emit(emit_to)?;
+        if should_remove_groups {
+            remove_emitted_groups(&mut self.buffer.group_ordering, emit_to);
+        }
+
+        for acc in &mut self.buffer.accumulators {
+            if is_final {
+                output.push(acc.evaluate(emit_to)?);
+            } else {
+                output.extend(acc.state(emit_to)?);
+            }
+        }
+        drop(timer);
+
+        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        debug_assert!(batch.num_rows() > 0);
+
+        Ok(Some(batch))
     }
 }
 
