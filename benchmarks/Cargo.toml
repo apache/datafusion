@@ -63,7 +63,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tokio-util = { version = "0.7.17" }
 
 [dev-dependencies]
-datafusion-proto = { workspace = true }
+datafusion-proto = { workspace = true, features = ["parquet"] }
 tempfile = { workspace = true }
 
 [[bench]]

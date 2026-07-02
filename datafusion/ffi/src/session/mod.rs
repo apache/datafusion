@@ -24,6 +24,8 @@ use arrow_schema::SchemaRef;
 use arrow_schema::ffi::FFI_ArrowSchema;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
+#[cfg(not(feature = "parquet"))]
+use datafusion_common::config::ConfigField;
 use datafusion_common::config::{ConfigFileType, ConfigOptions, TableOptions};
 use datafusion_common::{DFSchema, DataFusionError};
 use datafusion_execution::TaskContext;
@@ -258,6 +260,7 @@ fn table_options_to_rhash(mut options: TableOptions) -> SVec<(SString, SString)>
             "datafusion_ffi.table_current_format".into(),
             match current_format {
                 ConfigFileType::JSON => "json",
+                #[cfg(feature = "parquet")]
                 ConfigFileType::PARQUET => "parquet",
                 ConfigFileType::CSV => "csv",
             }
@@ -476,6 +479,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
     let formats = [
         ConfigFileType::CSV,
         ConfigFileType::JSON,
+        #[cfg(feature = "parquet")]
         ConfigFileType::PARQUET,
     ];
     for format in formats {
@@ -483,6 +487,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
         // included in the formats list above and in the extension check below.
         let format_name = match &format {
             ConfigFileType::CSV => "csv",
+            #[cfg(feature = "parquet")]
             ConfigFileType::PARQUET => "parquet",
             ConfigFileType::JSON => "json",
         };
@@ -503,6 +508,15 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
                 .alter_with_string_hash_map(&format_options)
                 .unwrap_or_else(|err| log::warn!("Error parsing table options: {err}"));
         }
+    }
+    #[cfg(not(feature = "parquet"))]
+    for (key, value) in options.iter().filter_map(|(k, v)| {
+        let (prefix, key) = k.split_once(".")?;
+        (prefix == "parquet").then(|| (key, v))
+    }) {
+        table_options.parquet.set(key, value).unwrap_or_else(|err| {
+            log::warn!("Error parsing parquet table option: {err}")
+        });
     }
 
     let extension_options: HashMap<String, String> = options
@@ -525,6 +539,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
     table_options.current_format =
         current_format.and_then(|format| match format.as_str() {
             "csv" => Some(ConfigFileType::CSV),
+            #[cfg(feature = "parquet")]
             "parquet" => Some(ConfigFileType::PARQUET),
             "json" => Some(ConfigFileType::JSON),
             _ => None,
