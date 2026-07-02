@@ -67,8 +67,8 @@ pub struct SortedSpillFile {
     /// Upper bound on the merge output batch size when this run participates in a
     /// merge. `None` means the run is unconstrained (written at the normal batch
     /// size). `Some(n)` means the run was re-spilled with a shrunk batch layout to
-    /// resolve skew (see [`MultiLevelMergeBuilder`](crate::sorts::multi_level_merge)),
-    /// so any merge that includes it must cap its output at `n` rows, otherwise
+    /// resolve skew (see `MultiLevelMergeBuilder`), so any merge that includes it
+    /// must cap its output at `n` rows, otherwise
     /// re-spilling the merged result would rebuild an oversized batch and
     /// reintroduce the skew.
     pub batch_size_limit: Option<usize>,
