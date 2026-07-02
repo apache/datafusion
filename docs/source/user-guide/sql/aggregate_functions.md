@@ -91,6 +91,7 @@ SELECT SUM(x) WITHIN GROUP (ORDER BY x) FROM t;
 - [first_value](#first_value)
 - [grouping](#grouping)
 - [last_value](#last_value)
+- [map_agg](#map_agg)
 - [max](#max)
 - [mean](#mean)
 - [median](#median)
@@ -345,6 +346,30 @@ last_value(expression [ORDER BY expression])
 +-----------------------------------------------+
 | last_element                                  |
 +-----------------------------------------------+
+```
+
+### `map_agg`
+
+Aggregate key-value pairs from two columns into a single map per group. Pairs with a NULL key are skipped; NULL values are retained. For duplicate keys, the first value in aggregate order wins; use ORDER BY to make that order deterministic.
+
+```sql
+map_agg(key, value [ORDER BY expression])
+```
+
+#### Arguments
+
+- **key**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **value**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> SELECT map_agg(name, score) FROM scores GROUP BY department;
++-------------------------------+
+| map_agg(name, score)          |
++-------------------------------+
+| {Alice: 95, Bob: 87}          |
++-------------------------------+
 ```
 
 ### `max`
