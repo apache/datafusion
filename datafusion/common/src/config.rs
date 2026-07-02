@@ -639,6 +639,21 @@ config_namespace! {
         /// Should DataFusion keep the columns used for partition_by in the output RecordBatches
         pub keep_partition_by_columns: bool, default = false
 
+        /// When `true` (the default), sibling partition streams of a single file
+        /// scan share a work queue: whichever output partition goes idle first
+        /// steals the next unopened file (or byte-range morsel) from the shared
+        /// queue. This balances work when all output partitions are polled
+        /// concurrently in one process.
+        ///
+        /// Executors that run each output partition as an isolated task in a
+        /// separate process (for example Ballista and datafusion-distributed)
+        /// never poll the sibling partitions, so the single polled partition
+        /// drains the whole queue and reads files belonging to other partitions,
+        /// inflating the scan output by the partition count. Such executors
+        /// should set this to `false`, which makes each partition read only its
+        /// own file group.
+        pub enable_file_stream_work_stealing: bool, default = true
+
         /// Aggregation ratio (number of distinct groups / number of input rows)
         /// threshold for skipping partial aggregation. If the value is greater
         /// then partial aggregation will skip aggregation for further input
