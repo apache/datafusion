@@ -277,7 +277,10 @@ impl ListingOptions {
         state: &dyn Session,
         table_path: &'a ListingTableUrl,
     ) -> datafusion_common::Result<SchemaRef> {
-        let store = state.runtime_env().object_store(table_path)?;
+        // Resolve through the registry so a store registered under a path prefix
+        // receives store-relative paths (see `ListingTableUrl::resolve`).
+        let (store, _, table_path) =
+            table_path.resolve(state.runtime_env().object_store_registry.as_ref())?;
 
         let all_files: Vec<_> = table_path
             .list_all_files(state, store.as_ref(), &self.file_extension)
@@ -369,7 +372,10 @@ impl ListingOptions {
         state: &dyn Session,
         table_path: &ListingTableUrl,
     ) -> datafusion_common::Result<Vec<String>> {
-        let store = state.runtime_env().object_store(table_path)?;
+        // Resolve through the registry so a store registered under a path prefix
+        // receives store-relative paths (see `ListingTableUrl::resolve`).
+        let (store, _, table_path) =
+            table_path.resolve(state.runtime_env().object_store_registry.as_ref())?;
 
         // only use 10 files for inference
         // This can fail to detect inconsistent partition keys

@@ -19,13 +19,14 @@
 //! This allows the user to extend DataFusion with different storage systems such as S3 or HDFS
 //! and query data inside these systems.
 
-use dashmap::DashMap;
 use datafusion_common::{
     DataFusionError, Result, exec_err, internal_datafusion_err, not_impl_err,
 };
 use object_store::ObjectStore;
 #[cfg(not(target_arch = "wasm32"))]
 use object_store::local::LocalFileSystem;
+use object_store::path::Path;
+use object_store::registry::ObjectStoreRegistry as UpstreamObjectStoreRegistry;
 use std::sync::Arc;
 use url::Url;
 
@@ -59,15 +60,20 @@ impl ObjectStoreUrl {
         let mut parsed =
             Url::parse(s.as_ref()).map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let remaining = &parsed[url::Position::BeforePath..];
-        if !remaining.is_empty() && remaining != "/" {
+        // An ObjectStoreUrl identifies a store, optionally including a registered
+        // path prefix (e.g. `hf://bucket/user/repo`). Query strings and fragments
+        // are not part of a store key and are rejected.
+        if parsed.query().is_some() || parsed.fragment().is_some() {
+            let remaining = &parsed[url::Position::AfterPath..];
             return exec_err!(
-                "ObjectStoreUrl must only contain scheme and authority, got: {remaining}"
+                "ObjectStoreUrl must not contain a query or fragment, got: {remaining}"
             );
         }
 
-        // Always set path for consistency
-        parsed.set_path("/");
+        // Normalize an empty path to "/" for consistency.
+        if parsed.path().is_empty() {
+            parsed.set_path("/");
+        }
         Ok(Self { url: parsed })
     }
 
@@ -175,102 +181,89 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// the `url` and [`ObjectStoreRegistry`] implementation. An [`ObjectStore`] may be lazily
     /// created and registered.
     fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>>;
+
+    /// Resolve `url` to an [`ObjectStore`] together with the object [`Path`]
+    /// *relative to that store*.
+    ///
+    /// Unlike [`Self::get_store`], this allows a store to be registered under a
+    /// path prefix (e.g. `hf://bucket/user/repo`). When resolving a longer URL
+    /// (e.g. `hf://bucket/user/repo/data/f.parquet`) the registered prefix is
+    /// stripped from the returned path (`data/f.parquet`), so a store rooted at
+    /// that prefix is not prefixed twice. The store with the longest matching
+    /// path prefix is returned.
+    ///
+    /// The default implementation preserves the legacy behavior of matching on
+    /// scheme + authority only, returning the full URL path unchanged.
+    fn resolve(&self, url: &Url) -> Result<(Arc<dyn ObjectStore>, Path)> {
+        let store = self.get_store(url)?;
+        let path = Path::from_url_path(url.path())
+            .map_err(|e| internal_datafusion_err!("Invalid object store path: {e}"))?;
+        Ok((store, path))
+    }
 }
 
-/// The default [`ObjectStoreRegistry`]
+/// The default [`ObjectStoreRegistry`].
+///
+/// This is a thin adapter over [`object_store::registry::DefaultObjectStoreRegistry`],
+/// which performs path-segment based longest-prefix matching. This means stores can
+/// be registered under a path prefix and coexist under a single scheme + authority:
+///
+/// - `file:///my_path` returns the local filesystem store
+/// - `s3://bucket/path` returns a store registered with `s3://bucket` (authority only)
+/// - `hf://bucket/user/repo/data/f.parquet` returns a store registered with
+///   `hf://bucket/user/repo`, and [`ObjectStoreRegistry::resolve`] strips the
+///   registered prefix from the returned path (`data/f.parquet`)
+///
+/// Stores for known schemes (`file`, `s3`, `gs`, `az`, `http`, ...) are created
+/// lazily on first access via [`object_store::parse_url_opts`].
+#[derive(Debug, Default)]
 pub struct DefaultObjectStoreRegistry {
-    /// A map from scheme to object store that serve list / read operations for the store
-    object_stores: DashMap<String, Arc<dyn ObjectStore>>,
-}
-
-impl std::fmt::Debug for DefaultObjectStoreRegistry {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("DefaultObjectStoreRegistry")
-            .field(
-                "schemes",
-                &self
-                    .object_stores
-                    .iter()
-                    .map(|o| o.key().clone())
-                    .collect::<Vec<_>>(),
-            )
-            .finish()
-    }
-}
-
-impl Default for DefaultObjectStoreRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
+    inner: object_store::registry::DefaultObjectStoreRegistry,
 }
 
 impl DefaultObjectStoreRegistry {
     /// This will register [`LocalFileSystem`] to handle `file://` paths
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {
-        let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
-        object_stores.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
-        Self { object_stores }
+        let inner = object_store::registry::DefaultObjectStoreRegistry::new();
+        inner.register(
+            Url::parse("file://").unwrap(),
+            Arc::new(LocalFileSystem::new()),
+        );
+        Self { inner }
     }
 
     /// Default without any backend registered.
     #[cfg(target_arch = "wasm32")]
     pub fn new() -> Self {
-        let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
-        Self { object_stores }
+        Self::default()
     }
 }
 
-///
-/// Stores are registered based on the scheme, host and port of the provided URL
-/// with a [`LocalFileSystem::new`] automatically registered for `file://` (if the
-/// target arch is not `wasm32`).
-///
-/// For example:
-///
-/// - `file:///my_path` will return the default LocalFS store
-/// - `s3://bucket/path` will return a store registered with `s3://bucket` if any
-/// - `hdfs://host:port/path` will return a store registered with `hdfs://host:port` if any
 impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     fn register_store(
         &self,
         url: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        let s = get_url_key(url);
-        self.object_stores.insert(s, store)
+        self.inner.register(url.clone(), store)
     }
 
     fn deregister_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
-        let s = get_url_key(url);
-        let (_, object_store) = self.object_stores
-            .remove(&s)
-            .ok_or_else(|| {
-                internal_datafusion_err!("Failed to deregister object store. No suitable object store found for {url}. See `RuntimeEnv::register_object_store`")
-            })?;
-
-        Ok(object_store)
+        self.inner.deregister(url).ok_or_else(|| {
+            internal_datafusion_err!("Failed to deregister object store. No suitable object store found for {url}. See `RuntimeEnv::register_object_store`")
+        })
     }
 
     fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
-        let s = get_url_key(url);
-        self.object_stores
-            .get(&s)
-            .map(|o| Arc::clone(o.value()))
-            .ok_or_else(|| {
-                internal_datafusion_err!("No suitable object store found for {url}. See `RuntimeEnv::register_object_store`")
-            })
+        self.resolve(url).map(|(store, _)| store)
     }
-}
 
-/// Get the key of a url for object store registration.
-/// The credential info will be removed
-fn get_url_key(url: &Url) -> String {
-    format!(
-        "{}://{}",
-        url.scheme(),
-        &url[url::Position::BeforeHost..url::Position::AfterPort],
-    )
+    fn resolve(&self, url: &Url) -> Result<(Arc<dyn ObjectStore>, Path)> {
+        self.inner
+            .resolve(url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
 }
 
 #[cfg(test)]
@@ -291,44 +284,99 @@ mod tests {
         let err = ObjectStoreUrl::parse("s3://bucket:invalid").unwrap_err();
         assert_eq!(err.strip_backtrace(), "External error: invalid port number");
 
+        // A path prefix is now allowed: it identifies a store registered under
+        // that prefix (e.g. an OpenDAL store rooted at a specific repo).
+        let url = ObjectStoreUrl::parse("s3://host:123/foo").unwrap();
+        assert_eq!(url.as_str(), "s3://host:123/foo");
+
+        let url =
+            ObjectStoreUrl::parse("s3://username:password@host:123/foo/bar").unwrap();
+        assert_eq!(url.as_str(), "s3://username:password@host:123/foo/bar");
+
+        // Query strings and fragments are still rejected.
         let err = ObjectStoreUrl::parse("s3://bucket?").unwrap_err();
         assert_eq!(
             err.strip_backtrace(),
-            "Execution error: ObjectStoreUrl must only contain scheme and authority, got: ?"
+            "Execution error: ObjectStoreUrl must not contain a query or fragment, got: ?"
         );
 
         let err = ObjectStoreUrl::parse("s3://bucket?foo=bar").unwrap_err();
         assert_eq!(
             err.strip_backtrace(),
-            "Execution error: ObjectStoreUrl must only contain scheme and authority, got: ?foo=bar"
-        );
-
-        let err = ObjectStoreUrl::parse("s3://host:123/foo").unwrap_err();
-        assert_eq!(
-            err.strip_backtrace(),
-            "Execution error: ObjectStoreUrl must only contain scheme and authority, got: /foo"
-        );
-
-        let err =
-            ObjectStoreUrl::parse("s3://username:password@host:123/foo").unwrap_err();
-        assert_eq!(
-            err.strip_backtrace(),
-            "Execution error: ObjectStoreUrl must only contain scheme and authority, got: /foo"
+            "Execution error: ObjectStoreUrl must not contain a query or fragment, got: ?foo=bar"
         );
     }
 
     #[test]
-    fn test_get_url_key() {
-        let file = ObjectStoreUrl::parse("file://").unwrap();
-        let key = get_url_key(&file.url);
-        assert_eq!(key.as_str(), "file://");
+    fn test_registry_resolves_prefixed_store() {
+        use object_store::memory::InMemory;
+        use object_store::prefix::PrefixStore;
 
-        let url = ObjectStoreUrl::parse("s3://bucket").unwrap();
-        let key = get_url_key(&url.url);
-        assert_eq!(key.as_str(), "s3://bucket");
+        let registry = DefaultObjectStoreRegistry::new();
 
-        let url = ObjectStoreUrl::parse("s3://username:password@host:123").unwrap();
-        let key = get_url_key(&url.url);
-        assert_eq!(key.as_str(), "s3://host:123");
+        // Register two stores under the SAME authority at different prefixes.
+        let repo1 = Arc::new(PrefixStore::new(InMemory::new(), "userA/repo1"))
+            as Arc<dyn ObjectStore>;
+        let repo2 = Arc::new(PrefixStore::new(InMemory::new(), "userB/repo2"))
+            as Arc<dyn ObjectStore>;
+        registry.register_store(
+            &Url::parse("hf://bucket/userA/repo1").unwrap(),
+            Arc::clone(&repo1),
+        );
+        registry.register_store(
+            &Url::parse("hf://bucket/userB/repo2").unwrap(),
+            Arc::clone(&repo2),
+        );
+
+        // Each query resolves to its own store, with the registered prefix stripped.
+        let (store, path) = registry
+            .resolve(&Url::parse("hf://bucket/userA/repo1/data/f.parquet").unwrap())
+            .unwrap();
+        assert_eq!(path.as_ref(), "data/f.parquet");
+        assert!(Arc::ptr_eq(&store, &repo1));
+
+        let (store, path) = registry
+            .resolve(&Url::parse("hf://bucket/userB/repo2/x/y.parquet").unwrap())
+            .unwrap();
+        assert_eq!(path.as_ref(), "x/y.parquet");
+        assert!(Arc::ptr_eq(&store, &repo2));
+
+        // Deregister repo1 and confirm it is gone while repo2 survives.
+        registry
+            .deregister_store(&Url::parse("hf://bucket/userA/repo1").unwrap())
+            .unwrap();
+        assert!(
+            registry
+                .resolve(&Url::parse("hf://bucket/userA/repo1/data/f.parquet").unwrap())
+                .is_err()
+        );
+        let (store, _) = registry
+            .resolve(&Url::parse("hf://bucket/userB/repo2/x/y.parquet").unwrap())
+            .unwrap();
+        assert!(Arc::ptr_eq(&store, &repo2));
+
+        // Deregistering a URL that was never registered is an error.
+        assert!(
+            registry
+                .deregister_store(&Url::parse("hf://bucket/nope").unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_registry_authority_only_store() {
+        use object_store::memory::InMemory;
+
+        // A store registered by scheme+authority only serves the whole authority;
+        // the full path is returned unchanged (the legacy behavior).
+        let registry = DefaultObjectStoreRegistry::new();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        registry.register_store(&Url::parse("s3://bucket").unwrap(), Arc::clone(&store));
+
+        let (resolved, path) = registry
+            .resolve(&Url::parse("s3://bucket/a/b/c.parquet").unwrap())
+            .unwrap();
+        assert_eq!(path.as_ref(), "a/b/c.parquet");
+        assert!(Arc::ptr_eq(&resolved, &store));
     }
 }
