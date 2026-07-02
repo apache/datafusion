@@ -118,7 +118,9 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, BooleanArray, Int8Array, Int16Array};
+    use arrow::array::{
+        ArrayRef, BooleanArray, Int8Array, Int16Array, UInt8Array, UInt16Array,
+    };
     use arrow::datatypes::{UInt8Type, UInt16Type};
 
     #[test]
@@ -163,6 +165,23 @@ mod tests {
             filter.contains(&needles, true)?,
             BooleanArray::from(vec![Some(false), None, Some(false)])
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn reinterpreted_bitmap_rejects_same_width_unsigned_needles() -> Result<()> {
+        let haystack: ArrayRef = Arc::new(Int8Array::from(vec![Some(-1)]));
+        let filter = make_bitmap_filter::<UInt8Type>(&haystack)?;
+        let needles = UInt8Array::from(vec![Some(u8::MAX)]);
+        let err = filter.contains(&needles, false).unwrap_err().to_string();
+        assert!(err.contains("expected Int8 array, got UInt8"), "{err}");
+
+        let haystack: ArrayRef = Arc::new(Int16Array::from(vec![Some(-1)]));
+        let filter = make_bitmap_filter::<UInt16Type>(&haystack)?;
+        let needles = UInt16Array::from(vec![Some(u16::MAX)]);
+        let err = filter.contains(&needles, false).unwrap_err().to_string();
+        assert!(err.contains("expected Int16 array, got UInt16"), "{err}");
 
         Ok(())
     }
