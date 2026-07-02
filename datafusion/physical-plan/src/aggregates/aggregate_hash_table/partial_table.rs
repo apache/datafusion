@@ -35,7 +35,13 @@ use super::common::{
     PartialMarker, PartialSkipMarker,
 };
 
-/// Methods specific to the aggregate hash table used in the partial aggregation stage.
+/// Implementation specific to partial aggregation, where the table stores
+/// partial aggregate states and the input rows are raw rows.
+///
+/// Example: `AVG(x) GROUP BY k`
+///
+/// - Aggregate table stores: `k, sum(x), count(x)`
+/// - Input rows: `k, x`
 impl AggregateHashTable<PartialMarker> {
     pub(in crate::aggregates) fn new(
         agg: &AggregateExec,
