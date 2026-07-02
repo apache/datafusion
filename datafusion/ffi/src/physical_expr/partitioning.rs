@@ -50,6 +50,9 @@ impl From<&Partitioning> for FFI_Partitioning {
             Partitioning::Range(range) => {
                 Self::UnknownPartitioning(range.partition_count())
             }
+            Partitioning::DynamicRange(range) => {
+                Self::UnknownPartitioning(range.partition_count())
+            }
             Partitioning::UnknownPartitioning(size) => Self::UnknownPartitioning(*size),
         }
     }
