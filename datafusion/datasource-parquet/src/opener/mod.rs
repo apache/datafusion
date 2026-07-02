@@ -38,6 +38,7 @@ use crate::{
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
+use datafusion_datasource::shared_file_state::SharedFileState;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use datafusion_physical_expr_adapter::rewrite::rewrite_input_file_name_in_projection;
@@ -270,6 +271,12 @@ pub(super) struct ParquetMorselizer {
     pub enable_bloom_filter: bool,
     /// Should row group pruning be applied
     pub enable_row_group_stats_pruning: bool,
+    /// Should a file range that partially overlaps a row group read the
+    /// proportional slice of the row group's rows (via a `RowSelection`)
+    /// instead of assigning the entire row group to the range containing its
+    /// first data page. This allows partitions to decode disjoint parts of
+    /// the same row group in parallel.
+    pub split_row_groups_by_range: bool,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
     /// Optional timezone applied to INT96-coerced timestamps. When `Some`, the
@@ -444,6 +451,7 @@ struct PreparedParquetOpen {
     enable_page_index: bool,
     enable_bloom_filter: bool,
     enable_row_group_stats_pruning: bool,
+    split_row_groups_by_range: bool,
     limit: Option<usize>,
     coerce_int96: Option<TimeUnit>,
     coerce_int96_tz: Option<Arc<str>>,
@@ -482,6 +490,40 @@ struct FiltersPreparedParquetOpen {
 struct RowGroupsPrunedParquetOpen {
     prepared: FiltersPreparedParquetOpen,
     row_groups: RowGroupAccessPlanFilter,
+}
+
+/// Per-file open state published by the first byte-range piece of a file to
+/// finish opening it, and reused by the pieces that start later (via
+/// [`SharedFileState`]). Everything here is identical for every piece: only
+/// the byte range (applied afterwards in `build_stream`) differs.
+///
+/// Reusing pieces skip metadata parsing, predicate specialization,
+/// statistics / bloom-filter / page-index pruning, and the associated I/O,
+/// which keeps the per-piece cost flat when a file is split into many small
+/// morsels.
+struct SharedParquetFileOpen {
+    /// Metadata with the schema coercions applied and, when loaded, the page
+    /// index.
+    reader_metadata: ArrowReaderMetadata,
+    physical_file_schema: SchemaRef,
+    /// Predicate rewritten for the file's physical schema.
+    predicate: Option<Arc<dyn PhysicalExpr>>,
+    /// Projection rewritten for the file's physical schema.
+    projection: ProjectionExprs,
+    /// Access plan for the whole file after statistics, bloom-filter, and
+    /// page-index pruning — before any byte-range or limit restriction.
+    access_plan: ParquetAccessPlan,
+}
+
+/// The shared open state for `prepared`'s file, if pieces of this file share
+/// state and another piece already published it.
+fn shared_open_state(
+    prepared: &PreparedParquetOpen,
+) -> Option<Arc<SharedParquetFileOpen>> {
+    prepared
+        .extensions
+        .get_arc::<SharedFileState>()?
+        .get::<SharedParquetFileOpen>()
 }
 
 /// State of [`ParquetOpenState`]
@@ -536,6 +578,15 @@ impl ParquetOpenState {
                 let Some(prepared) = (*prepared).prune_file()? else {
                     return Ok(ParquetOpenState::Done);
                 };
+                // Fast path: another piece of this file already opened it and
+                // published the shared open state (parsed metadata, pruning
+                // results, page index). Skip straight to building the stream
+                // for this piece's byte range.
+                if let Some(shared) = shared_open_state(&prepared) {
+                    return Ok(ParquetOpenState::BuildStream(Box::new(
+                        RowGroupsPrunedParquetOpen::from_shared(prepared, &shared),
+                    )));
+                }
                 Ok(ParquetOpenState::LoadMetadata(prepared.load().boxed()))
             }
             ParquetOpenState::LoadMetadata(future) => {
@@ -549,10 +600,22 @@ impl ParquetOpenState {
             }
             ParquetOpenState::PruneWithStatistics(prepared) => {
                 let prepared_row_groups = (*prepared).prune_row_groups()?;
-                if should_load_page_index(
-                    prepared_row_groups.prepared.page_pruning_predicate.as_ref(),
-                    &prepared_row_groups.row_groups,
-                ) {
+                // A deferred range split (see `prune_row_groups`) produces
+                // row selections in `build_stream`, which need the offset
+                // index so pieces fetch and decode only the pages covering
+                // their slice and can align to page boundaries.
+                let index_for_deferred_split = {
+                    let prepared = &prepared_row_groups.prepared.loaded.prepared;
+                    prepared.split_row_groups_by_range
+                        && prepared.file_range.is_some()
+                        && prepared.extensions.get_arc::<SharedFileState>().is_some()
+                };
+                if index_for_deferred_split
+                    || should_load_page_index(
+                        prepared_row_groups.prepared.page_pruning_predicate.as_ref(),
+                        &prepared_row_groups.row_groups,
+                    )
+                {
                     Ok(ParquetOpenState::LoadPageIndex(
                         prepared_row_groups.load_page_index().boxed(),
                     ))
@@ -843,6 +906,7 @@ impl ParquetMorselizer {
             enable_page_index: self.enable_page_index,
             enable_bloom_filter: self.enable_bloom_filter,
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+            split_row_groups_by_range: self.split_row_groups_by_range,
             limit: self.limit,
             coerce_int96: self.coerce_int96,
             coerce_int96_tz: self.coerce_int96_tz.clone(),
@@ -1091,9 +1155,24 @@ impl FiltersPreparedParquetOpen {
             rg_metadata,
         )?);
 
-        // If there is a range restricting what parts of the file to read
-        if let Some(range) = prepared.file_range.as_ref() {
-            row_groups.prune_by_range(rg_metadata, range);
+        // If there is a range restricting what parts of the file to read.
+        //
+        // When pieces of this file share their open state, the plan computed
+        // here must stay range-independent so any piece can reuse it; the
+        // range is applied in `build_stream` instead, after the page index
+        // is loaded (so the split can align to page boundaries).
+        let share_state = prepared.extensions.get_arc::<SharedFileState>();
+        if share_state.is_none()
+            && let Some(range) = prepared.file_range.as_ref()
+        {
+            if prepared.split_row_groups_by_range {
+                // Read the proportional slice of rows from row groups that
+                // partially overlap the range, so partitions can decode
+                // disjoint parts of the same row group in parallel.
+                row_groups.split_by_range(rg_metadata, range);
+            } else {
+                row_groups.prune_by_range(rg_metadata, range);
+            }
         }
 
         // If there is a predicate that can be evaluated against the metadata
@@ -1144,6 +1223,32 @@ impl FiltersPreparedParquetOpen {
 }
 
 impl RowGroupsPrunedParquetOpen {
+    /// Build the state for a piece that reuses another piece's published
+    /// open state: no metadata, page-index, or bloom-filter I/O and no
+    /// pruning work. The piece's byte range is applied in `build_stream`.
+    fn from_shared(
+        mut prepared: PreparedParquetOpen,
+        shared: &SharedParquetFileOpen,
+    ) -> Self {
+        prepared.physical_file_schema = Arc::clone(&shared.physical_file_schema);
+        prepared.predicate.clone_from(&shared.predicate);
+        prepared.projection = shared.projection.clone();
+        Self {
+            prepared: FiltersPreparedParquetOpen {
+                loaded: MetadataLoadedParquetOpen {
+                    prepared,
+                    reader_metadata: shared.reader_metadata.clone(),
+                    // only used to (re)load metadata, which is shared here
+                    options: ArrowReaderOptions::new(),
+                },
+                pruning_predicate: None,
+                // the shared access plan is already page-index pruned
+                page_pruning_predicate: None,
+            },
+            row_groups: RowGroupAccessPlanFilter::new(shared.access_plan.clone()),
+        }
+    }
+
     /// Load the page index if pruning requires it and metadata did not include it.
     async fn load_page_index(mut self) -> Result<Self> {
         self.prepared.loaded.reader_metadata = load_page_index(
@@ -1286,7 +1391,7 @@ impl RowGroupsPrunedParquetOpen {
     fn build_stream(self) -> Result<BoxStream<'static, Result<RecordBatch>>> {
         let RowGroupsPrunedParquetOpen {
             prepared,
-            mut row_groups,
+            row_groups,
         } = self;
         let FiltersPreparedParquetOpen {
             loaded,
@@ -1302,11 +1407,6 @@ impl RowGroupsPrunedParquetOpen {
         let file_metadata = Arc::clone(reader_metadata.metadata());
         let rg_metadata = file_metadata.row_groups();
 
-        // Prune by limit if limit is set and limit order is not sensitive
-        if let (Some(limit), false) = (prepared.limit, prepared.preserve_order) {
-            row_groups.prune_by_limit(limit, rg_metadata, &prepared.file_metrics);
-        }
-
         // Build the access plan. Fully matched row groups have all rows
         // satisfying the predicate, so page pruning and row filter evaluation
         // can be skipped for them.
@@ -1315,6 +1415,10 @@ impl RowGroupsPrunedParquetOpen {
         // Page index pruning: if all data on individual pages can
         // be ruled using page metadata, rows from other columns
         // with that range can be skipped as well.
+        //
+        // This runs before any byte-range or limit restriction so the
+        // resulting plan is identical for every piece of the file and can be
+        // shared below.
         if prepared.enable_page_index
             && !access_plan.is_empty()
             && let Some(page_pruning_predicate) = page_pruning_predicate
@@ -1334,6 +1438,44 @@ impl RowGroupsPrunedParquetOpen {
                 &prepared.file_name,
                 page_pruning_result.pages_skipped_by_fully_matched,
             );
+        }
+
+        // When pieces of this file share their open state: publish this
+        // piece's (range-independent) result for pieces that have not opened
+        // the file yet, then apply this piece's deferred byte range (see
+        // `prune_row_groups`). Boundaries snap to the page boundaries of the
+        // largest column chunk when the offset index is available, so
+        // adjacent pieces do not both decode the page straddling their
+        // boundary.
+        if let Some(state) = prepared.extensions.get_arc::<SharedFileState>() {
+            state.set(Arc::new(SharedParquetFileOpen {
+                reader_metadata: reader_metadata.clone(),
+                physical_file_schema: Arc::clone(&prepared.physical_file_schema),
+                predicate: prepared.predicate.clone(),
+                projection: prepared.projection.clone(),
+                access_plan: access_plan.clone(),
+            }));
+
+            if let Some(range) = prepared.file_range.as_ref() {
+                let mut filter = RowGroupAccessPlanFilter::new(access_plan);
+                if prepared.split_row_groups_by_range {
+                    filter.split_by_range_aligned(
+                        rg_metadata,
+                        range,
+                        file_metadata.offset_index(),
+                    );
+                } else {
+                    filter.prune_by_range(rg_metadata, range);
+                }
+                access_plan = filter.build();
+            }
+        }
+
+        // Prune by limit if limit is set and limit order is not sensitive
+        if let (Some(limit), false) = (prepared.limit, prepared.preserve_order) {
+            let mut filter = RowGroupAccessPlanFilter::new(access_plan);
+            filter.prune_by_limit(limit, rg_metadata, &prepared.file_metrics);
+            access_plan = filter.build();
         }
 
         // Prepare access plans, then apply row-group ordering tweaks per
@@ -1648,12 +1790,19 @@ fn should_load_page_index(
     page_pruning_predicate: Option<&Arc<PagePruningAccessPlanFilter>>,
     row_groups: &RowGroupAccessPlanFilter,
 ) -> bool {
-    page_pruning_predicate.is_some_and(|_| {
+    // Load to prune pages with the predicate, unless every surviving row
+    // group is already known to fully match it.
+    let for_page_pruning = page_pruning_predicate.is_some_and(|_| {
         let fully_matched = row_groups.is_fully_matched();
         row_groups
             .row_group_indexes()
             .any(|idx| !fully_matched[idx])
-    })
+    });
+
+    // Row selections (e.g. from `split_by_range`) need the offset index so
+    // the reader fetches and decodes only the pages covering the selected
+    // rows rather than entire column chunks.
+    for_page_pruning || row_groups.has_selection()
 }
 
 /// Returns a `ArrowReaderMetadata` with the page index loaded, loading
@@ -1749,6 +1898,7 @@ mod test {
         enable_page_index: bool,
         enable_bloom_filter: bool,
         enable_row_group_stats_pruning: bool,
+        split_row_groups_by_range: bool,
         coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
@@ -1857,6 +2007,7 @@ mod test {
                 enable_page_index: false,
                 enable_bloom_filter: false,
                 enable_row_group_stats_pruning: false,
+                split_row_groups_by_range: false,
                 coerce_int96: None,
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
@@ -1925,6 +2076,12 @@ mod test {
         /// Enable row group stats pruning.
         fn with_row_group_stats_pruning(mut self, enable: bool) -> Self {
             self.enable_row_group_stats_pruning = enable;
+            self
+        }
+
+        /// Enable splitting row groups that partially overlap a file range.
+        fn with_split_row_groups_by_range(mut self, enable: bool) -> Self {
+            self.split_row_groups_by_range = enable;
             self
         }
 
@@ -2025,6 +2182,7 @@ mod test {
                 enable_page_index: self.enable_page_index,
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+                split_row_groups_by_range: self.split_row_groups_by_range,
                 coerce_int96: self.coerce_int96,
                 // End-to-end coercion behavior (including timezone) is
                 // covered by parquet.slt. No opener-level test currently
@@ -2244,6 +2402,274 @@ mod test {
             expr.children().into_iter().map(Arc::clone).collect(),
             expr,
         ))
+    }
+
+    /// Read `test.parquet` through `num_ranges` byte ranges tiling the file
+    /// and return the values produced by each range.
+    async fn read_by_ranges(
+        opener: &ParquetMorselizer,
+        data_size: usize,
+        num_ranges: i64,
+    ) -> Vec<Vec<i32>> {
+        let chunk = (data_size as i64 + num_ranges - 1) / num_ranges;
+        let mut results = vec![];
+        for i in 0..num_ranges {
+            let file = PartitionedFile::new("test.parquet".to_string(), data_size as u64)
+                .with_range(i * chunk, ((i + 1) * chunk).min(data_size as i64));
+            let stream = open_file(opener, file).await.unwrap();
+            results.push(collect_int32_values(stream).await);
+        }
+        results
+    }
+
+    /// A file with a single row group scanned through byte ranges: with
+    /// `split_row_groups_by_range` each range decodes a disjoint slice of the
+    /// row group (so multiple partitions share the work), and every row is
+    /// read exactly once.
+    #[tokio::test]
+    async fn test_split_row_groups_by_range() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(arrow::array::Int32Array::from_iter_values(
+                0..1000,
+            ))],
+        )
+        .unwrap();
+        let data_size = write_parquet(Arc::clone(&store), "test.parquet", batch).await;
+
+        let make_opener = |split| {
+            ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_split_row_groups_by_range(split)
+                .build()
+        };
+
+        // With splitting: several ranges produce disjoint, contiguous slices
+        // that together cover the whole row group exactly once, in order.
+        let per_range = read_by_ranges(&make_opener(true), data_size, 4).await;
+        let non_empty = per_range.iter().filter(|v| !v.is_empty()).count();
+        assert!(
+            non_empty > 1,
+            "expected the row group to be split across ranges, got {non_empty} non-empty ranges"
+        );
+        let all_values: Vec<i32> = per_range.into_iter().flatten().collect();
+        assert_eq!(all_values, (0..1000).collect::<Vec<i32>>());
+
+        // Without splitting: the single row group is read entirely by the
+        // one range containing its first data page.
+        let per_range = read_by_ranges(&make_opener(false), data_size, 4).await;
+        let non_empty = per_range.iter().filter(|v| !v.is_empty()).count();
+        assert_eq!(non_empty, 1);
+        let all_values: Vec<i32> = per_range.into_iter().flatten().collect();
+        assert_eq!(all_values, (0..1000).collect::<Vec<i32>>());
+    }
+
+    /// Reader factory that records the byte range of every data read issued
+    /// to the object store (metadata reads are not recorded).
+    #[derive(Debug)]
+    struct RecordingReaderFactory {
+        inner: DefaultParquetFileReaderFactory,
+        requests: Arc<std::sync::Mutex<Vec<std::ops::Range<u64>>>>,
+    }
+
+    struct RecordingReader {
+        inner: Box<dyn AsyncFileReader + Send>,
+        requests: Arc<std::sync::Mutex<Vec<std::ops::Range<u64>>>>,
+    }
+
+    impl AsyncFileReader for RecordingReader {
+        fn get_bytes(
+            &mut self,
+            range: std::ops::Range<u64>,
+        ) -> BoxFuture<'_, parquet::errors::Result<bytes::Bytes>> {
+            self.requests.lock().unwrap().push(range.clone());
+            self.inner.get_bytes(range)
+        }
+
+        fn get_byte_ranges(
+            &mut self,
+            ranges: Vec<std::ops::Range<u64>>,
+        ) -> BoxFuture<'_, parquet::errors::Result<Vec<bytes::Bytes>>> {
+            self.requests.lock().unwrap().extend(ranges.iter().cloned());
+            self.inner.get_byte_ranges(ranges)
+        }
+
+        fn get_metadata<'a>(
+            &'a mut self,
+            options: Option<&'a ArrowReaderOptions>,
+        ) -> BoxFuture<
+            'a,
+            parquet::errors::Result<Arc<parquet::file::metadata::ParquetMetaData>>,
+        > {
+            self.inner.get_metadata(options)
+        }
+    }
+
+    impl ParquetFileReaderFactory for RecordingReaderFactory {
+        fn create_reader(
+            &self,
+            partition_index: usize,
+            partitioned_file: PartitionedFile,
+            metadata_size_hint: Option<usize>,
+            metrics: &ExecutionPlanMetricsSet,
+        ) -> Result<Box<dyn AsyncFileReader + Send>> {
+            let inner = self.inner.create_reader(
+                partition_index,
+                partitioned_file,
+                metadata_size_hint,
+                metrics,
+            )?;
+            Ok(Box::new(RecordingReader {
+                inner,
+                requests: Arc::clone(&self.requests),
+            }))
+        }
+    }
+
+    /// Pieces sharing a [`SharedFileState`] reuse the first piece's open
+    /// state: later pieces issue no metadata, page-index, or bloom I/O (all
+    /// their reads stay inside the column chunk data), split boundaries are
+    /// page aligned, and every row is still read exactly once.
+    #[tokio::test]
+    async fn test_shared_open_state_reused_across_pieces() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        // 1000 rows in ~10 data pages of 100 rows, single row group
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(arrow::array::Int32Array::from_iter_values(
+                0..1000,
+            ))],
+        )
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(100)
+            .set_write_batch_size(100)
+            .build();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+
+        // The byte range of the single column chunk, to classify requests
+        let file_bytes = store
+            .get(&Path::from("test.parquet"))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let file_meta = ParquetMetaDataReader::new()
+            .parse_and_finish(&file_bytes)
+            .unwrap();
+        let (chunk_start, chunk_len) = file_meta.row_group(0).column(0).byte_range();
+        let chunk = chunk_start..chunk_start + chunk_len;
+
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let factory = Arc::new(RecordingReaderFactory {
+            inner: DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
+            requests: Arc::clone(&requests),
+        });
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_split_row_groups_by_range(true)
+            .with_parquet_file_reader_factory(factory)
+            .build();
+
+        let state = Arc::new(SharedFileState::default());
+        let quarter = data_size as i64 / 4;
+        let mut per_piece = vec![];
+        for i in 0..4 {
+            let (start, end) = (
+                i * quarter,
+                if i == 3 {
+                    data_size as i64
+                } else {
+                    (i + 1) * quarter
+                },
+            );
+            let mut file =
+                PartitionedFile::new("test.parquet".to_string(), data_size as u64)
+                    .with_range(start, end);
+            file.extensions.insert_arc(Arc::clone(&state));
+
+            if i > 0 {
+                // the first piece published the shared open state
+                assert!(state.get::<SharedParquetFileOpen>().is_some());
+            }
+            let already_requested = requests.lock().unwrap().len();
+            let stream = open_file(&opener, file).await.unwrap();
+            let values = collect_int32_values(stream).await;
+            if i > 0 {
+                // reusing pieces read only data pages: no footer, page
+                // index, or bloom filter requests
+                let requests = requests.lock().unwrap();
+                for r in &requests[already_requested..] {
+                    assert!(
+                        r.start >= chunk.start && r.end <= chunk.end,
+                        "unexpected non-data request {r:?} (chunk: {chunk:?})"
+                    );
+                }
+            }
+            per_piece.push(values);
+        }
+
+        // Work was split across pieces, boundaries land on 100-row pages,
+        // and all rows appear exactly once, in order
+        assert!(per_piece.iter().filter(|v| !v.is_empty()).count() > 1);
+        for values in &per_piece {
+            if let Some(first) = values.first() {
+                assert_eq!(first % 100, 0, "piece must start on a page boundary");
+            }
+        }
+        let all_values: Vec<i32> = per_piece.into_iter().flatten().collect();
+        assert_eq!(all_values, (0..1000).collect::<Vec<i32>>());
+    }
+
+    /// Range splitting composes with predicate pushdown: rows are still read
+    /// exactly once and filters apply within each slice.
+    #[tokio::test]
+    async fn test_split_row_groups_by_range_with_predicate() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(arrow::array::Int32Array::from_iter_values(
+                0..1000,
+            ))],
+        )
+        .unwrap();
+        let data_size = write_parquet(Arc::clone(&store), "test.parquet", batch).await;
+
+        let expr = col("a").gt_eq(lit(100)).and(col("a").lt(lit(900)));
+        let predicate = logical2physical(&expr, &schema);
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_enable_page_index(true)
+            .with_split_row_groups_by_range(true)
+            .build();
+
+        let per_range = read_by_ranges(&opener, data_size, 4).await;
+        let all_values: Vec<i32> = per_range.into_iter().flatten().collect();
+        assert_eq!(all_values, (100..900).collect::<Vec<i32>>());
     }
 
     #[tokio::test]

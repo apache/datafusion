@@ -42,6 +42,7 @@ pub mod memory;
 pub mod morsel;
 pub mod projection;
 pub mod schema_adapter;
+pub mod shared_file_state;
 pub mod sink;
 pub mod source;
 mod statistics;
