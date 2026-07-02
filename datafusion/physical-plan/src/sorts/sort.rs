@@ -374,7 +374,7 @@ impl ExternalSorter {
             // allocation. Only needed for the non-spill path; the spill
             // path transfers the reservation to the merge stream instead.
             self.merge_reservation.free();
-            self.in_mem_sort_stream(self.metrics.baseline.clone())
+            self.in_mem_sort_stream(self.metrics.baseline.clone(), true)
         }
     }
 
@@ -476,8 +476,9 @@ impl ExternalSorter {
         // reserved again for the next spill.
         self.merge_reservation.free();
 
+        // No coalescing on the spill path: it raises per-run peak memory.
         let mut sorted_stream =
-            self.in_mem_sort_stream(self.metrics.baseline.intermediate())?;
+            self.in_mem_sort_stream(self.metrics.baseline.intermediate(), false)?;
         // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
         // to construct a globally sorted stream.
         assert_or_internal_err!(
@@ -584,9 +585,12 @@ impl ExternalSorter {
     ///
     ///   in_mem_batches
     /// ```
+    /// `coalesce_runs` merges buffered batches into fewer, larger sorted runs to
+    /// reduce merge fan-in. Disabled on the spill path to keep peak memory low.
     fn in_mem_sort_stream(
         &mut self,
         metrics: BaselineMetrics,
+        coalesce_runs: bool,
     ) -> Result<SendableRecordBatchStream> {
         if self.in_mem_batches.is_empty() {
             return Ok(Box::pin(EmptyRecordBatchStream::new(Arc::clone(
@@ -623,7 +627,19 @@ impl ExternalSorter {
             return self.sort_batch_stream(batch, &metrics, reservation);
         }
 
-        let streams = std::mem::take(&mut self.in_mem_batches)
+        // For single-column sorts, coalesce the buffered batches into fewer,
+        // larger runs to cut the merge fan-in (where the cheap per-key compare is
+        // dominated by per-stream cursor/merge overhead). Multi-column sorts are
+        // left as one run per batch: the row-format merge of many small runs
+        // beats sorting a few large runs with the lexicographic comparator.
+        let batches = std::mem::take(&mut self.in_mem_batches);
+        let runs = if coalesce_runs && self.expr.len() == 1 {
+            self.coalesce_in_mem_batches_into_runs(batches)?
+        } else {
+            batches
+        };
+
+        let streams = runs
             .into_iter()
             .map(|batch| {
                 let metrics = self.metrics.baseline.intermediate();
@@ -644,6 +660,58 @@ impl ExternalSorter {
             .with_fetch(None)
             .with_reservation(self.merge_reservation.new_empty())
             .build()
+    }
+
+    /// Concatenates `batches` into fewer, larger runs, each bounded by
+    /// `sort_in_place_threshold_bytes`, to reduce merge fan-in. `self.reservation`
+    /// is resized to the coalesced footprint so the caller's per-run splits stay
+    /// exact.
+    fn coalesce_in_mem_batches_into_runs(
+        &mut self,
+        batches: Vec<RecordBatch>,
+    ) -> Result<Vec<RecordBatch>> {
+        let target = self.sort_in_place_threshold_bytes.max(1);
+        let mut runs: Vec<RecordBatch> = Vec::new();
+        let mut group: Vec<RecordBatch> = Vec::new();
+        let mut group_bytes = 0usize;
+
+        // Flush a group into a run, skipping the copy for a single-batch group.
+        let flush = |group: &mut Vec<RecordBatch>,
+                     runs: &mut Vec<RecordBatch>,
+                     schema: &SchemaRef|
+         -> Result<()> {
+            match group.len() {
+                0 => {}
+                1 => runs.push(group.pop().unwrap()),
+                _ => {
+                    runs.push(concat_batches(schema, group.iter())?);
+                    group.clear();
+                }
+            }
+            Ok(())
+        };
+
+        for batch in batches {
+            let bytes = get_reserved_bytes_for_record_batch(&batch)?;
+            if !group.is_empty() && group_bytes.saturating_add(bytes) > target {
+                flush(&mut group, &mut runs, &self.schema)?;
+                group_bytes = 0;
+            }
+            group_bytes += bytes;
+            group.push(batch);
+        }
+        flush(&mut group, &mut runs, &self.schema)?;
+
+        // Realign the reservation: concatenation may shift the footprint slightly.
+        let total: usize = runs
+            .iter()
+            .map(get_reserved_bytes_for_record_batch)
+            .sum::<Result<usize>>()?;
+        self.reservation
+            .try_resize(total)
+            .map_err(Self::err_with_oom_context)?;
+
+        Ok(runs)
     }
 
     /// Sorts a single `RecordBatch` into a single stream.
@@ -1637,6 +1705,104 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].num_rows(), 400);
+        assert_eq!(
+            task_ctx.runtime_env().memory_pool.reserved(),
+            0,
+            "The sort should have returned all memory used back to the memory manager"
+        );
+
+        Ok(())
+    }
+
+    /// Single-column run coalescing: many small batches above a tiny in-place
+    /// threshold (with ample memory, so no spill) must still produce a correct
+    /// total order, including NULLs.
+    #[tokio::test]
+    async fn test_in_mem_sort_coalesced_runs() -> Result<()> {
+        // Tiny in-place threshold forces the sort-then-merge path and, for a
+        // single column, the coalescing branch. Ample memory => no spill.
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(64)
+                    .with_sort_in_place_threshold_bytes(1024),
+            ),
+        );
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+
+        // Build many small batches of shuffled values with interspersed NULLs,
+        // so coalescing produces several multi-row runs that must be merged.
+        let num_batches = 40;
+        let rows_per_batch = 50;
+        let mut all_values: Vec<Option<i32>> = Vec::new();
+        let mut batches = Vec::with_capacity(num_batches);
+        for b in 0..num_batches {
+            let mut col_values: Vec<Option<i32>> = Vec::with_capacity(rows_per_batch);
+            for r in 0..rows_per_batch {
+                let idx = (b * rows_per_batch + r) as i64;
+                // Deterministic scramble to avoid any pre-existing ordering.
+                let scrambled = ((idx.wrapping_mul(2_654_435_761)) % 1000) as i32;
+                let v = if idx % 7 == 0 { None } else { Some(scrambled) };
+                col_values.push(v);
+                all_values.push(v);
+            }
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(col_values))],
+            )?;
+            batches.push(batch);
+        }
+        let total_rows = num_batches * rows_per_batch;
+
+        let options = SortOptions::default();
+        let sort_exec = Arc::new(SortExec::new(
+            [PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options,
+            }]
+            .into(),
+            TestMemoryExec::try_new_exec(
+                std::slice::from_ref(&batches),
+                Arc::clone(&schema),
+                None,
+            )?,
+        ));
+
+        let result = collect(
+            Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
+
+        // Flatten the sorted output.
+        let mut got: Vec<Option<i32>> = Vec::with_capacity(total_rows);
+        for batch in &result {
+            let arr = as_primitive_array::<Int32Type>(batch.column(0))?;
+            for i in 0..arr.len() {
+                got.push(if arr.is_null(i) {
+                    None
+                } else {
+                    Some(arr.value(i))
+                });
+            }
+        }
+        assert_eq!(got.len(), total_rows, "row count must be preserved");
+
+        // Reference: sort the original values with the same semantics
+        // (ascending, NULLs first per SortOptions::default()).
+        let mut expected = all_values.clone();
+        expected.sort_by(|a, b| match (a, b) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Less, // nulls_first
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (Some(x), Some(y)) => x.cmp(y),
+        });
+
+        assert_eq!(
+            got, expected,
+            "coalesced-run sort output must be totally ordered"
+        );
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
             0,

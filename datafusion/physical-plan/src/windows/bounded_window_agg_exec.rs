@@ -336,7 +336,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             debug!("No partition defined for BoundedWindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            vec![Distribution::HashPartitioned(self.partition_keys().clone())]
+            vec![Distribution::KeyPartitioned(self.partition_keys().clone())]
         }
     }
 

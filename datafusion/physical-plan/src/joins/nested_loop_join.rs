@@ -66,9 +66,8 @@ use datafusion_common::{
     assert_eq_or_internal_err, internal_datafusion_err, internal_err, project_schema,
     unwrap_or_internal_err,
 };
-use datafusion_execution::TaskContext;
-use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::{SpillFile, TaskContext};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
@@ -908,7 +907,7 @@ pub(crate) struct LeftSpillData {
     /// SpillManager used to read the spill file (has the left schema)
     spill_manager: SpillManager,
     /// The spill file containing all left-side batches
-    spill_file: RefCountedTempFile,
+    spill_file: Arc<dyn SpillFile>,
     /// Left-side schema
     schema: SchemaRef,
 }
@@ -1586,7 +1585,7 @@ impl NestedLoopJoinStream {
                 Poll::Ready(Ok(spill_data)) => {
                     match spill_data
                         .spill_manager
-                        .read_spill_as_stream(spill_data.spill_file.clone(), None)
+                        .read_spill_as_stream(Arc::clone(&spill_data.spill_file), None)
                     {
                         Ok(stream) => {
                             active.left_schema = Some(Arc::clone(&spill_data.schema));

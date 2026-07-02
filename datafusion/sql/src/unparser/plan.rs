@@ -584,6 +584,19 @@ impl Unparser<'_> {
         self.project_window_output(&window_expr, select, None)
     }
 
+    fn extract_join_input_table_scan_filters(
+        plan: &Arc<LogicalPlan>,
+        table_scan_filters: &mut Vec<Expr>,
+    ) -> Result<Arc<LogicalPlan>> {
+        match try_transform_to_simple_table_scan_with_filters(plan)? {
+            Some((plan, filters)) => {
+                table_scan_filters.extend(filters);
+                Ok(Arc::new(plan))
+            }
+            None => Ok(Arc::clone(plan)),
+        }
+    }
+
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn select_to_sql_recursively(
         &self,
@@ -1153,14 +1166,10 @@ impl Unparser<'_> {
                 // The outer projection plan will handle projecting the correct columns.
                 let already_projected = select.already_projected();
 
-                let left_plan =
-                    match try_transform_to_simple_table_scan_with_filters(left_plan)? {
-                        Some((plan, filters)) => {
-                            table_scan_filters.extend(filters);
-                            Arc::new(plan)
-                        }
-                        None => Arc::clone(left_plan),
-                    };
+                let left_plan = Self::extract_join_input_table_scan_filters(
+                    left_plan,
+                    &mut table_scan_filters,
+                )?;
                 let left_plan = if already_projected {
                     Self::unwrap_qualified_passthrough_join_projection(left_plan)
                 } else {
@@ -1181,14 +1190,10 @@ impl Unparser<'_> {
                     None
                 };
 
-                let right_plan =
-                    match try_transform_to_simple_table_scan_with_filters(right_plan)? {
-                        Some((plan, filters)) => {
-                            table_scan_filters.extend(filters);
-                            Arc::new(plan)
-                        }
-                        None => Arc::clone(right_plan),
-                    };
+                let right_plan = Self::extract_join_input_table_scan_filters(
+                    right_plan,
+                    &mut table_scan_filters,
+                )?;
 
                 let mut right_relation = RelationBuilder::default();
                 if already_projected

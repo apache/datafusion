@@ -730,7 +730,7 @@ fn add_hash_on_top(
         return Ok(input);
     }
 
-    let dist = Distribution::HashPartitioned(hash_exprs);
+    let dist = Distribution::KeyPartitioned(hash_exprs);
     let satisfaction = input.plan.output_partitioning().satisfaction(
         &dist,
         input.plan.equivalence_properties(),
@@ -1001,6 +1001,10 @@ struct RepartitionRequirementStatus {
 ///     hash_necessary: true
 /// }
 /// ```
+#[expect(
+    deprecated,
+    reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+)]
 fn get_repartition_requirement_status(
     plan: &Arc<dyn ExecutionPlan>,
     batch_size: usize,
@@ -1024,7 +1028,10 @@ fn get_repartition_requirement_status(
             Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
             Precision::Absent => true,
         };
-        let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
+        let is_hash = matches!(
+            requirement,
+            Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_)
+        );
         // Hash re-partitioning is necessary when the input has more than one
         // partitions:
         let multi_partitions = child.output_partitioning().partition_count() > 1;
@@ -1066,6 +1073,10 @@ fn get_repartition_requirement_status(
 /// This function is intended to be used in a bottom up traversal, as it
 /// can first repartition (or newly partition) at the datasources -- these
 /// source partitions may be later repartitioned with additional data exchange operators.
+#[expect(
+    deprecated,
+    reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+)]
 pub fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,
@@ -1206,7 +1217,8 @@ pub fn ensure_distribution(
             // Grouping set aggregates (ROLLUP, CUBE, GROUPING SETS) require exact hash
             // partitioning on all group columns including __grouping_id to ensure partial
             // aggregates from different partitions are correctly combined.
-            let requires_grouping_id = matches!(&requirement, Distribution::HashPartitioned(exprs)
+            let requires_grouping_id = matches!(&requirement,
+                Distribution::HashPartitioned(exprs) | Distribution::KeyPartitioned(exprs)
                 if exprs.iter().any(|expr| {
                     (expr.as_ref() as &dyn Any)
                         .downcast_ref::<Column>()
@@ -1244,7 +1256,8 @@ pub fn ensure_distribution(
                 Distribution::SinglePartition => {
                     child = add_merge_on_top(child, removed_fetch);
                 }
-                Distribution::HashPartitioned(exprs) => {
+                Distribution::HashPartitioned(exprs)
+                | Distribution::KeyPartitioned(exprs) => {
                     // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
                     // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
                     if hash_necessary {
@@ -1311,7 +1324,9 @@ pub fn ensure_distribution(
                 // no ordering requirement
                 match requirement {
                     // Operator requires specific distribution.
-                    Distribution::SinglePartition | Distribution::HashPartitioned(_) => {
+                    Distribution::SinglePartition
+                    | Distribution::HashPartitioned(_)
+                    | Distribution::KeyPartitioned(_) => {
                         // If the parent doesn't maintain input order, preserving
                         // ordering is pointless. However, if it does maintain
                         // input order, we keep order-preserving variants so
