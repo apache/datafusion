@@ -38,6 +38,7 @@ use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchemaBuilder, compute_all_files_statistics,
 };
 use datafusion_execution::cache::cache_manager::{FileStatisticsCache, TableScopedPath};
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
@@ -52,6 +53,12 @@ use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Result of resolving a table's paths against the object store registry: the
+/// store serving the table, the base [`ObjectStoreUrl`] (including any registered
+/// path prefix) to use as the scan key, and the table paths rebased into the
+/// store's coordinate space.
+type ResolvedTablePaths = (Arc<dyn ObjectStore>, ObjectStoreUrl, Vec<ListingTableUrl>);
 
 /// Result of a file listing operation from [`ListingTable::list_files_for_scan`].
 #[derive(Debug)]
@@ -632,9 +639,7 @@ impl TableProvider for ListingTable {
             None
         };
 
-        let Some(object_store_url) =
-            self.table_paths.first().map(ListingTableUrl::object_store)
-        else {
+        let Some((_, object_store_url, _)) = self.resolve_object_store(state)? else {
             return Ok(ScanResult::new(Arc::new(EmptyExec::new(Arc::new(
                 Schema::empty(),
             )))));
@@ -790,15 +795,39 @@ impl ListingTable {
         }
     }
 
+    /// Resolve the object store for this table's paths via the registry.
+    ///
+    /// Returns the [`ObjectStore`] serving the table, the [`ObjectStoreUrl`] (base
+    /// url including any registered path prefix) to use as the scan key, and the
+    /// table paths rebased into the store's coordinate space (registered prefix
+    /// stripped). Returns `None` when the table has no paths.
+    fn resolve_object_store(
+        &self,
+        ctx: &dyn Session,
+    ) -> datafusion_common::Result<Option<ResolvedTablePaths>> {
+        let Some(first) = self.table_paths.first() else {
+            return Ok(None);
+        };
+        let registry = Arc::clone(&ctx.runtime_env().object_store_registry);
+        let (store, object_store_url, _) = first.resolve(registry.as_ref())?;
+        let rebased = self
+            .table_paths
+            .iter()
+            .map(|p| Ok(p.resolve(registry.as_ref())?.2))
+            .collect::<datafusion_common::Result<Vec<_>>>()?;
+        Ok(Some((store, object_store_url, rebased)))
+    }
+
     async fn collect_files_for_scan<'a>(
         &'a self,
         ctx: &'a dyn Session,
         store: &'a Arc<dyn ObjectStore>,
+        table_paths: &'a [ListingTableUrl],
         listing_time_filters: &'a [Expr],
         file_limit: Option<usize>,
     ) -> datafusion_common::Result<(FileGroup, bool)> {
         // list files (with partitions)
-        let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
+        let file_list = future::try_join_all(table_paths.iter().map(|table_path| {
             pruned_partition_list(
                 ctx,
                 store.as_ref(),
@@ -845,9 +874,7 @@ impl ListingTable {
             );
         }
 
-        let store = if let Some(url) = self.table_paths.first() {
-            ctx.runtime_env().object_store(url)?
-        } else {
+        let Some((store, _, rebased_paths)) = self.resolve_object_store(ctx)? else {
             return Ok(ListFilesResult {
                 file_groups: vec![],
                 statistics: Statistics::new_unknown(&self.file_schema),
@@ -855,7 +882,7 @@ impl ListingTable {
             });
         };
         let (file_group, inexact_stats) = self
-            .collect_files_for_scan(ctx, &store, filters, limit)
+            .collect_files_for_scan(ctx, &store, &rebased_paths, filters, limit)
             .await?;
 
         // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
@@ -907,17 +934,16 @@ impl ListingTable {
             );
         }
 
-        let store = if let Some(url) = self.table_paths.first() {
-            ctx.runtime_env().object_store(url)?
-        } else {
+        let Some((store, _, rebased_paths)) = self.resolve_object_store(ctx)? else {
             return Ok(ListFilesResult {
                 file_groups: vec![],
                 statistics: Statistics::new_unknown(&self.file_schema),
                 grouped_by_partition: false,
             });
         };
-        let (file_group, inexact_stats) =
-            self.collect_files_for_scan(ctx, &store, &[], None).await?;
+        let (file_group, inexact_stats) = self
+            .collect_files_for_scan(ctx, &store, &rebased_paths, &[], None)
+            .await?;
         let mut file_groups = file_group.split_files(file_group_count);
         if !file_groups.is_empty() {
             file_groups.resize_with(file_group_count, || FileGroup::new(vec![]));

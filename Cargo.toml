@@ -267,6 +267,12 @@ codegen-units = 16
 lto = false
 strip = false        # Retain debug info for flamegraphs
 
+# Pin object_store to arrow-rs-object-store PR #784 (adds a `deregister` method to
+# the registry). Uses the 0.13-compatible branch so the patch applies to `parquet`
+# (which requires object_store ^0.13). Drop once the PR is released.
+[patch.crates-io]
+object_store = { git = "https://github.com/kszucs/arrow-rs-object-store", branch = "registry-deregister-0.13" }
+
 [profile.profiling]
 inherits = "release"
 debug = true
