@@ -294,9 +294,9 @@ impl SplitProjection {
 mod test {
     use std::sync::Arc;
 
-    use arrow::array::{AsArray, RecordBatch};
+    use arrow::array::{AsArray, RecordBatch, record_batch};
     use arrow::datatypes::{DataType, Field, SchemaRef};
-    use datafusion_common::{DFSchema, ScalarValue, config::ConfigOptions, record_batch};
+    use datafusion_common::{DFSchema, ScalarValue, config::ConfigOptions};
     use datafusion_expr::{Expr, ScalarUDF, col, execution_props::ExecutionProps};
     use datafusion_functions::core::input_file_name::InputFileNameFunc;
     use datafusion_physical_expr::{

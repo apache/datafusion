@@ -1904,6 +1904,7 @@ name = "datafusion-datasource"
 version = "54.0.0"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "async-compression",
  "async-trait",
  "bytes",
@@ -2394,6 +2395,7 @@ name = "datafusion-physical-expr-adapter"
 version = "54.0.0"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
  "datafusion-functions",
@@ -2951,6 +2953,7 @@ name = "ffi_example_table_provider"
 version = "0.1.0"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "datafusion",
  "datafusion-ffi",
  "ffi_module_interface",
