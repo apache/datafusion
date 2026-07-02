@@ -304,7 +304,7 @@ impl ExecutionPlan for PartitionedTopKExec {
             .iter()
             .map(|e| Arc::clone(&e.expr))
             .collect();
-        vec![Distribution::HashPartitioned(partition_exprs)]
+        vec![Distribution::KeyPartitioned(partition_exprs)]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

@@ -1709,7 +1709,7 @@ impl ExecutionPlan for AggregateExec {
                 vec![Distribution::UnspecifiedDistribution]
             }
             AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned => {
-                vec![Distribution::HashPartitioned(self.group_by.input_exprs())]
+                vec![Distribution::KeyPartitioned(self.group_by.input_exprs())]
             }
             AggregateMode::Final | AggregateMode::Single => {
                 vec![Distribution::SinglePartition]
@@ -2434,8 +2434,8 @@ mod tests {
     };
 
     use arrow::array::{
-        DictionaryArray, Float32Array, Float64Array, Int32Array, Int64Array, StructArray,
-        UInt32Array, UInt64Array,
+        BooleanArray, DictionaryArray, Float32Array, Float64Array, Int32Array,
+        Int64Array, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::Int32Type;
@@ -2445,7 +2445,10 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-    use datafusion_expr::{AggregateUDF, AggregateUDFImpl, Signature, Volatility};
+    use datafusion_expr::{
+        Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator,
+        Signature, Volatility,
+    };
     use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
@@ -3225,6 +3228,76 @@ mod tests {
             vec![2, 1]
         );
         assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partial_grouped_aggregate_materializes_before_slicing() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+        let input_batches = vec![RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+            ],
+        )?];
+        let input =
+            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let udaf = Arc::new(AggregateUDF::from(NoFirstEmitUdaf::new()));
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(udaf, vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("no_first_emit(value)")
+                .build()?,
+        )];
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggregates,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(2)
+                    .set_bool("datafusion.execution.enable_migration_aggregate", true)
+                    .set(
+                        "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                        &ScalarValue::Float64(Some(2.0)),
+                    ),
+            ),
+        );
+
+        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::PartialHash(_)));
+
+        let stream: SendableRecordBatchStream = stream.into();
+        let batches = collect(stream).await?;
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +-----+-----------------------------+
+        | key | no_first_emit(value)[count] |
+        +-----+-----------------------------+
+        | 1   | 1                           |
+        | 2   | 1                           |
+        | 3   | 1                           |
+        +-----+-----------------------------+
+        ");
 
         Ok(())
     }
@@ -6253,6 +6326,140 @@ mod tests {
             let actual: Vec<DataType> =
                 states.iter().map(|a| a.data_type().clone()).collect();
             assert_data_types("merge_batch(states)", &self.state_types, &actual)
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct NoFirstEmitUdaf {
+        signature: Signature,
+    }
+
+    impl NoFirstEmitUdaf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![DataType::Int32], Volatility::Immutable),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for NoFirstEmitUdaf {
+        fn name(&self) -> &str {
+            "no_first_emit"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+            Ok(vec![Arc::new(Field::new(
+                format!("{}[count]", args.name),
+                DataType::Int64,
+                false,
+            ))])
+        }
+
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            Ok(Box::new(NoFirstEmitAccumulator))
+        }
+
+        fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
+            true
+        }
+
+        fn create_groups_accumulator(
+            &self,
+            _args: AccumulatorArgs,
+        ) -> Result<Box<dyn GroupsAccumulator>> {
+            Ok(Box::new(NoFirstEmitGroupsAccumulator { counts: vec![] }))
+        }
+    }
+
+    #[derive(Debug)]
+    struct NoFirstEmitAccumulator;
+
+    impl Accumulator for NoFirstEmitAccumulator {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(Some(0)))
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self)
+        }
+
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            Ok(vec![ScalarValue::Int64(Some(0))])
+        }
+
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct NoFirstEmitGroupsAccumulator {
+        counts: Vec<i64>,
+    }
+
+    impl NoFirstEmitGroupsAccumulator {
+        fn emit_counts(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+            match emit_to {
+                EmitTo::All => {
+                    let counts = std::mem::take(&mut self.counts);
+                    Ok(Arc::new(Int64Array::from(counts)))
+                }
+                EmitTo::First(_) => internal_err!(
+                    "partial grouped aggregate output must materialize with EmitTo::All before slicing"
+                ),
+            }
+        }
+    }
+
+    impl GroupsAccumulator for NoFirstEmitGroupsAccumulator {
+        fn update_batch(
+            &mut self,
+            _values: &[ArrayRef],
+            group_indices: &[usize],
+            _opt_filter: Option<&BooleanArray>,
+            total_num_groups: usize,
+        ) -> Result<()> {
+            self.counts.resize(total_num_groups, 0);
+            for group_index in group_indices {
+                self.counts[*group_index] += 1;
+            }
+            Ok(())
+        }
+
+        fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+            self.emit_counts(emit_to)
+        }
+
+        fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+            Ok(vec![self.emit_counts(emit_to)?])
+        }
+
+        fn merge_batch(
+            &mut self,
+            _values: &[ArrayRef],
+            _group_indices: &[usize],
+            _total_num_groups: usize,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self) + self.counts.capacity() * size_of::<i64>()
         }
     }
 

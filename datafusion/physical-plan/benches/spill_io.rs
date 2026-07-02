@@ -547,7 +547,7 @@ fn benchmark_spill_batches_for_all_codec(
         let write_throughput = (mem_bytes as u128 / write_time.as_millis().max(1)) * 1000;
 
         // calculate compression ratio
-        let disk_bytes = std::fs::metadata(spill_file.path())
+        let disk_bytes = std::fs::metadata(spill_file.path().unwrap())
             .expect("metadata read fail")
             .len() as usize;
         let ratio = mem_bytes as f64 / disk_bytes.max(1) as f64;
