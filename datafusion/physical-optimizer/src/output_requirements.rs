@@ -32,7 +32,6 @@ use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
-use datafusion_physical_plan::StatisticsArgs;
 use datafusion_physical_plan::execution_plan::Boundedness;
 use datafusion_physical_plan::projection::{
     ProjectionExec, make_with_child, update_expr, update_ordering_requirement,
@@ -40,8 +39,8 @@ use datafusion_physical_plan::projection::{
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    SendableRecordBatchStream,
+    ChildStats, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
+    PlanProperties, SendableRecordBatchStream, StatisticsArgs,
 };
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
@@ -243,8 +242,16 @@ impl ExecutionPlan for OutputRequirementExec {
         unreachable!();
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        args.compute_child_statistics(&self.input, args.partition())
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
     }
 
     #[expect(

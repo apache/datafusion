@@ -32,7 +32,7 @@ use datafusion_physical_expr::LexOrdering;
 use crate::metrics::{MetricCategory, MetricType, MetricValue};
 use crate::render_tree::RenderTree;
 
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{StatisticsArgs, StatisticsContext};
 
 use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
 
@@ -581,8 +581,8 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             }
         }
         if self.show_statistics {
-            let stats = plan
-                .statistics_with_args(&StatisticsArgs::default())
+            let stats = StatisticsContext::new()
+                .compute(plan, &StatisticsArgs::new())
                 .map_err(|_e| fmt::Error)?;
             write!(self.f, ", statistics=[{stats}]")?;
         }
@@ -679,8 +679,8 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         };
 
         let statistics = if self.show_statistics {
-            let stats = plan
-                .statistics_with_args(&StatisticsArgs::new())
+            let stats = StatisticsContext::new()
+                .compute(plan, &StatisticsArgs::new())
                 .map_err(|_e| fmt::Error)?;
             format!("statistics=[{stats}]")
         } else {
@@ -1504,7 +1504,11 @@ mod tests {
             todo!()
         }
 
-        fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        fn statistics_from_inputs(
+            &self,
+            _input_stats: &[Arc<Statistics>],
+            args: &StatisticsArgs,
+        ) -> Result<Arc<Statistics>> {
             if args.partition().is_some() {
                 return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }

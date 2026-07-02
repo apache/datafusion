@@ -33,7 +33,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
     SendableRecordBatchStream, Statistics, check_if_same_properties,
@@ -1772,9 +1772,16 @@ impl ExecutionPlan for AggregateExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let child_statistics =
-            args.compute_child_statistics(&self.input, args.partition())?;
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let child_statistics = Arc::clone(&input_stats[0]);
         Ok(Arc::new(
             self.statistics_inner(&child_statistics, args.partition())?,
         ))
@@ -2426,7 +2433,7 @@ mod tests {
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::metrics::MetricValue;
-    use crate::statistics::StatisticsArgs;
+    use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test::TestMemoryExec;
     use crate::test::assert_is_pending;
     use crate::test::exec::{
@@ -2815,7 +2822,8 @@ mod tests {
         )?);
 
         // Verify statistics are preserved proportionally through aggregation
-        let final_stats = merged_aggregate.statistics_with_args(&StatisticsArgs::new())?;
+        let final_stats = StatisticsContext::new()
+            .compute(merged_aggregate.as_ref(), &StatisticsArgs::new())?;
         assert!(final_stats.total_byte_size.get_value().is_some());
 
         let task_ctx = if spill {
@@ -2950,7 +2958,11 @@ mod tests {
             Ok(Box::pin(stream))
         }
 
-        fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        fn statistics_from_inputs(
+            &self,
+            _input_stats: &[Arc<Statistics>],
+            args: &StatisticsArgs,
+        ) -> Result<Arc<Statistics>> {
             if args.partition().is_some() {
                 return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }
@@ -4821,7 +4833,7 @@ mod tests {
             PhysicalGroupBy::default(),
             None,
         )?;
-        let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
+        let stats = StatisticsContext::new().compute(&agg, &StatisticsArgs::new())?;
         assert_eq!(stats.total_byte_size, Precision::Absent);
 
         let zero_row_stats = Statistics {
@@ -4838,7 +4850,8 @@ mod tests {
             PhysicalGroupBy::default(),
             None,
         )?;
-        let stats_zero = agg_zero.statistics_with_args(&StatisticsArgs::new())?;
+        let stats_zero =
+            StatisticsContext::new().compute(&agg_zero, &StatisticsArgs::new())?;
         assert_eq!(stats_zero.total_byte_size, Precision::Absent);
 
         let single_input =
@@ -4859,7 +4872,7 @@ mod tests {
             1
         );
         let single_stats_zero =
-            single_agg_zero.statistics_with_args(&StatisticsArgs::new())?;
+            StatisticsContext::new().compute(&single_agg_zero, &StatisticsArgs::new())?;
         assert_eq!(single_stats_zero.num_rows, Precision::Exact(1));
 
         Ok(())
@@ -5232,7 +5245,7 @@ mod tests {
             let agg =
                 build_test_aggregate(&schema, input_stats, group_by, case.limit_options)?;
 
-            let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
+            let stats = StatisticsContext::new().compute(&agg, &StatisticsArgs::new())?;
             assert_eq!(
                 stats.num_rows, case.expected_num_rows,
                 "FAILED: '{}' — expected {:?}, got {:?}",
@@ -5271,7 +5284,7 @@ mod tests {
             None,
         )?;
 
-        let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
+        let stats = StatisticsContext::new().compute(&agg, &StatisticsArgs::new())?;
         assert_eq!(
             stats.column_statistics[0].distinct_count,
             Precision::Exact(100),
@@ -5325,7 +5338,7 @@ mod tests {
 
         let agg = build_test_aggregate(&schema, input_stats, grouping_set, None)?;
 
-        let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
+        let stats = StatisticsContext::new().compute(&agg, &StatisticsArgs::new())?;
         // Per-set NDV: (a,NULL)=100, (NULL,b)=50, (a,b)=100*50=5000
         // Total = 100 + 50 + 5000 = 5150
         assert_eq!(
@@ -5355,8 +5368,8 @@ mod tests {
             Arc::clone(&schema),
         )?;
         assert_eq!(
-            single_agg
-                .statistics_with_args(&StatisticsArgs::new())?
+            StatisticsContext::new()
+                .compute(&single_agg, &StatisticsArgs::new())?
                 .num_rows,
             Precision::Exact(2)
         );
@@ -5383,9 +5396,10 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         for partition in 0..2 {
             assert_eq!(
-                partial_agg
-                    .statistics_with_args(
-                        &StatisticsArgs::new().with_partition(Some(partition))
+                StatisticsContext::new()
+                    .compute(
+                        partial_agg.as_ref(),
+                        &StatisticsArgs::new().with_partition(Some(partition)),
                     )?
                     .num_rows,
                 Precision::Exact(2)
@@ -5396,8 +5410,8 @@ mod tests {
         }
 
         assert_eq!(
-            partial_agg
-                .statistics_with_args(&StatisticsArgs::new())?
+            StatisticsContext::new()
+                .compute(partial_agg.as_ref(), &StatisticsArgs::new())?
                 .num_rows,
             Precision::Exact(4)
         );
@@ -5442,7 +5456,7 @@ mod tests {
             PhysicalGroupBy::new_single(vec![(expr_a_plus_b, "a+b".to_string())]);
         let agg = build_test_aggregate(&schema, input_stats, group_by, None)?;
 
-        let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
+        let stats = StatisticsContext::new().compute(&agg, &StatisticsArgs::new())?;
         assert_eq!(
             stats.num_rows,
             Precision::Inexact(1_000_000),
