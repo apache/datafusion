@@ -22,9 +22,11 @@
 use std::fmt::{self, Debug};
 use std::ops::Sub;
 
-use arrow::array::BooleanArray;
+use crate::joins::utils::JoinKeyComparator;
+use arrow::array::{ArrayRef, BooleanArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::ArrowNativeType;
+use datafusion_common::{NullEquality, Result};
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry::{Occupied, Vacant};
 
@@ -131,6 +133,18 @@ pub trait JoinHashMapType: Send + Sync {
         match_indices: &mut Vec<u64>,
     ) -> Option<MapOffset>;
 
+    /// Returns `true` if any bucket holds build rows with differing join keys
+    /// (real hash collisions). When `false`, the probe can check once per
+    /// chain head and accept the whole run. Scanned once at build time.
+    fn has_key_collisions(
+        &self,
+        left_values: &[ArrayRef],
+        null_equality: NullEquality,
+    ) -> Result<bool> {
+        let _ = (left_values, null_equality);
+        Ok(true)
+    }
+
     /// Returns a BooleanArray indicating which of the provided hashes exist in the map.
     fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray;
 
@@ -206,6 +220,14 @@ impl JoinHashMapType for JoinHashMapU32 {
             input_indices,
             match_indices,
         )
+    }
+
+    fn has_key_collisions(
+        &self,
+        left_values: &[ArrayRef],
+        null_equality: NullEquality,
+    ) -> Result<bool> {
+        detect_key_collisions(&self.next, left_values, null_equality)
     }
 
     fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
@@ -286,6 +308,14 @@ impl JoinHashMapType for JoinHashMapU64 {
             input_indices,
             match_indices,
         )
+    }
+
+    fn has_key_collisions(
+        &self,
+        left_values: &[ArrayRef],
+        null_equality: NullEquality,
+    ) -> Result<bool> {
+        detect_key_collisions(&self.next, left_values, null_equality)
     }
 
     fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
@@ -491,6 +521,40 @@ pub fn contain_hashes<T>(map: &HashTable<(u64, T)>, hash_values: &[u64]) -> Bool
     BooleanArray::new(buffer, None)
 }
 
+/// Scans the `next` chain to detect real hash collisions (two build rows in
+/// the same bucket with different keys). `next[i]` stores `prev_row + 1`
+/// (`0` = end of chain). Checking every adjacent linked pair is sufficient:
+/// any two distinct keys in the same bucket must appear as neighbors somewhere.
+///
+/// Example — keys `["cat", "cat", "dog"]`, next `[0, 1, 2]`:
+///   row 1 → prev 0: "cat"=="cat" ✓
+///   row 2 → prev 1: "dog"!="cat" → return true (collision found)
+fn detect_key_collisions<T>(
+    next: &[T],
+    left_values: &[ArrayRef],
+    null_equality: NullEquality,
+) -> Result<bool>
+where
+    T: ArrowNativeType + Into<u64>,
+{
+    if next.is_empty() {
+        return Ok(false);
+    }
+    let comparator =
+        JoinKeyComparator::for_equality(left_values, left_values, null_equality)?;
+    for (row, &link) in next.iter().enumerate() {
+        let link: u64 = link.into();
+        if link != 0 {
+            // `link` is `prev_row + 1`; both rows live in the same bucket.
+            let prev = (link - 1) as usize;
+            if !comparator.is_equal(row, prev) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,5 +632,32 @@ mod tests {
         assert_eq!(next_offset, None);
         assert_eq!(input_indices, vec![1, 1]);
         assert_eq!(match_indices, vec![3, 1]);
+    }
+
+    #[test]
+    fn test_has_key_collisions_same_key() -> Result<()> {
+        // 5 build rows all with key 10 chained in the same bucket — no collision.
+        // next: [0, 1, 2, 3, 4] → chain 4→3→2→1→0→end
+        use arrow::array::Int32Array;
+        use std::sync::Arc;
+        let next: Vec<u32> = vec![0, 1, 2, 3, 4];
+        let map = JoinHashMapU32::new(HashTable::new(), next);
+        let keys: ArrayRef = Arc::new(Int32Array::from(vec![10, 10, 10, 10, 10]));
+        assert!(!map.has_key_collisions(&[keys], NullEquality::NullEqualsNothing)?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_has_key_collisions_distinct_keys() -> Result<()> {
+        // 5 build rows, 4 with key 10 and 1 with key 20 buried in the chain.
+        // next: [0, 1, 2, 3, 4] → chain 4→3→2→1→0→end
+        // Row 2 has key 20 — adjacent pair (row 2, row 1) differs → collision.
+        use arrow::array::Int32Array;
+        use std::sync::Arc;
+        let next: Vec<u32> = vec![0, 1, 2, 3, 4];
+        let map = JoinHashMapU32::new(HashTable::new(), next);
+        let keys: ArrayRef = Arc::new(Int32Array::from(vec![10, 10, 20, 10, 10]));
+        assert!(map.has_key_collisions(&[keys], NullEquality::NullEqualsNothing)?);
+        Ok(())
     }
 }
