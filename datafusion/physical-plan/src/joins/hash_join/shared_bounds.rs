@@ -37,7 +37,7 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, SharedResult};
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, lit,
+    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, IsNullExpr, lit,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
@@ -255,6 +255,9 @@ pub(crate) struct SharedBuildAccumulator {
     repartition_random_state: SeededRandomState,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
+    /// Null-aware anti join (`NOT IN`). A probe-side NULL must reach the join so its
+    /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
+    null_aware: bool,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -358,6 +361,7 @@ impl SharedBuildAccumulator {
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
+        null_aware: bool,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -404,6 +408,7 @@ impl SharedBuildAccumulator {
             on_right,
             repartition_random_state,
             probe_schema: right_child.schema(),
+            null_aware,
         }
     }
 
@@ -579,7 +584,8 @@ impl SharedBuildAccumulator {
                     if let Some(filter_expr) =
                         combine_membership_and_bounds(membership_expr, bounds_expr)
                     {
-                        self.dynamic_filter.update(filter_expr)?;
+                        self.dynamic_filter
+                            .update(self.null_aware_filter(filter_expr))?;
                     }
                 }
                 PartitionStatus::Pending => {
@@ -685,11 +691,39 @@ impl SharedBuildAccumulator {
                     )?) as Arc<dyn PhysicalExpr>
                 };
 
-                self.dynamic_filter.update(filter_expr)?;
+                self.dynamic_filter
+                    .update(self.null_aware_filter(filter_expr))?;
             }
         }
 
         Ok(())
+    }
+
+    /// Wraps a pushdown filter so a null-aware anti join keeps its probe-side NULL rows.
+    ///
+    /// The build-side predicate drops probe rows whose key is NULL, but `NOT IN` three-valued
+    /// logic needs that NULL to reach the join. OR-ing `probe_key IS NULL` preserves the dynamic
+    /// filter's selectivity for non-NULL rows while letting the NULL through.
+    fn null_aware_filter(
+        &self,
+        filter_expr: Arc<dyn PhysicalExpr>,
+    ) -> Arc<dyn PhysicalExpr> {
+        if !self.null_aware {
+            return filter_expr;
+        }
+        debug_assert_eq!(
+            self.on_right.len(),
+            1,
+            "null_aware anti join must have exactly one probe key"
+        );
+        let probe_key_is_null: Arc<dyn PhysicalExpr> =
+            Arc::new(IsNullExpr::new(Arc::clone(&self.on_right[0])));
+        // Cheap null check first short-circuits before the costlier dynamic filter.
+        Arc::new(BinaryExpr::new(
+            probe_key_is_null,
+            Operator::Or,
+            filter_expr,
+        ))
     }
 }
 
@@ -722,6 +756,7 @@ pub(super) fn make_partitioned_accumulator_for_test(
         on_right: vec![],
         repartition_random_state: SeededRandomState::with_seed(1),
         probe_schema,
+        null_aware: false,
     }
 }
 
