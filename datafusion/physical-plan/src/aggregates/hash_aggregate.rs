@@ -293,9 +293,6 @@ pub(crate) struct FinalHashAggregateStream {
     /// See comments for the same variable in [`PartialHashAggregateStream`].
     group_values_soft_limit: Option<usize>,
 
-    /// Template used to create a fresh hash table for each replayed partition run.
-    hash_table_template: Option<AggregateHashTable<FinalMarker>>,
-
     /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
     /// state for emitting output batches.
     state: Option<FinalHashAggregateState>,
@@ -861,9 +858,6 @@ impl FinalHashAggregateStream {
             MemoryConsumer::new(format!("FinalHashAggregateStream[{partition}]"))
                 .register(context.memory_pool());
         let uses_partition_runs = agg.mode == super::AggregateMode::FinalPartitioned;
-        let hash_table_template = uses_partition_runs
-            .then(|| hash_table.empty_like())
-            .transpose()?;
 
         Ok(Self {
             schema,
@@ -872,7 +866,6 @@ impl FinalHashAggregateStream {
             reservation,
             partition_run_state: uses_partition_runs.then(FinalPartitionRunState::new),
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
-            hash_table_template,
             state: Some(FinalHashAggregateState::ReadingInput { hash_table }),
         })
     }
@@ -973,18 +966,10 @@ impl FinalHashAggregateStream {
         Ok(FinalHashAggregateState::ProducingOutput { hash_table })
     }
 
-    fn fresh_partition_run_hash_table(&self) -> Result<AggregateHashTable<FinalMarker>> {
-        self.hash_table_template
-            .as_ref()
-            .ok_or_else(|| {
-                DataFusionError::Internal(
-                    "missing final aggregate hash table template".to_string(),
-                )
-            })
-            .and_then(AggregateHashTable::empty_like)
-    }
-
-    fn next_state_after_partition_output(&mut self) -> Result<FinalHashAggregateState> {
+    fn next_state_after_partition_output(
+        &mut self,
+        hash_table: AggregateHashTable<FinalMarker>,
+    ) -> Result<FinalHashAggregateState> {
         if !self
             .partition_run_state
             .as_ref()
@@ -993,7 +978,6 @@ impl FinalHashAggregateStream {
             return Ok(FinalHashAggregateState::Done);
         }
 
-        let hash_table = self.fresh_partition_run_hash_table()?;
         self.load_next_partition_run(hash_table)
     }
 
@@ -1001,10 +985,6 @@ impl FinalHashAggregateStream {
         &mut self,
         hash_table: AggregateHashTable<FinalMarker>,
     ) -> Result<FinalHashAggregateState> {
-        dbg!(
-            "load_next_partition_run, num_partitions:{}",
-            self.partition_run_state.as_ref().map(|state| state.runs.len()).unwrap_or(0)
-        );
         let next_partition_id = self
             .partition_run_state
             .as_ref()
@@ -1257,8 +1237,12 @@ impl FinalHashAggregateStream {
         match result {
             Ok(Some(batch)) => {
                 debug_assert!(batch.num_rows() > 0);
-                let next_state = if original_state.hash_table().is_done() {
-                    match self.next_state_after_partition_output() {
+                let next_state = if original_state.hash_table().is_done()
+                    || original_state.hash_table().is_building()
+                {
+                    match self.next_state_after_partition_output(
+                        original_state.into_hash_table(),
+                    ) {
                         Ok(next_state) => next_state,
                         Err(e) => {
                             return ControlFlow::Break((

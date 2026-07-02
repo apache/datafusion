@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -24,8 +23,6 @@ use datafusion_common::{Result, internal_err};
 use datafusion_expr::EmitTo;
 
 use crate::aggregates::AggregateExec;
-use crate::aggregates::group_values::new_group_values;
-use crate::aggregates::order::GroupOrdering;
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState, FinalMarker,
@@ -47,36 +44,6 @@ impl AggregateHashTable<FinalMarker> {
             batch_size,
             vec![None; agg.aggr_expr.len()],
         )
-    }
-
-    pub(in crate::aggregates) fn empty_like(&self) -> Result<Self> {
-        let AggregateHashTableState::Building(state) = &self.state else {
-            return internal_err!(
-                "cannot create empty final hash aggregate table from non-building state"
-            );
-        };
-
-        let group_schema = state.group_by.group_schema(&self.input_schema)?;
-        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
-        let accumulators = state
-            .accumulators
-            .iter()
-            .map(|acc| acc.empty_like())
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(AggregateHashTable {
-            group_by_metrics: self.group_by_metrics.clone(),
-            input_schema: Arc::clone(&self.input_schema),
-            output_schema: Arc::clone(&self.output_schema),
-            batch_size: self.batch_size,
-            state: AggregateHashTableState::Building(AggregateHashTableBuffer {
-                group_by: Arc::clone(&state.group_by),
-                group_values,
-                batch_group_indices: Default::default(),
-                accumulators,
-            }),
-            _mode: PhantomData,
-        })
     }
 
     /// Emits the next batch of aggregated group keys and final aggregate values.
@@ -129,7 +96,15 @@ impl AggregateHashTable<FinalMarker> {
 
         let batch = RecordBatch::try_new(output_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
-        Ok(MaterializedAggregateOutput::new(batch))
+
+        let num_rows = batch.num_rows();
+        state.group_values.clear_shrink(num_rows);
+        state.batch_group_indices.clear();
+        state.batch_group_indices.shrink_to(num_rows);
+
+        Ok(MaterializedAggregateOutput::new_with_reusable_buffer(
+            batch, state,
+        ))
     }
 
     fn emit_next_materialized_batch(
@@ -139,7 +114,10 @@ impl AggregateHashTable<FinalMarker> {
     ) -> Option<RecordBatch> {
         let batch = output.next_batch(batch_size);
         if output.is_exhausted() {
-            self.state = AggregateHashTableState::Done;
+            self.state = output
+                .take_reusable_buffer()
+                .map(AggregateHashTableState::Building)
+                .unwrap_or(AggregateHashTableState::Done);
         } else {
             self.state = AggregateHashTableState::OutputtingMaterialized(output);
         }

@@ -172,16 +172,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     pub(in crate::aggregates) fn memory_size(&self) -> usize {
         match &self.state {
             AggregateHashTableState::Building(state)
-            | AggregateHashTableState::Outputting(state) => {
-                let acc = state
-                    .accumulators
-                    .iter()
-                    .map(|acc| acc.accumulator.size())
-                    .sum::<usize>();
-
-                acc + state.group_values.size()
-                    + state.batch_group_indices.allocated_size()
-            }
+            | AggregateHashTableState::Outputting(state) => state.memory_size(),
             AggregateHashTableState::OutputtingMaterialized(output) => {
                 output.memory_size()
             }
@@ -290,6 +281,20 @@ pub(super) struct AggregateHashTableBuffer {
     pub(super) accumulators: Vec<HashAggregateAccumulator>,
 }
 
+impl AggregateHashTableBuffer {
+    pub(super) fn memory_size(&self) -> usize {
+        let accumulator_size = self
+            .accumulators
+            .iter()
+            .map(|acc| acc.accumulator.size())
+            .sum::<usize>();
+
+        accumulator_size
+            + self.group_values.size()
+            + self.batch_group_indices.allocated_size()
+    }
+}
+
 pub(super) enum AggregateHashTableState {
     /// Accumulating input rows into group keys and aggregate state.
     Building(AggregateHashTableBuffer),
@@ -311,11 +316,27 @@ pub(super) enum AggregateHashTableState {
 pub(super) struct MaterializedAggregateOutput {
     batch: RecordBatch,
     offset: usize,
+    reusable_buffer: Option<AggregateHashTableBuffer>,
 }
 
 impl MaterializedAggregateOutput {
     pub(super) fn new(batch: RecordBatch) -> Self {
-        Self { batch, offset: 0 }
+        Self {
+            batch,
+            offset: 0,
+            reusable_buffer: None,
+        }
+    }
+
+    pub(super) fn new_with_reusable_buffer(
+        batch: RecordBatch,
+        reusable_buffer: AggregateHashTableBuffer,
+    ) -> Self {
+        Self {
+            batch,
+            offset: 0,
+            reusable_buffer: Some(reusable_buffer),
+        }
     }
 
     pub(super) fn next_batch(&mut self, batch_size: usize) -> Option<RecordBatch> {
@@ -334,8 +355,18 @@ impl MaterializedAggregateOutput {
         self.offset >= self.batch.num_rows()
     }
 
+    pub(super) fn take_reusable_buffer(&mut self) -> Option<AggregateHashTableBuffer> {
+        self.reusable_buffer.take()
+    }
+
     pub(super) fn memory_size(&self) -> usize {
-        self.batch.get_array_memory_size()
+        let reusable_buffer_size = self
+            .reusable_buffer
+            .as_ref()
+            .map(AggregateHashTableBuffer::memory_size)
+            .unwrap_or(0);
+
+        self.batch.get_array_memory_size() + reusable_buffer_size
     }
 }
 
