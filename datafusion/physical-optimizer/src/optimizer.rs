@@ -36,8 +36,10 @@ use crate::topk_repartition::TopKRepartition;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
 use crate::hash_join_buffering::HashJoinBuffering;
+use crate::insert_hash_join_boundaries::InsertHashJoinBoundaries;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use crate::pushdown_sort::PushdownSort;
+use crate::runtime_optimizer::InsertRuntimeOptimizer;
 use crate::window_topn::WindowTopN;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
@@ -247,6 +249,19 @@ impl PhysicalOptimizer {
             // given query plan; i.e. it only acts as a final
             // gatekeeping rule.
             Arc::new(SanityCheckPlan::new()),
+            // Adaptive-execution infrastructure. Two rules, in order:
+            //   1. InsertHashJoinBoundaries — wraps each HashJoin input
+            //      in a StageBoundaryBuffer with a bottom-up stage
+            //      number; the boundaries are where runtime stats become
+            //      observable and where the build/probe sides are gated
+            //      until a swap decision can be made.
+            //   2. InsertRuntimeOptimizer — wraps the plan root in a
+            //      RuntimeOptimizerExec that walks the subtree at runtime
+            //      to release ready buffers and run RuntimeRules.
+            // Split so future adaptive rules can add their own targeted
+            // boundary-insertion rules without touching the RTO wrapper.
+            Arc::new(InsertHashJoinBoundaries::new()),
+            Arc::new(InsertRuntimeOptimizer::new()),
         ];
 
         Self::with_rules(rules)

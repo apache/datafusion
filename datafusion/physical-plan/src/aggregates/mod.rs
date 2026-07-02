@@ -32,7 +32,7 @@ use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDownPredicate,
 };
-use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::{ExecutionPlanMetricsSet, MetricValue, MetricsSet};
 use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
@@ -1770,6 +1770,34 @@ impl ExecutionPlan for AggregateExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    /// Reads the `OutputRows` metric for the given partition. Returns
+    /// `None` until that partition has emitted at least one batch.
+    ///
+    /// For `Final` / `FinalPartitioned` modes the build phase produces
+    /// all groups in a single batch per output partition, so once any
+    /// output has been pulled the count equals the true post-build
+    /// cardinality for that partition. That's what downstream adaptive
+    /// rules consume.
+    ///
+    /// For `Partial` modes the count is also per-partition truth —
+    /// each input partition independently knows how many partial-group
+    /// rows it has produced.
+    fn runtime_row_count(&self, partition: usize) -> Option<usize> {
+        // Find the OutputRows metric registered for this partition.
+        // Returning `Some(0)` for an empty partition is correct — None
+        // means "this partition hasn't been started yet" (the metric
+        // doesn't exist).
+        self.metrics
+            .clone_inner()
+            .iter()
+            .find_map(|m| match (m.partition(), m.value()) {
+                (Some(p), MetricValue::OutputRows(count)) if p == partition => {
+                    Some(count.value())
+                }
+                _ => None,
+            })
     }
 
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
