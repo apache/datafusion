@@ -261,7 +261,7 @@ select log(-1), log(0), sqrt(-1);
 
 | Syntax               | Description                                            |
 | -------------------- | ------------------------------------------------------ |
-| date_part            | Extracts a subfield from the date.                     |
+| date_part            | Extracts a subfield from the date as a double.         |
 | date_trunc           | Truncates the date to a specified level of precision.  |
 | from_unixtime        | Returns the unix time in format.                       |
 | to_timestamp         | Converts a string to a `Timestamp(_, _)`               |
