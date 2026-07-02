@@ -15,13 +15,182 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+# UTF-8 encoding
+query ?
+SELECT encode('Spark SQL'::string, 'utf-8'::string);
+----
+537061726b2053514c
 
-## Original Query: SELECT encode('abc', 'utf-8');
-## PySpark 3.5.5 Result: {'encode(abc, utf-8)': bytearray(b'abc'), 'typeof(encode(abc, utf-8))': 'binary', 'typeof(abc)': 'string', 'typeof(utf-8)': 'string'}
-#query
-#SELECT encode('abc'::string, 'utf-8'::string);
+# US-ASCII encoding
+query ?
+SELECT encode('Hello'::string, 'us-ascii'::string);
+----
+48656c6c6f
+
+# ISO-8859-1 encoding (ï = 0xEF in ISO-8859-1)
+query ?
+SELECT encode('naïve'::string, 'iso-8859-1'::string);
+----
+6e61ef7665
+
+# UTF-16BE encoding
+query ?
+SELECT encode('AB'::string, 'utf-16be'::string);
+----
+00410042
+
+# UTF-16LE encoding
+query ?
+SELECT encode('AB'::string, 'utf-16le'::string);
+----
+41004200
+
+# UTF-16 with BOM (FEFF prefix followed by UTF-16BE bytes)
+query ?
+SELECT encode('Spark SQL'::string, 'utf-16'::string);
+----
+feff0053007000610072006b002000530051004c
+
+# UTF-32BE encoding
+query ?
+SELECT encode('A'::string, 'utf-32be'::string);
+----
+00000041
+
+# UTF-32LE encoding
+query ?
+SELECT encode('AB'::string, 'utf-32le'::string);
+----
+4100000042000000
+
+# UTF-32 (Spark 3.5 / 4.1: no BOM, identical to UTF-32BE)
+query ?
+SELECT encode('A'::string, 'utf-32'::string);
+----
+00000041
+
+# Case-insensitive charset
+query ?
+SELECT encode('hello'::string, 'Utf-8'::string);
+----
+68656c6c6f
+
+# US-ASCII: unmappable characters are silently replaced with '?' (Spark 3.5 behavior)
+query ?
+SELECT encode('é'::string, 'us-ascii'::string);
+----
+3f
+
+# ISO-8859-1: code points above U+00FF are replaced with '?' (Ā is U+0100)
+query ?
+SELECT encode('Ā'::string, 'iso-8859-1'::string);
+----
+3f
+
+# Multi-byte input (emoji 😀 = U+1F600) across charsets
+query ?
+SELECT encode('😀'::string, 'utf-8'::string);
+----
+f09f9880
+
+query ?
+SELECT encode('😀'::string, 'utf-16be'::string);
+----
+d83dde00
+
+query ?
+SELECT encode('😀'::string, 'utf-16le'::string);
+----
+3dd800de
+
+query ?
+SELECT encode('😀'::string, 'utf-16'::string);
+----
+feffd83dde00
+
+query ?
+SELECT encode('😀'::string, 'utf-32be'::string);
+----
+0001f600
+
+query ?
+SELECT encode('😀'::string, 'utf-32le'::string);
+----
+00f60100
+
+query ?
+SELECT encode('😀'::string, 'utf-32'::string);
+----
+0001f600
+
+# Utf8View column input
+query ?
+SELECT encode(arrow_cast(s, 'Utf8View'), 'utf-8'::string) FROM (VALUES ('foo'::string), ('bar'::string)) AS t(s);
+----
+666f6f
+626172
+
+# Binary input is decoded as UTF-8 (lossily), then re-encoded with the charset
+query ?
+SELECT encode(arrow_cast('Hello', 'Binary'), 'utf-8'::string);
+----
+48656c6c6f
+
+query ?
+SELECT encode(arrow_cast('Hello', 'LargeBinary'), 'utf-8'::string);
+----
+48656c6c6f
+
+query ?
+SELECT encode(arrow_cast('Hello', 'BinaryView'), 'utf-8'::string);
+----
+48656c6c6f
+
+# Binary input with invalid UTF-8 bytes: each invalid byte becomes U+FFFD (ef bf bd).
+# Bytes FE and FF are not valid UTF-8 and are replaced; 00 61 00 73 decode as NUL a NUL s.
+query ?
+SELECT encode(X'FEFF00610073', 'utf-8'::string);
+----
+efbfbdefbfbd00610073
+
+# NULL input
+query ?
+SELECT encode(NULL::string, 'utf-8'::string);
+----
+NULL
+
+# Array input with NULLs
+query ?
+SELECT encode(s, 'utf-8'::string) FROM (VALUES ('hello'::string), (NULL::string), ('world'::string)) AS t(s);
+----
+68656c6c6f
+NULL
+776f726c64
+
+# NULL charset returns NULL (Spark is NullIntolerant)
+query ?
+SELECT encode('hello'::string, NULL::string);
+----
+NULL
+
+# Charset varies per row, and a NULL charset yields NULL for that row
+query ?
+SELECT encode(a, b) FROM VALUES (X'0a', 'US-ASCII'), (X'deadbeef', NULL) AS t(a, b);
+----
+0a
+NULL
+
+# Per-row charsets: each row encoded with its own charset
+query ?
+SELECT encode(a, b) FROM VALUES (X'0a', 'US-ASCII'), (X'deadbeef', 'UTF-16be') AS t(a, b);
+----
+0a
+07adfffdfffd
+
+# Error: unsupported charset
+statement error Unsupported charset for encode
+SELECT encode('hello'::string, 'EBCDIC'::string);
+
+# Error: no arguments
+statement error encode function requires 2 arguments
+SELECT encode();
