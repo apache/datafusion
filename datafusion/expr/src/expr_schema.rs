@@ -484,7 +484,8 @@ impl ExprSchemable for Expr {
     /// - **Aliases**: Merge underlying expr metadata with alias-specific metadata, preferring the alias metadata
     /// - **Binary expressions**: field metadata is empty
     /// - **Boolean expressions**: field metadata is empty
-    /// - **Cast expressions**: determined by the input expression's field metadata handling
+    /// - **Cast expressions**: Type-only casts pass through source metadata (stripping extension
+    ///   type keys); casts with explicit target fields use target metadata exactly
     /// - **Scalar functions**: Generate metadata via function's [`return_field_from_args`] method,
     ///   with the default implementation returning empty field metadata
     /// - **Aggregate functions**: Generate metadata via function's [`return_field`] method,
