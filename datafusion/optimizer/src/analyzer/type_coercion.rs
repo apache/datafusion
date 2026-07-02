@@ -695,7 +695,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let case = coerce_case_expression(case, self.schema)?;
                 Ok(Transformed::yes(Expr::Case(case)))
             }
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args, .. }) => {
                 let new_expr =
                     coerce_arguments_for_signature(args, self.schema, func.as_ref())?;
                 Ok(Transformed::yes(Expr::ScalarFunction(
@@ -712,6 +712,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         order_by,
                         null_treatment,
                     },
+                ..
             }) => {
                 let new_expr =
                     coerce_arguments_for_signature(args, self.schema, func.as_ref())?;

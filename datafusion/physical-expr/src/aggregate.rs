@@ -504,6 +504,7 @@ impl<'a> LoweredAggregateBuilder<'a> {
                     order_by,
                     null_treatment,
                 },
+            ..
         }) = &expr
         else {
             return internal_err!("Invalid aggregate expression '{expr:?}'");

@@ -163,7 +163,7 @@ impl ScalarUDFImpl for ArrayHas {
                     )));
                 }
             }
-            Expr::ScalarFunction(ScalarFunction { func, args })
+            Expr::ScalarFunction(ScalarFunction { func, args, .. })
                 if func == &make_array_udf() =>
             {
                 // make_array has a static set of arguments, so we can pull the arguments out from it

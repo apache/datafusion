@@ -17,7 +17,7 @@
 
 //! SQL planning extensions like [`AggregateFunctionPlanner`]
 
-use datafusion_common::Result;
+use datafusion_common::{Result, Spans};
 use datafusion_expr::{
     Expr,
     expr::{AggregateFunction, AggregateFunctionParams},
@@ -52,6 +52,7 @@ impl ExprPlanner for AggregateFunctionPlanner {
                 order_by,
                 null_treatment,
             },
+            spans: Spans::new(),
         });
 
         let saved_name = NamePreserver::new_for_projection().save(&origin_expr);
@@ -66,6 +67,7 @@ impl ExprPlanner for AggregateFunctionPlanner {
                     order_by,
                     null_treatment,
                 },
+            ..
         }) = origin_expr
         else {
             unreachable!("")

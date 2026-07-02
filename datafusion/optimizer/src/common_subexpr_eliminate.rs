@@ -654,7 +654,7 @@ impl CSEController for ExprCSEController<'_> {
             // In case of `ScalarFunction`s and `HigherOrderFunction`s we don't know which children are surely
             // executed so start visiting all children conditionally and stop the
             // recursion with `TreeNodeRecursion::Jump`.
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args, .. }) => {
                 func.conditional_arguments(args)
             }
             Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {

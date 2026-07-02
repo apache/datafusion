@@ -173,7 +173,7 @@ impl Unparser<'_> {
                     negated: *negated,
                 })
             }
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args, .. }) => {
                 let func_name = func.name();
 
                 if let Some(expr) = self
@@ -3306,6 +3306,7 @@ mod tests {
                     Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
                     Expr::Literal(ScalarValue::Int64(Some(2)), None),
                 ],
+                spans: Spans::new(),
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
@@ -3447,6 +3448,7 @@ mod tests {
             let expr = Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(FromUnixtimeFunc::new())),
                 args: vec![col("date_col")],
+                spans: Spans::new(),
             });
 
             let ast = unparser.expr_to_sql(&expr)?;
@@ -3531,6 +3533,7 @@ mod tests {
                     Expr::Literal(ScalarValue::Utf8(Some(precision.to_string())), None),
                     col("date_col"),
                 ],
+                spans: Spans::new(),
             });
 
             let ast = unparser.expr_to_sql(&expr)?;
@@ -3789,6 +3792,7 @@ mod tests {
                 datafusion_functions::datetime::date_part::DatePartFunc::new(),
             )),
             args: vec![lit("YEAR"), col("date_col")],
+            spans: Spans::new(),
         });
         let actual = format!("{}", unparser.expr_to_sql(&expr)?);
         assert_eq!(actual, "EXTRACT(YEAR FROM `date_col`)");

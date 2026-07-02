@@ -33,8 +33,8 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::{
-    Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
-    not_impl_err, plan_datafusion_err, plan_err,
+    Column, DataFusionError, Diagnostic, ExprSchema, Result, ScalarValue, Span, Spans,
+    TableReference, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -549,13 +549,13 @@ impl ExprSchemable for Expr {
                 match fun {
                     WindowFunctionDefinition::AggregateUDF(udaf) => {
                         let new_fields =
-                            verify_function_arguments(udaf.as_ref(), &fields)?;
+                            verify_function_arguments(udaf.as_ref(), &fields, None)?;
                         let return_field = udaf.return_field(&new_fields)?;
                         Ok(return_field)
                     }
                     WindowFunctionDefinition::WindowUDF(udwf) => {
                         let new_fields =
-                            verify_function_arguments(udwf.as_ref(), &fields)?;
+                            verify_function_arguments(udwf.as_ref(), &fields, None)?;
                         let return_field = udwf
                             .field(WindowUDFFieldArgs::new(&new_fields, &schema_name))?;
                         Ok(return_field)
@@ -565,20 +565,23 @@ impl ExprSchemable for Expr {
             Expr::AggregateFunction(AggregateFunction {
                 func,
                 params: AggregateFunctionParams { args, .. },
+                spans,
             }) => {
                 let fields = args
                     .iter()
                     .map(|e| e.to_field(schema).map(|(_, f)| f))
                     .collect::<Result<Vec<_>>>()?;
-                let new_fields = verify_function_arguments(func.as_ref(), &fields)?;
+                let new_fields =
+                    verify_function_arguments(func.as_ref(), &fields, spans.first())?;
                 func.return_field(&new_fields)
             }
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args, spans }) => {
                 let fields = args
                     .iter()
                     .map(|e| e.to_field(schema).map(|(_, f)| f))
                     .collect::<Result<Vec<_>>>()?;
-                let new_fields = verify_function_arguments(func.as_ref(), &fields)?;
+                let new_fields =
+                    verify_function_arguments(func.as_ref(), &fields, spans.first())?;
 
                 let arguments = args
                     .iter()
@@ -720,6 +723,7 @@ impl ExprSchemable for Expr {
 fn verify_function_arguments<F: UDFCoercionExt>(
     function: &F,
     input_fields: &[FieldRef],
+    func_span: Option<Span>,
 ) -> Result<Vec<FieldRef>> {
     fields_with_udf(input_fields, function).map_err(|err| {
         let data_types = input_fields
@@ -727,18 +731,38 @@ fn verify_function_arguments<F: UDFCoercionExt>(
             .map(|f| f.data_type())
             .cloned()
             .collect::<Vec<_>>();
-        plan_datafusion_err!(
-            "{}. {}",
-            match err {
-                DataFusionError::Plan(msg) => msg,
-                err => err.to_string(),
-            },
-            utils::generate_signature_error_message(
-                function.name(),
-                function.signature(),
-                &data_types
-            )
+        let name = function.name();
+        let signature_msg = utils::generate_signature_error_message(
+            name,
+            function.signature(),
+            &data_types,
+        );
+        let err_msg = match err {
+            DataFusionError::Plan(msg) => msg,
+            err => err.to_string(),
+        };
+
+        let types_str = data_types
+            .iter()
+            .map(|dt| dt.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let candidates = function
+            .signature()
+            .type_signature
+            .to_string_repr_with_names(function.signature().parameter_names.as_deref())
+            .iter()
+            .map(|args_str| format!("{name}({args_str})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let diagnostic = Diagnostic::new_error(
+            format!("invalid argument type(s) for '{name}'"),
+            func_span,
         )
+        .with_note(format!("called with argument type(s): {types_str}"), None)
+        .with_help(format!("candidate function(s): {candidates}"), None);
+
+        plan_datafusion_err!("{err_msg}. {signature_msg}").with_diagnostic(diagnostic)
     })
 }
 
