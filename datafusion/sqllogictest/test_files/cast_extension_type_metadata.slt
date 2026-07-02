@@ -45,5 +45,55 @@ FROM (
 ----
 00010203040506070809000102030506 arrow.uuid
 
-statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*TryCast from FixedSizeBinary\(16\) to FixedSizeBinary\(16\)<\{"ARROW:extension:name": "arrow\.uuid"\}> is not supported
-SELECT TRY_CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID);
+# TRY_CAST to extension type should also preserve extension metadata
+query ?T
+SELECT
+    TRY_CAST(
+        arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)')
+        AS UUID
+    ),
+    arrow_metadata(
+        TRY_CAST(
+            arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)')
+            AS UUID
+        ),
+        'ARROW:extension:name'
+    );
+----
+00010203040506070809000102030506 arrow.uuid
+
+# TRY_CAST to UUID from a subquery
+query ?T
+SELECT
+    TRY_CAST(raw AS UUID),
+    arrow_metadata(TRY_CAST(raw AS UUID), 'ARROW:extension:name')
+FROM (
+    VALUES (
+        arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)')
+    )
+) AS uuids(raw);
+----
+00010203040506070809000102030506 arrow.uuid
+
+# arrow_cast from UUID to same underlying type (FixedSizeBinary(16)) preserves
+# extension metadata because the cast is optimized away as a no-op (same physical type)
+query ?T
+SELECT
+    arrow_cast(uuid_val, 'FixedSizeBinary(16)'),
+    arrow_metadata(arrow_cast(uuid_val, 'FixedSizeBinary(16)'), 'ARROW:extension:name')
+FROM (
+    SELECT CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID) AS uuid_val
+);
+----
+00010203040506070809000102030506 arrow.uuid
+
+# arrow_cast to a different type strips extension metadata (type-only cast semantics)
+query ?T
+SELECT
+    arrow_cast(uuid_val, 'Binary'),
+    arrow_metadata(arrow_cast(uuid_val, 'Binary'), 'ARROW:extension:name')
+FROM (
+    SELECT CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID) AS uuid_val
+);
+----
+00010203040506070809000102030506 NULL
