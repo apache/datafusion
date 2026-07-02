@@ -69,6 +69,14 @@ pub struct ParquetFileMetrics {
     pub pushdown_rows_matched: Count,
     /// Total time spent evaluating row-level pushdown filters
     pub row_pushdown_eval_time: Time,
+    /// Total rows filtered out by the in-scan post-scan filter
+    /// (predicate conjuncts that could not be applied as a parquet
+    /// `RowFilter` and were instead evaluated on decoded batches).
+    pub post_scan_rows_pruned: Count,
+    /// Total rows that passed the in-scan post-scan filter.
+    pub post_scan_rows_matched: Count,
+    /// Total time spent evaluating the in-scan post-scan filter.
+    pub post_scan_filter_eval_time: Time,
     /// Total time spent evaluating row group-level statistics filters
     pub statistics_eval_time: Time,
     /// Total time spent evaluating row group Bloom Filters
@@ -182,6 +190,19 @@ impl ParquetFileMetrics {
         let row_pushdown_eval_time = builder
             .clone()
             .subset_time("row_pushdown_eval_time", partition);
+
+        let post_scan_rows_pruned = builder
+            .clone()
+            .with_category(MetricCategory::Rows)
+            .counter("post_scan_rows_pruned", partition);
+        let post_scan_rows_matched = builder
+            .clone()
+            .with_category(MetricCategory::Rows)
+            .counter("post_scan_rows_matched", partition);
+        let post_scan_filter_eval_time = builder
+            .clone()
+            .subset_time("post_scan_filter_eval_time", partition);
+
         let statistics_eval_time = builder
             .clone()
             .subset_time("statistics_eval_time", partition);
@@ -221,6 +242,9 @@ impl ParquetFileMetrics {
             pushdown_rows_pruned,
             pushdown_rows_matched,
             row_pushdown_eval_time,
+            post_scan_rows_pruned,
+            post_scan_rows_matched,
+            post_scan_filter_eval_time,
             page_index_rows_pruned,
             page_index_pages_pruned,
             statistics_eval_time,
