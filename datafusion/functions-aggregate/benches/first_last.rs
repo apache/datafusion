@@ -235,7 +235,6 @@ fn merge_bench(
                                     Arc::clone(&is_set),
                                 ],
                                 &group_indices,
-                                opt_filter,
                                 num_groups,
                             )
                             .unwrap(),

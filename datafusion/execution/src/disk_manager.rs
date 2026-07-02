@@ -17,23 +17,24 @@
 
 //! [`DiskManager`]: Manages files generated during query execution
 
-use datafusion_common::{
-    DataFusionError, Result, config_err, resources_datafusion_err, resources_err,
-};
+use crate::spill_file::{SpillFile, SpillWriter, TempFileFactory};
+use bytes::Bytes;
+use datafusion_common::human_readable_size;
+use datafusion_common::{DataFusionError, Result, config_err, resources_datafusion_err};
+#[cfg(not(target_arch = "wasm32"))]
+use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
 use rand::{Rng, rng};
+use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tempfile::{Builder, NamedTempFile, TempDir};
-
-use datafusion_common::human_readable_size;
-
 pub const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
 
 /// Builder pattern for the [DiskManager] structure
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DiskManagerBuilder {
     /// The storage mode of the disk manager
     mode: DiskManagerMode,
@@ -41,7 +42,14 @@ pub struct DiskManagerBuilder {
     /// Default to 100GB
     max_temp_directory_size: u64,
 }
-
+impl Debug for DiskManagerBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiskManagerBuilder")
+            .field("mode", &self.mode)
+            .field("max_temp_directory_size", &self.max_temp_directory_size)
+            .finish()
+    }
+}
 impl Default for DiskManagerBuilder {
     fn default() -> Self {
         Self {
@@ -78,6 +86,7 @@ impl DiskManagerBuilder {
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
                 active_files_count: Arc::new(AtomicUsize::new(0)),
+                factory: None,
             }),
             DiskManagerMode::Directories(conf_dirs) => {
                 let local_dirs = create_local_dirs(&conf_dirs)?;
@@ -89,6 +98,7 @@ impl DiskManagerBuilder {
                     max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                     used_disk_space: Arc::new(AtomicU64::new(0)),
                     active_files_count: Arc::new(AtomicUsize::new(0)),
+                    factory: None,
                 })
             }
             DiskManagerMode::Disabled => Ok(DiskManager {
@@ -96,12 +106,20 @@ impl DiskManagerBuilder {
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
                 active_files_count: Arc::new(AtomicUsize::new(0)),
+                factory: None,
+            }),
+            DiskManagerMode::Custom(factory) => Ok(DiskManager {
+                local_dirs: Mutex::new(None),
+                max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
+                used_disk_space: Arc::new(AtomicU64::new(0)),
+                active_files_count: Arc::new(AtomicUsize::new(0)),
+                factory: Some(factory),
             }),
         }
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub enum DiskManagerMode {
     /// Create a new [DiskManager] that creates temporary files within
     /// a temporary directory chosen by the OS
@@ -113,53 +131,26 @@ pub enum DiskManagerMode {
     /// at random for each temporary file created.
     Directories(Vec<PathBuf>),
 
-    /// Disable disk manager, attempts to create temporary files will error
-    Disabled,
-}
-
-/// Configuration for temporary disk access
-#[deprecated(since = "48.0.0", note = "Use DiskManagerBuilder instead")]
-#[derive(Debug, Clone, Default)]
-#[allow(clippy::allow_attributes)]
-#[allow(deprecated)]
-pub enum DiskManagerConfig {
-    /// Use the provided [DiskManager] instance
-    Existing(Arc<DiskManager>),
-
-    /// Create a new [DiskManager] that creates temporary files within
-    /// a temporary directory chosen by the OS
-    #[default]
-    NewOs,
-
-    /// Create a new [DiskManager] that creates temporary files within
-    /// the specified directories
-    NewSpecified(Vec<PathBuf>),
+    /// Create a new [DiskManager] with a cutstom backend
+    Custom(Arc<dyn TempFileFactory>),
 
     /// Disable disk manager, attempts to create temporary files will error
     Disabled,
 }
 
-#[expect(deprecated)]
-impl DiskManagerConfig {
-    /// Create temporary files in a temporary directory chosen by the OS
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Create temporary files using the provided disk manager
-    pub fn new_existing(existing: Arc<DiskManager>) -> Self {
-        Self::Existing(existing)
-    }
-
-    /// Create temporary files in the specified directories
-    pub fn new_specified(paths: Vec<PathBuf>) -> Self {
-        Self::NewSpecified(paths)
+impl Debug for DiskManagerMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OsTmpDirectory => write!(f, "OsTmpDirectory"),
+            Self::Directories(dirs) => f.debug_tuple("Directories").field(dirs).finish(),
+            Self::Disabled => write!(f, "Disabled"),
+            Self::Custom(_) => write!(f, "Custom(Arc<dyn TempFileFactory>)"),
+        }
     }
 }
 
 /// Manages files generated during query execution, e.g. spill files generated
 /// while processing dataset larger than available memory.
-#[derive(Debug)]
 pub struct DiskManager {
     /// TempDirs to put temporary files in.
     ///
@@ -175,8 +166,20 @@ pub struct DiskManager {
     used_disk_space: Arc<AtomicU64>,
     /// Number of active temporary files created by this disk manager
     active_files_count: Arc<AtomicUsize>,
+    /// Factory
+    factory: Option<Arc<dyn TempFileFactory>>,
 }
-
+impl Debug for DiskManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiskManager")
+            .field("local_dirs", &self.local_dirs)
+            .field("max_temp_directory_size", &self.max_temp_directory_size)
+            .field("used_disk_space", &self.used_disk_space)
+            .field("active_files_count", &self.active_files_count)
+            .field("factory", &self.factory.is_some())
+            .finish()
+    }
+}
 /// Information about the current disk usage for spilling
 #[derive(Debug, Clone, Copy)]
 pub struct SpillingProgress {
@@ -192,41 +195,6 @@ impl DiskManager {
         DiskManagerBuilder::default()
     }
 
-    /// Create a DiskManager given the configuration
-    #[expect(deprecated)]
-    #[deprecated(since = "48.0.0", note = "Use DiskManager::builder() instead")]
-    pub fn try_new(config: DiskManagerConfig) -> Result<Arc<Self>> {
-        match config {
-            DiskManagerConfig::Existing(manager) => Ok(manager),
-            DiskManagerConfig::NewOs => Ok(Arc::new(Self {
-                local_dirs: Mutex::new(Some(vec![])),
-                max_temp_directory_size: AtomicU64::new(DEFAULT_MAX_TEMP_DIRECTORY_SIZE),
-                used_disk_space: Arc::new(AtomicU64::new(0)),
-                active_files_count: Arc::new(AtomicUsize::new(0)),
-            })),
-            DiskManagerConfig::NewSpecified(conf_dirs) => {
-                let local_dirs = create_local_dirs(&conf_dirs)?;
-                debug!(
-                    "Created local dirs {local_dirs:?} as DataFusion working directory"
-                );
-                Ok(Arc::new(Self {
-                    local_dirs: Mutex::new(Some(local_dirs)),
-                    max_temp_directory_size: AtomicU64::new(
-                        DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
-                    ),
-                    used_disk_space: Arc::new(AtomicU64::new(0)),
-                    active_files_count: Arc::new(AtomicUsize::new(0)),
-                }))
-            }
-            DiskManagerConfig::Disabled => Ok(Arc::new(Self {
-                local_dirs: Mutex::new(None),
-                max_temp_directory_size: AtomicU64::new(DEFAULT_MAX_TEMP_DIRECTORY_SIZE),
-                used_disk_space: Arc::new(AtomicU64::new(0)),
-                active_files_count: Arc::new(AtomicUsize::new(0)),
-            })),
-        }
-    }
-
     /// Atomically set the max temp directory size at runtime.
     ///
     /// Takes `&self`, so it works through `Arc<DiskManager>` without requiring
@@ -238,7 +206,12 @@ impl DiskManager {
         &self,
         max_temp_directory_size: u64,
     ) -> Result<()> {
-        if self.local_dirs.lock().is_none() && max_temp_directory_size != 0 {
+        // If the disk manager is disabled and `max_temp_directory_size` is not 0,
+        // this operation is not meaningful, fail early.
+        if self.local_dirs.lock().is_none()
+            && max_temp_directory_size != 0
+            && self.factory.is_none()
+        {
             return config_err!(
                 "Cannot set max temp directory size for a disk manager that spilling is disabled"
             );
@@ -302,7 +275,7 @@ impl DiskManager {
     /// files. If this returns false, any call to `create_tmp_file`
     /// will error.
     pub fn tmp_files_enabled(&self) -> bool {
-        self.local_dirs.lock().is_some()
+        self.factory.is_some() || self.local_dirs.lock().is_some()
     }
 
     /// Return a temporary file from a randomized choice in the configured locations
@@ -312,7 +285,11 @@ impl DiskManager {
     pub fn create_tmp_file(
         self: &Arc<Self>,
         request_description: &str,
-    ) -> Result<RefCountedTempFile> {
+    ) -> Result<Arc<dyn SpillFile>> {
+        // Delegate to custom backend if configured
+        if let Some(factory) = &self.factory {
+            return factory.create_temp_file(request_description);
+        }
         let mut guard = self.local_dirs.lock();
         let local_dirs = guard.as_mut().ok_or_else(|| {
             resources_datafusion_err!(
@@ -335,7 +312,7 @@ impl DiskManager {
 
         let dir_index = rng().random_range(0..local_dirs.len());
         self.active_files_count.fetch_add(1, Ordering::Relaxed);
-        Ok(RefCountedTempFile {
+        Ok(Arc::new(RefCountedTempFile {
             parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
             tempfile: Arc::new(
                 Builder::new()
@@ -344,18 +321,12 @@ impl DiskManager {
             ),
             current_file_disk_usage: Arc::new(AtomicU64::new(0)),
             disk_manager: Arc::clone(self),
-        })
+        }))
     }
 }
 
 /// A wrapper around a [`NamedTempFile`] that also contains
 /// a reference to its parent temporary directory.
-///
-/// # Note
-/// After any modification to the underlying file (e.g., writing data to it), the caller
-/// must invoke [`Self::update_disk_usage`] to update the global disk usage counter.
-/// This ensures the disk manager can properly enforce usage limits configured by
-/// [`DiskManager::with_max_temp_directory_size`].
 ///
 /// This type is Clone-able, allowing multiple references to the same underlying file.
 /// The file is deleted only when the last reference is dropped.
@@ -372,8 +343,7 @@ pub struct RefCountedTempFile {
     parent_temp_dir: Arc<TempDir>,
     /// The underlying temporary file, wrapped in Arc to allow cloning
     tempfile: Arc<NamedTempFile>,
-    /// Tracks the current disk usage of this temporary file. See
-    /// [`Self::update_disk_usage`] for more details.
+    /// Tracks the current disk usage of this temporary file.
     ///
     /// This is wrapped in `Arc<AtomicU64>` so that all clones share the same
     /// disk usage tracking, preventing incorrect accounting when clones are dropped.
@@ -402,59 +372,7 @@ impl RefCountedTempFile {
         self.tempfile.as_ref()
     }
 
-    /// Updates the global disk usage counter after modifications to the underlying file.
-    ///
-    /// # Errors
-    /// - Returns an error if the global disk usage exceeds the configured limit.
-    pub fn update_disk_usage(&mut self) -> Result<()> {
-        // Get new file size from OS
-        let metadata = self.tempfile.as_file().metadata()?;
-        let new_disk_usage = metadata.len();
-
-        // Get the old disk usage
-        let old_disk_usage = self.current_file_disk_usage.load(Ordering::Relaxed);
-
-        // Update the global disk usage by:
-        // 1. Subtracting the old file size from the global counter
-        self.disk_manager
-            .used_disk_space
-            .fetch_sub(old_disk_usage, Ordering::Relaxed);
-        // 2. Adding the new file size to the global counter
-        self.disk_manager
-            .used_disk_space
-            .fetch_add(new_disk_usage, Ordering::Relaxed);
-
-        // 3. Check if the updated global disk usage exceeds the configured limit
-        let global_disk_usage = self.disk_manager.used_disk_space.load(Ordering::Relaxed);
-        let limit = self
-            .disk_manager
-            .max_temp_directory_size
-            .load(Ordering::Relaxed);
-        if global_disk_usage > limit {
-            // Roll back: restore global counter to previous state so that
-            // Drop (which subtracts current_file_disk_usage = old value) remains
-            // consistent. Without this, the delta (new - old) leaks permanently.
-            self.disk_manager
-                .used_disk_space
-                .fetch_sub(new_disk_usage, Ordering::Relaxed);
-            self.disk_manager
-                .used_disk_space
-                .fetch_add(old_disk_usage, Ordering::Relaxed);
-            return resources_err!(
-                "The used disk space during the spilling process has exceeded the allowable limit of {}. \
-                Please try increasing the config: `datafusion.runtime.max_temp_directory_size`.",
-                human_readable_size(limit as usize)
-            );
-        }
-
-        // 4. Update the local file size tracking
-        self.current_file_disk_usage
-            .store(new_disk_usage, Ordering::Relaxed);
-
-        Ok(())
-    }
-
-    pub fn current_disk_usage(&self) -> u64 {
+    fn current_disk_usage(&self) -> u64 {
         self.current_file_disk_usage.load(Ordering::Relaxed)
     }
 }
@@ -494,6 +412,122 @@ fn create_local_dirs(local_dirs: &[PathBuf]) -> Result<Vec<Arc<TempDir>>> {
         .collect()
 }
 
+pub struct FileSpillWriter {
+    file: std::fs::File,
+    disk_manager: Arc<DiskManager>,
+    current_file_disk_usage: Arc<AtomicU64>,
+}
+
+impl std::io::Write for FileSpillWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let len = buf.len() as u64;
+        if len == 0 {
+            return Ok(0);
+        }
+
+        let new_global = self
+            .disk_manager
+            .used_disk_space
+            .fetch_add(len, Ordering::Relaxed)
+            + len;
+
+        let limit = self.disk_manager.max_temp_directory_size();
+
+        if new_global > limit {
+            self.disk_manager
+                .used_disk_space
+                .fetch_sub(len, Ordering::Relaxed);
+
+            return Err(std::io::Error::other(format!(
+                "The used disk space during the spilling process has exceeded the allowable limit of {}. \
+                        Please try increasing the config: `datafusion.runtime.max_temp_directory_size`.",
+                human_readable_size(limit as usize)
+            )));
+        }
+
+        self.file.write_all(buf).map_err(DataFusionError::IoError)?;
+
+        self.current_file_disk_usage
+            .fetch_add(len, Ordering::Relaxed);
+
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl SpillWriter for FileSpillWriter {
+    fn finish(&mut self) -> Result<()> {
+        // flush() is handled by Arrow, nothing left to do here
+        Ok(())
+    }
+}
+
+impl SpillFile for RefCountedTempFile {
+    fn path(&self) -> Option<&Path> {
+        Some(self.tempfile.path())
+    }
+
+    fn size(&self) -> Option<u64> {
+        Some(self.current_disk_usage())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_stream(
+        &self,
+    ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<Bytes>> + Send>>>
+    {
+        let path = self.path().to_owned();
+
+        let stream =
+            futures::stream::once(async move {
+                tokio::fs::File::open(&path)
+                    .await
+                    .map_err(DataFusionError::IoError)
+            })
+            .flat_map(
+                |open_result| -> std::pin::Pin<
+                    Box<dyn futures::Stream<Item = Result<Bytes>> + Send>,
+                > {
+                    match open_result {
+                        Ok(file) => Box::pin(
+                            // Use a 128KB read buffer. The default 8KB causes excessive async
+                            // poll overhead when reading multi-MB spill files back into memory.
+                            tokio_util::io::ReaderStream::with_capacity(file, 128 * 1024)
+                                .map(|r| r.map_err(DataFusionError::IoError)),
+                        ),
+                        Err(e) => Box::pin(futures::stream::once(async move { Err(e) })),
+                    }
+                },
+            );
+
+        Ok(Box::pin(stream))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn read_stream(
+        &self,
+    ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<Bytes>> + Send>>>
+    {
+        datafusion_common::exec_err!(
+            "Default OS file spilling is not supported on WASM. Configure DiskManager with a Custom TempFileFactory."
+        )
+    }
+
+    fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
+        let file = self
+            .tempfile
+            .as_file()
+            .try_clone()
+            .map_err(DataFusionError::IoError)?;
+        Ok(Box::new(FileSpillWriter {
+            file,
+            disk_manager: Arc::clone(&self.disk_manager),
+            current_file_disk_usage: Arc::clone(&self.current_file_disk_usage),
+        }))
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,7 +547,10 @@ mod tests {
 
         // the returned tempfile file should be in the temp directory
         let local_dirs = local_dir_snapshot(&dm);
-        assert_path_in_dirs(actual.path(), local_dirs.iter().map(|p| p.as_path()));
+        assert_path_in_dirs(
+            actual.path().unwrap(),
+            local_dirs.iter().map(|p| p.as_path()),
+        );
 
         Ok(())
     }
@@ -545,7 +582,7 @@ mod tests {
         let actual = dm.create_tmp_file("Testing")?;
 
         // the file should be in one of the specified local directories
-        assert_path_in_dirs(actual.path(), local_dirs.into_iter());
+        assert_path_in_dirs(actual.path().unwrap(), local_dirs.into_iter());
 
         Ok(())
     }
@@ -559,13 +596,17 @@ mod tests {
                 .unwrap(),
         );
         assert!(!manager.tmp_files_enabled());
-        assert_eq!(
-            manager
-                .create_tmp_file("Testing")
-                .unwrap_err()
-                .strip_backtrace(),
-            "Resources exhausted: Memory Exhausted while Testing (DiskManager is disabled)",
-        )
+        match manager.create_tmp_file("Testing") {
+            Err(e) => {
+                assert_eq!(
+                    e.strip_backtrace(),
+                    "Resources exhausted: Memory Exhausted while Testing (DiskManager is disabled)"
+                );
+            }
+            Ok(_) => {
+                panic!("Expected DiskManager to fail creating a file when disabled!")
+            }
+        }
     }
 
     #[test]
@@ -598,7 +639,7 @@ mod tests {
         // Test for the case using OS arranged temporary directory
         let dm = Arc::new(DiskManagerBuilder::default().build()?);
         let temp_file = dm.create_tmp_file("Testing")?;
-        let temp_file_path = temp_file.path().to_owned();
+        let temp_file_path = temp_file.path().unwrap().to_owned();
         assert!(temp_file_path.exists());
 
         drop(dm);
@@ -620,7 +661,7 @@ mod tests {
                 .build()?,
         );
         let temp_file = dm.create_tmp_file("Testing")?;
-        let temp_file_path = temp_file.path().to_owned();
+        let temp_file_path = temp_file.path().unwrap().to_owned();
         assert!(temp_file_path.exists());
 
         drop(dm);
@@ -634,30 +675,26 @@ mod tests {
 
     #[test]
     fn test_disk_usage_basic() -> Result<()> {
-        use std::io::Write;
-
         let dm = Arc::new(DiskManagerBuilder::default().build()?);
-        let mut temp_file = dm.create_tmp_file("Testing")?;
-
+        let temp_file = dm.create_tmp_file("Testing")?;
+        let mut writer = temp_file.open_writer()?;
         // Initially, disk usage should be 0
         assert_eq!(dm.used_disk_space(), 0);
-        assert_eq!(temp_file.current_disk_usage(), 0);
+        assert_eq!(temp_file.size().unwrap(), 0);
 
         // Write some data to the file
-        temp_file.inner().as_file().write_all(b"hello world")?;
-        temp_file.update_disk_usage()?;
+        writer.write_all(b"hello world")?;
 
         // Disk usage should now reflect the written data
-        let expected_usage = temp_file.current_disk_usage();
+        let expected_usage = temp_file.size().unwrap();
         assert!(expected_usage > 0);
         assert_eq!(dm.used_disk_space(), expected_usage);
 
         // Write more data
-        temp_file.inner().as_file().write_all(b" more data")?;
-        temp_file.update_disk_usage()?;
+        writer.write_all(b"more_data")?;
 
         // Disk usage should increase
-        let new_usage = temp_file.current_disk_usage();
+        let new_usage = temp_file.size().unwrap();
         assert!(new_usage > expected_usage);
         assert_eq!(dm.used_disk_space(), new_usage);
 
@@ -672,64 +709,60 @@ mod tests {
 
     #[test]
     fn test_disk_usage_with_clones() -> Result<()> {
-        use std::io::Write;
-
         let dm = Arc::new(DiskManagerBuilder::default().build()?);
-        let mut temp_file = dm.create_tmp_file("Testing")?;
+        let temp_file = dm.create_tmp_file("Testing")?;
 
         // Write some data
-        temp_file.inner().as_file().write_all(b"test data")?;
-        temp_file.update_disk_usage()?;
+        let mut writer = temp_file.open_writer()?;
+        writer.write_all(b"test data")?;
 
-        let usage_after_write = temp_file.current_disk_usage();
+        let usage_after_write = temp_file.size().unwrap();
         assert!(usage_after_write > 0);
         assert_eq!(dm.used_disk_space(), usage_after_write);
 
         // Clone the file
-        let clone1 = temp_file.clone();
-        let clone2 = temp_file.clone();
+        let clone1 = Arc::clone(&temp_file);
+        let clone2 = Arc::clone(&temp_file);
 
         // All clones should see the same disk usage
-        assert_eq!(clone1.current_disk_usage(), usage_after_write);
-        assert_eq!(clone2.current_disk_usage(), usage_after_write);
-
+        assert_eq!(clone1.size().unwrap(), usage_after_write);
+        assert_eq!(clone2.size().unwrap(), usage_after_write);
         // Global disk usage should still be the same (not multiplied by number of clones)
         assert_eq!(dm.used_disk_space(), usage_after_write);
 
         // Write more data through one clone
-        clone1.inner().as_file().write_all(b" more data")?;
-        let mut mutable_clone1 = clone1;
-        mutable_clone1.update_disk_usage()?;
+        let mut clone_writer = clone1.open_writer()?;
+        clone_writer.write_all(b" more data")?;
 
-        let new_usage = mutable_clone1.current_disk_usage();
+        let new_usage = clone1.size().unwrap();
         assert!(new_usage > usage_after_write);
-
         // All clones should see the updated disk usage
-        assert_eq!(temp_file.current_disk_usage(), new_usage);
-        assert_eq!(clone2.current_disk_usage(), new_usage);
-        assert_eq!(mutable_clone1.current_disk_usage(), new_usage);
+        assert_eq!(temp_file.size().unwrap(), new_usage);
+        assert_eq!(clone2.size().unwrap(), new_usage);
+        assert_eq!(clone1.size().unwrap(), new_usage);
 
         // Global disk usage should reflect the new size (not multiplied)
         assert_eq!(dm.used_disk_space(), new_usage);
 
         // Drop one clone
-        drop(mutable_clone1);
+        drop(clone_writer);
+        drop(clone1);
 
         // Disk usage should NOT change (other clones still exist)
         assert_eq!(dm.used_disk_space(), new_usage);
-        assert_eq!(temp_file.current_disk_usage(), new_usage);
-        assert_eq!(clone2.current_disk_usage(), new_usage);
+        assert_eq!(temp_file.size().unwrap(), new_usage);
+        assert_eq!(clone2.size().unwrap(), new_usage);
 
         // Drop another clone
         drop(clone2);
 
         // Disk usage should still NOT change (original still exists)
         assert_eq!(dm.used_disk_space(), new_usage);
-        assert_eq!(temp_file.current_disk_usage(), new_usage);
+        assert_eq!(temp_file.size().unwrap(), new_usage);
 
         // Drop the original
+        drop(writer);
         drop(temp_file);
-
         // Now disk usage should return to 0 (last reference dropped)
         assert_eq!(dm.used_disk_space(), 0);
 
@@ -738,29 +771,27 @@ mod tests {
 
     #[test]
     fn test_disk_usage_clones_dropped_out_of_order() -> Result<()> {
-        use std::io::Write;
-
         let dm = Arc::new(DiskManagerBuilder::default().build()?);
-        let mut temp_file = dm.create_tmp_file("Testing")?;
+        let temp_file = dm.create_tmp_file("Testing")?;
+        let mut writer = temp_file.open_writer()?;
 
         // Write data
-        temp_file.inner().as_file().write_all(b"test")?;
-        temp_file.update_disk_usage()?;
+        writer.write_all(b"test")?;
 
-        let usage = temp_file.current_disk_usage();
+        let usage = temp_file.size().unwrap();
         assert_eq!(dm.used_disk_space(), usage);
 
         // Create multiple clones
-        let clone1 = temp_file.clone();
-        let clone2 = temp_file.clone();
-        let clone3 = temp_file.clone();
+        let clone1 = Arc::clone(&temp_file);
+        let clone2 = Arc::clone(&temp_file);
+        let clone3 = Arc::clone(&temp_file);
 
         // Drop the original first (out of order)
         drop(temp_file);
 
         // Disk usage should still be tracked (clones exist)
         assert_eq!(dm.used_disk_space(), usage);
-        assert_eq!(clone1.current_disk_usage(), usage);
+        assert_eq!(clone1.size().unwrap(), usage);
 
         // Drop clones in different order
         drop(clone2);
@@ -780,25 +811,24 @@ mod tests {
 
     #[test]
     fn test_disk_usage_multiple_files() -> Result<()> {
-        use std::io::Write;
-
         let dm = Arc::new(DiskManagerBuilder::default().build()?);
 
         // Create multiple temp files
-        let mut file1 = dm.create_tmp_file("Testing1")?;
-        let mut file2 = dm.create_tmp_file("Testing2")?;
+        let file1 = dm.create_tmp_file("Testing1")?;
+        let file2 = dm.create_tmp_file("Testing2")?;
+
+        let mut writer1 = file1.open_writer()?;
+        let mut writer2 = file2.open_writer()?;
 
         // Write to first file
-        file1.inner().as_file().write_all(b"file1")?;
-        file1.update_disk_usage()?;
-        let usage1 = file1.current_disk_usage();
+        writer1.write_all(b"file1")?;
+        let usage1 = file1.size().unwrap();
 
         assert_eq!(dm.used_disk_space(), usage1);
 
         // Write to second file
-        file2.inner().as_file().write_all(b"file2 data")?;
-        file2.update_disk_usage()?;
-        let usage2 = file2.current_disk_usage();
+        writer2.write_all(b"file2 data")?;
+        let usage2 = file2.size().unwrap();
 
         // Global usage should be sum of both files
         assert_eq!(dm.used_disk_space(), usage1 + usage2);
@@ -1008,8 +1038,6 @@ mod tests {
         //
         // Without the rollback fix, the global counter would be permanently
         // inflated by the delta between the new and old file sizes.
-        use std::fs::OpenOptions;
-        use std::io::Write;
 
         let dm = Arc::new(
             DiskManager::builder()
@@ -1017,30 +1045,25 @@ mod tests {
                 .build()?,
         );
 
-        // Create a temp file and write some data via a separate writable handle
-        let mut file = dm.create_tmp_file("test_rollback")?;
+        let file = dm.create_tmp_file("test_rollback")?;
+
+        let mut writer = file.open_writer()?;
+
+        // Create a temp file and write some data
         {
-            let path = file.path().to_path_buf();
-            let mut f = OpenOptions::new().append(true).open(&path)?;
             let data = vec![0u8; 1024]; // 1KB
-            f.write_all(&data)?;
-            f.sync_all()?;
+            writer.write_all(&data)?;
         }
-        // Record the file's disk usage
-        file.update_disk_usage()?;
+
         let usage_after_first_write = dm.used_disk_space();
         assert!(usage_after_first_write > 0);
 
         // Write more data to grow the file
         {
-            let path = file.path().to_path_buf();
-            let mut f = OpenOptions::new().append(true).open(&path)?;
             let data = vec![0u8; 4 * 1024]; // 4KB more
-            f.write_all(&data)?;
-            f.sync_all()?;
+            writer.write_all(&data)?;
         }
-        // Update disk usage — should succeed (still under 10MB)
-        file.update_disk_usage()?;
+
         let usage_after_second_write = dm.used_disk_space();
         assert!(usage_after_second_write > usage_after_first_write);
 
@@ -1049,28 +1072,26 @@ mod tests {
 
         // Write even more data
         {
-            let path = file.path().to_path_buf();
-            let mut f = OpenOptions::new().append(true).open(&path)?;
             let data = vec![0u8; 2 * 1024]; // 2KB more
-            f.write_all(&data)?;
-            f.sync_all()?;
-        }
 
-        // This update_disk_usage should FAIL (exceeds new 1-byte limit)
-        let result = file.update_disk_usage();
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("exceeded the allowable limit")
-        );
+            // This write should FAIL (exceeds new 1-byte limit)
+            let result = writer.write_all(&data);
+
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("exceeded the allowable limit")
+            );
+        }
 
         // Critical check: used_disk_space should still equal the LAST
         // successful update (before the failed one), not be inflated
         assert_eq!(dm.used_disk_space(), usage_after_second_write);
 
-        // Drop the file — should subtract the last successful file size
+        // Drop the writer and file — should subtract the last successful file size
+        drop(writer);
         drop(file);
 
         // After drop: used_disk_space must be zero (no leak)

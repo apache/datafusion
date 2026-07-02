@@ -33,6 +33,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
     SendableRecordBatchStream, Statistics, check_if_same_properties,
@@ -71,12 +72,13 @@ use itertools::Itertools;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
+mod aggregate_hash_table;
 pub mod group_values;
 mod hash_aggregate;
-mod hash_table;
 mod no_grouping;
 pub mod order;
 mod row_hash;
+mod skip_partial;
 mod topk;
 mod topk_stream;
 
@@ -1007,6 +1009,13 @@ impl AggregateExec {
             ));
         }
 
+        // `GroupedHashAggregateStream` is being incrementally refactored. See the
+        // tracking issue for details.
+        //
+        // New features and improvements should go directly into the new implementation.
+        // Please coordinate through the tracking issue.
+        //
+        // Issue: <https://github.com/apache/datafusion/issues/22710>
         if context
             .session_config()
             .options()
@@ -1026,7 +1035,7 @@ impl AggregateExec {
             }
         }
 
-        // grouping by something else and we need to just materialize all results
+        // Execution paths that have not been migrated use the fallback implementation
         Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
             self, context, partition,
         )?))
@@ -1700,7 +1709,7 @@ impl ExecutionPlan for AggregateExec {
                 vec![Distribution::UnspecifiedDistribution]
             }
             AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned => {
-                vec![Distribution::HashPartitioned(self.group_by.input_exprs())]
+                vec![Distribution::KeyPartitioned(self.group_by.input_exprs())]
             }
             AggregateMode::Final | AggregateMode::Single => {
                 vec![Distribution::SinglePartition]
@@ -1763,10 +1772,11 @@ impl ExecutionPlan for AggregateExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let child_statistics = self.input().partition_statistics(partition)?;
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let child_statistics =
+            args.compute_child_statistics(&self.input, args.partition())?;
         Ok(Arc::new(
-            self.statistics_inner(&child_statistics, partition)?,
+            self.statistics_inner(&child_statistics, args.partition())?,
         ))
     }
 
@@ -2416,6 +2426,7 @@ mod tests {
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::metrics::MetricValue;
+    use crate::statistics::StatisticsArgs;
     use crate::test::TestMemoryExec;
     use crate::test::assert_is_pending;
     use crate::test::exec::{
@@ -2423,8 +2434,8 @@ mod tests {
     };
 
     use arrow::array::{
-        DictionaryArray, Float32Array, Float64Array, Int32Array, Int64Array, StructArray,
-        UInt32Array, UInt64Array,
+        BooleanArray, DictionaryArray, Float32Array, Float64Array, Int32Array,
+        Int64Array, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::Int32Type;
@@ -2434,7 +2445,10 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-    use datafusion_expr::{AggregateUDF, AggregateUDFImpl, Signature, Volatility};
+    use datafusion_expr::{
+        Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator,
+        Signature, Volatility,
+    };
     use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
@@ -2801,7 +2815,7 @@ mod tests {
         )?);
 
         // Verify statistics are preserved proportionally through aggregation
-        let final_stats = merged_aggregate.partition_statistics(None)?;
+        let final_stats = merged_aggregate.statistics_with_args(&StatisticsArgs::new())?;
         assert!(final_stats.total_byte_size.get_value().is_some());
 
         let task_ctx = if spill {
@@ -2936,11 +2950,8 @@ mod tests {
             Ok(Box::pin(stream))
         }
 
-        fn partition_statistics(
-            &self,
-            partition: Option<usize>,
-        ) -> Result<Arc<Statistics>> {
-            if partition.is_some() {
+        fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+            if args.partition().is_some() {
                 return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }
             let (_, batches) = some_data();
@@ -3217,6 +3228,76 @@ mod tests {
             vec![2, 1]
         );
         assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partial_grouped_aggregate_materializes_before_slicing() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+        let input_batches = vec![RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+            ],
+        )?];
+        let input =
+            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let udaf = Arc::new(AggregateUDF::from(NoFirstEmitUdaf::new()));
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(udaf, vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("no_first_emit(value)")
+                .build()?,
+        )];
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggregates,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(2)
+                    .set_bool("datafusion.execution.enable_migration_aggregate", true)
+                    .set(
+                        "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                        &ScalarValue::Float64(Some(2.0)),
+                    ),
+            ),
+        );
+
+        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::PartialHash(_)));
+
+        let stream: SendableRecordBatchStream = stream.into();
+        let batches = collect(stream).await?;
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +-----+-----------------------------+
+        | key | no_first_emit(value)[count] |
+        +-----+-----------------------------+
+        | 1   | 1                           |
+        | 2   | 1                           |
+        | 3   | 1                           |
+        +-----+-----------------------------+
+        ");
 
         Ok(())
     }
@@ -3988,6 +4069,8 @@ mod tests {
         Ok(())
     }
 
+    // Migrated to PartialHashAggregateStream coverage below;
+    // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_skip_aggregation_after_first_batch() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -4070,6 +4153,8 @@ mod tests {
         Ok(())
     }
 
+    // Migrated to PartialHashAggregateStream coverage below;
+    // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_skip_aggregation_after_threshold() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -4157,6 +4242,189 @@ mod tests {
             +-----+-------------------+
             ");
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partial_hash_stream_skip_aggregation_after_first_batch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, true),
+            Field::new("val", DataType::Int32, true),
+        ]));
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias(String::from("COUNT(val)"))
+                .build()
+                .map(Arc::new)?,
+        ];
+
+        let input_data = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![2, 3, 4])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+        ];
+
+        let input =
+            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggr_expr,
+            vec![None],
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            schema,
+        )?);
+
+        let session_config = SessionConfig::default()
+            .set_bool("datafusion.execution.enable_migration_aggregate", true)
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                &ScalarValue::Int64(Some(2)),
+            )
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                &ScalarValue::Float64(Some(0.1)),
+            );
+
+        let ctx = Arc::new(TaskContext::default().with_session_config(session_config));
+        let output = collect(aggregate_exec.execute(0, Arc::clone(&ctx))?).await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&output), @r"
+            +-----+-------------------+
+            | key | COUNT(val)[count] |
+            +-----+-------------------+
+            | 1   | 1                 |
+            | 2   | 1                 |
+            | 2   | 1                 |
+            | 3   | 1                 |
+            | 3   | 1                 |
+            | 4   | 1                 |
+            +-----+-------------------+
+            ");
+        }
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        let skipped_rows = metrics
+            .sum_by_name("skipped_aggregation_rows")
+            .map(|m| m.as_usize())
+            .unwrap_or(0);
+        assert_eq!(skipped_rows, 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partial_hash_stream_skip_aggregation_after_threshold() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, true),
+            Field::new("val", DataType::Int32, true),
+        ]));
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias(String::from("COUNT(val)"))
+                .build()
+                .map(Arc::new)?,
+        ];
+
+        let input_data = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![2, 3, 4])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![2, 3, 4])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+        ];
+
+        let input =
+            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggr_expr,
+            vec![None],
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            schema,
+        )?);
+
+        let session_config = SessionConfig::default()
+            .set_bool("datafusion.execution.enable_migration_aggregate", true)
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                &ScalarValue::Int64(Some(5)),
+            )
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                &ScalarValue::Float64(Some(0.1)),
+            );
+
+        let ctx = Arc::new(TaskContext::default().with_session_config(session_config));
+        let output = collect(aggregate_exec.execute(0, Arc::clone(&ctx))?).await?;
+
+        allow_duplicates! {
+        assert_snapshot!(batches_to_sort_string(&output), @r"
+        +-----+-------------------+
+        | key | COUNT(val)[count] |
+        +-----+-------------------+
+        | 1   | 1                 |
+        | 2   | 1                 |
+        | 2   | 2                 |
+        | 3   | 1                 |
+        | 3   | 2                 |
+        | 4   | 1                 |
+        | 4   | 1                 |
+        +-----+-------------------+
+        ");
+        }
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        let skipped_rows = metrics
+            .sum_by_name("skipped_aggregation_rows")
+            .map(|m| m.as_usize())
+            .unwrap_or(0);
+        assert_eq!(skipped_rows, 3);
 
         Ok(())
     }
@@ -4553,7 +4821,7 @@ mod tests {
             PhysicalGroupBy::default(),
             None,
         )?;
-        let stats = agg.partition_statistics(None)?;
+        let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(stats.total_byte_size, Precision::Absent);
 
         let zero_row_stats = Statistics {
@@ -4570,7 +4838,7 @@ mod tests {
             PhysicalGroupBy::default(),
             None,
         )?;
-        let stats_zero = agg_zero.partition_statistics(None)?;
+        let stats_zero = agg_zero.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(stats_zero.total_byte_size, Precision::Absent);
 
         let single_input =
@@ -4590,7 +4858,8 @@ mod tests {
                 .partition_count(),
             1
         );
-        let single_stats_zero = single_agg_zero.partition_statistics(None)?;
+        let single_stats_zero =
+            single_agg_zero.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(single_stats_zero.num_rows, Precision::Exact(1));
 
         Ok(())
@@ -4963,7 +5232,7 @@ mod tests {
             let agg =
                 build_test_aggregate(&schema, input_stats, group_by, case.limit_options)?;
 
-            let stats = agg.partition_statistics(None)?;
+            let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
             assert_eq!(
                 stats.num_rows, case.expected_num_rows,
                 "FAILED: '{}' — expected {:?}, got {:?}",
@@ -5002,7 +5271,7 @@ mod tests {
             None,
         )?;
 
-        let stats = agg.partition_statistics(None)?;
+        let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(
             stats.column_statistics[0].distinct_count,
             Precision::Exact(100),
@@ -5056,7 +5325,7 @@ mod tests {
 
         let agg = build_test_aggregate(&schema, input_stats, grouping_set, None)?;
 
-        let stats = agg.partition_statistics(None)?;
+        let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
         // Per-set NDV: (a,NULL)=100, (NULL,b)=50, (a,b)=100*50=5000
         // Total = 100 + 50 + 5000 = 5150
         assert_eq!(
@@ -5086,7 +5355,9 @@ mod tests {
             Arc::clone(&schema),
         )?;
         assert_eq!(
-            single_agg.partition_statistics(None)?.num_rows,
+            single_agg
+                .statistics_with_args(&StatisticsArgs::new())?
+                .num_rows,
             Precision::Exact(2)
         );
 
@@ -5112,7 +5383,11 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         for partition in 0..2 {
             assert_eq!(
-                partial_agg.partition_statistics(Some(partition))?.num_rows,
+                partial_agg
+                    .statistics_with_args(
+                        &StatisticsArgs::new().with_partition(Some(partition))
+                    )?
+                    .num_rows,
                 Precision::Exact(2)
             );
             let result =
@@ -5121,7 +5396,9 @@ mod tests {
         }
 
         assert_eq!(
-            partial_agg.partition_statistics(None)?.num_rows,
+            partial_agg
+                .statistics_with_args(&StatisticsArgs::new())?
+                .num_rows,
             Precision::Exact(4)
         );
 
@@ -5165,7 +5442,7 @@ mod tests {
             PhysicalGroupBy::new_single(vec![(expr_a_plus_b, "a+b".to_string())]);
         let agg = build_test_aggregate(&schema, input_stats, group_by, None)?;
 
-        let stats = agg.partition_statistics(None)?;
+        let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(
             stats.num_rows,
             Precision::Inexact(1_000_000),
@@ -6049,6 +6326,140 @@ mod tests {
             let actual: Vec<DataType> =
                 states.iter().map(|a| a.data_type().clone()).collect();
             assert_data_types("merge_batch(states)", &self.state_types, &actual)
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct NoFirstEmitUdaf {
+        signature: Signature,
+    }
+
+    impl NoFirstEmitUdaf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![DataType::Int32], Volatility::Immutable),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for NoFirstEmitUdaf {
+        fn name(&self) -> &str {
+            "no_first_emit"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+            Ok(vec![Arc::new(Field::new(
+                format!("{}[count]", args.name),
+                DataType::Int64,
+                false,
+            ))])
+        }
+
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            Ok(Box::new(NoFirstEmitAccumulator))
+        }
+
+        fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
+            true
+        }
+
+        fn create_groups_accumulator(
+            &self,
+            _args: AccumulatorArgs,
+        ) -> Result<Box<dyn GroupsAccumulator>> {
+            Ok(Box::new(NoFirstEmitGroupsAccumulator { counts: vec![] }))
+        }
+    }
+
+    #[derive(Debug)]
+    struct NoFirstEmitAccumulator;
+
+    impl Accumulator for NoFirstEmitAccumulator {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(Some(0)))
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self)
+        }
+
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            Ok(vec![ScalarValue::Int64(Some(0))])
+        }
+
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct NoFirstEmitGroupsAccumulator {
+        counts: Vec<i64>,
+    }
+
+    impl NoFirstEmitGroupsAccumulator {
+        fn emit_counts(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+            match emit_to {
+                EmitTo::All => {
+                    let counts = std::mem::take(&mut self.counts);
+                    Ok(Arc::new(Int64Array::from(counts)))
+                }
+                EmitTo::First(_) => internal_err!(
+                    "partial grouped aggregate output must materialize with EmitTo::All before slicing"
+                ),
+            }
+        }
+    }
+
+    impl GroupsAccumulator for NoFirstEmitGroupsAccumulator {
+        fn update_batch(
+            &mut self,
+            _values: &[ArrayRef],
+            group_indices: &[usize],
+            _opt_filter: Option<&BooleanArray>,
+            total_num_groups: usize,
+        ) -> Result<()> {
+            self.counts.resize(total_num_groups, 0);
+            for group_index in group_indices {
+                self.counts[*group_index] += 1;
+            }
+            Ok(())
+        }
+
+        fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+            self.emit_counts(emit_to)
+        }
+
+        fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+            Ok(vec![self.emit_counts(emit_to)?])
+        }
+
+        fn merge_batch(
+            &mut self,
+            _values: &[ArrayRef],
+            _group_indices: &[usize],
+            _total_num_groups: usize,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self) + self.counts.capacity() * size_of::<i64>()
         }
     }
 
