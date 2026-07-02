@@ -331,7 +331,13 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.buffer.group_values.emit(emit_to)?;
         if should_remove_groups {
-            remove_emitted_groups(&mut self.buffer.group_ordering, emit_to);
+            match emit_to {
+                EmitTo::First(n) => self.buffer.group_ordering.remove_groups(n),
+                // `EmitTo::All` is only used after `input_done`, when all
+                // buffered groups are known complete and the ordering state is
+                // no longer needed.
+                EmitTo::All => {}
+            }
         }
 
         for acc in &mut self.buffer.accumulators {
@@ -347,14 +353,5 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         debug_assert!(batch.num_rows() > 0);
 
         Ok(Some(batch))
-    }
-}
-
-pub(super) fn remove_emitted_groups(group_ordering: &mut GroupOrdering, emit_to: EmitTo) {
-    match emit_to {
-        EmitTo::First(n) => group_ordering.remove_groups(n),
-        // `EmitTo::All` is only used after `input_done`, when all buffered groups
-        // are known complete and the ordering state is no longer needed.
-        EmitTo::All => {}
     }
 }
