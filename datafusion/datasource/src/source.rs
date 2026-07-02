@@ -243,6 +243,10 @@ pub trait DataSource: Any + Send + Sync + Debug {
     /// Create per execution state to share across sibling instances of this
     /// data source during one execution.
     ///
+    /// `config` is the session configuration, so implementations can honor
+    /// options that disable sibling sharing (returning `None`) for consumers
+    /// that cannot poll all partitions in one process.
+    ///
     /// Returns `None` (the default) if this data source has
     /// no sibling-shared execution state.
     fn create_sibling_state(

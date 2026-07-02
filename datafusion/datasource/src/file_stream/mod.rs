@@ -1175,12 +1175,11 @@ mod tests {
             test: &FileStreamMorselTest,
             config: &FileScanConfig,
             options: &ConfigOptions,
-        ) -> Result<(bool, String)> {
+        ) -> Result<String> {
             let shared_work_source =
                 config.create_sibling_state(options).and_then(|state| {
                     state.as_ref().downcast_ref::<SharedWorkSource>().cloned()
                 });
-            let shared = shared_work_source.is_some();
             let metrics_set = ExecutionPlanMetricsSet::new();
             let partition0 = FileStreamBuilder::new(config)
                 .with_partition(0)
@@ -1188,7 +1187,7 @@ mod tests {
                 .with_morselizer(Box::new(test.morselizer.clone()))
                 .with_metrics(&metrics_set)
                 .build()?;
-            Ok((shared, drain_stream_output(partition0).await?))
+            drain_stream_output(partition0).await
         }
 
         // With work stealing enabled (the default), the single polled partition
@@ -1197,13 +1196,13 @@ mod tests {
         assert!(options.execution.enable_file_stream_work_stealing);
         let test = make_test();
         let config = test.test_config();
-        let (shared, output) = drive_partition0(&test, &config, &options).await?;
         assert!(
-            shared,
+            config.create_sibling_state(&options).is_some(),
             "the default config shares one work queue across siblings"
         );
         assert_eq!(
-            output, "Batch: 101\nBatch: 201",
+            drive_partition0(&test, &config, &options).await?,
+            "Batch: 101\nBatch: 201",
             "with work stealing on, an isolated partition drains the shared queue"
         );
 
@@ -1212,13 +1211,13 @@ mod tests {
         options.execution.enable_file_stream_work_stealing = false;
         let test = make_test();
         let config = test.test_config();
-        let (shared, output) = drive_partition0(&test, &config, &options).await?;
         assert!(
-            !shared,
+            config.create_sibling_state(&options).is_none(),
             "disabling work stealing drops the shared work source"
         );
         assert_eq!(
-            output, "Batch: 101",
+            drive_partition0(&test, &config, &options).await?,
+            "Batch: 101",
             "with work stealing off, partition 0 reads only its own file group"
         );
 
