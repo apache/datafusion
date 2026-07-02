@@ -29,3 +29,6 @@ workspace = true
 
 [dev-dependencies]
 arrow-schema = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["arrow-schema"]

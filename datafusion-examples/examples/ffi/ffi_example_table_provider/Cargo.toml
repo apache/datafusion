@@ -28,6 +28,9 @@ datafusion = { workspace = true }
 datafusion-ffi = { workspace = true }
 ffi_module_interface = { path = "../ffi_module_interface" }
 
+[package.metadata.cargo-machete]
+ignored = ["arrow-schema"]
+
 [lints]
 workspace = true
 
