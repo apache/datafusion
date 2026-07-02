@@ -162,9 +162,11 @@ pub enum WindowFnKind {
 ///
 /// # Limitations
 ///
-/// - Only activated when the window function is `ROW_NUMBER` with a
-///   `PARTITION BY` clause. Global top-K (no `PARTITION BY`) is already
-///   handled efficiently by `SortExec` with `fetch`.
+/// - Only activated when the window function is `ROW_NUMBER` or `RANK` with
+///   a `PARTITION BY` clause. `RANK` additionally requires a non-empty
+///   `ORDER BY` (with an empty `ORDER BY`, every row ties at rank 1 and the
+///   heap-of-K rewrite doesn't apply). Global top-K (no `PARTITION BY`) is
+///   already handled efficiently by `SortExec` with `fetch`.
 /// - For very high cardinality partition keys (millions of distinct values),
 ///   both memory usage and runtime overhead can become significant. In such
 ///   cases, the sort-based plan is more robust. Therefore, this optimization
