@@ -75,8 +75,8 @@ FROM (
 ----
 00010203040506070809000102030506 arrow.uuid
 
-# arrow_cast from UUID to same underlying type (FixedSizeBinary(16)) preserves
-# extension metadata because the cast is optimized away as a no-op (same physical type)
+# arrow_cast from UUID to same underlying type (FixedSizeBinary(16)) strips
+# extension metadata (type-only cast semantics)
 query ?T
 SELECT
     arrow_cast(uuid_val, 'FixedSizeBinary(16)'),
@@ -85,7 +85,7 @@ FROM (
     SELECT CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID) AS uuid_val
 );
 ----
-00010203040506070809000102030506 arrow.uuid
+00010203040506070809000102030506 NULL
 
 # arrow_cast to a different type strips extension metadata (type-only cast semantics)
 query ?T

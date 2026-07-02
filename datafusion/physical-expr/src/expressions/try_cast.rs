@@ -285,9 +285,9 @@ pub fn try_cast(
 ///
 /// TRY_CAST results are always nullable since failed casts return NULL.
 ///
-/// If the input expression already has the same data type and the target field
-/// has no explicit metadata constraints, the original expression is returned
-/// unchanged.
+/// If the input expression already has the same data type, the target field
+/// has no explicit metadata constraints, and the source has no extension
+/// metadata to strip, the original expression is returned unchanged.
 pub fn try_cast_with_target_field(
     expr: Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
@@ -303,8 +303,18 @@ pub fn try_cast_with_target_field(
         && target_field.is_nullable()
         && target_field.metadata().is_empty();
 
+    // For same-type casts, we can skip creating a TryCastExpr only if:
+    // 1. The target is type-only (no explicit metadata)
+    // 2. The source has no extension metadata that needs to be stripped
+    // Otherwise we need the TryCastExpr to strip extension metadata from the source.
     if expr_type == *cast_type && is_type_only {
-        return Ok(Arc::clone(&expr));
+        let source_field = expr.return_field(input_schema)?;
+        let has_extension_metadata = source_field
+            .metadata()
+            .contains_key(EXTENSION_TYPE_NAME_KEY);
+        if !has_extension_metadata {
+            return Ok(Arc::clone(&expr));
+        }
     }
 
     if !can_cast_types(&expr_type, cast_type) {

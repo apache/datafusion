@@ -497,8 +497,18 @@ pub fn cast_with_target_field(
         && target_field.is_nullable()
         && target_field.metadata().is_empty();
 
+    // For same-type casts, we can skip creating a CastExpr only if:
+    // 1. The target is type-only (no explicit metadata)
+    // 2. The source has no extension metadata that needs to be stripped
+    // Otherwise we need the CastExpr to strip extension metadata from the source.
     if expr_type == *cast_type && is_type_only {
-        return Ok(Arc::clone(&expr));
+        let source_field = expr.return_field(input_schema)?;
+        let has_extension_metadata = source_field
+            .metadata()
+            .contains_key(EXTENSION_TYPE_NAME_KEY);
+        if !has_extension_metadata {
+            return Ok(Arc::clone(&expr));
+        }
     }
 
     let can_build_cast = if requires_nested_struct_cast(&expr_type, cast_type) {
