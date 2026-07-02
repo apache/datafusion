@@ -86,6 +86,7 @@ pub(super) trait BitmapFilterType:
 {
     type Storage: BitmapStorage;
 
+    /// Returns the index in the bitmap to check for this value.
     fn index(value: Self::Native) -> usize;
 }
 
