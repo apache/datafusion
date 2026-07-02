@@ -279,13 +279,7 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch() -> Result<()
     })
     .await?;
 
-    let output_batches = metrics
-        .iter()
-        .find_map(|item| match item.value() {
-            MetricValue::OutputBatches(total) => Some(total),
-            _ => None,
-        })
-        .expect("Must have output_batches metric since it exists in the baseline");
+    let output_batches = get_output_batches_from_metrics(&metrics);
 
     // minimum 2 batches more
     assert!(
@@ -379,14 +373,16 @@ async fn run_sort_test_with_limited_memory(
     let result = sort_exec.execute(0, Arc::clone(&args.task_ctx))?;
 
     let number_of_record_batches = args.number_of_record_batches;
+    let assert_output_batch_size =
+        args.assert_all_output_batches_roughly_match_batch_size_conf;
 
     let metrics = run_test(args, sort_exec, result).await?;
 
     assert_baseline_metrics_for_non_empty_output(
         &metrics,
         number_of_record_batches * record_batch_size as usize,
-        if args.assert_all_output_batches_roughly_match_batch_size_conf {
-            record_batch_size as usize
+        if assert_output_batch_size {
+            Some(record_batch_size as usize)
         } else {
             None
         },
@@ -775,20 +771,24 @@ fn assert_baseline_metrics_for_non_empty_output(
 
     assert_ne!(output_bytes.value(), 0_usize);
 
-    let output_batches = metrics
-        .iter()
-        .find_map(|item| match item.value() {
-            MetricValue::OutputBatches(total) => Some(total),
-            _ => None,
-        })
-        .expect("Must have output_batches metric since it exists in the baseline");
+    let output_batches = get_output_batches_from_metrics(metrics);
 
     if let Some(output_batch_size) = output_batch_size {
         assert_eq!(
-            output_batches.value(),
+            output_batches,
             expected_output_rows.div_ceil(output_batch_size)
         );
     } else {
-        assert_ne!(output_batches.value(), 0,);
+        assert_ne!(output_batches, 0,);
     }
+}
+
+fn get_output_batches_from_metrics(metrics: &MetricsSet) -> usize {
+    metrics
+        .iter()
+        .find_map(|item| match item.value() {
+            MetricValue::OutputBatches(total) => Some(total.value()),
+            _ => None,
+        })
+        .expect("Must have output_batches metric since it exists in the baseline")
 }
