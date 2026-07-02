@@ -377,7 +377,7 @@ macro_rules! create_array {
 ///     ("c", Utf8, vec!["alpha", "beta", "gamma"])
 /// );
 /// ```
-#[deprecated(since = "54.0.0", note = "Use `arrow::array::record_batch` instead")]
+#[deprecated(since = "55.0.0", note = "Use `arrow::array::record_batch` instead")]
 #[macro_export]
 macro_rules! record_batch {
     ($(($name: expr, $type: ident, $values: expr)),*) => {
