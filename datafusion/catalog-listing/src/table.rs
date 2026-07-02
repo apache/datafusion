@@ -37,7 +37,9 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchemaBuilder, compute_all_files_statistics,
 };
-use datafusion_execution::cache::cache_manager::{FileStatisticsCache, TableScopedPath};
+use datafusion_execution::cache::cache_manager::{
+    CachedFileMetadata, FileStatisticsCache, SchemaFingerprint, TableScopedPath,
+};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
@@ -197,6 +199,10 @@ pub struct ListingTable {
     column_defaults: HashMap<String, Expr>,
     /// Optional [`PhysicalExprAdapterFactory`] for creating physical expression adapters
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    /// Precomputed fingerprint of `file_schema` for file-statistics cache
+    /// validation. Constant for the table, so computed once here instead of per
+    /// file.
+    file_schema_fingerprint: Arc<SchemaFingerprint>,
 }
 
 impl ListingTable {
@@ -227,6 +233,9 @@ impl ListingTable {
                 .with_metadata(file_schema.metadata().clone()),
         );
 
+        let file_schema_fingerprint =
+            Arc::new(SchemaFingerprint::from_schema(&file_schema));
+
         let table = Self {
             table_paths: config.table_paths,
             file_schema,
@@ -238,6 +247,7 @@ impl ListingTable {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             expr_adapter_factory: config.expr_adapter_factory,
+            file_schema_fingerprint,
         };
 
         Ok(table)
@@ -266,21 +276,6 @@ impl ListingTable {
     pub fn with_cache(mut self, cache: Option<Arc<FileStatisticsCache>>) -> Self {
         self.collected_statistics = cache;
         self
-    }
-
-    fn statistics_cache(
-        &self,
-        has_table_reference: bool,
-    ) -> Option<&Arc<FileStatisticsCache>> {
-        let shared_cache = self.collected_statistics.as_ref()?;
-        if has_table_reference || self.schema_source == SchemaSource::Inferred {
-            Some(shared_cache)
-        } else {
-            // Anonymous specified-schema reads can use the same file path with
-            // different logical schemas. File statistics are schema-dependent,
-            // so avoid reusing stats computed for a different read schema.
-            None
-        }
     }
 
     /// Specify the SQL definition for this table, if any
@@ -990,18 +985,18 @@ impl ListingTable {
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
-        use datafusion_execution::cache::cache_manager::CachedFileMetadata;
-
         let path = TableScopedPath {
             table: part_file.table_reference.clone(),
             path: part_file.object_meta.location.clone(),
         };
         let meta = &part_file.object_meta;
 
-        // Check cache first - if we have valid cached statistics and ordering
-        if let Some(cache) = self.statistics_cache(path.table.is_some())
+        // Check cache first. The key stays `{table, path}` for cheap lookups;
+        // the cached value carries the schema fingerprint to prevent reusing
+        // stats computed under a different file schema.
+        if let Some(cache) = &self.collected_statistics
             && let Some(cached) = cache.get(&path)
-            && cached.is_valid_for(meta)
+            && cached.is_valid_for(meta, self.file_schema_fingerprint.as_ref())
         {
             // Return cached statistics and ordering
             return Ok((Arc::clone(&cached.statistics), cached.ordering.clone()));
@@ -1017,11 +1012,12 @@ impl ListingTable {
         let statistics = Arc::new(file_meta.statistics);
 
         // Store in cache
-        if let Some(cache) = self.statistics_cache(path.table.is_some()) {
+        if let Some(cache) = &self.collected_statistics {
             cache.put(
                 &path,
                 CachedFileMetadata::new(
                     meta.clone(),
+                    Arc::clone(&self.file_schema_fingerprint),
                     Arc::clone(&statistics),
                     file_meta.ordering.clone(),
                 ),
