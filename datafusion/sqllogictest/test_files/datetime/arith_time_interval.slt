@@ -1,70 +1,75 @@
 # postgresql behavior
 #
 # time + interval → time
-# Add an interval to a time
+# Add an interval to a time. The result is a `time` value that wraps within the
+# 24-hour clock, matching PostgreSQL and DuckDB.
 # time '01:00' + interval '3 hours' → 04:00:00
-#
-# note that while the above reflects what postgresql does
-# in the case of datafusion/arrow that is not the case. The
-# result will be an interval, not a time.
+# time '22:00' + interval '3 hours' → 01:00:00 (wraps past midnight)
 
-query ?
+query D
 SELECT '01:00'::time + interval '3 hours'
 ----
-4 hours
+04:00:00
 
 query T
 SELECT arrow_typeof('01:00'::time + interval '3 hours')
 ----
-Interval(MonthDayNano)
+Time64(ns)
 
-query ?
+query D
 SELECT '22:00'::time + interval '3 hours'
 ----
-25 hours
+01:00:00
 
-query ?
+query D
 SELECT interval '3 hours' + '22:00'::time
 ----
-25 hours
+01:00:00
 
-query ?
+query D
 SELECT arrow_cast('22:00', 'Time32(Second)') + interval '3 hours'
 ----
-25 hours
+01:00:00
 
-query ?
+query D
 SELECT arrow_cast('22:00', 'Time32(Millisecond)') + interval '3 hours'
 ----
-25 hours
+01:00:00
 
-query ?
+query D
 SELECT arrow_cast('22:00', 'Time64(Microsecond)') + interval '3 hours'
 ----
-25 hours
+01:00:00
 
-query ?
+query D
 SELECT arrow_cast('22:00', 'Time64(Nanosecond)') + interval '3 hours'
 ----
-25 hours
+01:00:00
+
+# Whole days and months in the interval do not affect a time-of-day (PostgreSQL).
+query D
+SELECT '10:00'::time + interval '1 day 2 hours'
+----
+12:00:00
 
 # postgresql behavior
 #
 # time - interval → time
-# Subtract an interval from a time
+# Subtract an interval from a time, wrapping within the 24-hour clock.
 # time '05:00' - interval '2 hours' → 03:00:00
+# time '02:00' - interval '3 hours' → 23:00:00 (wraps before midnight)
 
-query ?
+query D
 SELECT '05:00'::time - interval '2 hours'
 ----
-3 hours
+03:00:00
 
 query T
 SELECT arrow_typeof('05:00'::time - interval '2 hours')
 ----
-Interval(MonthDayNano)
+Time64(ns)
 
-query ?
+query D
 SELECT '02:00'::time - interval '3 hours'
 ----
--1 hours
+23:00:00
