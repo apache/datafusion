@@ -26,8 +26,10 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UInt32Array};
-use arrow::compute::take_arrays;
+use arrow::array::{
+    Array, ArrayRef, MutableArrayData, RecordBatch, RecordBatchOptions, UInt32Array,
+    make_array,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::cast::as_uint32_array;
 use datafusion_common::{Result, internal_err};
@@ -112,7 +114,7 @@ pub(crate) fn append_subpartition_column(
 pub(crate) struct SubpartitionReorderBuffer {
     counts: Vec<usize>,
     offsets: Vec<usize>,
-    indices: Vec<u32>,
+    source_runs: Vec<SourcePartitionRun>,
     runs: Vec<PartitionRun>,
 }
 
@@ -130,7 +132,7 @@ impl SubpartitionReorderBuffer {
     fn clear(&mut self) {
         self.counts.clear();
         self.offsets.clear();
-        self.indices.clear();
+        self.source_runs.clear();
         self.runs.clear();
     }
 }
@@ -169,28 +171,48 @@ pub(crate) fn reorder_by_subpartition(
     }
 
     buffer.offsets.resize(buffer.counts.len(), 0);
-    let mut offset = 0;
+    let mut output_offset = 0;
     for (relative_partition, len) in buffer.counts.iter().copied().enumerate() {
-        buffer.offsets[relative_partition] = offset;
+        buffer.offsets[relative_partition] = output_offset;
         if len != 0 {
             buffer
                 .runs
                 .push(PartitionRun::new(relative_partition, len)?);
         }
-        offset += len;
+        output_offset += len;
     }
-    debug_assert_eq!(offset, num_rows);
+    debug_assert_eq!(output_offset, num_rows);
 
-    buffer.indices.resize(num_rows, 0);
     let mut is_identity = true;
-    for (row_idx, relative_partition) in
-        subpartitions.values().iter().copied().enumerate()
-    {
-        let relative_partition = relative_partition as usize;
-        let output_idx = buffer.offsets[relative_partition];
-        buffer.offsets[relative_partition] += 1;
-        is_identity &= output_idx == row_idx;
-        buffer.indices[output_idx] = row_idx as u32;
+    let mut values = subpartitions.values().iter().copied().enumerate();
+    if let Some((run_start, first_partition)) = values.next() {
+        let mut current_partition = first_partition as usize;
+        let mut current_start = run_start;
+        let mut current_len = 1;
+        for (row_idx, relative_partition) in values {
+            let relative_partition = relative_partition as usize;
+            if relative_partition == current_partition {
+                current_len += 1;
+            } else {
+                push_source_run(
+                    buffer,
+                    current_partition,
+                    current_start,
+                    current_len,
+                    &mut is_identity,
+                );
+                current_partition = relative_partition;
+                current_start = row_idx;
+                current_len = 1;
+            }
+        }
+        push_source_run(
+            buffer,
+            current_partition,
+            current_start,
+            current_len,
+            &mut is_identity,
+        );
     }
 
     let schema = strip_subpartition_schema(batch.schema_ref(), subpartition_idx);
@@ -198,16 +220,64 @@ pub(crate) fn reorder_by_subpartition(
     let output = if is_identity {
         RecordBatch::try_new(schema, columns)?
     } else {
-        let indices = UInt32Array::from(std::mem::take(&mut buffer.indices));
-        let columns = take_arrays(&columns, &indices, None)?;
-        let num_indices = indices.len();
-        let (_, values, _) = indices.into_parts();
-        buffer.indices = values.into();
-        let options = RecordBatchOptions::new().with_row_count(Some(num_indices));
+        buffer
+            .source_runs
+            .sort_unstable_by_key(|run| run.output_start);
+        let columns =
+            reorder_columns_by_source_runs(&columns, &buffer.source_runs, num_rows);
+        let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
         RecordBatch::try_new_with_options(schema, columns, &options)?
     };
 
     Ok(Some(output))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SourcePartitionRun {
+    start: usize,
+    len: usize,
+    output_start: usize,
+}
+
+fn push_source_run(
+    buffer: &mut SubpartitionReorderBuffer,
+    relative_partition: usize,
+    start: usize,
+    len: usize,
+    is_identity: &mut bool,
+) {
+    let output_start = buffer.offsets[relative_partition];
+    buffer.offsets[relative_partition] += len;
+    *is_identity &= output_start == start;
+    buffer.source_runs.push(SourcePartitionRun {
+        start,
+        len,
+        output_start,
+    });
+}
+
+fn reorder_columns_by_source_runs(
+    columns: &[ArrayRef],
+    source_runs: &[SourcePartitionRun],
+    num_rows: usize,
+) -> Vec<ArrayRef> {
+    columns
+        .iter()
+        .map(|column| reorder_array_by_source_runs(column, source_runs, num_rows))
+        .collect()
+}
+
+fn reorder_array_by_source_runs(
+    array: &ArrayRef,
+    source_runs: &[SourcePartitionRun],
+    num_rows: usize,
+) -> ArrayRef {
+    let array_data = array.to_data();
+    let mut mutable = MutableArrayData::new(vec![&array_data], true, num_rows);
+    for run in source_runs {
+        mutable.extend(0, run.start, run.start + run.len);
+    }
+    make_array(mutable.freeze())
 }
 
 /// Return partition runs encoded on `schema`, if present.
