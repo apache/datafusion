@@ -525,6 +525,35 @@ impl LogicalPlan {
         Ok(using_columns)
     }
 
+    /// Returns the `(left, right, join_type)` join-key column triples of every
+    /// `USING` / `NATURAL` join in this plan.
+    pub fn using_key_pairs(
+        &self,
+    ) -> Result<Vec<(Column, Column, JoinType)>, DataFusionError> {
+        let mut triples = vec![];
+
+        self.apply_with_subqueries(|plan| {
+            if let LogicalPlan::Join(Join {
+                join_constraint: JoinConstraint::Using,
+                join_type,
+                on,
+                ..
+            }) = plan
+            {
+                for (l, r) in on {
+                    if let (Some(l), Some(r)) =
+                        (l.get_as_join_column(), r.get_as_join_column())
+                    {
+                        triples.push((l.to_owned(), r.to_owned(), *join_type));
+                    }
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+
+        Ok(triples)
+    }
+
     /// returns the first output expression of this `LogicalPlan` node.
     pub fn head_output_expr(&self) -> Result<Option<Expr>> {
         match self {

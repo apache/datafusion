@@ -2198,6 +2198,15 @@ impl Unparser<'_> {
 
     fn select_item_to_sql(&self, expr: &Expr) -> Result<ast::SelectItem> {
         match expr {
+            Expr::Alias(Alias {
+                relation: Some(relation),
+                name,
+                ..
+            }) if relation.table() == LogicalPlanBuilder::MERGED_KEY_QUALIFIER => {
+                Ok(ast::SelectItem::UnnamedExpr(ast::Expr::Identifier(
+                    self.new_ident_quoted_if_needs(name.to_string()),
+                )))
+            }
             Expr::Alias(Alias { expr, name, .. }) => {
                 let inner = self.expr_to_sql(expr)?;
 
