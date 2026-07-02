@@ -374,25 +374,25 @@ async fn optimized_duckdb_unparse_qualifies_nested_passthrough_column() -> Resul
     // `order_id` must be unqualified there, not rebased to the subquery alias
     // `o` (which is only the base-table alias one level deeper). The bug emitted
     // `"o"."order_id"` inside that derived table; the fix emits a bare column.
-    let discount_alias = r#" AS "discount_pct_2""#;
-    let alias_pos = sql
-        .find(discount_alias)
-        .expect("unparsed SQL should contain discount_pct_2 alias");
-    let select_start = sql[..alias_pos]
-        .rfind("(SELECT ")
-        .expect("discount_pct_2 should be in a derived SELECT");
-    let from_start = alias_pos
-        + sql[alias_pos..]
-            .find(" FROM ")
-            .expect("discount_pct_2 SELECT should contain FROM");
-    let derived_projection = &sql[select_start..from_start];
+    let expected = concat!(
+        r#"SELECT "o"."order_id", "o"."discount_pct_2" "#,
+        r#"FROM "warehouse"."main"."order_items" AS "oi" "#,
+        r#"INNER JOIN (SELECT "order_id", "#,
+        r#"CASE WHEN "__common_expr_1" IS NOT NULL "#,
+        r#"THEN "__common_expr_1" ELSE 0.00 END AS "discount_pct_2" "#,
+        r#"FROM (SELECT CAST("o"."discount_pct" AS DECIMAL(22,2)) "#,
+        r#"AS "__common_expr_1", "o"."order_id" "#,
+        r#"FROM "warehouse"."main"."orders" AS "o")) AS "o" "#,
+        r#"ON "oi"."order_id" = "o"."order_id""#,
+    );
+    assert_eq!(sql, expected);
 
     assert!(
-        derived_projection.contains(r#""order_id""#),
+        sql.contains(r#"(SELECT "order_id", CASE WHEN"#),
         "pass-through order_id should be unqualified in derived table: {sql}"
     );
     assert!(
-        !derived_projection.contains(r#""o"."order_id""#),
+        !sql.contains(r#"(SELECT "o"."order_id", CASE WHEN"#),
         "derived table must not reference out-of-scope alias o: {sql}"
     );
 
