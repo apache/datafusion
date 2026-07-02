@@ -26,7 +26,9 @@ use rand::{Rng, rng};
 use crate::fuzz_cases::aggregation_fuzzer::query_builder::QueryBuilder;
 use crate::fuzz_cases::aggregation_fuzzer::{
     check_equality_of_batches,
-    context_generator::{SessionContextGenerator, SessionContextWithParams},
+    context_generator::{
+        SessionContextGenerator, SessionContextOptions, SessionContextWithParams,
+    },
     data_generator::{Dataset, DatasetGenerator, DatasetGeneratorConfig},
     run_sql,
 };
@@ -50,6 +52,9 @@ pub struct AggregationFuzzerBuilder {
 
     /// See `data_gen_rounds` in [`AggregationFuzzer`], default 16
     data_gen_rounds: usize,
+
+    /// Session context options to force-enable or force-disable specific knobs
+    session_context_options: SessionContextOptions,
 }
 
 impl AggregationFuzzerBuilder {
@@ -59,6 +64,7 @@ impl AggregationFuzzerBuilder {
             table_name: None,
             data_gen_config: None,
             data_gen_rounds: 16,
+            session_context_options: SessionContextOptions::default(),
         }
     }
 
@@ -90,6 +96,11 @@ impl AggregationFuzzerBuilder {
         self
     }
 
+    pub fn session_context_options(mut self, options: SessionContextOptions) -> Self {
+        self.session_context_options = options;
+        self
+    }
+
     pub fn build(self) -> AggregationFuzzer {
         assert!(!self.candidate_sqls.is_empty());
         let candidate_sqls = self.candidate_sqls;
@@ -104,6 +115,7 @@ impl AggregationFuzzerBuilder {
             table_name,
             dataset_generator,
             data_gen_rounds,
+            session_context_options: self.session_context_options,
         }
     }
 }
@@ -139,6 +151,9 @@ pub struct AggregationFuzzer {
     /// It is suggested to set value 2x or more bigger than num of
     /// `candidate_sqls` for better test coverage.
     data_gen_rounds: usize,
+
+    /// Session context options to force-enable or force-disable specific knobs
+    session_context_options: SessionContextOptions,
 }
 
 /// Query group including the tested dataset and its sql query
@@ -210,8 +225,11 @@ impl AggregationFuzzer {
         let mut tasks = Vec::with_capacity(query_groups.len() * CTX_GEN_ROUNDS);
         for QueryGroup { dataset, sql } in query_groups {
             let dataset_ref = Arc::new(dataset);
-            let ctx_generator =
-                SessionContextGenerator::new(dataset_ref.clone(), &self.table_name);
+            let ctx_generator = SessionContextGenerator::new_with_options(
+                dataset_ref.clone(),
+                &self.table_name,
+                self.session_context_options.clone(),
+            );
 
             // Generate the baseline context, and get the baseline result firstly
             let baseline_ctx_with_params = ctx_generator

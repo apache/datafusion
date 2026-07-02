@@ -933,6 +933,16 @@ config_namespace! {
         /// the remote end point.
         pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
 
+        /// Should DataFusion use a blocked approach to manage grouping state.
+        /// When enabled, the blocked approach
+        /// allocates capacity based on a predefined block size firstly.
+        /// When the block reaches its limit, we allocate a new block (also with
+        /// the same predefined block size based capacity) instead of expanding
+        /// the current one and copying the data.
+        /// If `false`, a single allocation approach is used, where
+        /// values are managed within a single large memory block.
+        /// As this block grows, it often triggers numerous copies, resulting in poor performance.
+        pub enable_aggregation_blocked_groups: bool, default = false
         /// Whether to enable ANSI SQL mode.
         ///
         /// The flag is experimental and relevant only for DataFusion Spark built-in functions

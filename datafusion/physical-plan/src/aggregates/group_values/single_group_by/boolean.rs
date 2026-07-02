@@ -20,7 +20,7 @@ use crate::aggregates::group_values::GroupValues;
 use arrow::array::{
     ArrayRef, AsArray as _, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
 };
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::EmitTo;
 use std::{mem::size_of, sync::Arc};
 
@@ -103,6 +103,11 @@ impl GroupValues for GroupValuesBoolean {
         let emit_count = match emit_to {
             EmitTo::All => len,
             EmitTo::First(n) => n,
+            EmitTo::NextBlock => {
+                return internal_err!(
+                    "group_values_boolean does not support blocked groups"
+                );
+            }
         };
         builder.append_n(emit_count, false);
         if let Some(idx) = self.true_group.as_mut() {
