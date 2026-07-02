@@ -48,18 +48,9 @@ use crate::{
     check_if_same_properties,
 };
 
-use arrow::array::{
-    Array, ArrayRef, AsArray, PrimitiveArray, RecordBatch, RecordBatchOptions, make_array,
-};
-use arrow::compute::{concat_batches, take_arrays};
-use arrow::datatypes::{
-    ArrowNativeType, BinaryType, ByteArrayType, DataType, LargeBinaryType, LargeUtf8Type,
-    SchemaRef, UInt32Type, Utf8Type,
-};
-use arrow_data::{
-    ArrayData,
-    transform::{Capacities, MutableArrayData},
-};
+use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
+use arrow::compute::take_arrays;
+use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
@@ -365,25 +356,9 @@ impl OutputPartitionCoalescer {
     }
 }
 
-#[derive(Debug)]
-struct BufferedPartitionRange {
-    batch: Arc<RecordBatch>,
-    offset: usize,
-    len: usize,
-}
-
-#[derive(Debug)]
-struct IndexedPartitionRange {
-    batch_idx: usize,
-    offset: usize,
-    len: usize,
-}
-
 pub struct HashAggregateOutputPartitionCoalescer {
-    schema: SchemaRef,
     target_batch_size: usize,
-    buffers: Vec<Vec<BufferedPartitionRange>>,
-    buffered_rows: usize,
+    buffers: Vec<LimitedBatchCoalescer>,
     completed: VecDeque<RecordBatch>,
     finished: bool,
 }
@@ -394,11 +369,18 @@ impl HashAggregateOutputPartitionCoalescer {
         target_batch_size: usize,
         max_aggr_partition_factor: usize,
     ) -> Self {
+        let target_batch_size = target_batch_size.max(1);
         Self {
-            schema: Arc::clone(schema),
-            target_batch_size: target_batch_size.max(1),
-            buffers: (0..max_aggr_partition_factor).map(|_| vec![]).collect(),
-            buffered_rows: 0,
+            target_batch_size,
+            buffers: (0..max_aggr_partition_factor)
+                .map(|_| {
+                    LimitedBatchCoalescer::new(
+                        Arc::clone(schema),
+                        target_batch_size,
+                        None,
+                    )
+                })
+                .collect(),
             completed: VecDeque::new(),
             finished: false,
         }
@@ -410,31 +392,46 @@ impl HashAggregateOutputPartitionCoalescer {
         batch: RecordBatch,
     ) -> Result<()> {
         self.push_checked_batch()?;
-        self.push_batch_ranges(batch, |batch| {
-            Ok(vec![PartitionRun::new(
-                relative_partition,
-                batch.num_rows(),
-            )?])
-        })
+        self.push_partition_batch(relative_partition, batch)
     }
 
     pub fn push_partitioned_batch(&mut self, batch: RecordBatch) -> Result<()> {
         self.push_checked_batch()?;
-        self.push_batch_ranges(batch, |batch| {
-            partition_runs(batch.schema_ref())?.ok_or_else(|| {
-                DataFusionError::Internal(
-                    "Hash aggregate partitioned batch missing partition run metadata"
-                        .to_string(),
-                )
-            })
-        })
+        let batch = Arc::new(batch);
+        let runs = partition_runs(batch.schema_ref())?.ok_or_else(|| {
+            DataFusionError::Internal(
+                "Hash aggregate partitioned batch missing partition run metadata"
+                    .to_string(),
+            )
+        })?;
+
+        let mut offset = 0;
+        for run in runs {
+            if run.relative_partition >= self.buffers.len() {
+                return internal_err!(
+                    "Hash aggregate repartition produced relative partition {}, expected less than {}",
+                    run.relative_partition,
+                    self.buffers.len()
+                );
+            }
+
+            let partition_batch = batch.slice(offset, run.len);
+            self.push_partition_batch(run.relative_partition, partition_batch)?;
+            offset += run.len;
+        }
+        debug_assert_eq!(offset, batch.num_rows());
+        Ok(())
     }
 
     pub fn finish(&mut self) -> Result<()> {
         if self.finished {
             return Ok(());
         }
-        self.flush_buffered()?;
+
+        for relative_partition in 0..self.buffers.len() {
+            self.buffers[relative_partition].finish()?;
+            self.drain_partition(relative_partition)?;
+        }
         self.finished = true;
         Ok(())
     }
@@ -452,215 +449,51 @@ impl HashAggregateOutputPartitionCoalescer {
         Ok(())
     }
 
-    fn push_batch_ranges(
+    fn push_partition_batch(
         &mut self,
+        relative_partition: usize,
         batch: RecordBatch,
-        runs: impl FnOnce(&RecordBatch) -> Result<Vec<PartitionRun>>,
     ) -> Result<()> {
         if batch.num_rows() == 0 {
             return Ok(());
         }
+        if relative_partition >= self.buffers.len() {
+            return internal_err!(
+                "Hash aggregate repartition produced relative partition {}, expected less than {}",
+                relative_partition,
+                self.buffers.len()
+            );
+        }
 
-        let runs = runs(&batch)?;
-        let batch = Arc::new(batch);
+        let num_rows = batch.num_rows();
+        let mut batch = Some(batch);
         let mut offset = 0;
-        for run in runs {
-            if run.relative_partition >= self.buffers.len() {
-                return internal_err!(
-                    "Hash aggregate repartition produced relative partition {}, expected less than {}",
-                    run.relative_partition,
-                    self.buffers.len()
-                );
-            }
-
-            self.push_range(&batch, run.relative_partition, offset, run.len)?;
-            offset += run.len;
+        while offset < num_rows {
+            let len = self.target_batch_size.min(num_rows - offset);
+            let output_batch = if offset == 0 && len == num_rows {
+                batch.take().expect("batch must still be available")
+            } else {
+                batch
+                    .as_ref()
+                    .expect("batch must still be available")
+                    .slice(offset, len)
+            };
+            self.buffers[relative_partition].push_batch(output_batch)?;
+            self.drain_partition(relative_partition)?;
+            offset += len;
         }
-        debug_assert_eq!(offset, batch.num_rows());
+
         Ok(())
     }
 
-    fn push_range(
-        &mut self,
-        batch: &Arc<RecordBatch>,
-        relative_partition: usize,
-        mut offset: usize,
-        mut len: usize,
-    ) -> Result<()> {
-        while len > 0 {
-            let num_free_rows = self.target_batch_size.saturating_sub(self.buffered_rows);
-            if num_free_rows == 0 {
-                self.flush_buffered()?;
-                continue;
-            }
-
-            let range_len = len.min(num_free_rows);
-            self.buffer_range(batch, relative_partition, offset, range_len);
-            if self.buffered_rows == self.target_batch_size {
-                self.flush_buffered()?;
-            }
-
-            offset += range_len;
-            len -= range_len;
+    fn drain_partition(&mut self, relative_partition: usize) -> Result<()> {
+        while let Some(batch) = self.buffers[relative_partition].next_completed_batch() {
+            let run = PartitionRun::new(relative_partition, batch.num_rows())?;
+            let batch = set_partition_runs_metadata(batch, &[run])?;
+            self.completed.push_back(batch);
         }
         Ok(())
     }
-
-    fn buffer_range(
-        &mut self,
-        batch: &Arc<RecordBatch>,
-        relative_partition: usize,
-        offset: usize,
-        len: usize,
-    ) {
-        debug_assert!(len > 0);
-        self.buffered_rows += len;
-        self.buffers[relative_partition].push(BufferedPartitionRange {
-            batch: Arc::clone(batch),
-            offset,
-            len,
-        });
-    }
-
-    fn flush_buffered(&mut self) -> Result<()> {
-        if self.buffered_rows == 0 {
-            return Ok(());
-        }
-
-        let mut runs = Vec::new();
-        let mut output_ranges = Vec::new();
-        let partitions = self.buffers.iter_mut().enumerate();
-        for (relative_partition, partition_ranges) in partitions {
-            let partition_rows = partition_ranges
-                .iter()
-                .map(|range| range.len)
-                .sum::<usize>();
-            if partition_rows == 0 {
-                continue;
-            }
-
-            runs.push(PartitionRun::new(relative_partition, partition_rows)?);
-            output_ranges.append(partition_ranges);
-        }
-
-        let batch =
-            concat_batch_ranges(&self.schema, &output_ranges, self.buffered_rows)?;
-        debug_assert_eq!(batch.num_rows(), self.buffered_rows);
-        let batch = set_partition_runs_metadata(batch, &runs)?;
-        self.completed.push_back(batch);
-        self.buffered_rows = 0;
-        Ok(())
-    }
-}
-
-fn concat_batch_ranges(
-    schema: &SchemaRef,
-    ranges: &[BufferedPartitionRange],
-    num_rows: usize,
-) -> Result<RecordBatch> {
-    if ranges
-        .iter()
-        .all(|range| range.offset == 0 && range.len == range.batch.num_rows())
-    {
-        let batches = ranges
-            .iter()
-            .map(|range| range.batch.as_ref())
-            .collect::<Vec<_>>();
-        return Ok(concat_batches(schema, batches)?);
-    }
-
-    let (batches, ranges) = index_partition_ranges(ranges);
-    let columns = (0..schema.fields().len())
-        .map(|column_idx| concat_column_ranges(&batches, &ranges, column_idx, num_rows))
-        .collect::<Result<Vec<_>>>()?;
-
-    RecordBatch::try_new(Arc::clone(schema), columns).map_err(Into::into)
-}
-
-fn index_partition_ranges(
-    ranges: &[BufferedPartitionRange],
-) -> (Vec<Arc<RecordBatch>>, Vec<IndexedPartitionRange>) {
-    let mut batches = Vec::new();
-    let mut indexed_ranges = Vec::with_capacity(ranges.len());
-
-    for range in ranges {
-        let batch_idx = batches
-            .iter()
-            .position(|batch| Arc::ptr_eq(batch, &range.batch))
-            .unwrap_or_else(|| {
-                let batch_idx = batches.len();
-                batches.push(Arc::clone(&range.batch));
-                batch_idx
-            });
-        indexed_ranges.push(IndexedPartitionRange {
-            batch_idx,
-            offset: range.offset,
-            len: range.len,
-        });
-    }
-
-    (batches, indexed_ranges)
-}
-
-fn concat_column_ranges(
-    batches: &[Arc<RecordBatch>],
-    ranges: &[IndexedPartitionRange],
-    column_idx: usize,
-    num_rows: usize,
-) -> Result<ArrayRef> {
-    let input_arrays = batches
-        .iter()
-        .map(|batch| batch.column(column_idx).as_ref())
-        .collect::<Vec<_>>();
-    let input_data = input_arrays
-        .iter()
-        .map(|array| array.to_data())
-        .collect::<Vec<_>>();
-    let input_refs = input_data.iter().collect::<Vec<&ArrayData>>();
-    let capacity = concat_ranges_capacity(&input_arrays, ranges, num_rows);
-    let mut output = MutableArrayData::with_capacities(input_refs, false, capacity);
-
-    for range in ranges {
-        output.extend(range.batch_idx, range.offset, range.offset + range.len);
-    }
-
-    Ok(make_array(output.freeze()))
-}
-
-fn concat_ranges_capacity(
-    arrays: &[&dyn Array],
-    ranges: &[IndexedPartitionRange],
-    num_rows: usize,
-) -> Capacities {
-    match arrays[0].data_type() {
-        DataType::Utf8 => concat_bytes_ranges_capacity::<Utf8Type>(arrays, ranges),
-        DataType::LargeUtf8 => {
-            concat_bytes_ranges_capacity::<LargeUtf8Type>(arrays, ranges)
-        }
-        DataType::Binary => concat_bytes_ranges_capacity::<BinaryType>(arrays, ranges),
-        DataType::LargeBinary => {
-            concat_bytes_ranges_capacity::<LargeBinaryType>(arrays, ranges)
-        }
-        DataType::Utf8View | DataType::BinaryView => Capacities::Array(num_rows),
-        _ => Capacities::Array(num_rows),
-    }
-}
-
-fn concat_bytes_ranges_capacity<T: ByteArrayType>(
-    arrays: &[&dyn Array],
-    ranges: &[IndexedPartitionRange],
-) -> Capacities {
-    let mut item_capacity = 0;
-    let mut bytes_capacity = 0;
-    for range in ranges {
-        let array = arrays[range.batch_idx].as_bytes::<T>();
-        let offsets = array.value_offsets();
-        item_capacity += range.len;
-        bytes_capacity += offsets[range.offset + range.len].as_usize()
-            - offsets[range.offset].as_usize();
-    }
-
-    Capacities::Binary(item_capacity, Some(bytes_capacity))
 }
 
 /// Channels and resources for a single output partition.
@@ -2766,9 +2599,9 @@ mod tests {
         Ok(())
     }
 
-    // Covers hash aggregate output coalescing ordering rows by relative
-    // aggregate partition and encoding partition runs in batch metadata.
-    // Example: pushing p1 then p0 still outputs rows as p0, then p1.
+    // Covers hash aggregate output coalescing without concatenating rows from
+    // different relative aggregate partitions into the same output batch.
+    // Example: pushing p1 then p0 outputs separate p0 and p1 batches on finish.
     #[test]
     fn test_hash_aggregate_output_coalescer_orders_partition_runs() -> Result<()> {
         let schema = test_schema();
@@ -2777,15 +2610,26 @@ mod tests {
         coalescer.push_batch(1, uint32_batch(&schema, &[10, 11]))?;
         assert!(coalescer.next_completed_batch().is_none());
         coalescer.push_batch(0, uint32_batch(&schema, &[1, 2]))?;
+        assert!(coalescer.next_completed_batch().is_none());
 
-        let output = coalescer.next_completed_batch().unwrap();
-        assert_eq!(uint32_values(&output), vec![1, 2, 10, 11]);
+        coalescer.finish()?;
+        let first = coalescer.next_completed_batch().unwrap();
+        let second = coalescer.next_completed_batch().unwrap();
+        assert_eq!(uint32_values(&first), vec![1, 2]);
+        assert_eq!(uint32_values(&second), vec![10, 11]);
         assert_eq!(
-            output
+            first
                 .schema_ref()
                 .metadata()
                 .get("datafusion.internal.hash_aggr_partition_runs"),
-            Some(&"0:2,1:2".to_string())
+            Some(&"0:2".to_string())
+        );
+        assert_eq!(
+            second
+                .schema_ref()
+                .metadata()
+                .get("datafusion.internal.hash_aggr_partition_runs"),
+            Some(&"1:2".to_string())
         );
         assert!(coalescer.next_completed_batch().is_none());
 
