@@ -1056,6 +1056,37 @@ pub struct SessionStateBuilder {
     physical_optimizer_rules: Option<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>>,
 }
 
+fn collect_registry_values_by_canonical_name<T: ?Sized, F>(
+    entries: HashMap<String, Arc<T>>,
+    canonical_name: F,
+) -> Vec<Arc<T>>
+where
+    F: Fn(&Arc<T>) -> String,
+{
+    // First, collect canonical key mappings (if present), which represent the
+    // current authoritative binding for a canonical name.
+    let mut by_name = std::collections::BTreeMap::new();
+    let mut non_canonical_entries = vec![];
+    for (key, value) in entries {
+        let name = canonical_name(&value);
+        if key == name {
+            by_name.insert(name, value);
+        } else {
+            non_canonical_entries.push((key, value));
+        }
+    }
+
+    // Then salvage any canonical functions that no longer have a canonical key
+    // mapping but still survive through aliases.
+    non_canonical_entries.sort_unstable_by(|(key_a, _), (key_b, _)| key_a.cmp(key_b));
+    for (_, value) in non_canonical_entries {
+        let name = canonical_name(&value);
+        by_name.entry(name).or_insert(value);
+    }
+
+    by_name.into_values().collect()
+}
+
 impl SessionStateBuilder {
     /// Returns a new empty [`SessionStateBuilder`].
     ///
@@ -1134,14 +1165,22 @@ impl SessionStateBuilder {
             query_planner: Some(existing.query_planner),
             catalog_list: Some(existing.catalog_list),
             table_functions: Some(existing.table_functions),
-            scalar_functions: Some(existing.scalar_functions.into_values().collect_vec()),
-            higher_order_functions: Some(
-                existing.higher_order_functions.into_values().collect_vec(),
-            ),
-            aggregate_functions: Some(
-                existing.aggregate_functions.into_values().collect_vec(),
-            ),
-            window_functions: Some(existing.window_functions.into_values().collect_vec()),
+            scalar_functions: Some(collect_registry_values_by_canonical_name(
+                existing.scalar_functions,
+                |udf| udf.name().to_string(),
+            )),
+            higher_order_functions: Some(collect_registry_values_by_canonical_name(
+                existing.higher_order_functions,
+                |udf| udf.name().to_string(),
+            )),
+            aggregate_functions: Some(collect_registry_values_by_canonical_name(
+                existing.aggregate_functions,
+                |udaf| udaf.name().to_string(),
+            )),
+            window_functions: Some(collect_registry_values_by_canonical_name(
+                existing.window_functions,
+                |udwf| udwf.name().to_string(),
+            )),
             extension_types: Some(existing.extension_types),
             serializer_registry: Some(existing.serializer_registry),
             file_formats: Some(existing.file_formats.into_values().collect_vec()),
@@ -2366,6 +2405,7 @@ mod tests {
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_physical_plan::display::DisplayableExecutionPlan;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
+    use itertools::Itertools;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -2535,6 +2575,103 @@ mod tests {
         assert_eq!(
             state.optimizers().len(),
             Optimizer::default().rules.len() + 1
+        );
+    }
+
+    #[test]
+    fn test_new_from_existing_deduplicates_and_sorts_function_registries() {
+        let state = SessionStateBuilder::new().with_default_features().build();
+        let builder = SessionStateBuilder::new_from_existing(state.clone());
+
+        let scalar_names = builder
+            .scalar_functions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|udf| udf.name().to_string())
+            .collect_vec();
+        let mut expected_scalar_names = state
+            .scalar_functions
+            .iter()
+            .filter(|(key, udf)| *key == udf.name())
+            .map(|(key, _)| key.to_string())
+            .collect_vec();
+        expected_scalar_names.sort_unstable();
+        assert_eq!(scalar_names, expected_scalar_names);
+
+        let aggregate_names = builder
+            .aggregate_functions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|udaf| udaf.name().to_string())
+            .collect_vec();
+        let mut expected_aggregate_names = state
+            .aggregate_functions
+            .iter()
+            .filter(|(key, udaf)| *key == udaf.name())
+            .map(|(key, _)| key.to_string())
+            .collect_vec();
+        expected_aggregate_names.sort_unstable();
+        assert_eq!(aggregate_names, expected_aggregate_names);
+
+        let window_names = builder
+            .window_functions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|udwf| udwf.name().to_string())
+            .collect_vec();
+        let mut expected_window_names = state
+            .window_functions
+            .iter()
+            .filter(|(key, udwf)| *key == udwf.name())
+            .map(|(key, _)| key.to_string())
+            .collect_vec();
+        expected_window_names.sort_unstable();
+        assert_eq!(window_names, expected_window_names);
+    }
+
+    #[test]
+    fn test_collect_registry_values_salvages_alias_only_functions() {
+        let state = SessionStateBuilder::new().with_default_features().build();
+        let mut canonical_scalar_functions = state
+            .scalar_functions
+            .iter()
+            .filter(|(key, udf)| *key == udf.name())
+            .map(|(_, udf)| Arc::clone(udf))
+            .take(3)
+            .collect_vec();
+        canonical_scalar_functions.sort_unstable_by(|a, b| a.name().cmp(b.name()));
+
+        let udf_a = Arc::clone(&canonical_scalar_functions[0]);
+        let udf_b = Arc::clone(&canonical_scalar_functions[1]);
+        let udf_c = Arc::clone(&canonical_scalar_functions[2]);
+
+        let mut entries = HashMap::new();
+        // udf_c keeps its canonical mapping
+        entries.insert(udf_c.name().to_string(), Arc::clone(&udf_c));
+        // udf_b only survives via another function's canonical key
+        entries.insert(udf_a.name().to_string(), Arc::clone(&udf_b));
+        // udf_a only survives via an alias-like non-canonical key
+        entries.insert(format!("{}_alias", udf_a.name()), Arc::clone(&udf_a));
+
+        let collected = super::collect_registry_values_by_canonical_name(
+            entries,
+            |udf: &Arc<ScalarUDF>| udf.name().to_string(),
+        );
+        let collected_names = collected
+            .into_iter()
+            .map(|udf| udf.name().to_string())
+            .collect_vec();
+
+        assert_eq!(
+            collected_names,
+            vec![
+                udf_a.name().to_string(),
+                udf_b.name().to_string(),
+                udf_c.name().to_string()
+            ]
         );
     }
 
