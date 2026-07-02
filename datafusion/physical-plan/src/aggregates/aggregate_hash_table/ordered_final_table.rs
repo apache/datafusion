@@ -26,11 +26,10 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
 use crate::InputOrderMode;
+use crate::aggregates::aggregate_hash_table::FinalMarker;
 use crate::aggregates::{AggregateExec, AggregateMode};
 
-use super::common_ordered::{
-    OrderedAggregateTable, OrderedFinalMarker, remove_emitted_groups,
-};
+use super::common_ordered::{OrderedAggregateTable, remove_emitted_groups};
 
 /// Implementation specific to final aggregation, where the table stores partial
 /// aggregate states and the input rows are also partial states.
@@ -39,7 +38,7 @@ use super::common_ordered::{
 ///
 /// - Aggregate table stores: `k, sum(x), count(x)`
 /// - Input rows: `k, sum(x), count(x)`
-impl OrderedAggregateTable<OrderedFinalMarker> {
+impl OrderedAggregateTable<FinalMarker> {
     pub(in crate::aggregates) fn new_with_input_order(
         agg: &AggregateExec,
         partition: usize,

@@ -26,5 +26,5 @@ pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialSkipMarker,
 };
 pub(super) use common_ordered::{
-    OrderedAggregateTable, OrderedFinalMarker, OrderedPartialMarker,
+    OrderedAggregateTable, FinalMarker, PartialMarker,
 };

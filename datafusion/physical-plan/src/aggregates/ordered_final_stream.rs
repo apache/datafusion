@@ -29,7 +29,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
-use super::aggregate_hash_table::{OrderedAggregateTable, OrderedFinalMarker};
+use super::aggregate_hash_table::{FinalMarker, OrderedAggregateTable};
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
@@ -50,10 +50,10 @@ pub(crate) struct OrderedFinalAggregateStream {
 /// See comments at `poll_next()` for details.
 enum OrderedFinalAggregateState {
     ReadingInput {
-        table: OrderedAggregateTable<OrderedFinalMarker>,
+        table: OrderedAggregateTable<FinalMarker>,
     },
     DrainingFinal {
-        table: OrderedAggregateTable<OrderedFinalMarker>,
+        table: OrderedAggregateTable<FinalMarker>,
     },
     Done,
 }
@@ -101,7 +101,7 @@ impl OrderedFinalAggregateStream {
         // Preserve the existing aggregate metric surface for this plan node.
         let _spill_metrics = SpillMetrics::new(&agg.metrics, partition);
 
-        let table = OrderedAggregateTable::<OrderedFinalMarker>::new_with_input_order(
+        let table = OrderedAggregateTable::<FinalMarker>::new_with_input_order(
             agg,
             partition,
             &input_schema,

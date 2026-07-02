@@ -35,11 +35,11 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
-use crate::aggregates::{AggregateExec, AggregateMode};
-
-use super::common_ordered::{
-    OrderedAggregateTable, OrderedPartialMarker, remove_emitted_groups,
+use crate::aggregates::{
+    AggregateExec, AggregateMode, aggregate_hash_table::PartialMarker,
 };
+
+use super::common_ordered::{OrderedAggregateTable, remove_emitted_groups};
 
 /// Implementation specific to partial aggregation, where the table stores
 /// partial aggregate states and the input rows are raw rows.
@@ -48,7 +48,7 @@ use super::common_ordered::{
 ///
 /// - Aggregate table stores: `k, sum(x), count(x)`
 /// - Input rows: `k, x`
-impl OrderedAggregateTable<OrderedPartialMarker> {
+impl OrderedAggregateTable<PartialMarker> {
     pub(in crate::aggregates) fn new(
         agg: &AggregateExec,
         partition: usize,

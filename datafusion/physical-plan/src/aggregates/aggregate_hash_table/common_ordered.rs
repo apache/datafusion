@@ -23,7 +23,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::Result;
+use datafusion_common::assert_or_internal_err;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 
@@ -39,11 +40,6 @@ use crate::aggregates::{
 
 use super::common::{AggregateAccumulator, EvaluatedAggregateBatch};
 
-/// Marker for raw rows -> partial state aggregation on ordered input.
-pub(in crate::aggregates) struct OrderedPartialMarker;
-/// Marker for partial state -> final value aggregation on ordered input.
-pub(in crate::aggregates) struct OrderedFinalMarker;
-
 /// Aggregate table shared by the ordered partial and final paths.
 ///
 /// The table consumes input batches while `GroupOrdering` tracks which groups
@@ -53,9 +49,9 @@ pub(in crate::aggregates) struct OrderedFinalMarker;
 /// # Marker Type
 ///
 /// `OrderedAggrMode` selects the aggregate semantics. For example,
-/// `OrderedAggregateTable::<OrderedPartialMarker>::new(...)` consumes raw rows
+/// `OrderedAggregateTable::<PartialMarker>::new(...)` consumes raw rows
 /// and emits partial states, while
-/// `OrderedAggregateTable::<OrderedFinalMarker>::new_with_input_order(...)`
+/// `OrderedAggregateTable::<FinalMarker>::new_with_input_order(...)`
 /// consumes partial states and emits final values.
 ///
 /// Shared methods live on `impl<T>`; partial/final behavior lives on
@@ -120,11 +116,10 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         aggregate_mode: &AggregateMode,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
     ) -> Result<Self> {
-        if batch_size == 0 {
-            return internal_err!(
-                "OrderedAggregateTable requires config batch_size >= 1"
-            );
-        }
+        assert_or_internal_err!(
+            batch_size == 0,
+            "OrderedAggregateTable requires config batch_size >= 1"
+        );
 
         let group_ordering = GroupOrdering::try_new(input_order_mode)?;
         let group_schema = agg.group_by.group_schema(input_schema)?;

@@ -29,7 +29,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
-use super::aggregate_hash_table::{OrderedAggregateTable, OrderedPartialMarker};
+use super::aggregate_hash_table::{OrderedAggregateTable, PartialMarker};
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
@@ -89,10 +89,10 @@ pub(crate) struct OrderedPartialAggregateStream {
 /// See comments at `poll_next()` for details.
 enum OrderedPartialAggregateState {
     ReadingInput {
-        table: OrderedAggregateTable<OrderedPartialMarker>,
+        table: OrderedAggregateTable<PartialMarker>,
     },
     DrainingFinal {
-        table: OrderedAggregateTable<OrderedPartialMarker>,
+        table: OrderedAggregateTable<PartialMarker>,
     },
     Done,
 }
@@ -123,7 +123,7 @@ impl OrderedPartialAggregateStream {
             .with_type(metrics::MetricType::Summary)
             .ratio_metrics("reduction_factor", partition);
 
-        let table = OrderedAggregateTable::<OrderedPartialMarker>::new(
+        let table = OrderedAggregateTable::<PartialMarker>::new(
             agg,
             partition,
             Arc::clone(&schema),
