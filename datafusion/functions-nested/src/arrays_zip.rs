@@ -88,6 +88,7 @@ make_udf_expr_and_func!(
 pub struct ArraysZip {
     signature: Signature,
     aliases: Vec<String>,
+    field_names: Option<Arc<[String]>>,
 }
 
 impl Default for ArraysZip {
@@ -101,6 +102,25 @@ impl ArraysZip {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
             aliases: vec![String::from("list_zip")],
+            field_names: None,
+        }
+    }
+
+    pub fn with_field_names(names: impl Into<Arc<[String]>>) -> Self {
+        Self {
+            field_names: Some(names.into()),
+            ..Self::new()
+        }
+    }
+
+    fn resolved_field_names(&self, len: usize) -> Result<Vec<String>> {
+        match &self.field_names {
+            Some(names) if names.len() != len => exec_err!(
+                "arrays_zip configured with {} field names but called with {len} arguments",
+                names.len()
+            ),
+            Some(names) => Ok(names.to_vec()),
+            None => Ok(arrays_zip_field_names(len)),
         }
     }
 }
@@ -119,6 +139,7 @@ impl ScalarUDFImpl for ArraysZip {
             return exec_err!("arrays_zip requires at least one argument");
         }
 
+        let field_names = self.resolved_field_names(arg_types.len())?;
         let mut fields = Vec::with_capacity(arg_types.len());
         for (i, arg_type) in arg_types.iter().enumerate() {
             let element_type = match arg_type {
@@ -130,7 +151,7 @@ impl ScalarUDFImpl for ArraysZip {
                     return exec_err!("arrays_zip expects array arguments, got {dt}");
                 }
             };
-            fields.push(Field::new(arrays_zip_field_name(i), element_type, true));
+            fields.push(Field::new(field_names[i].clone(), element_type, true));
         }
 
         Ok(List(Arc::new(Field::new_list_field(
@@ -140,7 +161,10 @@ impl ScalarUDFImpl for ArraysZip {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(arrays_zip_inner)(&args.args)
+        let field_names = self.resolved_field_names(args.args.len())?;
+        make_scalar_function(move |columns: &[ArrayRef]| {
+            arrays_zip_inner(columns, &field_names)
+        })(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -158,15 +182,14 @@ impl ScalarUDFImpl for ArraysZip {
 /// has one field per input array. If arrays within a row have different
 /// lengths, shorter arrays are padded with NULLs.
 /// Supports List, LargeList, and Null input types.
-fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn arrays_zip_inner(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef> {
     if args.is_empty() {
         return exec_err!("arrays_zip requires at least one argument");
     }
 
-    let field_names = arrays_zip_field_names(args.len());
     let num_rows = args[0].len();
 
-    if let Some(result) = try_perfect_list_zip(args, &field_names)? {
+    if let Some(result) = try_perfect_list_zip(args, field_names)? {
         return Ok(result);
     }
 
@@ -442,6 +465,7 @@ mod tests {
     use super::*;
     use arrow::array::Int64Array;
     use arrow::buffer::NullBuffer;
+    use datafusion_common::DataFusionError;
 
     fn list(values: Vec<i64>, offsets: Vec<i32>) -> Arc<ListArray> {
         list_with_validity(values, offsets, None)
@@ -468,10 +492,13 @@ mod tests {
         let left = list(vec![1, 2, 3, 4, 5, 6], vec![0, 2, 3, 6]);
         let right = list(vec![10, 20, 30, 40, 50, 60], vec![0, 2, 3, 6]);
 
-        let result = arrays_zip_inner(&[
-            Arc::clone(&left) as ArrayRef,
-            Arc::clone(&right) as ArrayRef,
-        ])
+        let result = arrays_zip_inner(
+            &[
+                Arc::clone(&left) as ArrayRef,
+                Arc::clone(&right) as ArrayRef,
+            ],
+            &arrays_zip_field_names(2),
+        )
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
         let values = result
@@ -528,10 +555,13 @@ mod tests {
             Some(vec![true, false, true]),
         );
 
-        let result = arrays_zip_inner(&[
-            Arc::clone(&left) as ArrayRef,
-            Arc::clone(&right) as ArrayRef,
-        ])
+        let result = arrays_zip_inner(
+            &[
+                Arc::clone(&left) as ArrayRef,
+                Arc::clone(&right) as ArrayRef,
+            ],
+            &arrays_zip_field_names(2),
+        )
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
 
@@ -546,10 +576,13 @@ mod tests {
         let right =
             list_with_validity(vec![], vec![0, 0, 0, 0], Some(vec![true, false, false]));
 
-        let result = arrays_zip_inner(&[
-            Arc::clone(&left) as ArrayRef,
-            Arc::clone(&right) as ArrayRef,
-        ])
+        let result = arrays_zip_inner(
+            &[
+                Arc::clone(&left) as ArrayRef,
+                Arc::clone(&right) as ArrayRef,
+            ],
+            &arrays_zip_field_names(2),
+        )
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
 
@@ -569,10 +602,13 @@ mod tests {
             Some(vec![true, false]),
         );
 
-        let result = arrays_zip_inner(&[
-            Arc::clone(&left) as ArrayRef,
-            Arc::clone(&right) as ArrayRef,
-        ])
+        let result = arrays_zip_inner(
+            &[
+                Arc::clone(&left) as ArrayRef,
+                Arc::clone(&right) as ArrayRef,
+            ],
+            &arrays_zip_field_names(2),
+        )
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
 
@@ -591,10 +627,13 @@ mod tests {
             Some(vec![true, true]),
         );
 
-        let result = arrays_zip_inner(&[
-            Arc::clone(&left) as ArrayRef,
-            Arc::clone(&right) as ArrayRef,
-        ])
+        let result = arrays_zip_inner(
+            &[
+                Arc::clone(&left) as ArrayRef,
+                Arc::clone(&right) as ArrayRef,
+            ],
+            &arrays_zip_field_names(2),
+        )
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
         let values = result
@@ -609,5 +648,70 @@ mod tests {
         assert!(values.column(0).is_null(3));
         assert!(!values.column(1).is_null(2));
         assert!(!values.column(1).is_null(3));
+    }
+
+    fn list_arg_type(element: DataType) -> DataType {
+        List(Arc::new(Field::new_list_field(element, true)))
+    }
+
+    #[test]
+    fn with_field_names_overrides_struct_field_names() {
+        let arg_types = vec![
+            list_arg_type(DataType::Int64),
+            list_arg_type(DataType::Utf8),
+        ];
+        let names: Arc<[String]> = vec!["a".to_string(), "b".to_string()].into();
+
+        let dt = ArraysZip::with_field_names(names)
+            .return_type(&arg_types)
+            .unwrap();
+
+        let List(list_field) = &dt else {
+            panic!("expected List return type, got {dt:?}");
+        };
+        let DataType::Struct(fields) = list_field.data_type() else {
+            panic!("expected List<Struct>, got {:?}", list_field.data_type());
+        };
+        let got: Vec<&str> = fields.iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(got, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn without_field_names_keeps_ordinal_struct_field_names() {
+        let arg_types = vec![
+            list_arg_type(DataType::Int64),
+            list_arg_type(DataType::Utf8),
+        ];
+
+        let dt = ArraysZip::new().return_type(&arg_types).unwrap();
+
+        let List(list_field) = &dt else {
+            panic!("expected List return type, got {dt:?}");
+        };
+        let DataType::Struct(fields) = list_field.data_type() else {
+            panic!("expected List<Struct>, got {:?}", list_field.data_type());
+        };
+        let got: Vec<&str> = fields.iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(got, vec!["1", "2"]);
+    }
+
+    #[test]
+    fn with_field_names_length_mismatch_errors() {
+        let arg_types = vec![list_arg_type(DataType::Int64)];
+        let names: Arc<[String]> = vec!["a".to_string(), "b".to_string()].into();
+
+        let err = ArraysZip::with_field_names(names)
+            .return_type(&arg_types)
+            .unwrap_err();
+
+        assert!(
+            matches!(err, DataFusionError::Execution(_)),
+            "unexpected error kind: {err}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains('2') && msg.contains('1'),
+            "error should report both counts, got: {msg}"
+        );
     }
 }
