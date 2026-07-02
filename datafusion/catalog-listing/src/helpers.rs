@@ -455,6 +455,7 @@ where
     for (part, expected_partition) in subpath.zip(table_partition_cols) {
         match part.split_once('=') {
             Some((name, val)) if name == expected_partition => {
+                // Preserve the original value if percent-decoding produces invalid UTF-8.
                 let decoded = percent_decode_str(val)
                     .decode_utf8()
                     .unwrap_or(Cow::Borrowed(val));
@@ -580,6 +581,23 @@ mod tests {
                 &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
                 &Path::parse("bucket/mytable/name=John%20Doe/file.csv").unwrap(),
                 vec!["name"]
+            )
+        );
+        assert_eq!(
+            Some(vec![Cow::<str>::Owned("test dir/file".to_string())]),
+            parse_partitions_for_path(
+                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
+                &Path::parse("bucket/mytable/mypartition=test%20dir%2Ffile/file.csv")
+                    .unwrap(),
+                vec!["mypartition"]
+            )
+        );
+        assert_eq!(
+            Some(vec![Cow::<str>::Owned("é".to_string())]),
+            parse_partitions_for_path(
+                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
+                &Path::parse("bucket/mytable/mypartition=%C3%A9/file.csv").unwrap(),
+                vec!["mypartition"]
             )
         );
         assert_eq!(
