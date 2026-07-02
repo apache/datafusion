@@ -40,13 +40,15 @@ use datafusion_common::{
     DFSchema, DataFusionError, Result, ScalarValue, assert_batches_eq,
     assert_batches_sorted_eq, assert_contains, exec_datafusion_err, exec_err,
     not_impl_err, plan_err,
+    types::{NativeType, logical_int16},
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
     OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature, Volatility, lit_with_metadata,
+    Signature, TypeSignatureClass, Volatility, lit_with_metadata,
 };
+use datafusion_expr_common::signature::Coercion;
 use datafusion_expr_common::signature::TypeSignature;
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
@@ -2075,6 +2077,74 @@ AS t(string, extension)
             .get("ARROW:extension:metadata"),
         Some(&"foofy.foofy".into())
     );
+    Ok(())
+}
+
+/// https://github.com/apache/datafusion/issues/19982
+#[tokio::test]
+async fn test_return_field_args_scalar_argument_types_match_arg_fields() -> Result<()> {
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestUdf {
+        signature: Signature,
+    }
+
+    impl Default for TestUdf {
+        fn default() -> Self {
+            Self {
+                signature: Signature::coercible(
+                    vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int16()),
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Int16,
+                    )],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for TestUdf {
+        fn name(&self) -> &str {
+            "test_udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unreachable!("return_field_from_args is implemented")
+        }
+
+        fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+            assert_eq!(args.arg_fields.len(), 1);
+            assert_eq!(args.scalar_arguments.len(), 1);
+            assert_eq!(
+                args.arg_fields[0].data_type(),
+                &args.scalar_arguments[0]
+                    .expect("literal argument")
+                    .data_type()
+            );
+            Ok(
+                Field::new(self.name(), args.arg_fields[0].data_type().clone(), true)
+                    .into(),
+            )
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            assert!(matches!(
+                args.args[0],
+                ColumnarValue::Scalar(ScalarValue::Int16(Some(_)))
+            ));
+            Ok(args.args[0].clone())
+        }
+    }
+
+    let ctx = SessionContext::new();
+    ctx.register_udf(TestUdf::default().into());
+
+    ctx.sql("select test_udf(1)").await?.collect().await?;
+
     Ok(())
 }
 

@@ -87,6 +87,30 @@ fn cast_output_field(
     Arc::new(f)
 }
 
+fn scalar_arguments_for_fields(
+    args: &[Expr],
+    arg_fields: &[FieldRef],
+) -> Result<Vec<Option<ScalarValue>>> {
+    args.iter()
+        .zip(arg_fields)
+        .map(|(expr, field)| {
+            literal_scalar_value(expr)
+                .map(|sv| sv.cast_to(field.data_type()))
+                .transpose()
+        })
+        .collect()
+}
+
+fn literal_scalar_value(expr: &Expr) -> Option<&ScalarValue> {
+    match expr {
+        Expr::Literal(sv, _) => Some(sv),
+        Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
+            literal_scalar_value(expr)
+        }
+        _ => None,
+    }
+}
+
 impl ExprSchemable for Expr {
     /// Returns the [arrow::datatypes::DataType] of the expression
     /// based on [ExprSchema]
@@ -580,16 +604,12 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 let new_fields = verify_function_arguments(func.as_ref(), &fields)?;
 
-                let arguments = args
-                    .iter()
-                    .map(|e| match e {
-                        Expr::Literal(sv, _) => Some(sv),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
+                let arguments = scalar_arguments_for_fields(args, &new_fields)?;
+                let argument_refs =
+                    arguments.iter().map(Option::as_ref).collect::<Vec<_>>();
                 let args = ReturnFieldArgs {
                     arg_fields: &new_fields,
-                    scalar_arguments: &arguments,
+                    scalar_arguments: &argument_refs,
                 };
 
                 func.return_field_from_args(args)
