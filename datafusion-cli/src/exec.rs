@@ -513,8 +513,14 @@ pub(crate) async fn register_object_store_and_config_extensions(
     )
     .await?;
 
-    // Register the retrieved object store in the session context's runtime environment
-    ctx.register_object_store(url, store);
+    // Register the retrieved object store in the session context's runtime
+    // environment. The stdin store is shared across all `stdin://` object paths,
+    // so it is keyed by scheme/authority rather than by the object path.
+    if scheme == StdinUtils::SCHEME {
+        ctx.register_object_store(&StdinUtils::store_url(url), store);
+    } else {
+        ctx.register_object_store(url, store);
+    }
 
     Ok(())
 }
