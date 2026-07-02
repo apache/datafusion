@@ -597,9 +597,7 @@ impl ExternalSorter {
         if self.in_mem_batches.is_empty() {
             let empty_stream =
                 Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)));
-            return Ok(
-                self.maybe_wrap_with_observed_stream(empty_stream, is_output_stream)
-            );
+            return Ok(self.observe_if_output(empty_stream, is_output_stream));
         }
 
         // The elapsed compute timer is updated when the value is dropped.
@@ -617,9 +615,7 @@ impl ExternalSorter {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
             let sorted_stream = self.sort_batch_stream(batch, reservation)?;
-            return Ok(
-                self.maybe_wrap_with_observed_stream(sorted_stream, is_output_stream)
-            );
+            return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
         // If less than sort_in_place_threshold_bytes, concatenate and sort in place
@@ -632,9 +628,7 @@ impl ExternalSorter {
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
             let sorted_stream = self.sort_batch_stream(batch, reservation)?;
-            return Ok(
-                self.maybe_wrap_with_observed_stream(sorted_stream, is_output_stream)
-            );
+            return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
         // For single-column sorts, coalesce the buffered batches into fewer,
@@ -838,7 +832,7 @@ impl ExternalSorter {
         }
     }
 
-    fn maybe_wrap_with_observed_stream(
+    fn observe_if_output(
         &self,
         mut stream: SendableRecordBatchStream,
         wrap: bool,

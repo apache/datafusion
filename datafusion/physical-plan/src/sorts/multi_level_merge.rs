@@ -245,17 +245,13 @@ impl MultiLevelMergeBuilder {
             (0, 0) => {
                 let empty_stream =
                     Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)));
-                Ok(MergeStep::Stream(
-                    self.wrap_with_observed_stream(empty_stream),
-                ))
+                Ok(MergeStep::Stream(self.observe_output(empty_stream)))
             }
 
             // Only in-memory stream, return that
             (0, 1) => {
                 let output_stream = self.sorted_streams.remove(0);
-                Ok(MergeStep::Stream(
-                    self.wrap_with_observed_stream(output_stream),
-                ))
+                Ok(MergeStep::Stream(self.observe_output(output_stream)))
             }
 
             // Only single sorted spill file so return it
@@ -267,9 +263,7 @@ impl MultiLevelMergeBuilder {
                     .spill_manager
                     .read_spill_as_stream(spill_file.file, None)?;
 
-                Ok(MergeStep::Stream(
-                    self.wrap_with_observed_stream(output_stream),
-                ))
+                Ok(MergeStep::Stream(self.observe_output(output_stream)))
             }
 
             // Only in memory streams, so merge them all in a single pass
@@ -588,7 +582,7 @@ impl MultiLevelMergeBuilder {
         Ok(())
     }
 
-    fn wrap_with_observed_stream(
+    fn observe_output(
         &self,
         stream: SendableRecordBatchStream,
     ) -> SendableRecordBatchStream {
