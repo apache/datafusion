@@ -42,7 +42,9 @@ use super::aggregate_hash_table::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialSkipMarker,
 };
 use super::skip_partial::SkipAggregationProbe;
-use super::{AggregateExec, partition_runs, reorder_by_subpartition};
+use super::{
+    AggregateExec, SubpartitionReorderBuffer, partition_runs, reorder_by_subpartition,
+};
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
@@ -77,6 +79,7 @@ struct FinalPartitionRunState {
     total_runs_size: usize,
     replaying_run_size: usize,
     is_draining: bool,
+    subpartition_reorder_buffer: SubpartitionReorderBuffer,
 }
 
 impl FinalPartitionRunState {
@@ -87,6 +90,7 @@ impl FinalPartitionRunState {
             total_runs_size: 0,
             replaying_run_size: 0,
             is_draining: false,
+            subpartition_reorder_buffer: SubpartitionReorderBuffer::new(),
         }
     }
 
@@ -891,22 +895,33 @@ impl FinalHashAggregateStream {
     }
 
     fn stage_partition_runs(&mut self, batch: &RecordBatch) -> Result<Option<usize>> {
-        let (batch, runs) = if let Some((batch, runs)) = reorder_by_subpartition(batch)? {
-            (batch, runs)
-        } else {
-            let Some(runs) = partition_runs(batch.schema_ref())? else {
-                if self
-                    .partition_run_state
-                    .as_ref()
-                    .is_some_and(|state| !state.runs.is_empty())
-                {
-                    return internal_err!(
-                        "missing partition run metadata for final partitioned aggregation after buffered runs have started"
-                    );
-                }
-                return Ok(None);
-            };
-            (batch.clone(), runs)
+        if let Some(state) = self.partition_run_state.as_mut()
+            && let Some(batch) =
+                reorder_by_subpartition(batch, &mut state.subpartition_reorder_buffer)?
+        {
+            let mut offset = 0;
+            let mut staged_memory = 0;
+            let num_runs = state.subpartition_reorder_buffer.runs().len();
+            for run_idx in 0..num_runs {
+                let run = state.subpartition_reorder_buffer.runs()[run_idx];
+                let run_batch = batch.slice(offset, run.len);
+                offset += run.len;
+                staged_memory += state.stage_batch(run_batch, run.relative_partition);
+            }
+            return Ok(Some(staged_memory));
+        }
+
+        let Some(runs) = partition_runs(batch.schema_ref())? else {
+            if self
+                .partition_run_state
+                .as_ref()
+                .is_some_and(|state| !state.runs.is_empty())
+            {
+                return internal_err!(
+                    "missing partition run metadata for final partitioned aggregation after buffered runs have started"
+                );
+            }
+            return Ok(None);
         };
 
         let mut offset = 0;

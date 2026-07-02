@@ -107,10 +107,41 @@ pub(crate) fn append_subpartition_column(
     RecordBatch::try_new_with_options(schema, columns, &options).map_err(Into::into)
 }
 
+/// Reusable scratch space for [`reorder_by_subpartition`].
+#[derive(Default)]
+pub(crate) struct SubpartitionReorderBuffer {
+    counts: Vec<usize>,
+    offsets: Vec<usize>,
+    indices: Vec<u32>,
+    runs: Vec<PartitionRun>,
+}
+
+impl SubpartitionReorderBuffer {
+    /// Create an empty reorder scratch buffer.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return partition runs produced by the latest reorder.
+    pub(crate) fn runs(&self) -> &[PartitionRun] {
+        &self.runs
+    }
+
+    fn clear(&mut self) {
+        self.counts.clear();
+        self.offsets.clear();
+        self.indices.clear();
+        self.runs.clear();
+    }
+}
+
 /// Reorder `batch` by its internal subpartition column and strip that column.
 pub(crate) fn reorder_by_subpartition(
     batch: &RecordBatch,
-) -> Result<Option<(RecordBatch, Vec<PartitionRun>)>> {
+    buffer: &mut SubpartitionReorderBuffer,
+) -> Result<Option<RecordBatch>> {
+    buffer.clear();
+
     let Some(subpartition_idx) = subpartition_column_index(batch.schema_ref()) else {
         return Ok(None);
     };
@@ -122,33 +153,44 @@ pub(crate) fn reorder_by_subpartition(
         );
     }
 
-    let mut partition_indices = Vec::<Vec<u32>>::new();
-    for row_idx in 0..batch.num_rows() {
-        let relative_partition = subpartitions.value(row_idx) as usize;
-        if relative_partition >= partition_indices.len() {
-            partition_indices.resize_with(relative_partition + 1, Vec::new);
-        }
-        let row_idx = u32::try_from(row_idx).map_err(|err| {
-            datafusion_common::DataFusionError::Internal(format!(
-                "Hash aggregate batch row index does not fit UInt32: {err}"
-            ))
-        })?;
-        partition_indices[relative_partition].push(row_idx);
+    let num_rows = batch.num_rows();
+    if num_rows > u32::MAX as usize {
+        return internal_err!(
+            "Hash aggregate batch row count {num_rows} does not fit UInt32"
+        );
     }
 
-    let mut runs = Vec::with_capacity(partition_indices.len());
-    let mut indices = Vec::with_capacity(batch.num_rows());
+    for relative_partition in subpartitions.values().iter().copied() {
+        let relative_partition = relative_partition as usize;
+        if relative_partition >= buffer.counts.len() {
+            buffer.counts.resize(relative_partition + 1, 0);
+        }
+        buffer.counts[relative_partition] += 1;
+    }
+
+    buffer.offsets.resize(buffer.counts.len(), 0);
+    let mut offset = 0;
+    for (relative_partition, len) in buffer.counts.iter().copied().enumerate() {
+        buffer.offsets[relative_partition] = offset;
+        if len != 0 {
+            buffer
+                .runs
+                .push(PartitionRun::new(relative_partition, len)?);
+        }
+        offset += len;
+    }
+    debug_assert_eq!(offset, num_rows);
+
+    buffer.indices.resize(num_rows, 0);
     let mut is_identity = true;
-    for (relative_partition, partition_rows) in partition_indices.into_iter().enumerate()
+    for (row_idx, relative_partition) in
+        subpartitions.values().iter().copied().enumerate()
     {
-        if partition_rows.is_empty() {
-            continue;
-        }
-        runs.push(PartitionRun::new(relative_partition, partition_rows.len())?);
-        for row_idx in partition_rows {
-            is_identity &= row_idx as usize == indices.len();
-            indices.push(row_idx);
-        }
+        let relative_partition = relative_partition as usize;
+        let output_idx = buffer.offsets[relative_partition];
+        buffer.offsets[relative_partition] += 1;
+        is_identity &= output_idx == row_idx;
+        buffer.indices[output_idx] = row_idx as u32;
     }
 
     let schema = strip_subpartition_schema(batch.schema_ref(), subpartition_idx);
@@ -156,13 +198,16 @@ pub(crate) fn reorder_by_subpartition(
     let output = if is_identity {
         RecordBatch::try_new(schema, columns)?
     } else {
-        let indices = UInt32Array::from(indices);
+        let indices = UInt32Array::from(std::mem::take(&mut buffer.indices));
         let columns = take_arrays(&columns, &indices, None)?;
-        let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
+        let num_indices = indices.len();
+        let (_, values, _) = indices.into_parts();
+        buffer.indices = values.into();
+        let options = RecordBatchOptions::new().with_row_count(Some(num_indices));
         RecordBatch::try_new_with_options(schema, columns, &options)?
     };
 
-    Ok(Some((output, runs)))
+    Ok(Some(output))
 }
 
 /// Return partition runs encoded on `schema`, if present.
@@ -337,13 +382,14 @@ mod tests {
             ],
         )?;
 
-        let (batch, runs) = reorder_by_subpartition(&batch)?.unwrap();
+        let mut buffer = SubpartitionReorderBuffer::new();
+        let batch = reorder_by_subpartition(&batch, &mut buffer)?.unwrap();
         let values = as_uint32_array(batch.column(0).as_ref())?;
         assert_eq!(values.values(), &[11, 12, 10, 13]);
         assert_eq!(batch.num_columns(), 1);
         assert_eq!(
-            runs,
-            vec![PartitionRun::new(0, 2)?, PartitionRun::new(1, 2)?]
+            buffer.runs(),
+            &[PartitionRun::new(0, 2)?, PartitionRun::new(1, 2)?]
         );
         Ok(())
     }
