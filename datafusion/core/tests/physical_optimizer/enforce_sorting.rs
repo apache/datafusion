@@ -2845,3 +2845,45 @@ async fn test_sort_with_streaming_table() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_push_sort_through_reordered_projection_to_union() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let ordering: LexOrdering = [sort_expr("a", &schema)].into();
+
+    let sorted_source = parquet_exec_with_sort(schema.clone(), vec![ordering.clone()]);
+    let unsorted_source = sort_exec(ordering.clone(), parquet_exec(schema.clone()));
+    let union = union_exec(vec![sorted_source, unsorted_source]);
+
+    let projection = projection_exec(
+        vec![
+            (col("c", &schema)?, "c".to_string()),
+            (col("b", &schema)?, "b".to_string()),
+            (col("a", &schema)?, "a".to_string()),
+        ],
+        union,
+    )?;
+
+    let physical_plan =
+        sort_exec([sort_expr("a", &projection.schema())].into(), projection);
+
+    let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(true);
+    assert_snapshot!(test.run(), @r"
+    Input Plan:
+    SortExec: expr=[a@2 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[c@2 as c, b@1 as b, a@0 as a]
+        UnionExec
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+          SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+
+    Optimized Plan:
+    SortPreservingMergeExec: [a@2 ASC]
+      ProjectionExec: expr=[c@2 as c, b@1 as b, a@0 as a]
+        UnionExec
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+          SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
+    Ok(())
+}
