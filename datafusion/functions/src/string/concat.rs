@@ -97,11 +97,8 @@ impl ScalarUDFImpl for ConcatFunc {
         }
     }
 
-    /// mixed inputs, prefer Utf8View; prefer LargeUtf8 over Utf8 to avoid
-    /// potential overflow on LargeUtf8 input.
-    /// For binaries, use the similar hierarchy
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(deduce_return_type(arg_types))
+        Ok(arg_types[0].clone())
     }
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
@@ -245,9 +242,97 @@ impl ScalarUDFImpl for ConcatFunc {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &SimplifyContext,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        simplify_concat(args)
+        let data_types = args
+            .iter()
+            .map(|expr| info.get_data_type(expr))
+            .collect::<Result<Vec<_>>>()?;
+        let return_type = self.return_type(&data_types)?;
+
+        let mut new_args = Vec::with_capacity(args.len());
+        let mut contiguous_scalar: Vec<u8> = vec![];
+
+        fn form_scalar(scalar: &[u8], data_type: &DataType) -> Expr {
+            match data_type {
+                // Technically we're guaranteed UTF8 safety since all input types
+                // should be a common type, i.e. all strings or all binary.
+                // Using from_utf8_lossy here just for safety, as the performance
+                // impact is probably minimal on this simplification path.
+                DataType::Utf8 => lit(ScalarValue::Utf8(Some(
+                    String::from_utf8_lossy(scalar).to_string(),
+                ))),
+                DataType::LargeUtf8 => lit(ScalarValue::LargeUtf8(Some(
+                    String::from_utf8_lossy(scalar).to_string(),
+                ))),
+                DataType::Utf8View => lit(ScalarValue::Utf8View(Some(
+                    String::from_utf8_lossy(scalar).to_string(),
+                ))),
+                DataType::Binary => lit(ScalarValue::Binary(Some(scalar.to_vec()))),
+                DataType::LargeBinary => {
+                    lit(ScalarValue::LargeBinary(Some(scalar.to_vec())))
+                }
+                DataType::BinaryView => {
+                    lit(ScalarValue::BinaryView(Some(scalar.to_vec())))
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        for arg in &args {
+            match arg {
+                Expr::Literal(sv, _) if sv.is_null() => {}
+
+                Expr::Literal(
+                    ScalarValue::Utf8(Some(v))
+                    | ScalarValue::LargeUtf8(Some(v))
+                    | ScalarValue::Utf8View(Some(v)),
+                    _,
+                ) => {
+                    contiguous_scalar.extend(v.as_bytes());
+                }
+                Expr::Literal(
+                    ScalarValue::Binary(Some(v))
+                    | ScalarValue::LargeBinary(Some(v))
+                    | ScalarValue::BinaryView(Some(v)),
+                    _,
+                ) => {
+                    contiguous_scalar.extend(v);
+                }
+
+                Expr::Literal(x, _) => {
+                    return internal_err!(
+                        "Unexpected datatype during simplification, expected string or binary got {}",
+                        x.data_type()
+                    );
+                }
+
+                // Non-literal blocks further simplification, finish what we've
+                // done so far and reset
+                arg => {
+                    if !contiguous_scalar.is_empty() {
+                        new_args.push(form_scalar(&contiguous_scalar, &return_type));
+                        contiguous_scalar.clear();
+                    }
+                    new_args.push(arg.clone());
+                }
+            }
+        }
+
+        if !contiguous_scalar.is_empty() {
+            new_args.push(form_scalar(&contiguous_scalar, &return_type));
+        }
+
+        if args.len() != new_args.len() {
+            Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
+                ScalarFunction {
+                    func: concat(),
+                    args: new_args,
+                },
+            )))
+        } else {
+            Ok(ExprSimplifyResult::Original(args))
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -256,24 +341,6 @@ impl ScalarUDFImpl for ConcatFunc {
 
     fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
         Ok(true)
-    }
-}
-
-pub(crate) fn deduce_return_type(arg_types: &[DataType]) -> DataType {
-    use DataType::*;
-    if arg_types.contains(&BinaryView) {
-        BinaryView
-    } else if arg_types.contains(&LargeBinary) {
-        // Serves LargeBinary and FixedSizeBinary inputs
-        LargeBinary
-    } else if arg_types.contains(&Binary) {
-        Binary
-    } else if arg_types.contains(&Utf8View) {
-        Utf8View
-    } else if arg_types.contains(&LargeUtf8) {
-        LargeUtf8
-    } else {
-        Utf8
     }
 }
 
@@ -311,113 +378,13 @@ fn build_concat<B: ConcatBuilder>(
     Ok(ColumnarValue::Array(array))
 }
 
-pub(crate) fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
-    // Skip simplification when binary literals are present, because it
-    // handles only strings
-    for arg in &args {
-        match arg {
-            Expr::Literal(dt, _) if dt.data_type().is_binary() => {
-                return Ok(ExprSimplifyResult::Original(args));
-            }
-            _ => {}
-        }
-    }
-
-    let mut new_args = Vec::with_capacity(args.len());
-    let mut contiguous_scalar = "".to_string();
-
-    let return_type = {
-        let data_types: Vec<_> = args
-            .iter()
-            .filter_map(|expr| match expr {
-                Expr::Literal(l, _) => Some(l.data_type()),
-                _ => None,
-            })
-            .collect();
-        ConcatFunc::new().return_type(&data_types)
-    }?;
-
-    for arg in args.clone() {
-        match arg {
-            Expr::Literal(ScalarValue::Utf8(None), _) => {}
-            Expr::Literal(ScalarValue::LargeUtf8(None), _) => {}
-            Expr::Literal(ScalarValue::Utf8View(None), _) => {}
-
-            // filter out `null` args
-            // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
-            // Concatenate it with the `contiguous_scalar`.
-            Expr::Literal(ScalarValue::Utf8(Some(v)), _) => {
-                contiguous_scalar += &v;
-            }
-            Expr::Literal(ScalarValue::LargeUtf8(Some(v)), _) => {
-                contiguous_scalar += &v;
-            }
-            Expr::Literal(ScalarValue::Utf8View(Some(v)), _) => {
-                contiguous_scalar += &v;
-            }
-
-            Expr::Literal(x, _) => {
-                return internal_err!(
-                    "The scalar {x} should be casted to string type during the type coercion."
-                );
-            }
-            // If the arg is not a literal, we should first push the current `contiguous_scalar`
-            // to the `new_args` (if it is not empty) and reset it to empty string.
-            // Then pushing this arg to the `new_args`.
-            arg => {
-                if !contiguous_scalar.is_empty() {
-                    match return_type {
-                        DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
-                        DataType::LargeUtf8 => new_args
-                            .push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar)))),
-                        DataType::Utf8View => new_args
-                            .push(lit(ScalarValue::Utf8View(Some(contiguous_scalar)))),
-                        _ => unreachable!(),
-                    }
-                    contiguous_scalar = "".to_string();
-                }
-                new_args.push(arg);
-            }
-        }
-    }
-
-    if !contiguous_scalar.is_empty() {
-        match return_type {
-            DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
-            DataType::LargeUtf8 => {
-                new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar))))
-            }
-            DataType::Utf8View => {
-                new_args.push(lit(ScalarValue::Utf8View(Some(contiguous_scalar))))
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    if !args.eq(&new_args) {
-        Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
-            ScalarFunction {
-                func: concat(),
-                args: new_args,
-            },
-        )))
-    } else {
-        Ok(ExprSimplifyResult::Original(args))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::utils::test::test_function;
     use DataType::*;
-    use arrow::array::{
-        ArrayRef, BinaryArray, BinaryViewArray, LargeBinaryArray, StringArray,
-    };
+    use arrow::array::{BinaryArray, BinaryViewArray, LargeBinaryArray, StringArray};
     use arrow::array::{LargeStringArray, StringViewArray};
-    use arrow::datatypes::Field;
-    use datafusion_common::config::ConfigOptions;
-    use std::sync::Arc;
 
     #[test]
     fn test_functions() -> Result<()> {
@@ -456,10 +423,10 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             vec![
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("aa".to_string()))),
                 ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("cc".to_string()))),
             ],
             Ok(Some("aacc")),
             &str,
@@ -469,9 +436,9 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             vec![
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("aa".to_string()))),
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("cc".to_string()))),
             ],
             Ok(Some("aacc")),
             &str,
@@ -482,7 +449,7 @@ mod tests {
             ConcatFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some("aa".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("cc".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("cc".to_string()))),
             ],
             Ok(Some("aacc")),
             &str,
@@ -510,7 +477,7 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             vec![
-                ColumnarValue::Scalar(ScalarValue::Binary(Some(
+                ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(
                     "Café".as_bytes().into()
                 ))),
                 ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(
@@ -525,7 +492,7 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             vec![
-                ColumnarValue::Scalar(ScalarValue::Binary(Some(
+                ColumnarValue::Scalar(ScalarValue::BinaryView(Some(
                     "Café".as_bytes().into()
                 ))),
                 ColumnarValue::Scalar(ScalarValue::BinaryView(Some(
@@ -573,105 +540,6 @@ mod tests {
             Binary,
             BinaryArray
         );
-        Ok(())
-    }
-
-    #[test]
-    fn test_array_string() -> Result<()> {
-        let c0 =
-            ColumnarValue::Array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
-        let c1 = ColumnarValue::Scalar(ScalarValue::Utf8(Some(",".to_string())));
-        let c2 = ColumnarValue::Array(Arc::new(StringArray::from(vec![
-            Some("x"),
-            None,
-            Some("z"),
-        ])));
-        let c3 = ColumnarValue::Scalar(ScalarValue::Utf8View(Some(",".to_string())));
-        let c4 = ColumnarValue::Array(Arc::new(StringViewArray::from(vec![
-            Some("a"),
-            None,
-            Some("b"),
-        ])));
-        let arg_fields = vec![
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8View, true),
-            Field::new("a", Utf8View, true),
-        ]
-        .into_iter()
-        .map(Arc::new)
-        .collect::<Vec<_>>();
-
-        let args = ScalarFunctionArgs {
-            args: vec![c0, c1, c2, c3, c4],
-            arg_fields,
-            number_rows: 3,
-            return_field: Field::new("f", Utf8View, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
-        };
-
-        let result = ConcatFunc::new().invoke_with_args(args)?;
-        let expected =
-            Arc::new(StringViewArray::from(vec!["foo,x,a", "bar,,", "baz,z,b"]))
-                as ArrayRef;
-        match &result {
-            ColumnarValue::Array(array) => {
-                assert_eq!(&expected, array);
-            }
-            _ => panic!(),
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_array_binary() -> Result<()> {
-        let c0 = ColumnarValue::Array(Arc::new(BinaryArray::from_vec(vec![
-            b"foo", b"bar", b"baz",
-        ])));
-        let c1 = ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(b",".to_vec())));
-        let c2 = ColumnarValue::Array(Arc::new(BinaryArray::from_opt_vec(vec![
-            Some(b"x"),
-            None,
-            Some(b"z"),
-        ])));
-        let c3 = ColumnarValue::Scalar(ScalarValue::BinaryView(Some(b",".to_vec())));
-        let c4 = ColumnarValue::Array(Arc::new(BinaryViewArray::from_iter(vec![
-            Some(b"a"),
-            None,
-            Some(b"b"),
-        ])));
-        let arg_fields = vec![
-            Field::new("a", Binary, true),
-            Field::new("a", LargeBinary, true),
-            Field::new("a", Binary, true),
-            Field::new("a", BinaryView, true),
-            Field::new("a", BinaryView, true),
-        ]
-        .into_iter()
-        .map(Arc::new)
-        .collect::<Vec<_>>();
-
-        let args = ScalarFunctionArgs {
-            args: vec![c0, c1, c2, c3, c4],
-            arg_fields,
-            number_rows: 3,
-            return_field: Field::new("f", BinaryView, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
-        };
-
-        let result = ConcatFunc::new().invoke_with_args(args)?;
-        let expected = Arc::new(BinaryViewArray::from_iter(vec![
-            Some(b"foo,x,a".to_vec()),
-            Some(b"bar,,".to_vec()),
-            Some(b"baz,z,b".to_vec()),
-        ])) as ArrayRef;
-        match &result {
-            ColumnarValue::Array(array) => {
-                assert_eq!(&expected, array);
-            }
-            _ => panic!(),
-        }
         Ok(())
     }
 }

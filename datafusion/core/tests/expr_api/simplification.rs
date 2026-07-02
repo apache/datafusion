@@ -684,8 +684,8 @@ fn test_simplify_concat_ws() {
 
     // the delimiter is an empty string
     {
-        let expr = concat_ws(lit(""), vec![col("a"), lit("c"), lit("b")]);
-        let expected = concat(vec![col("a"), lit("cb")]);
+        let expr = concat_ws(lit(""), vec![col("c1"), lit("c"), lit("b")]);
+        let expected = concat(vec![col("c1"), lit("cb")]);
         test_simplify(expr, expected);
     }
 
@@ -695,7 +695,7 @@ fn test_simplify_concat_ws() {
             lit("-"),
             vec![
                 null.clone(),
-                col("c0"),
+                col("c1"),
                 lit("hello"),
                 null.clone(),
                 lit("rust"),
@@ -707,7 +707,7 @@ fn test_simplify_concat_ws() {
         );
         let expected = concat_ws(
             lit("-"),
-            vec![col("c0"), lit("hello-rust"), col("c1"), lit("-")],
+            vec![col("c1"), lit("hello-rust"), col("c1"), lit("-")],
         );
         test_simplify(expr, expected)
     }
@@ -738,8 +738,8 @@ fn test_simplify_concat_ws_with_null() {
 
     // null delimiter (nested)
     {
-        let sub_expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
-        let expr = concat_ws(sub_expr, vec![col("c3"), col("c4")]);
+        let sub_expr = concat_ws(null.clone(), vec![col("c1"), col("c1")]);
+        let expr = concat_ws(sub_expr, vec![col("c1"), col("c1")]);
         test_simplify(expr, null);
     }
 }
@@ -754,16 +754,35 @@ fn test_simplify_concat() -> Result<()> {
         lit("hello "),
         null.clone(),
         lit("rust"),
-        lit(ScalarValue::Utf8View(Some("!".to_string()))),
+        lit("!"),
         col("c2"),
         lit(""),
         null,
         col("c5"),
     ]);
     let expr_datatype = expr.get_type(schema.as_ref())?;
+    let expected = concat(vec![col("c1"), lit("hello rust!"), col("c2"), col("c5")]);
+    let expected_datatype = expected.get_type(schema.as_ref())?;
+    assert_eq!(expr_datatype, expected_datatype);
+    test_simplify(expr, expected);
+
+    let null = lit(ScalarValue::Binary(None));
+    let expr = concat(vec![
+        null.clone(),
+        col("c1"),
+        lit(vec![0xde_u8]),
+        null.clone(),
+        lit(vec![0xad_u8]),
+        lit(vec![0xbe_u8, 0xef]),
+        col("c2"),
+        lit(Vec::new()),
+        null,
+        col("c5"),
+    ]);
+    let expr_datatype = expr.get_type(schema.as_ref())?;
     let expected = concat(vec![
         col("c1"),
-        lit(ScalarValue::Utf8View(Some("hello rust!".to_string()))),
+        lit(vec![0xde_u8, 0xad, 0xbe, 0xef]),
         col("c2"),
         col("c5"),
     ]);
