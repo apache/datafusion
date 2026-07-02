@@ -34,7 +34,8 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalExprSimplifier};
 use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
-use parquet::file::metadata::RowGroupMetaData;
+use parquet::file::metadata::{ParquetOffsetIndex, RowGroupMetaData};
+use parquet::file::page_index::offset_index::PageLocation;
 use parquet::schema::types::SchemaDescriptor;
 
 /// Reduces the [`ParquetAccessPlan`] based on row group level metadata.
@@ -228,6 +229,19 @@ impl RowGroupAccessPlanFilter {
         }
     }
 
+    /// The page start rows of row group `idx`'s largest column chunk, if the
+    /// offset index carries them.
+    fn page_starts_for_group<'a>(
+        offset_index: Option<&'a ParquetOffsetIndex>,
+        idx: usize,
+        metadata: &RowGroupMetaData,
+    ) -> Option<&'a [PageLocation]> {
+        let columns = offset_index?.get(idx)?;
+        let largest_column = (0..metadata.columns().len())
+            .max_by_key(|c| metadata.column(*c).compressed_size())?;
+        Some(columns.get(largest_column)?.page_locations())
+    }
+
     /// Prune remaining row groups to only those  within the specified range.
     ///
     /// Updates this set to mark row groups that should not be scanned
@@ -275,6 +289,22 @@ impl RowGroupAccessPlanFilter {
     /// # Panics
     /// if `groups.len() != self.len()`
     pub fn split_by_range(&mut self, groups: &[RowGroupMetaData], range: &FileRange) {
+        self.split_by_range_aligned(groups, range, None)
+    }
+
+    /// Like [`Self::split_by_range`], but when an offset index is available
+    /// the row boundaries are snapped down to the page boundaries of each
+    /// row group's largest column chunk. Aligned boundaries mean adjacent
+    /// ranges do not both decode the page straddling their boundary, which
+    /// matters when a row group is split into many small pieces. Snapping is
+    /// a pure function of the unaligned boundary row, so adjacent ranges
+    /// still tile the row group exactly.
+    pub fn split_by_range_aligned(
+        &mut self,
+        groups: &[RowGroupMetaData],
+        range: &FileRange,
+        offset_index: Option<&ParquetOffsetIndex>,
+    ) {
         assert_eq!(groups.len(), self.access_plan.len());
         for (idx, metadata) in groups.iter().enumerate() {
             if !self.access_plan.should_scan(idx) {
@@ -306,17 +336,32 @@ impl RowGroupAccessPlanFilter {
                 continue;
             }
 
+            // Snap an interior row boundary down to the start of the page
+            // containing it, using the page boundaries of the row group's
+            // largest (most expensive to decode) column chunk.
+            let page_starts = Self::page_starts_for_group(offset_index, idx, metadata);
+            let snap = |row: i64| -> i64 {
+                let Some(starts) = page_starts else {
+                    return row;
+                };
+                let next = starts.partition_point(|loc| loc.first_row_index <= row);
+                match next.checked_sub(1) {
+                    Some(i) => starts[i].first_row_index,
+                    None => row,
+                }
+            };
+
             // Flooring byte→row mapping; evaluating it identically at both
             // ends of each range keeps adjacent row intervals contiguous and
             // non-overlapping.
             let row_at = |pos: i64| -> i64 {
                 ((pos - rg_start) as i128 * num_rows as i128 / rg_len as i128) as i64
             };
-            let start_row = row_at(overlap_start);
+            let start_row = snap(row_at(overlap_start));
             let end_row = if overlap_end >= rg_end {
                 num_rows
             } else {
-                row_at(overlap_end)
+                snap(row_at(overlap_end))
             };
 
             if start_row >= end_row {

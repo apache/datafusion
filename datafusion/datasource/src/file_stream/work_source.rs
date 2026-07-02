@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use crate::file_groups::FileGroup;
 use crate::file_scan_config::FileScanConfig;
+use crate::shared_file_state::SharedFileState;
 use crate::{FileRange, PartitionedFile};
 use datafusion_physical_expr::utils::collect_columns;
 use parking_lot::Mutex;
@@ -145,7 +146,8 @@ impl SharedWorkSource {
             .flat_map(FileGroup::iter)
             .cloned()
             .collect();
-        let files = config.file_source.reorder_files(files);
+        let mut files = config.file_source.reorder_files(files);
+        attach_shared_file_states(&mut files);
         // A morsel should carry ~MORSEL_MIN_PROJECTED_SIZE bytes of data the
         // scan actually reads; scale the file-range floor by the fraction of
         // columns referenced.
@@ -170,6 +172,12 @@ impl SharedWorkSource {
     /// `min_morsel_size` morsels (the excess halves are pushed back), so
     /// sibling streams that finish their pieces early steal a share of the
     /// last piece instead of idling behind one straggler.
+    ///
+    /// Splitting to morsel granularity unconditionally was measured slower
+    /// even with pieces sharing their opened-file state (see
+    /// [`crate::shared_file_state::SharedFileState`]): the residual
+    /// per-piece cost (decoder and filter setup, per-piece page reads)
+    /// outweighs the balance gain on already even-sized pieces.
     fn pop_front(&self) -> Option<PartitionedFile> {
         let mut files = self.inner.state.lock();
         let mut file = files.pop_front()?;
@@ -182,6 +190,36 @@ impl SharedWorkSource {
             }
         }
         Some(file)
+    }
+}
+
+/// Attach one [`SharedFileState`] to all byte-range pieces of the same file
+/// so the pieces can share their opened-file state (parsed metadata, pruning
+/// results, page index) instead of each repeating that work. Files that are
+/// not split into multiple ranged pieces get no shared state.
+///
+/// Pieces created later by morsel splitting clone their source piece and
+/// therefore share the same state.
+fn attach_shared_file_states(files: &mut [PartitionedFile]) {
+    let mut pieces_per_file: HashMap<&str, usize> = HashMap::new();
+    for file in files.iter() {
+        if file.range.is_some() {
+            *pieces_per_file
+                .entry(file.object_meta.location.as_ref())
+                .or_default() += 1;
+        }
+    }
+    let states: HashMap<String, Arc<SharedFileState>> = pieces_per_file
+        .into_iter()
+        .filter(|(_, pieces)| *pieces > 1)
+        .map(|(path, _)| (path.to_string(), Arc::default()))
+        .collect();
+    for file in files.iter_mut() {
+        if file.range.is_some()
+            && let Some(state) = states.get(file.object_meta.location.as_ref())
+        {
+            file.extensions.insert_arc(Arc::clone(state));
+        }
     }
 }
 
@@ -278,35 +316,23 @@ mod tests {
     }
 
     #[test]
-    fn deep_backlog_pops_whole_ranges() {
-        // With plenty of remaining work relative to the consumer count, the
-        // fair share exceeds the range size and pieces are not split.
-        let files = (0..8).map(|_| ranged_file(8 * MIB));
-        let source = SharedWorkSource::with_consumers(files, 1);
-        let first = source.pop_front().unwrap().range.unwrap();
-        assert_eq!(
-            first,
-            FileRange {
-                start: 0,
-                end: 8 * MIB
-            }
-        );
-    }
-
-    #[test]
-    fn morsels_shrink_toward_the_tail() {
+    fn only_the_tail_splits_into_morsels() {
         let files = (0..4).map(|i| {
             PartitionedFile::new("test.parquet".to_string(), 32 * MIB as u64)
                 .with_range(i * 8 * MIB, (i + 1) * 8 * MIB)
         });
         let source = SharedWorkSource::with_consumers(files, 4);
         let ranges = drain(&source);
-        assert!(ranges.len() > 4, "expected splitting, got {ranges:?}");
-        let first = ranges.first().unwrap();
+        // The first pieces pop unsplit; the final piece splits into morsels
+        assert!(ranges.len() > 4, "expected tail splitting, got {ranges:?}");
+        for r in &ranges[..3] {
+            assert_eq!(r.end - r.start, 8 * MIB, "planner-sized piece: {ranges:?}");
+        }
         let last = ranges.last().unwrap();
         assert!(
-            last.end - last.start < first.end - first.start,
-            "tail morsels should be smaller: {ranges:?}"
+            (MORSEL_MIN_PROJECTED_SIZE..2 * MORSEL_MIN_PROJECTED_SIZE)
+                .contains(&(last.end - last.start)),
+            "tail morsel near the floor: {ranges:?}"
         );
     }
 
@@ -323,5 +349,27 @@ mod tests {
     fn small_ranges_are_not_split() {
         let source = SharedWorkSource::with_consumers([ranged_file(MIB)], 4);
         assert_eq!(drain(&source), vec![FileRange { start: 0, end: MIB }]);
+    }
+
+    #[test]
+    fn shared_file_states_attached_to_multi_piece_files() {
+        let piece = |path: &str, start: i64, end: i64| {
+            PartitionedFile::new(path.to_string(), 4 * MIB as u64).with_range(start, end)
+        };
+        let mut files = vec![
+            piece("split.parquet", 0, 2 * MIB),
+            piece("split.parquet", 2 * MIB, 4 * MIB),
+            piece("solo.parquet", 0, 4 * MIB),
+            PartitionedFile::new("unranged.parquet".to_string(), 4 * MIB as u64),
+        ];
+        attach_shared_file_states(&mut files);
+
+        let state = |f: &PartitionedFile| f.extensions.get_arc::<SharedFileState>();
+        // Both pieces of the split file share the same state
+        let (a, b) = (state(&files[0]).unwrap(), state(&files[1]).unwrap());
+        assert!(Arc::ptr_eq(&a, &b));
+        // Files that are not split into multiple pieces get no shared state
+        assert!(state(&files[2]).is_none());
+        assert!(state(&files[3]).is_none());
     }
 }
