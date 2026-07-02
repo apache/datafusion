@@ -456,6 +456,9 @@ impl ExternalSorter {
             self.finished_spill_files.push(SortedSpillFile {
                 file: spill_file,
                 max_record_batch_memory,
+                // Freshly spilled sorted runs are written at the normal batch size,
+                // so they impose no cap on later merge output batch sizes.
+                batch_size_limit: None,
             });
         }
 
