@@ -37,6 +37,7 @@ use datafusion_physical_plan::execution_plan::Boundedness;
 use datafusion_physical_plan::projection::{
     ProjectionExec, make_with_child, update_expr, update_ordering_requirement,
 };
+use datafusion_physical_plan::scalar_subquery::ScalarSubqueryExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
@@ -364,6 +365,26 @@ fn require_top_ordering_helper(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
     let mut children = plan.children();
+
+    // `ScalarSubqueryExec` is a multi-child but order-transparent root: child 0 is
+    // the main input (it copies that child's `PlanProperties` and reports
+    // `maintains_input_order()[0] == true` with no required input ordering), while
+    // the remaining children are subquery plans that don't contribute to output
+    // ordering. The generic `children.len() != 1` guard below would stop the search
+    // at this node and lose the query's global ORDER BY (the top `SortExec` lives
+    // below the main input), so descend through child 0 and reattach the rest.
+    if plan.downcast_ref::<ScalarSubqueryExec>().is_some() {
+        let (new_main, is_changed) =
+            require_top_ordering_helper(Arc::clone(children[0]))?;
+        if is_changed {
+            let mut new_children: Vec<Arc<dyn ExecutionPlan>> =
+                children.iter().map(|&c| Arc::clone(c)).collect();
+            new_children[0] = new_main;
+            return Ok((plan.with_new_children(new_children)?, true));
+        }
+        return Ok((plan, false));
+    }
+
     // Global ordering defines desired ordering in the final result.
     if children.len() != 1 {
         Ok((plan, false))
