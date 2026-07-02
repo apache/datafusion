@@ -343,6 +343,62 @@ async fn optimized_duckdb_unparse_preserves_derived_table_scope() -> Result<()> 
     Ok(())
 }
 
+// https://github.com/apache/datafusion/issues/23138
+//
+// CSE on `coalesce(discount_pct, 0)` factors a shared CAST into an extra inner
+// projection, so `SubqueryAlias: o` ends up over two stacked projections. When
+// the unparser renders that as nested derived tables it must qualify the
+// pass-through `order_id` with a name in scope at each level -- it must not
+// rebase it to the outer subquery alias `o`, which is not visible inside the
+// inner derived table.
+const ISSUE_23138_QUERY: &str = r#"
+SELECT * FROM
+(
+    SELECT order_id FROM "warehouse"."main"."order_items"
+) oi
+JOIN (
+    SELECT order_id, coalesce(discount_pct, 0) AS discount_pct_2
+    FROM "warehouse"."main"."orders"
+) o USING (order_id)
+"#;
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_qualifies_nested_passthrough_column() -> Result<()> {
+    let ctx = issue_22961_context()?;
+    let plan = ctx.sql(ISSUE_23138_QUERY).await?.into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    // The intermediate derived table has no `o` in scope, so the pass-through
+    // `order_id` must be unqualified there, not rebased to the subquery alias
+    // `o` (which is only the base-table alias one level deeper). The bug emitted
+    // `"o"."order_id"` inside that derived table; the fix emits a bare column.
+    let expected = concat!(
+        r#"SELECT "o"."order_id", "o"."discount_pct_2" "#,
+        r#"FROM "warehouse"."main"."order_items" AS "oi" "#,
+        r#"INNER JOIN (SELECT "order_id", "#,
+        r#"CASE WHEN "__common_expr_1" IS NOT NULL "#,
+        r#"THEN "__common_expr_1" ELSE 0.00 END AS "discount_pct_2" "#,
+        r#"FROM (SELECT CAST("o"."discount_pct" AS DECIMAL(22,2)) "#,
+        r#"AS "__common_expr_1", "o"."order_id" "#,
+        r#"FROM "warehouse"."main"."orders" AS "o")) AS "o" "#,
+        r#"ON "oi"."order_id" = "o"."order_id""#,
+    );
+    assert_eq!(sql, expected);
+
+    assert!(
+        sql.contains(r#"(SELECT "order_id", CASE WHEN"#),
+        "pass-through order_id should be unqualified in derived table: {sql}"
+    );
+    assert!(
+        !sql.contains(r#"(SELECT "o"."order_id", CASE WHEN"#),
+        "derived table must not reference out-of-scope alias o: {sql}"
+    );
+
+    Ok(())
+}
+
 /// The outcome of running a single roundtrip test.
 ///
 /// A successful test produces [`TestCaseResult::Success`].
