@@ -1132,94 +1132,36 @@ mod tests {
         Ok(())
     }
 
-    /// Covers <https://github.com/apache/datafusion/issues/23293>.
+    /// Verifies that disabling `enable_file_stream_work_stealing` keeps each
+    /// stream's files local, so a sibling cannot steal them at runtime.
     ///
-    /// Executors that run each output partition as an isolated task in a
-    /// separate process (Ballista, datafusion-distributed) build one plan
-    /// instance and call `execute(partition)` for a single partition. The
-    /// sibling partitions are never polled in that process. A `DataSourceExec`
-    /// seeds one shared work queue from every file group, so the single polled
-    /// partition drains the whole queue and reads files that belong to other
-    /// partitions, inflating the scan output by the partition count.
-    ///
-    /// `datafusion.execution.enable_file_stream_work_stealing` turns the shared
-    /// queue off: `create_sibling_state` then returns `None` and each partition
-    /// reads only its own file group. This test drives only partition 0 (as an
-    /// isolated task would) and checks both behaviors: with the default
-    /// (stealing on) partition 0 also reads partition 1's file, and with the
-    /// flag off it reads only its own.
+    /// Covers <https://github.com/apache/datafusion/issues/23293>: executors
+    /// that run each output partition as an isolated task in a separate process
+    /// (Ballista, datafusion-distributed) poll only their own partition, so the
+    /// shared work queue would let that one partition drain files belonging to
+    /// its siblings. Disabling the flag falls back to per-partition file groups.
     #[tokio::test]
-    async fn isolated_partition_respects_work_stealing_config() -> Result<()> {
-        // A two-file scan: partition 0 owns file1 (batch 101), partition 1 owns
-        // file2 (batch 201). Rebuilt per phase because the mock planners are
-        // consumed as files are opened.
-        let make_test = || {
-            FileStreamMorselTest::new()
-                .with_file_in_partition(
-                    PartitionId(0),
-                    MockPlanner::builder("file1.parquet")
-                        .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 101))
-                        .return_none(),
-                )
-                .with_file_in_partition(
-                    PartitionId(1),
-                    MockPlanner::builder("file2.parquet")
-                        .add_plan(MockPlanBuilder::new().with_morsel(MorselId(11), 201))
-                        .return_none(),
-                )
-        };
+    async fn morsel_disabled_work_stealing_keeps_files_local() -> Result<()> {
+        // same fixture as `morsel_shared_files_can_be_stolen`, but with work
+        // stealing disabled via config
+        let test = two_partition_morsel_test()
+            .with_enable_file_stream_work_stealing(false)
+            .with_file_stream_events(false);
 
-        // Drive only partition 0, exactly as an isolated per-task executor does.
-        // Partition 1's stream is never created.
-        async fn drive_partition0(
-            test: &FileStreamMorselTest,
-            config: &FileScanConfig,
-            options: &ConfigOptions,
-        ) -> Result<String> {
-            let shared_work_source =
-                config.create_sibling_state(options).and_then(|state| {
-                    state.as_ref().downcast_ref::<SharedWorkSource>().cloned()
-                });
-            let metrics_set = ExecutionPlanMetricsSet::new();
-            let partition0 = FileStreamBuilder::new(config)
-                .with_partition(0)
-                .with_shared_work_source(shared_work_source)
-                .with_morselizer(Box::new(test.morselizer.clone()))
-                .with_metrics(&metrics_set)
-                .build()?;
-            drain_stream_output(partition0).await
-        }
-
-        // With work stealing enabled (the default), the single polled partition
-        // drains the shared queue and reads a sibling's file (issue #23293).
-        let mut options = ConfigOptions::default();
-        assert!(options.execution.enable_file_stream_work_stealing);
-        let test = make_test();
-        let config = test.test_config();
-        assert!(
-            config.create_sibling_state(&options).is_some(),
-            "the default config shares one work queue across siblings"
-        );
-        assert_eq!(
-            drive_partition0(&test, &config, &options).await?,
-            "Batch: 101\nBatch: 201",
-            "with work stealing on, an isolated partition drains the shared queue"
-        );
-
-        // Disabling work stealing drops the shared queue, so partition 0 reads
-        // only its own file group.
-        options.execution.enable_file_stream_work_stealing = false;
-        let test = make_test();
-        let config = test.test_config();
-        assert!(
-            config.create_sibling_state(&options).is_none(),
-            "disabling work stealing drops the shared work source"
-        );
-        assert_eq!(
-            drive_partition0(&test, &config, &options).await?,
-            "Batch: 101",
-            "with work stealing off, partition 0 reads only its own file group"
-        );
+        // Even though Partition 1 is polled first, it cannot steal the three
+        // files assigned to Partition 0; each partition reads only its own.
+        insta::assert_snapshot!(test.run().await.unwrap(), @r"
+        ----- Partition 0 -----
+        Batch: 101
+        Batch: 102
+        Batch: 103
+        Done
+        ----- Partition 1 -----
+        Batch: 201
+        Done
+        ----- File Stream Events -----
+        (omitted due to with_file_stream_events(false))
+        ");
 
         Ok(())
     }
@@ -1425,6 +1367,7 @@ mod tests {
         partition_files: BTreeMap<PartitionId, Vec<String>>,
         preserve_order: bool,
         partitioned_by_file_group: bool,
+        enable_file_stream_work_stealing: bool,
         file_stream_events: bool,
         build_streams_on_first_read: bool,
         reads: Vec<PartitionId>,
@@ -1439,6 +1382,7 @@ mod tests {
                 partition_files: BTreeMap::new(),
                 preserve_order: false,
                 partitioned_by_file_group: false,
+                enable_file_stream_work_stealing: true,
                 file_stream_events: true,
                 build_streams_on_first_read: false,
                 reads: vec![],
@@ -1481,6 +1425,14 @@ mod tests {
             partitioned_by_file_group: bool,
         ) -> Self {
             self.partitioned_by_file_group = partitioned_by_file_group;
+            self
+        }
+
+        /// Sets `datafusion.execution.enable_file_stream_work_stealing`. When
+        /// disabled, each stream keeps its own files local instead of sharing a
+        /// work queue with its siblings.
+        fn with_enable_file_stream_work_stealing(mut self, enable: bool) -> Self {
+            self.enable_file_stream_work_stealing = enable;
             self
         }
 
@@ -1561,9 +1513,11 @@ mod tests {
             // `FileStream`s directly, bypassing `DataSourceExec`, so they must
             // perform the same setup explicitly when exercising sibling-stream
             // work stealing.
-            let shared_work_source = config
-                .create_sibling_state(&ConfigOptions::default())
-                .and_then(|state| {
+            let mut options = ConfigOptions::default();
+            options.execution.enable_file_stream_work_stealing =
+                self.enable_file_stream_work_stealing;
+            let shared_work_source =
+                config.create_sibling_state(&options).and_then(|state| {
                     state.as_ref().downcast_ref::<SharedWorkSource>().cloned()
                 });
             if !self.build_streams_on_first_read {
