@@ -23,6 +23,11 @@ concurrency:
 
 on:
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/pull_request_template.md"
   merge_group:
 
 permissions:
