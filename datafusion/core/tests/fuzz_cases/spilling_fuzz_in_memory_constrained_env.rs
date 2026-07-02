@@ -77,6 +77,7 @@ async fn test_sort_with_limited_memory() -> Result<()> {
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |_| record_batch_size),
         memory_behavior: Default::default(),
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 
@@ -122,6 +123,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch() -> 
             }
         }),
         memory_behavior: Default::default(),
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 
@@ -160,6 +162,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_c
             }
         }),
         memory_behavior: MemoryBehavior::TakeAllMemoryAndReleaseEveryNthBatch(10),
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 
@@ -198,6 +201,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_t
             }
         }),
         memory_behavior: MemoryBehavior::TakeAllMemoryAtTheBeginning,
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 
@@ -230,6 +234,7 @@ async fn test_sort_with_limited_memory_and_large_record_batch() -> Result<()> {
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 6),
         memory_behavior: Default::default(),
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 
@@ -255,20 +260,38 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch() -> Result<()
             ))
     };
 
+    let number_of_record_batches = 100;
+
     // Each spilled run's largest batch is so big that two merge streams cannot be
     // reserved at once even at the smallest read-buffer size (`2 * (2 * batch) >
     // pool`), yet a single stream still fits (`2 * batch < pool`). Reducing the
     // buffer size therefore cannot help, the multi-level merge has to re-spill a
     // run with a smaller batch size to make progress instead of failing with
     // `ResourcesExhausted`.
-    run_sort_test_with_limited_memory(RunTestWithLimitedMemoryArgs {
+    let metrics = run_sort_test_with_limited_memory(RunTestWithLimitedMemoryArgs {
         pool_size,
         task_ctx: Arc::new(task_ctx),
-        number_of_record_batches: 100,
+        number_of_record_batches,
         get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 3),
         memory_behavior: Default::default(),
+
+        assert_all_output_batches_roughly_match_batch_size_conf: false,
     })
     .await?;
+
+    let output_batches = metrics
+        .iter()
+        .find_map(|item| match item.value() {
+            MetricValue::OutputBatches(total) => Some(total),
+            _ => None,
+        })
+        .expect("Must have output_batches metric since it exists in the baseline");
+
+    // minimum 2 batches more
+    assert!(
+        output_batches >= number_of_record_batches + 2,
+        "output_batches {output_batches} should be greater than number_of_record_batches ({number_of_record_batches}) + 2"
+    );
 
     Ok(())
 }
@@ -280,6 +303,9 @@ struct RunTestWithLimitedMemoryArgs {
     get_size_of_record_batch_to_generate:
         Pin<Box<dyn Fn(usize) -> usize + Send + 'static>>,
     memory_behavior: MemoryBehavior,
+
+    /// When true we would `assert_eq(the number of output_rows metric / output_batches metric == task_ctx.batch_size)`
+    assert_all_output_batches_roughly_match_batch_size_conf: bool,
 }
 
 #[derive(Default)]
@@ -359,7 +385,11 @@ async fn run_sort_test_with_limited_memory(
     assert_baseline_metrics_for_non_empty_output(
         &metrics,
         number_of_record_batches * record_batch_size as usize,
-        record_batch_size as usize,
+        if args.assert_all_output_batches_roughly_match_batch_size_conf {
+            record_batch_size as usize
+        } else {
+            None
+        },
     );
 
     Ok(metrics)
@@ -403,6 +433,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory() -> Result<()
             number_of_record_batches: 100,
             get_size_of_record_batch_to_generate: Box::pin(move |_| record_batch_size),
             memory_behavior: Default::default(),
+            assert_all_output_batches_roughly_match_batch_size_conf: true,
         })
         .await?;
 
@@ -444,6 +475,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
             }
         }),
         memory_behavior: Default::default(),
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 
@@ -478,6 +510,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
             }
         }),
         memory_behavior: MemoryBehavior::TakeAllMemoryAndReleaseEveryNthBatch(10),
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 
@@ -512,6 +545,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
             }
         }),
         memory_behavior: MemoryBehavior::TakeAllMemoryAtTheBeginning,
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 
@@ -541,6 +575,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_large_reco
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 6),
         memory_behavior: Default::default(),
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 
@@ -709,10 +744,14 @@ async fn consume_stream_and_simulate_other_running_memory_consumers(
     Ok(())
 }
 
+/// Assert baseline metrics are as expected or around that
+///
+/// `output_batch_size` should be `None` when you expect to not get batched at the same size
+/// `Some(session conf batch size)` for the rest
 fn assert_baseline_metrics_for_non_empty_output(
     metrics: &MetricsSet,
     expected_output_rows: usize,
-    output_batch_size: usize,
+    output_batch_size: Option<usize>,
 ) {
     let end_time = metrics
         .iter()
@@ -744,8 +783,12 @@ fn assert_baseline_metrics_for_non_empty_output(
         })
         .expect("Must have output_batches metric since it exists in the baseline");
 
-    assert_eq!(
-        output_batches.value(),
-        expected_output_rows.div_ceil(output_batch_size)
-    );
+    if let Some(output_batch_size) = output_batch_size {
+        assert_eq!(
+            output_batches.value(),
+            expected_output_rows.div_ceil(output_batch_size)
+        );
+    } else {
+        assert_ne!(output_batches.value(), 0,);
+    }
 }
