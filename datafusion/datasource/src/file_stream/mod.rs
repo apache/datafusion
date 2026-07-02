@@ -1131,6 +1131,77 @@ mod tests {
         Ok(())
     }
 
+    /// Reproduces <https://github.com/apache/datafusion/issues/23293>.
+    ///
+    /// Executors that run each output partition as an isolated task in a
+    /// separate process (Ballista, datafusion-distributed) build one plan
+    /// instance and call `execute(partition)` for a single partition. The
+    /// sibling partitions are never polled in that process. A `DataSourceExec`
+    /// seeds one shared work queue from every file group, so the single polled
+    /// partition drains the whole queue and reads files that belong to other
+    /// partitions. Each isolated task does the same, inflating the scan output
+    /// by the partition count.
+    ///
+    /// This test models that setup: it builds and drives only partition 0.
+    /// Partition 0 should read only its own file (`file1.parquet`), but today
+    /// it also reads partition 1's file, so it fails with
+    /// `"Batch: 101\nBatch: 201"`.
+    ///
+    /// Ignored because it fails on `main` by design: it is a caught regression
+    /// kept with its assertion intact. Run it with
+    /// `cargo test -p datafusion-datasource -- --ignored
+    /// regression_isolated_partition_reads_only_its_own_files`.
+    #[tokio::test]
+    #[ignore = "reproduces #23293: shared FileStream work queue is drained by a single isolated task"]
+    async fn regression_isolated_partition_reads_only_its_own_files() -> Result<()> {
+        let test = FileStreamMorselTest::new()
+            .with_file_in_partition(
+                PartitionId(0),
+                MockPlanner::builder("file1.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 101))
+                    .return_none(),
+            )
+            .with_file_in_partition(
+                PartitionId(1),
+                MockPlanner::builder("file2.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(11), 201))
+                    .return_none(),
+            );
+
+        let config = test.test_config();
+        let metrics_set = ExecutionPlanMetricsSet::new();
+
+        // A `DataSourceExec` builds exactly one shared work source per
+        // execution, seeded from every file group. An isolated task builds that
+        // state and then executes only its own partition.
+        let shared_work_source = config
+            .create_sibling_state()
+            .and_then(|state| state.as_ref().downcast_ref::<SharedWorkSource>().cloned());
+        assert!(
+            shared_work_source.is_some(),
+            "a plain repartitioned scan should use a shared work source"
+        );
+
+        // Build and drive ONLY partition 0. Partition 1's stream is never
+        // created, exactly as in an isolated per-task executor.
+        let partition0 = FileStreamBuilder::new(&config)
+            .with_partition(0)
+            .with_shared_work_source(shared_work_source)
+            .with_morselizer(Box::new(test.morselizer.clone()))
+            .with_metrics(&metrics_set)
+            .build()?;
+
+        let output = drain_stream_output(partition0).await?;
+
+        assert_eq!(
+            output, "Batch: 101",
+            "partition 0 read files belonging to a sibling partition: a single \
+             isolated task drained the shared work queue (issue #23293)"
+        );
+
+        Ok(())
+    }
+
     /// Verifies that an empty sibling can immediately steal shared files when
     /// it is polled before the stream that originally owned them.
     #[tokio::test]
