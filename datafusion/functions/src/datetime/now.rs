@@ -87,7 +87,7 @@ impl NowFunc {
                 .execution
                 .time_zone
                 .as_ref()
-                .map(|tz| Arc::from(tz.as_str())),
+                .map(|tz| Arc::from(tz.to_string())),
         }
     }
 }

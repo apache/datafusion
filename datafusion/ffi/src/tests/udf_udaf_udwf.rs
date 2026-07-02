@@ -99,7 +99,12 @@ impl ScalarUDFImpl for TimeZoneUDF {
         &self,
         args: ScalarFunctionArgs,
     ) -> datafusion_common::Result<ColumnarValue> {
-        let tz = args.config_options.execution.time_zone.clone();
+        let tz = args
+            .config_options
+            .execution
+            .time_zone
+            .as_ref()
+            .map(ToString::to_string);
         Ok(ColumnarValue::Scalar(ScalarValue::from(tz)))
     }
 }

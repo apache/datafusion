@@ -768,7 +768,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp With Time Zone
                     // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
                     // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
-                    self.context_provider.options().execution.time_zone.clone()
+                    self.context_provider
+                        .options()
+                        .execution
+                        .time_zone
+                        .as_ref()
+                        .map(|tz| Arc::from(tz.to_string()))
                 } else {
                     // Timestamp Without Time zone
                     None
@@ -780,7 +785,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     None | Some(9) => TimeUnit::Nanosecond,
                     _ => unreachable!(),
                 };
-                Ok(DataType::Timestamp(precision, tz.map(Into::into)))
+                Ok(DataType::Timestamp(precision, tz))
             }
             SQLDataType::Date => Ok(DataType::Date32),
             SQLDataType::Time(None, tz_info) => {
