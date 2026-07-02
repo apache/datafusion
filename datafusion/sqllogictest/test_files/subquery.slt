@@ -2468,12 +2468,12 @@ query TT
 EXPLAIN SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null);
 ----
 logical_plan
-01)LeftAnti Join: nia_left.x = __correlated_sq_1.y
+01)LeftAnti Join: nia_left.x = __correlated_sq_1.y null_aware
 02)--TableScan: nia_left projection=[x]
 03)--SubqueryAlias: __correlated_sq_1
 04)----TableScan: nia_right_with_null projection=[y]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(x@0, y@0)]
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(x@0, y@0)], null_aware
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
