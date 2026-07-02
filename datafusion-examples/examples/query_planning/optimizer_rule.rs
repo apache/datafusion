@@ -150,7 +150,7 @@ impl MyOptimizerRule {
                     let BinaryExpr { left, op: _, right } = binary_expr;
                     // rewrite to `my_eq(left, right)`
                     let udf = ScalarUDF::new_from_impl(MyEq::new());
-                    let call = udf.call(vec![*left, *right]);
+                    let call = udf.call(vec![*left.into_inner(), *right.into_inner()]);
                     Ok(Transformed::yes(call))
                 }
                 _ => Ok(Transformed::no(expr)),

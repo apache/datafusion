@@ -717,11 +717,11 @@ mod tests {
 
         let mut expr = col("a");
         for _ in 0..depth {
-            expr = Expr::BinaryExpr(BinaryExpr {
-                left: Box::new(expr),
-                op: Operator::Plus,
-                right: Box::new(col("a")),
-            });
+            expr = Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(expr),
+                Operator::Plus,
+                Box::new(col("a")),
+            ));
         }
 
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);

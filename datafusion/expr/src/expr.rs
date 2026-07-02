@@ -22,6 +22,7 @@ use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::mem;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
@@ -767,21 +768,112 @@ impl Alias {
     }
 }
 
+/// A `Box<Expr>` for the recursive children of [`BinaryExpr`]. A long binary-operator chain
+/// (e.g. `a OR b OR c OR ...`) builds an `Expr` as deep as the chain, and dropping it
+/// recursively would overflow the stack. This wrapper's `Drop` tears the chain down iteratively.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct BoxedExpr(Box<Expr>);
+
+impl fmt::Debug for BoxedExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // Stay transparent like the `Box<Expr>` this replaced, so a `BinaryExpr`'s debug
+        // output keeps showing its children directly rather than wrapped.
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl BoxedExpr {
+    pub fn new(expr: Expr) -> Self {
+        Self(Box::new(expr))
+    }
+
+    /// Take the inner `Box<Expr>` out without running the iterative `Drop`.
+    pub fn into_inner(mut self) -> Box<Expr> {
+        let inner = mem::replace(
+            &mut self.0,
+            Box::new(Expr::Literal(ScalarValue::Null, None)),
+        );
+        // `self` now holds a leaf and drops in O(1).
+        inner
+    }
+}
+
+impl From<Box<Expr>> for BoxedExpr {
+    fn from(boxed: Box<Expr>) -> Self {
+        Self(boxed)
+    }
+}
+
+impl From<Expr> for BoxedExpr {
+    fn from(expr: Expr) -> Self {
+        Self(Box::new(expr))
+    }
+}
+
+impl Deref for BoxedExpr {
+    type Target = Expr;
+    fn deref(&self) -> &Expr {
+        &self.0
+    }
+}
+
+impl DerefMut for BoxedExpr {
+    fn deref_mut(&mut self) -> &mut Expr {
+        &mut self.0
+    }
+}
+
+impl AsRef<Expr> for BoxedExpr {
+    fn as_ref(&self) -> &Expr {
+        &self.0
+    }
+}
+
+impl Drop for BoxedExpr {
+    fn drop(&mut self) {
+        // Detach each `BinaryExpr`'s children into a heap stack before the node drops, so an
+        // arbitrarily deep chain is torn down iteratively instead of recursing.
+        fn detach(expr: &mut Expr, stack: &mut Vec<Expr>) {
+            if let Expr::BinaryExpr(b) = expr {
+                stack.push(mem::replace(
+                    b.left.0.as_mut(),
+                    Expr::Literal(ScalarValue::Null, None),
+                ));
+                stack.push(mem::replace(
+                    b.right.0.as_mut(),
+                    Expr::Literal(ScalarValue::Null, None),
+                ));
+            }
+        }
+
+        let mut stack: Vec<Expr> = Vec::new();
+        detach(self.0.as_mut(), &mut stack);
+        while let Some(mut expr) = stack.pop() {
+            detach(&mut expr, &mut stack);
+            // `expr` drops here; its children were detached, so the drop is shallow.
+        }
+    }
+}
+
 /// Binary expression for [`Expr::BinaryExpr`]
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct BinaryExpr {
     /// Left-hand side of the expression
-    pub left: Box<Expr>,
+    pub left: BoxedExpr,
     /// The comparison operator
     pub op: Operator,
     /// Right-hand side of the expression
-    pub right: Box<Expr>,
+    pub right: BoxedExpr,
 }
 
 impl BinaryExpr {
     /// Create a new binary expression
     pub fn new(left: Box<Expr>, op: Operator, right: Box<Expr>) -> Self {
-        Self { left, op, right }
+        Self {
+            left: BoxedExpr(left),
+            op,
+            right: BoxedExpr(right),
+        }
     }
 }
 
@@ -2165,8 +2257,8 @@ impl Expr {
             match &mut expr {
                 // Default to assuming the arguments are the same type
                 Expr::BinaryExpr(BinaryExpr { left, op: _, right }) => {
-                    rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
-                    rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
+                    rewrite_placeholder(left, right.as_ref(), schema)?;
+                    rewrite_placeholder(right, left.as_ref(), schema)?;
                 }
                 Expr::Between(Between {
                     expr,
@@ -3790,6 +3882,22 @@ mod test {
     use sqlparser::ast::{Ident, IdentWithAlias};
 
     #[test]
+    fn deep_binary_expr_chain_drops_without_overflowing() {
+        // Build a left-deep `OR` chain far deeper than a recursive drop could unwind, then let it
+        // drop on the normal test stack. The iterative `Drop` on `BoxedExpr` must keep it from
+        // overflowing.
+        let mut expr = Expr::Literal(ScalarValue::Null, None);
+        for _ in 0..200_000 {
+            expr = Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(expr),
+                Operator::Or,
+                Box::new(Expr::Literal(ScalarValue::Null, None)),
+            ));
+        }
+        drop(expr);
+    }
+
+    #[test]
     fn infer_placeholder_in_clause() {
         // SELECT * FROM employees WHERE department_id IN ($1, $2, $3);
         let column = col("department_id");
@@ -4011,7 +4119,7 @@ mod test {
 
         let (inferred_expr, _) = expr.infer_placeholder_types(&df_schema).unwrap();
         match inferred_expr {
-            Expr::BinaryExpr(BinaryExpr { right, .. }) => match *right {
+            Expr::BinaryExpr(BinaryExpr { right, .. }) => match *right.into_inner() {
                 Expr::Placeholder(placeholder) => {
                     assert_eq!(
                         placeholder.field.as_ref().unwrap().data_type(),

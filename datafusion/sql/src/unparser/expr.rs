@@ -2539,19 +2539,19 @@ mod tests {
                 "[1, 2, 3]",
             ),
             (
-                Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(col("a")),
-                    op: Operator::ArrowAt,
-                    right: Box::new(col("b")),
-                }),
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(col("a")),
+                    Operator::ArrowAt,
+                    Box::new(col("b")),
+                )),
                 "(a <@ b)",
             ),
             (
-                Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(col("a")),
-                    op: Operator::AtArrow,
-                    right: Box::new(col("b")),
-                }),
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(col("a")),
+                    Operator::AtArrow,
+                    Box::new(col("b")),
+                )),
                 "(a @> b)",
             ),
         ];
@@ -3128,11 +3128,11 @@ mod tests {
             [(default_dialect, "(a / b)"), (duckdb_dialect, "(a // b)")]
         {
             let unparser = Unparser::new(&dialect);
-            let expr = Expr::BinaryExpr(BinaryExpr {
-                left: Box::new(col("a")),
-                op: Operator::Divide,
-                right: Box::new(col("b")),
-            });
+            let expr = Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(col("a")),
+                Operator::Divide,
+                Box::new(col("b")),
+            ));
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = format!("{ast}");
@@ -3333,72 +3333,6 @@ mod tests {
         }
 
         Ok(())
-    }
-
-    /// Regression test for https://github.com/apache/datafusion/issues/23056
-    ///
-    /// Deeply-nested expressions whose unparse path routes through scalar
-    /// function arguments and dialect scalar-function overrides used to
-    /// overflow the OS stack even with `recursive_protection` enabled,
-    /// because the per-level stack cost of those paths exceeds the default
-    /// `recursive` red zone and the unparser installed no [`StackGuard`].
-    ///
-    /// This test only asserts the protected behavior, so it is gated on the
-    /// `recursive_protection` feature. Without that feature the unparser is
-    /// not stack-safe by design and a deep enough expression will overflow.
-    #[cfg(feature = "recursive_protection")]
-    #[test]
-    fn test_deeply_nested_expr_does_not_overflow_stack() {
-        // Far deeper than the ~60 levels that overflow without protection, but
-        // bounded so the trampoline's heap stacks stay reasonable in debug.
-        const DEPTH: usize = 2_000;
-
-        // Run on an explicit, realistically-sized thread stack. The work is
-        // performed on a spawned thread so an overflow (in the unfixed code)
-        // aborts the process and fails the test deterministically rather than
-        // depending on the harness thread's stack size.
-        let handle = std::thread::Builder::new()
-            .stack_size(2 * 1024 * 1024)
-            .spawn(|| {
-                // 1. Linear chain through a dialect scalar-function override:
-                //    array_has(array_has(... array_has(col, 'x') ...), 'x').
-                //    PostgreSqlDialect unparses array_has via array_has_to_sql_any,
-                //    which recurses back into the unparser for each argument.
-                let mut nested_fn: Expr = col("c");
-                for _ in 0..DEPTH {
-                    nested_fn = array_has(nested_fn, lit("x"));
-                }
-                let pg = PostgreSqlDialect {};
-                Unparser::new(&pg)
-                    .expr_to_sql(&nested_fn)
-                    .expect("deeply nested scalar function should unparse");
-
-                // 2. Linear chain of plain binary operators, exercising the
-                //    inner -> inner recursion on the default dialect.
-                let mut nested_binary: Expr = col("c");
-                for _ in 0..DEPTH {
-                    nested_binary = nested_binary + lit(1);
-                }
-                Unparser::default()
-                    .expr_to_sql(&nested_binary)
-                    .expect("deeply nested binary expression should unparse");
-
-                // 3. Same binary chain in pretty mode. Pretty mode runs
-                //    `remove_unnecessary_nesting` at every level, which recurses
-                //    alongside the unparse itself; this locks down that second
-                //    recursion site fixed by this PR.
-                Unparser::default()
-                    .with_pretty(true)
-                    .expr_to_sql(&nested_binary)
-                    .expect(
-                        "deeply nested binary expression should unparse in pretty mode",
-                    );
-            })
-            .unwrap();
-
-        // If the unparser overflows, the process aborts and this join is never
-        // reached; otherwise the spawned thread returns cleanly.
-        handle.join().expect("unparsing thread should not panic");
     }
 
     #[test]

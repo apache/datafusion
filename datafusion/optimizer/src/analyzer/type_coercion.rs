@@ -614,8 +614,13 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 ))))
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let (left, right) =
-                    self.coerce_binary_op(*left, self.schema, op, *right, self.schema)?;
+                let (left, right) = self.coerce_binary_op(
+                    *left.into_inner(),
+                    self.schema,
+                    op,
+                    *right.into_inner(),
+                    self.schema,
+                )?;
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(left),
                     op,
