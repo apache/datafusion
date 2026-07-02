@@ -42,7 +42,7 @@ use super::aggregate_hash_table::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialSkipMarker,
 };
 use super::skip_partial::SkipAggregationProbe;
-use super::{AggregateExec, partition_runs};
+use super::{AggregateExec, partition_runs, reorder_by_subpartition};
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
@@ -891,17 +891,22 @@ impl FinalHashAggregateStream {
     }
 
     fn stage_partition_runs(&mut self, batch: &RecordBatch) -> Result<Option<usize>> {
-        let Some(runs) = partition_runs(batch.schema_ref())? else {
-            if self
-                .partition_run_state
-                .as_ref()
-                .is_some_and(|state| !state.runs.is_empty())
-            {
-                return internal_err!(
-                    "missing partition run metadata for final partitioned aggregation after buffered runs have started"
-                );
-            }
-            return Ok(None);
+        let (batch, runs) = if let Some((batch, runs)) = reorder_by_subpartition(batch)? {
+            (batch, runs)
+        } else {
+            let Some(runs) = partition_runs(batch.schema_ref())? else {
+                if self
+                    .partition_run_state
+                    .as_ref()
+                    .is_some_and(|state| !state.runs.is_empty())
+                {
+                    return internal_err!(
+                        "missing partition run metadata for final partitioned aggregation after buffered runs have started"
+                    );
+                }
+                return Ok(None);
+            };
+            (batch.clone(), runs)
         };
 
         let mut offset = 0;

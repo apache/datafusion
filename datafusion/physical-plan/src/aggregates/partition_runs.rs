@@ -15,16 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Metadata helpers for hash aggregate repartition runs.
+//! Internal helpers for hash aggregate repartition subpartitions.
 //!
 //! This module does NOT perform repartitioning or aggregation. It only owns the
-//! schema metadata contract used to describe contiguous relative aggregate
-//! partition runs inside a coalesced record batch.
+//! internal contracts used to describe relative aggregate subpartitions passed
+//! from repartition to final hash aggregation.
 //!
-//! Entry points: [`set_partition_runs_metadata`] and [`partition_runs`].
+//! Entry points: [`append_subpartition_column`], [`reorder_by_subpartition`],
+//! [`set_partition_runs_metadata`] and [`partition_runs`].
 
-use arrow::datatypes::Schema;
-use arrow::record_batch::RecordBatch;
+use std::sync::Arc;
+
+use arrow::array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UInt32Array};
+use arrow::compute::take_arrays;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::cast::as_uint32_array;
 use datafusion_common::{Result, internal_err};
 
 const PARTITION_RUN_SEPARATOR: char = ',';
@@ -32,6 +37,9 @@ const PARTITION_RUN_FIELD_SEPARATOR: char = ':';
 
 pub(crate) const AGGR_PARTITION_RUNS_METADATA_KEY: &str =
     "datafusion.internal.hash_aggr_partition_runs";
+
+pub(crate) const AGGR_SUBPARTITION_COLUMN_NAME: &str =
+    "__datafusion_internal_hash_aggr_subpartition";
 
 /// A contiguous run of rows for one relative aggregate partition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +64,107 @@ impl PartitionRun {
     }
 }
 
+/// Return a schema with the internal subpartition column appended.
+pub(crate) fn subpartition_schema(schema: &SchemaRef) -> SchemaRef {
+    if subpartition_column_index(schema.as_ref()).is_some() {
+        return Arc::clone(schema);
+    }
+
+    let mut fields = schema.fields().iter().cloned().collect::<Vec<_>>();
+    fields.push(Arc::new(Field::new(
+        AGGR_SUBPARTITION_COLUMN_NAME,
+        DataType::UInt32,
+        false,
+    )));
+    Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+/// Append an internal subpartition column using `runs`.
+pub(crate) fn append_subpartition_column(
+    batch: &RecordBatch,
+    runs: &[PartitionRun],
+) -> Result<RecordBatch> {
+    validate_partition_runs(runs, batch.num_rows())?;
+    if subpartition_column_index(batch.schema_ref()).is_some() {
+        return internal_err!("Hash aggregate subpartition column already exists");
+    }
+
+    let mut values = Vec::with_capacity(batch.num_rows());
+    for run in runs {
+        let relative_partition =
+            u32::try_from(run.relative_partition).map_err(|err| {
+                datafusion_common::DataFusionError::Internal(format!(
+                    "Hash aggregate relative partition does not fit UInt32: {err}"
+                ))
+            })?;
+        values.extend(std::iter::repeat_n(relative_partition, run.len));
+    }
+
+    let mut columns = batch.columns().to_vec();
+    columns.push(Arc::new(UInt32Array::from(values)) as ArrayRef);
+    let schema = subpartition_schema(batch.schema_ref());
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    RecordBatch::try_new_with_options(schema, columns, &options).map_err(Into::into)
+}
+
+/// Reorder `batch` by its internal subpartition column and strip that column.
+pub(crate) fn reorder_by_subpartition(
+    batch: &RecordBatch,
+) -> Result<Option<(RecordBatch, Vec<PartitionRun>)>> {
+    let Some(subpartition_idx) = subpartition_column_index(batch.schema_ref()) else {
+        return Ok(None);
+    };
+
+    let subpartitions = as_uint32_array(batch.column(subpartition_idx).as_ref())?;
+    if subpartitions.null_count() != 0 {
+        return internal_err!(
+            "Hash aggregate subpartition column must not contain nulls"
+        );
+    }
+
+    let mut partition_indices = Vec::<Vec<u32>>::new();
+    for row_idx in 0..batch.num_rows() {
+        let relative_partition = subpartitions.value(row_idx) as usize;
+        if relative_partition >= partition_indices.len() {
+            partition_indices.resize_with(relative_partition + 1, Vec::new);
+        }
+        let row_idx = u32::try_from(row_idx).map_err(|err| {
+            datafusion_common::DataFusionError::Internal(format!(
+                "Hash aggregate batch row index does not fit UInt32: {err}"
+            ))
+        })?;
+        partition_indices[relative_partition].push(row_idx);
+    }
+
+    let mut runs = Vec::with_capacity(partition_indices.len());
+    let mut indices = Vec::with_capacity(batch.num_rows());
+    let mut is_identity = true;
+    for (relative_partition, partition_rows) in partition_indices.into_iter().enumerate()
+    {
+        if partition_rows.is_empty() {
+            continue;
+        }
+        runs.push(PartitionRun::new(relative_partition, partition_rows.len())?);
+        for row_idx in partition_rows {
+            is_identity &= row_idx as usize == indices.len();
+            indices.push(row_idx);
+        }
+    }
+
+    let schema = strip_subpartition_schema(batch.schema_ref(), subpartition_idx);
+    let columns = strip_subpartition_columns(batch, subpartition_idx);
+    let output = if is_identity {
+        RecordBatch::try_new(schema, columns)?
+    } else {
+        let indices = UInt32Array::from(indices);
+        let columns = take_arrays(&columns, &indices, None)?;
+        let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
+        RecordBatch::try_new_with_options(schema, columns, &options)?
+    };
+
+    Ok(Some((output, runs)))
+}
+
 /// Return partition runs encoded on `schema`, if present.
 pub(crate) fn partition_runs(schema: &Schema) -> Result<Option<Vec<PartitionRun>>> {
     schema
@@ -66,6 +175,7 @@ pub(crate) fn partition_runs(schema: &Schema) -> Result<Option<Vec<PartitionRun>
 }
 
 /// Encode partition runs as schema metadata value.
+#[cfg(test)]
 pub(crate) fn encode_partition_runs(runs: &[PartitionRun]) -> String {
     runs.iter()
         .map(|run| format!("{}:{}", run.relative_partition, run.len))
@@ -86,6 +196,7 @@ pub(crate) fn decode_partition_runs(value: &str) -> Result<Vec<PartitionRun>> {
 }
 
 /// Set partition runs metadata on `batch`.
+#[cfg(test)]
 pub(crate) fn set_partition_runs_metadata(
     mut batch: RecordBatch,
     runs: &[PartitionRun],
@@ -97,6 +208,37 @@ pub(crate) fn set_partition_runs_metadata(
         .schema_metadata_mut()
         .insert(AGGR_PARTITION_RUNS_METADATA_KEY.to_string(), value);
     Ok(batch)
+}
+
+fn subpartition_column_index(schema: &Schema) -> Option<usize> {
+    schema
+        .fields()
+        .iter()
+        .position(|field| field.name() == AGGR_SUBPARTITION_COLUMN_NAME)
+}
+
+fn strip_subpartition_schema(schema: &SchemaRef, subpartition_idx: usize) -> SchemaRef {
+    let fields = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| *idx != subpartition_idx)
+        .map(|(_, field)| Arc::clone(field))
+        .collect::<Vec<_>>();
+    Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+fn strip_subpartition_columns(
+    batch: &RecordBatch,
+    subpartition_idx: usize,
+) -> Vec<ArrayRef> {
+    batch
+        .columns()
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| *idx != subpartition_idx)
+        .map(|(_, column)| Arc::clone(column))
+        .collect()
 }
 
 fn decode_partition_run(value: &str) -> Result<PartitionRun> {
@@ -144,56 +286,64 @@ fn validate_partition_runs(runs: &[PartitionRun], num_rows: usize) -> Result<()>
         );
     }
 
-    if runs.iter().any(|run| run.len == 0) {
-        return internal_err!("Hash aggregate partition run length must be nonzero");
-    }
-
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use super::*;
 
     use arrow::array::UInt32Array;
     use arrow::datatypes::{DataType, Field, Schema};
 
-    use super::*;
-
-    // Covers encoding and decoding multiple relative aggregate partition runs.
-    // Example: runs [(0, 3), (2, 4)] are encoded as "0:3,2:4".
     #[test]
     fn test_partition_runs_encode_decode_multiple_runs() -> Result<()> {
         let runs = vec![PartitionRun::new(0, 3)?, PartitionRun::new(2, 4)?];
-
         let encoded = encode_partition_runs(&runs);
         assert_eq!(encoded, "0:3,2:4");
         assert_eq!(decode_partition_runs(&encoded)?, runs);
-
         Ok(())
     }
 
-    // Covers attaching partition runs to record batch schema metadata.
-    // Example: a 3-row batch with run [(1, 3)] stores metadata "1:3".
     #[test]
     fn test_set_partition_runs_metadata_sets_batch_schema_metadata() -> Result<()> {
         let schema =
-            Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
+            Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, false)]));
         let batch = RecordBatch::try_new(
-            schema,
+            Arc::clone(&schema),
             vec![Arc::new(UInt32Array::from(vec![1, 2, 3]))],
         )?;
         let runs = vec![PartitionRun::new(1, 3)?];
-
         let batch = set_partition_runs_metadata(batch, &runs)?;
-
+        assert_eq!(partition_runs(batch.schema_ref())?, Some(runs.clone()));
         assert_eq!(decode_partition_runs(&encode_partition_runs(&runs))?, runs);
+        Ok(())
+    }
+
+    #[test]
+    fn test_reorder_by_subpartition_groups_rows_and_strips_column() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![10, 11, 12, 13]))],
+        )?;
+        let batch = append_subpartition_column(
+            &batch,
+            &[
+                PartitionRun::new(1, 1)?,
+                PartitionRun::new(0, 2)?,
+                PartitionRun::new(1, 1)?,
+            ],
+        )?;
+
+        let (batch, runs) = reorder_by_subpartition(&batch)?.unwrap();
+        let values = as_uint32_array(batch.column(0).as_ref())?;
+        assert_eq!(values.values(), &[11, 12, 10, 13]);
+        assert_eq!(batch.num_columns(), 1);
         assert_eq!(
-            batch
-                .schema_ref()
-                .metadata()
-                .get(AGGR_PARTITION_RUNS_METADATA_KEY),
-            Some(&"1:3".to_string())
+            runs,
+            vec![PartitionRun::new(0, 2)?, PartitionRun::new(1, 2)?]
         );
         Ok(())
     }

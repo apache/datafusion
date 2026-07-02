@@ -19,7 +19,6 @@
 //! partitions to M output partitions based on a partitioning scheme, optionally
 //! maintaining the order of the input rows in the output.
 
-use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -32,7 +31,7 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
-use crate::aggregates::{PartitionRun, partition_runs, set_partition_runs_metadata};
+use crate::aggregates::{PartitionRun, append_subpartition_column, subpartition_schema};
 use crate::coalesce::LimitedBatchCoalescer;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::hash_utils::create_hashes;
@@ -168,13 +167,9 @@ struct OutputChannel {
 }
 
 impl OutputChannel {
-    fn coalesce(
-        &mut self,
-        relative_partition: usize,
-        batch: RecordBatch,
-    ) -> Result<Vec<RecordBatch>> {
+    fn coalesce(&mut self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
         match &self.shared_coalescer {
-            Some(shared) => Ok(shared.push_and_drain(relative_partition, batch)?),
+            Some(shared) => Ok(shared.push_and_drain(batch)?),
             None => Ok(vec![batch]),
         }
     }
@@ -230,22 +225,17 @@ impl OutputChannel {
 /// Cheap to [`Clone`]: both fields are [`Arc`]s.
 #[derive(Clone)]
 struct SharedCoalescer {
-    inner: Arc<Mutex<OutputPartitionCoalescer>>,
+    inner: Arc<Mutex<LimitedBatchCoalescer>>,
     active_senders: Arc<AtomicUsize>,
 }
 
 impl SharedCoalescer {
-    fn new(
-        schema: &SchemaRef,
-        target_batch_size: usize,
-        num_senders: usize,
-        max_aggr_partition_factor: usize,
-    ) -> Self {
+    fn new(schema: &SchemaRef, target_batch_size: usize, num_senders: usize) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(OutputPartitionCoalescer::new(
-                schema,
+            inner: Arc::new(Mutex::new(LimitedBatchCoalescer::new(
+                Arc::clone(schema),
                 target_batch_size,
-                max_aggr_partition_factor,
+                None,
             ))),
             active_senders: Arc::new(AtomicUsize::new(num_senders)),
         }
@@ -253,14 +243,10 @@ impl SharedCoalescer {
 
     /// Push `batch` into the coalescer and drain any newly completed
     /// batches. The mutex is held only briefly.
-    fn push_and_drain(
-        &self,
-        relative_partition: usize,
-        batch: RecordBatch,
-    ) -> Result<Vec<RecordBatch>> {
+    fn push_and_drain(&self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
         let mut acc = Vec::new();
         let mut coalescer = self.inner.lock();
-        coalescer.push_batch(relative_partition, batch)?;
+        coalescer.push_batch(batch)?;
         while let Some(batch) = coalescer.next_completed_batch() {
             acc.push(batch);
         }
@@ -282,217 +268,6 @@ impl SharedCoalescer {
             acc.push(batch);
         }
         Ok(acc)
-    }
-}
-
-struct OutputPartitionCoalescer {
-    inner: OutputPartitionCoalescerInner,
-}
-
-enum OutputPartitionCoalescerInner {
-    Simple(LimitedBatchCoalescer),
-    HashAggregate(HashAggregateOutputPartitionCoalescer),
-}
-
-impl OutputPartitionCoalescer {
-    fn new(
-        schema: &SchemaRef,
-        target_batch_size: usize,
-        max_aggr_partition_factor: usize,
-    ) -> Self {
-        let inner = if max_aggr_partition_factor <= 1 {
-            OutputPartitionCoalescerInner::Simple(LimitedBatchCoalescer::new(
-                Arc::clone(schema),
-                target_batch_size,
-                None,
-            ))
-        } else {
-            OutputPartitionCoalescerInner::HashAggregate(
-                HashAggregateOutputPartitionCoalescer::new(
-                    schema,
-                    target_batch_size,
-                    max_aggr_partition_factor,
-                ),
-            )
-        };
-
-        Self { inner }
-    }
-
-    fn push_batch(
-        &mut self,
-        relative_partition: usize,
-        batch: RecordBatch,
-    ) -> Result<()> {
-        match &mut self.inner {
-            OutputPartitionCoalescerInner::Simple(coalescer) => {
-                debug_assert_eq!(relative_partition, 0);
-                coalescer.push_batch(batch)?;
-            }
-            OutputPartitionCoalescerInner::HashAggregate(coalescer) => {
-                debug_assert_eq!(relative_partition, 0);
-                coalescer.push_partitioned_batch(batch)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn finish(&mut self) -> Result<()> {
-        match &mut self.inner {
-            OutputPartitionCoalescerInner::Simple(coalescer) => coalescer.finish(),
-            OutputPartitionCoalescerInner::HashAggregate(coalescer) => coalescer.finish(),
-        }
-    }
-
-    fn next_completed_batch(&mut self) -> Option<RecordBatch> {
-        match &mut self.inner {
-            OutputPartitionCoalescerInner::Simple(coalescer) => {
-                coalescer.next_completed_batch()
-            }
-            OutputPartitionCoalescerInner::HashAggregate(coalescer) => {
-                coalescer.next_completed_batch()
-            }
-        }
-    }
-}
-
-pub struct HashAggregateOutputPartitionCoalescer {
-    target_batch_size: usize,
-    buffers: Vec<LimitedBatchCoalescer>,
-    completed: VecDeque<RecordBatch>,
-    finished: bool,
-}
-
-impl HashAggregateOutputPartitionCoalescer {
-    pub fn new(
-        schema: &SchemaRef,
-        target_batch_size: usize,
-        max_aggr_partition_factor: usize,
-    ) -> Self {
-        let target_batch_size = target_batch_size.max(1);
-        Self {
-            target_batch_size,
-            buffers: (0..max_aggr_partition_factor)
-                .map(|_| {
-                    LimitedBatchCoalescer::new(
-                        Arc::clone(schema),
-                        target_batch_size,
-                        None,
-                    )
-                })
-                .collect(),
-            completed: VecDeque::new(),
-            finished: false,
-        }
-    }
-
-    pub fn push_batch(
-        &mut self,
-        relative_partition: usize,
-        batch: RecordBatch,
-    ) -> Result<()> {
-        self.push_checked_batch()?;
-        self.push_partition_batch(relative_partition, batch)
-    }
-
-    pub fn push_partitioned_batch(&mut self, batch: RecordBatch) -> Result<()> {
-        self.push_checked_batch()?;
-        let batch = Arc::new(batch);
-        let runs = partition_runs(batch.schema_ref())?.ok_or_else(|| {
-            DataFusionError::Internal(
-                "Hash aggregate partitioned batch missing partition run metadata"
-                    .to_string(),
-            )
-        })?;
-
-        let mut offset = 0;
-        for run in runs {
-            if run.relative_partition >= self.buffers.len() {
-                return internal_err!(
-                    "Hash aggregate repartition produced relative partition {}, expected less than {}",
-                    run.relative_partition,
-                    self.buffers.len()
-                );
-            }
-
-            let partition_batch = batch.slice(offset, run.len);
-            self.push_partition_batch(run.relative_partition, partition_batch)?;
-            offset += run.len;
-        }
-        debug_assert_eq!(offset, batch.num_rows());
-        Ok(())
-    }
-
-    pub fn finish(&mut self) -> Result<()> {
-        if self.finished {
-            return Ok(());
-        }
-
-        for relative_partition in 0..self.buffers.len() {
-            self.buffers[relative_partition].finish()?;
-            self.drain_partition(relative_partition)?;
-        }
-        self.finished = true;
-        Ok(())
-    }
-
-    pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
-        self.completed.pop_front()
-    }
-
-    fn push_checked_batch(&self) -> Result<()> {
-        if self.finished {
-            return internal_err!(
-                "HashAggregateOutputPartitionCoalescer: cannot push batch after finish"
-            );
-        }
-        Ok(())
-    }
-
-    fn push_partition_batch(
-        &mut self,
-        relative_partition: usize,
-        batch: RecordBatch,
-    ) -> Result<()> {
-        if batch.num_rows() == 0 {
-            return Ok(());
-        }
-        if relative_partition >= self.buffers.len() {
-            return internal_err!(
-                "Hash aggregate repartition produced relative partition {}, expected less than {}",
-                relative_partition,
-                self.buffers.len()
-            );
-        }
-
-        let num_rows = batch.num_rows();
-        let mut batch = Some(batch);
-        let mut offset = 0;
-        while offset < num_rows {
-            let len = self.target_batch_size.min(num_rows - offset);
-            let output_batch = if offset == 0 && len == num_rows {
-                batch.take().expect("batch must still be available")
-            } else {
-                batch
-                    .as_ref()
-                    .expect("batch must still be available")
-                    .slice(offset, len)
-            };
-            self.buffers[relative_partition].push_batch(output_batch)?;
-            self.drain_partition(relative_partition)?;
-            offset += len;
-        }
-
-        Ok(())
-    }
-
-    fn drain_partition(&mut self, relative_partition: usize) -> Result<()> {
-        while let Some(batch) = self.buffers[relative_partition].next_completed_batch() {
-            let run = PartitionRun::new(relative_partition, batch.num_rows())?;
-            let batch = set_partition_runs_metadata(batch, &[run])?;
-            self.completed.push_back(batch);
-        }
-        Ok(())
     }
 }
 
@@ -702,12 +477,16 @@ impl RepartitionExecState {
             // the consumer never sees the per-input-task small batches.
             // Skip in preserve-order mode: each input has its own dedicated
             // channel and `StreamingMergeBuilder` handles batching.
+            let coalesce_schema = if max_aggr_partition_factor > 1 {
+                subpartition_schema(&input.schema())
+            } else {
+                input.schema()
+            };
             let shared_coalescer = (!preserve_order).then(|| {
                 SharedCoalescer::new(
-                    &input.schema(),
+                    &coalesce_schema,
                     context.session_config().batch_size(),
                     num_input_partitions,
-                    max_aggr_partition_factor,
                 )
             });
 
@@ -1290,7 +1069,7 @@ impl BatchPartitioner {
                 if current_output_partition != Some(output_partition) {
                     if let Some(partition) = current_output_partition {
                         let batch = reordered_batch.slice(current_start, current_len);
-                        let batch = set_partition_runs_metadata(batch, &current_runs)?;
+                        let batch = append_subpartition_column(&batch, &current_runs)?;
                         output_batches.push(Ok((partition, 0, batch)));
                     }
 
@@ -1306,7 +1085,7 @@ impl BatchPartitioner {
 
             if let Some(partition) = current_output_partition {
                 let batch = reordered_batch.slice(current_start, current_len);
-                let batch = set_partition_runs_metadata(batch, &current_runs)?;
+                let batch = append_subpartition_column(&batch, &current_runs)?;
                 output_batches.push(Ok((partition, 0, batch)));
             }
 
@@ -1726,10 +1505,15 @@ impl ExecutionPlan for RepartitionExec {
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
 
+        let spill_schema = if max_aggr_partition_factor > 1 {
+            subpartition_schema(&input.schema())
+        } else {
+            input.schema()
+        };
         let spill_manager = SpillManager::new(
             Arc::clone(&context.runtime_env()),
             spill_metrics,
-            input.schema(),
+            spill_schema,
         );
 
         // Get existing ordering to use for merging
@@ -2215,12 +1999,12 @@ impl RepartitionExec {
             }
 
             for res in partitioner.partition_iter_with_relative_partition(batch)? {
-                let (partition, relative_partition, batch) = res?;
+                let (partition, _relative_partition, batch) = res?;
 
                 let timer = metrics.send_time[partition].timer();
                 // if there is still a receiver, send to it
                 if let Some(output_channel) = output_channels.get_mut(&partition) {
-                    for batch in output_channel.coalesce(relative_partition, batch)? {
+                    for batch in output_channel.coalesce(batch)? {
                         if output_channel.send(batch).await.is_err() {
                             // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                             // so ignore this channel from now on.
@@ -2559,12 +2343,11 @@ mod tests {
     use insta::assert_snapshot;
 
     // Covers hash aggregate partitioning mapping multiple aggregate partitions
-    // back to one output partition.
-    // Example: with 2 output partitions and factor 4, each non-empty relative
-    // partition is in 0..4 and the output partition is in 0..2.
+    // back to one output partition through an internal subpartition column.
+    // Example: with 2 output partitions and factor 4, each output batch has
+    // visible data plus one internal subpartition column.
     #[test]
-    fn test_hash_aggregate_partitioner_maps_subpartitions_to_output_partitions()
-    -> Result<()> {
+    fn test_hash_aggregate_partitioner_appends_subpartition_column() -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
         let batch = RecordBatch::try_new(
@@ -2585,100 +2368,24 @@ mod tests {
             let (partition, relative_partition, batch) = result?;
             assert!(partition < 2);
             assert_eq!(relative_partition, 0);
+            assert_eq!(batch.num_columns(), 2);
             num_rows += batch.num_rows();
 
-            let runs = partition_runs(batch.schema_ref())?.unwrap();
-            for run in runs {
-                assert!(run.relative_partition < 4);
-                seen[partition][run.relative_partition] = true;
+            let subpartitions = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .expect("subpartition column should be UInt32");
+            for value in subpartitions.iter() {
+                let value =
+                    value.expect("subpartition value should not be null") as usize;
+                assert!(value < 4);
+                seen[partition][value] = true;
             }
         }
 
         assert_eq!(num_rows, 128);
         assert!(seen.iter().flatten().all(|seen| *seen));
-        Ok(())
-    }
-
-    // Covers hash aggregate output coalescing without concatenating rows from
-    // different relative aggregate partitions into the same output batch.
-    // Example: pushing p1 then p0 outputs separate p0 and p1 batches on finish.
-    #[test]
-    fn test_hash_aggregate_output_coalescer_orders_partition_runs() -> Result<()> {
-        let schema = test_schema();
-        let mut coalescer = HashAggregateOutputPartitionCoalescer::new(&schema, 4, 3);
-
-        coalescer.push_batch(1, uint32_batch(&schema, &[10, 11]))?;
-        assert!(coalescer.next_completed_batch().is_none());
-        coalescer.push_batch(0, uint32_batch(&schema, &[1, 2]))?;
-        assert!(coalescer.next_completed_batch().is_none());
-
-        coalescer.finish()?;
-        let first = coalescer.next_completed_batch().unwrap();
-        let second = coalescer.next_completed_batch().unwrap();
-        assert_eq!(uint32_values(&first), vec![1, 2]);
-        assert_eq!(uint32_values(&second), vec![10, 11]);
-        assert_eq!(
-            first
-                .schema_ref()
-                .metadata()
-                .get("datafusion.internal.hash_aggr_partition_runs"),
-            Some(&"0:2".to_string())
-        );
-        assert_eq!(
-            second
-                .schema_ref()
-                .metadata()
-                .get("datafusion.internal.hash_aggr_partition_runs"),
-            Some(&"1:2".to_string())
-        );
-        assert!(coalescer.next_completed_batch().is_none());
-
-        Ok(())
-    }
-
-    // Covers slicing an incoming batch repeatedly when the remaining rows still
-    // exceed target_batch_size.
-    // Example: target 4 and one 10-row input yields 4, 4, then residual 2.
-    #[test]
-    fn test_hash_aggregate_output_coalescer_splits_large_batch() -> Result<()> {
-        let schema = test_schema();
-        let mut coalescer = HashAggregateOutputPartitionCoalescer::new(&schema, 4, 2);
-
-        coalescer
-            .push_batch(1, uint32_batch(&schema, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))?;
-
-        let first = coalescer.next_completed_batch().unwrap();
-        let second = coalescer.next_completed_batch().unwrap();
-        assert!(coalescer.next_completed_batch().is_none());
-
-        coalescer.finish()?;
-        let third = coalescer.next_completed_batch().unwrap();
-
-        assert_eq!(uint32_values(&first), vec![0, 1, 2, 3]);
-        assert_eq!(uint32_values(&second), vec![4, 5, 6, 7]);
-        assert_eq!(uint32_values(&third), vec![8, 9]);
-        assert_eq!(
-            first
-                .schema_ref()
-                .metadata()
-                .get("datafusion.internal.hash_aggr_partition_runs"),
-            Some(&"1:4".to_string())
-        );
-        assert_eq!(
-            second
-                .schema_ref()
-                .metadata()
-                .get("datafusion.internal.hash_aggr_partition_runs"),
-            Some(&"1:4".to_string())
-        );
-        assert_eq!(
-            third
-                .schema_ref()
-                .metadata()
-                .get("datafusion.internal.hash_aggr_partition_runs"),
-            Some(&"1:2".to_string())
-        );
-
         Ok(())
     }
 
@@ -2888,24 +2595,6 @@ mod tests {
 
     fn test_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
-    }
-
-    fn uint32_batch(schema: &SchemaRef, values: &[u32]) -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::clone(schema),
-            vec![Arc::new(UInt32Array::from(values.to_vec()))],
-        )
-        .unwrap()
-    }
-
-    fn uint32_values(batch: &RecordBatch) -> Vec<u32> {
-        batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .unwrap()
-            .values()
-            .to_vec()
     }
 
     async fn repartition(
