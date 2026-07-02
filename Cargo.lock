@@ -2296,11 +2296,18 @@ dependencies = [
  "arrow",
  "async-trait",
  "datafusion-catalog",
+ "datafusion-catalog-listing",
  "datafusion-common",
+ "datafusion-datasource",
+ "datafusion-datasource-avro",
+ "datafusion-datasource-csv",
+ "datafusion-datasource-json",
+ "datafusion-datasource-parquet",
  "datafusion-expr",
  "datafusion-physical-expr",
  "datafusion-physical-plan",
  "parking_lot",
+ "tokio",
 ]
 
 [[package]]

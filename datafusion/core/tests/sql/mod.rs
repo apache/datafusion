@@ -67,6 +67,7 @@ pub mod create_drop;
 pub mod explain_analyze;
 pub mod joins;
 mod path_partition;
+mod read_table_functions;
 mod runtime_config;
 pub mod select;
 mod sql_api;
