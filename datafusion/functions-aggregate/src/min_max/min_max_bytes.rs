@@ -493,7 +493,7 @@ impl MinMaxBytesState {
                     std::mem::take(&mut self.min_max),
                 )
             }
-            EmitTo::First(n) => {
+            EmitTo::First(n) | EmitTo::FirstBlock(n) => {
                 let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
                 let first_data_capacity: usize = first_min_maxes
                     .iter()

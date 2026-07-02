@@ -6419,7 +6419,7 @@ mod tests {
                     let counts = std::mem::take(&mut self.counts);
                     Ok(Arc::new(Int64Array::from(counts)))
                 }
-                EmitTo::First(_) => internal_err!(
+                EmitTo::First(_) | EmitTo::FirstBlock(_) => internal_err!(
                     "partial grouped aggregate output must materialize with EmitTo::All before slicing"
                 ),
             }
