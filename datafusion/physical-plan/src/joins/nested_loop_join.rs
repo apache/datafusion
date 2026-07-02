@@ -647,22 +647,17 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // Determine if OOM fallback to memory-limited mode is possible.
         // Conditions:
         // 1. Disk manager supports temp files (needed for spilling).
-        // 2. FULL join with multiple right partitions is not yet supported
-        //    in the fallback path. FULL join needs to track BOTH left-side
-        //    matches (for unmatched left rows) AND right-side matches (for
-        //    unmatched right rows). The fallback path builds a per-partition
-        //    `JoinLeftData` with `probe_threads_counter == 1`, so each
-        //    partition emits unmatched left rows based only on its own
-        //    right-side matches, producing incorrect duplicate output for
-        //    left rows that match in another partition. Other join types
-        //    that need only one-sided final emission (LEFT, LEFT SEMI,
-        //    LEFT ANTI, LEFT MARK) have a similar latent issue in the
-        //    fallback path which predates this change; tracking is out of
-        //    scope for this PR.
-        let full_join_multi_partition =
-            matches!(self.join_type, JoinType::Full) && right_partition_count > 1;
+        // 2. Joins that need final left-side emission are not supported when
+        //    the right side has multiple partitions. The fallback path builds
+        //    per-chunk `JoinLeftData` with `probe_threads_counter == 1`, so a
+        //    partition can emit unmatched/semi/anti/mark left rows using only
+        //    its local right-side matches. Without a global left bitmap across
+        //    all right partitions this can produce incorrect output. FULL join
+        //    is included because it also emits unmatched left rows.
+        let left_final_multi_partition =
+            need_produce_result_in_final(self.join_type) && right_partition_count > 1;
         let spill_state = if context.runtime_env().disk_manager.tmp_files_enabled()
-            && !full_join_multi_partition
+            && !left_final_multi_partition
         {
             SpillState::Pending {
                 left_plan: Arc::clone(&self.left),
@@ -3230,6 +3225,23 @@ pub(crate) mod tests {
         Ok((columns, batches, metrics))
     }
 
+    async fn assert_multi_partition_join_oom(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        join_type: &JoinType,
+        join_filter: Option<JoinFilter>,
+        memory_limit: usize,
+        batch_size: usize,
+    ) -> Result<()> {
+        let context = task_ctx_with_memory_limit(memory_limit, batch_size)?;
+        let err =
+            multi_partitioned_join_collect(left, right, join_type, join_filter, context)
+                .await
+                .unwrap_err();
+        assert_contains!(err.to_string(), "Resources exhausted");
+        Ok(())
+    }
+
     fn new_task_ctx(batch_size: usize) -> Arc<TaskContext> {
         let base = TaskContext::default();
         // limit max size of intermediate batch used in nlj to 1
@@ -3605,12 +3617,8 @@ pub(crate) mod tests {
 
         // Join types that support memory-limited fallback should succeed
         // even under tight memory limits (they spill to disk instead of OOM).
-        let fallback_join_types = vec![
+        let fallback_join_types = [
             JoinType::Inner,
-            JoinType::Left,
-            JoinType::LeftSemi,
-            JoinType::LeftAnti,
-            JoinType::LeftMark,
             JoinType::Right,
             JoinType::RightSemi,
             JoinType::RightAnti,
@@ -3635,24 +3643,29 @@ pub(crate) mod tests {
             .await?;
         }
 
-        // FULL JOIN with multiple right partitions is intentionally not
-        // supported in the fallback path yet (cross-partition left-bitmap
-        // coordination is missing). It should still OOM under tight memory.
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(100, 1.0)
-            .build_arc()?;
-        let task_ctx = TaskContext::default().with_runtime(runtime);
-        let task_ctx = Arc::new(task_ctx);
-        let err = multi_partitioned_join_collect(
-            Arc::clone(&left),
-            Arc::clone(&right),
-            &JoinType::Full,
-            Some(filter.clone()),
-            task_ctx,
-        )
-        .await
-        .unwrap_err();
-        assert_contains!(err.to_string(), "Resources exhausted");
+        // Joins that need final left-side emission with multiple right
+        // partitions are intentionally not supported in the fallback path yet
+        // (cross-partition left-bitmap coordination is missing). They should
+        // still OOM under tight memory rather than produce incorrect output.
+        let left_final_join_types = [
+            JoinType::Left,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::LeftMark,
+            JoinType::Full,
+        ];
+
+        for join_type in &left_final_join_types {
+            assert_multi_partition_join_oom(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                join_type,
+                Some(filter.clone()),
+                100,
+                16,
+            )
+            .await?;
+        }
 
         Ok(())
     }
@@ -3862,6 +3875,40 @@ pub(crate) mod tests {
             .unwrap_err();
 
         assert_contains!(err.to_string(), "Resources exhausted");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nlj_memory_limited_left_join_multi_partition_fallback_disabled()
+    -> Result<()> {
+        let left = build_left_table();
+        let right = build_right_table();
+        let filter = prepare_join_filter();
+
+        assert_multi_partition_join_oom(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            &JoinType::Left,
+            Some(filter.clone()),
+            50,
+            16,
+        )
+        .await?;
+
+        let single_partition_task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let (_, _, metrics) = join_collect(
+            left,
+            right,
+            &JoinType::Left,
+            Some(filter),
+            single_partition_task_ctx,
+        )
+        .await?;
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected single-partition LEFT join fallback to spill"
+        );
+
         Ok(())
     }
 
