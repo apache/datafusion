@@ -15,49 +15,42 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use inner::StackGuard;
+/// The local red zone used by SQL recursive entry points.
+///
+/// Some SQL planner and unparser recursion paths need more than `recursive`'s
+/// default 128 KiB red zone in debug builds. Keep this value local to each
+/// stack-growth checkpoint rather than mutating `recursive`'s process-global
+/// minimum stack size.
+pub(crate) const SQL_RECURSION_RED_ZONE: usize = 256 * 1024;
 
-/// A guard that sets the minimum stack size for the current thread to `min_stack_size` bytes.
+/// Runs `callback` on a stack with enough space for SQL recursive entry points.
 #[cfg(feature = "recursive_protection")]
-mod inner {
-    /// Sets the stack size to `min_stack_size` bytes on call to `new()` and
-    /// resets to the previous value when this structure is dropped.
-    pub struct StackGuard {
-        previous_stack_size: usize,
-    }
-
-    impl StackGuard {
-        /// Sets the stack size to `min_stack_size` bytes on call to `new()` and
-        /// resets to the previous value when this structure is dropped.
-        pub fn new(min_stack_size: usize) -> Self {
-            let previous_stack_size = recursive::get_minimum_stack_size();
-            recursive::set_minimum_stack_size(min_stack_size);
-            Self {
-                previous_stack_size,
-            }
-        }
-    }
-
-    impl Drop for StackGuard {
-        fn drop(&mut self) {
-            recursive::set_minimum_stack_size(self.previous_stack_size);
-        }
-    }
+#[inline]
+pub(crate) fn maybe_grow<R>(callback: impl FnOnce() -> R) -> R {
+    stacker::maybe_grow(
+        SQL_RECURSION_RED_ZONE,
+        recursive::get_stack_allocation_size(),
+        callback,
+    )
 }
 
-/// A stub implementation of the stack guard when the recursive protection
-/// feature is not enabled
+/// Runs `callback` without stack growth when recursive protection is disabled.
 #[cfg(not(feature = "recursive_protection"))]
-mod inner {
-    /// A stub implementation of the stack guard when the recursive protection
-    /// feature is not enabled that does nothing
-    pub struct StackGuard;
+#[inline]
+pub(crate) fn maybe_grow<R>(callback: impl FnOnce() -> R) -> R {
+    callback()
+}
 
-    impl StackGuard {
-        /// A stub implementation of the stack guard when the recursive protection
-        /// feature is not enabled
-        pub fn new(_min_stack_size: usize) -> Self {
-            Self
-        }
+#[cfg(all(test, feature = "recursive_protection"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maybe_grow_does_not_mutate_recursive_minimum_stack_size() {
+        let before = recursive::get_minimum_stack_size();
+        let observed = maybe_grow(recursive::get_minimum_stack_size);
+
+        assert_eq!(observed, before);
+        assert_eq!(recursive::get_minimum_stack_size(), before);
     }
 }
