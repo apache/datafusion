@@ -45,9 +45,7 @@
 //! - `all` — run all examples included in this module
 //!
 //! - `distributed_pipeline`
-//!   (desc: Run a multi-stage `GROUP BY ... ORDER BY` query through the
-//!   stage-graph executor and print the result alongside single-node
-//!   `collect` for comparison)
+//!   (file: main.rs, desc: In-process model of stage-based distributed execution (stage splitting, per-task plan serialization))
 //!
 //! ## Tests
 //!
