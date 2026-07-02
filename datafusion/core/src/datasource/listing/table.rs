@@ -51,16 +51,15 @@ impl ListingTableConfigExt for ListingTableConfig {
         self,
         state: &dyn Session,
     ) -> datafusion_common::Result<ListingTableConfig> {
-        let store = if let Some(url) = self.table_paths.first() {
-            state.runtime_env().object_store(url)?
-        } else {
+        let Some(first) = self.table_paths.first() else {
             return Ok(self);
         };
+        // Resolve through the registry so a store registered under a path prefix
+        // receives store-relative paths (see `ListingTableUrl::resolve`).
+        let (store, _, table_path) =
+            first.resolve(state.runtime_env().object_store_registry.as_ref())?;
 
-        let file = self
-            .table_paths
-            .first()
-            .unwrap()
+        let file = table_path
             .list_all_files(state, store.as_ref(), "")
             .await?
             .next()
