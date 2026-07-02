@@ -97,8 +97,13 @@ impl MinMaxStatistics {
                             .zip(s.column_statistics[i].max_value.get_value().cloned())
                             .ok_or_else(|| plan_datafusion_err!("statistics not found"))
                     } else {
-                        let partition_value = &pv[i - s.column_statistics.len()];
-                        Ok((partition_value.clone(), partition_value.clone()))
+                        let partition_value_index = i - s.column_statistics.len();
+                        if pv.len() > partition_value_index {
+                            let partition_value = &pv[partition_value_index];
+                            Ok((partition_value.clone(), partition_value.clone()))
+                        } else {
+                            Err(plan_datafusion_err!("statistics not found"))
+                        }
                     }
                 })
                 .collect::<Result<Vec<_>>>()?
