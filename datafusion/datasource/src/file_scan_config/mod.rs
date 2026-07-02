@@ -159,6 +159,12 @@ pub struct FileScanConfig {
     /// DataFusion may attempt to read each partition of files
     /// concurrently, however files *within* a partition will be read
     /// sequentially, one after the next.
+    ///
+    /// Note that when `datafusion.execution.enable_file_stream_work_stealing`
+    /// is enabled (the default), files may be reassigned to a different
+    /// partition at runtime unless `preserve_order` or
+    /// `partitioned_by_file_group` is set, so a file is not guaranteed to be
+    /// read by the partition it is grouped under here.
     pub file_groups: Vec<FileGroup>,
     /// Table constraints
     pub constraints: Constraints,
