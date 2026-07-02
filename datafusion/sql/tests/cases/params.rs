@@ -988,6 +988,70 @@ fn test_prepare_statement_to_plan_having() {
 }
 
 #[test]
+fn test_infer_types_from_limit() {
+    let test = ParameterTest {
+        sql: "SELECT id FROM person OFFSET $1 LIMIT $2",
+        expected_types: vec![
+            ("$1", Some(DataType::Int64)),
+            ("$2", Some(DataType::Int64)),
+        ],
+        param_values: vec![ScalarValue::Int64(Some(10)), ScalarValue::Int64(Some(200))],
+    };
+
+    assert_snapshot!(
+        test.run(),
+        @r"
+    ** Initial Plan:
+    Limit: skip=$1, fetch=$2
+      Projection: person.id
+        TableScan: person
+    ** Final Plan:
+    Limit: skip=10, fetch=200
+      Projection: person.id
+        TableScan: person
+    "
+    );
+}
+
+#[test]
+fn test_infer_types_from_limit_conflicting_parameter() {
+    let plan =
+        logical_plan("SELECT id FROM person WHERE first_name = $1 OFFSET $1").unwrap();
+
+    let err = plan.get_parameter_types().unwrap_err();
+    assert_contains!(err.to_string(), "Conflicting types for id $1");
+}
+
+#[test]
+fn test_prepare_statement_infer_types_from_limit() {
+    let sql = "PREPARE my_plan AS
+        SELECT id FROM person \
+        OFFSET $1 LIMIT $2";
+    let (plan, dt) = generate_prepare_stmt_and_data_types(sql);
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [Int64, Int64]
+      Limit: skip=$1, fetch=$2
+        Projection: person.id
+          TableScan: person
+    "#
+    );
+    assert_snapshot!(dt, @"Int64, Int64");
+
+    let param_values = vec![ScalarValue::Int64(Some(10)), ScalarValue::Int64(Some(200))];
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Limit: skip=10, fetch=200
+      Projection: person.id
+        TableScan: person
+    "
+    );
+}
+
+#[test]
 fn test_prepare_statement_to_plan_limit() {
     let sql = "PREPARE my_plan(BIGINT, BIGINT) AS
         SELECT id FROM person \
