@@ -246,7 +246,10 @@ pub trait DataSource: Any + Send + Sync + Debug {
     ///
     /// Returns `None` (the default) if this data source has
     /// no sibling-shared execution state.
-    fn create_sibling_state(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+    fn create_sibling_state(
+        &self,
+        _config: &ConfigOptions,
+    ) -> Option<Arc<dyn Any + Send + Sync>> {
         None
     }
 
@@ -392,7 +395,10 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Result<SendableRecordBatchStream> {
         let shared_state = self
             .execution_state
-            .get_or_init(|| self.data_source.create_sibling_state())
+            .get_or_init(|| {
+                self.data_source
+                    .create_sibling_state(context.session_config().options())
+            })
             .clone();
         let args = OpenArgs::new(partition, Arc::clone(&context))
             .with_shared_state(shared_state);

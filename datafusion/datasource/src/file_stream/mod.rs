@@ -182,6 +182,7 @@ mod tests {
     use arrow::array::{AsArray, RecordBatch};
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_common::DataFusionError;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::error::Result;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -1131,7 +1132,7 @@ mod tests {
         Ok(())
     }
 
-    /// Reproduces <https://github.com/apache/datafusion/issues/23293>.
+    /// Covers <https://github.com/apache/datafusion/issues/23293>.
     ///
     /// Executors that run each output partition as an isolated task in a
     /// separate process (Ballista, datafusion-distributed) build one plan
@@ -1139,64 +1140,86 @@ mod tests {
     /// sibling partitions are never polled in that process. A `DataSourceExec`
     /// seeds one shared work queue from every file group, so the single polled
     /// partition drains the whole queue and reads files that belong to other
-    /// partitions. Each isolated task does the same, inflating the scan output
-    /// by the partition count.
+    /// partitions, inflating the scan output by the partition count.
     ///
-    /// This test models that setup: it builds and drives only partition 0.
-    /// Partition 0 should read only its own file (`file1.parquet`), but today
-    /// it also reads partition 1's file, so it fails with
-    /// `"Batch: 101\nBatch: 201"`.
-    ///
-    /// Ignored because it fails on `main` by design: it is a caught regression
-    /// kept with its assertion intact. Run it with
-    /// `cargo test -p datafusion-datasource -- --ignored
-    /// regression_isolated_partition_reads_only_its_own_files`.
+    /// `datafusion.execution.enable_file_stream_work_stealing` turns the shared
+    /// queue off: `create_sibling_state` then returns `None` and each partition
+    /// reads only its own file group. This test drives only partition 0 (as an
+    /// isolated task would) and checks both behaviors: with the default
+    /// (stealing on) partition 0 also reads partition 1's file, and with the
+    /// flag off it reads only its own.
     #[tokio::test]
-    #[ignore = "reproduces #23293: shared FileStream work queue is drained by a single isolated task"]
-    async fn regression_isolated_partition_reads_only_its_own_files() -> Result<()> {
-        let test = FileStreamMorselTest::new()
-            .with_file_in_partition(
-                PartitionId(0),
-                MockPlanner::builder("file1.parquet")
-                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 101))
-                    .return_none(),
-            )
-            .with_file_in_partition(
-                PartitionId(1),
-                MockPlanner::builder("file2.parquet")
-                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(11), 201))
-                    .return_none(),
-            );
+    async fn isolated_partition_respects_work_stealing_config() -> Result<()> {
+        // A two-file scan: partition 0 owns file1 (batch 101), partition 1 owns
+        // file2 (batch 201). Rebuilt per phase because the mock planners are
+        // consumed as files are opened.
+        let make_test = || {
+            FileStreamMorselTest::new()
+                .with_file_in_partition(
+                    PartitionId(0),
+                    MockPlanner::builder("file1.parquet")
+                        .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 101))
+                        .return_none(),
+                )
+                .with_file_in_partition(
+                    PartitionId(1),
+                    MockPlanner::builder("file2.parquet")
+                        .add_plan(MockPlanBuilder::new().with_morsel(MorselId(11), 201))
+                        .return_none(),
+                )
+        };
 
+        // Drive only partition 0, exactly as an isolated per-task executor does.
+        // Partition 1's stream is never created.
+        async fn drive_partition0(
+            test: &FileStreamMorselTest,
+            config: &FileScanConfig,
+            options: &ConfigOptions,
+        ) -> Result<(bool, String)> {
+            let shared_work_source =
+                config.create_sibling_state(options).and_then(|state| {
+                    state.as_ref().downcast_ref::<SharedWorkSource>().cloned()
+                });
+            let shared = shared_work_source.is_some();
+            let metrics_set = ExecutionPlanMetricsSet::new();
+            let partition0 = FileStreamBuilder::new(config)
+                .with_partition(0)
+                .with_shared_work_source(shared_work_source)
+                .with_morselizer(Box::new(test.morselizer.clone()))
+                .with_metrics(&metrics_set)
+                .build()?;
+            Ok((shared, drain_stream_output(partition0).await?))
+        }
+
+        // With work stealing enabled (the default), the single polled partition
+        // drains the shared queue and reads a sibling's file (issue #23293).
+        let mut options = ConfigOptions::default();
+        assert!(options.execution.enable_file_stream_work_stealing);
+        let test = make_test();
         let config = test.test_config();
-        let metrics_set = ExecutionPlanMetricsSet::new();
-
-        // A `DataSourceExec` builds exactly one shared work source per
-        // execution, seeded from every file group. An isolated task builds that
-        // state and then executes only its own partition.
-        let shared_work_source = config
-            .create_sibling_state()
-            .and_then(|state| state.as_ref().downcast_ref::<SharedWorkSource>().cloned());
+        let (shared, output) = drive_partition0(&test, &config, &options).await?;
         assert!(
-            shared_work_source.is_some(),
-            "a plain repartitioned scan should use a shared work source"
+            shared,
+            "the default config shares one work queue across siblings"
+        );
+        assert_eq!(
+            output, "Batch: 101\nBatch: 201",
+            "with work stealing on, an isolated partition drains the shared queue"
         );
 
-        // Build and drive ONLY partition 0. Partition 1's stream is never
-        // created, exactly as in an isolated per-task executor.
-        let partition0 = FileStreamBuilder::new(&config)
-            .with_partition(0)
-            .with_shared_work_source(shared_work_source)
-            .with_morselizer(Box::new(test.morselizer.clone()))
-            .with_metrics(&metrics_set)
-            .build()?;
-
-        let output = drain_stream_output(partition0).await?;
-
+        // Disabling work stealing drops the shared queue, so partition 0 reads
+        // only its own file group.
+        options.execution.enable_file_stream_work_stealing = false;
+        let test = make_test();
+        let config = test.test_config();
+        let (shared, output) = drive_partition0(&test, &config, &options).await?;
+        assert!(
+            !shared,
+            "disabling work stealing drops the shared work source"
+        );
         assert_eq!(
             output, "Batch: 101",
-            "partition 0 read files belonging to a sibling partition: a single \
-             isolated task drained the shared work queue (issue #23293)"
+            "with work stealing off, partition 0 reads only its own file group"
         );
 
         Ok(())
@@ -1287,7 +1310,7 @@ mod tests {
         let unlimited_config = test.test_config();
         let limited_config = test.clone().with_limit(1).test_config();
         let shared_work_source = limited_config
-            .create_sibling_state()
+            .create_sibling_state(&ConfigOptions::default())
             .and_then(|state| state.as_ref().downcast_ref::<SharedWorkSource>().cloned())
             .expect("shared work source");
         let limited_metrics = ExecutionPlanMetricsSet::new();
@@ -1539,9 +1562,11 @@ mod tests {
             // `FileStream`s directly, bypassing `DataSourceExec`, so they must
             // perform the same setup explicitly when exercising sibling-stream
             // work stealing.
-            let shared_work_source = config.create_sibling_state().and_then(|state| {
-                state.as_ref().downcast_ref::<SharedWorkSource>().cloned()
-            });
+            let shared_work_source = config
+                .create_sibling_state(&ConfigOptions::default())
+                .and_then(|state| {
+                    state.as_ref().downcast_ref::<SharedWorkSource>().cloned()
+                });
             if !self.build_streams_on_first_read {
                 for partition in build_order {
                     let stream = FileStreamBuilder::new(&config)
