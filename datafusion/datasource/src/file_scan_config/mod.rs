@@ -159,6 +159,12 @@ pub struct FileScanConfig {
     /// DataFusion may attempt to read each partition of files
     /// concurrently, however files *within* a partition will be read
     /// sequentially, one after the next.
+    ///
+    /// Note that when `datafusion.execution.enable_file_stream_work_stealing`
+    /// is enabled (the default), files may be reassigned to a different
+    /// partition at runtime unless `preserve_order` or
+    /// `partitioned_by_file_group` is set, so a file is not guaranteed to be
+    /// read by the partition it is grouped under here.
     pub file_groups: Vec<FileGroup>,
     /// Table constraints
     pub constraints: Constraints,
@@ -1038,10 +1044,18 @@ impl DataSource for FileScanConfig {
     /// during one execution.
     ///
     /// This returns `None` when sibling streams must not share work, such as
-    /// when file order must be preserved or the file groups define the output
-    /// partitioning needed for the rest of the plan
-    fn create_sibling_state(&self) -> Option<Arc<dyn Any + Send + Sync>> {
-        if self.preserve_order || self.partitioned_by_file_group {
+    /// when file order must be preserved, the file groups define the output
+    /// partitioning needed for the rest of the plan, or work stealing is
+    /// disabled via
+    /// `datafusion.execution.enable_file_stream_work_stealing`.
+    fn create_sibling_state(
+        &self,
+        config: &ConfigOptions,
+    ) -> Option<Arc<dyn Any + Send + Sync>> {
+        if self.preserve_order
+            || self.partitioned_by_file_group
+            || !config.execution.enable_file_stream_work_stealing
+        {
             return None;
         }
 
