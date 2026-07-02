@@ -28,6 +28,7 @@ use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use crate::adaptive_filter::{AdaptiveConjunction, AdaptiveFilterShared};
 use crate::check_if_same_properties;
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::common::can_project;
@@ -98,6 +99,10 @@ pub struct FilterExec {
     batch_size: usize,
     /// Number of rows to fetch
     fetch: Option<usize>,
+    /// Measurements shared by all partition streams, used by adaptive conjunct
+    /// reordering (see [`AdaptiveConjunction`]) so the streams learn as one.
+    /// Fresh per plan node; never affects the plan.
+    adaptive_stats: Arc<AdaptiveFilterShared>,
 }
 
 /// Builder for [`FilterExec`] to set optional parameters
@@ -217,6 +222,7 @@ impl FilterExecBuilder {
             projection: self.projection,
             batch_size: self.batch_size,
             fetch: self.fetch,
+            adaptive_stats: Arc::new(AdaptiveFilterShared::new()),
         })
     }
 }
@@ -290,6 +296,7 @@ impl FilterExec {
             projection: self.projection.clone(),
             batch_size,
             fetch: self.fetch,
+            adaptive_stats: Arc::clone(&self.adaptive_stats),
         })
     }
 
@@ -571,9 +578,19 @@ impl ExecutionPlan for FilterExec {
             context.task_id()
         );
         let metrics = FilterExecMetrics::new(&self.metrics, partition);
+        let adaptive = AdaptiveConjunction::try_new(
+            &self.predicate,
+            context
+                .session_config()
+                .options()
+                .execution
+                .adaptive_filter_reordering,
+            Arc::clone(&self.adaptive_stats),
+        );
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
+            adaptive,
             input: self.input.execute(partition, context)?,
             metrics,
             projection: self.projection.clone(),
@@ -764,6 +781,9 @@ impl ExecutionPlan for FilterExec {
                 projection: self.projection.clone(),
                 batch_size: self.batch_size,
                 fetch: self.fetch,
+                // The predicate changed; pooled per-conjunct stats no longer
+                // describe it.
+                adaptive_stats: Arc::new(AdaptiveFilterShared::new()),
             };
             Some(Arc::new(new) as _)
         };
@@ -788,6 +808,7 @@ impl ExecutionPlan for FilterExec {
             projection: self.projection.clone(),
             batch_size: self.batch_size,
             fetch,
+            adaptive_stats: Arc::clone(&self.adaptive_stats),
         }))
     }
 
@@ -1051,6 +1072,10 @@ struct FilterExecStream {
     schema: SchemaRef,
     /// The expression to filter on. This expression must evaluate to a boolean value.
     predicate: Arc<dyn PhysicalExpr>,
+    /// When set, the predicate is a reorderable conjunction evaluated
+    /// adaptively (conjuncts measured, then reordered) instead of via
+    /// `predicate`.
+    adaptive: Option<AdaptiveConjunction>,
     /// The input partition to filter.
     input: SendableRecordBatchStream,
     /// Runtime metrics recording
@@ -1146,9 +1171,15 @@ impl Stream for FilterExecStream {
                 }
                 Some(Ok(batch)) => {
                     let timer = elapsed_compute.timer();
-                    let status = self.predicate.as_ref()
-                        .evaluate(&batch)
-                        .and_then(|v| v.into_array(batch.num_rows()))
+                    let array = match self.adaptive.as_mut() {
+                        Some(adaptive) => adaptive.evaluate(&batch),
+                        None => self
+                            .predicate
+                            .as_ref()
+                            .evaluate(&batch)
+                            .and_then(|v| v.into_array(batch.num_rows())),
+                    };
+                    let status = array
                         .and_then(|array| {
                             Ok(match self.projection.as_ref()  {
                                 Some(projection) => {
