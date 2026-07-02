@@ -408,6 +408,12 @@ impl MultiLevelMergeBuilder {
     ) -> Result<SpillFilesToMerge> {
         assert_ne!(buffer_len, 0, "Buffer length must be greater than 0");
         let mut number_of_spills_to_read_for_current_phase = 0;
+        let configured_fan_in = self
+            .spill_manager
+            .env()
+            .disk_manager
+            .max_spill_merge_fan_in();
+        let max_spill_files = effective_spill_merge_fan_in(configured_fan_in);
         // Track total memory needed for spill file buffers. When the
         // reservation has pre-reserved bytes (from sort_spill_reservation_bytes),
         // those bytes cover the first N spill files without additional pool
@@ -415,6 +421,10 @@ impl MultiLevelMergeBuilder {
         let mut total_needed: usize = 0;
 
         for spill in &self.sorted_spill_files {
+            if number_of_spills_to_read_for_current_phase >= max_spill_files {
+                break;
+            }
+
             let per_spill = get_reserved_bytes_for_record_batch_size(
                 spill.max_record_batch_memory,
                 // Size will be the same as the sliced size, bc it is a spilled batch.
@@ -603,6 +613,14 @@ fn split_batch_in_half(batch: RecordBatch) -> Vec<RecordBatch> {
     vec![batch.slice(0, mid), batch.slice(mid, num_rows - mid)]
 }
 
+fn effective_spill_merge_fan_in(configured_fan_in: usize) -> usize {
+    if configured_fan_in == 0 {
+        usize::MAX
+    } else {
+        configured_fan_in.max(2)
+    }
+}
+
 struct StreamAttachedReservation {
     stream: SendableRecordBatchStream,
     reservation: MemoryReservation,
@@ -665,8 +683,8 @@ mod tests {
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryConsumer, MemoryPool,
     };
-    use datafusion_execution::runtime_env::RuntimeEnv;
-    use datafusion_physical_expr::expressions::Column;
+    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+    use datafusion_physical_expr::expressions::{Column, col};
     use datafusion_physical_expr_common::metrics::{
         ExecutionPlanMetricsSet, SpillMetrics,
     };
@@ -856,6 +874,77 @@ mod tests {
             "after one re-spill the merge must emit {expected_batch_size}-row \
              batches, got a largest batch of {max_batch_rows} rows"
         );
+
+        Ok(())
+    }
+    #[test]
+    fn spill_merge_fan_in_is_unlimited_by_default() {
+        assert_eq!(effective_spill_merge_fan_in(0), usize::MAX);
+    }
+
+    #[test]
+    fn spill_merge_fan_in_preserves_merge_progress() {
+        assert_eq!(effective_spill_merge_fan_in(1), 2);
+        assert_eq!(effective_spill_merge_fan_in(2), 2);
+        assert_eq!(effective_spill_merge_fan_in(8), 8);
+    }
+
+    #[test]
+    fn spill_merge_phase_respects_configured_fan_in() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_max_spill_merge_fan_in(2)
+            .build_arc()?;
+        let spill_manager = SpillManager::new(
+            Arc::clone(&runtime),
+            SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            Arc::clone(&schema),
+        );
+        let sorted_spill_files = (0..4)
+            .map(|idx| {
+                Ok(SortedSpillFile {
+                    file: runtime
+                        .disk_manager
+                        .create_tmp_file(&format!("spill fan-in test {idx}"))?,
+                    max_record_batch_memory: 1,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let expr = LexOrdering::new([PhysicalSortExpr::new_default(col("a", &schema)?)])
+            .unwrap();
+        let reservation =
+            MemoryConsumer::new("spill_merge_phase_respects_configured_fan_in")
+                .register(&runtime.memory_pool);
+        let metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let mut builder = MultiLevelMergeBuilder::new(
+            spill_manager,
+            schema,
+            sorted_spill_files,
+            vec![],
+            expr,
+            metrics,
+            1024,
+            reservation,
+            None,
+            false,
+        );
+        let mut merge_reservation = MemoryConsumer::new("spill_merge_fan_in_phase")
+            .register(&runtime.memory_pool);
+
+        let (spills, buffer_len) = match builder.get_sorted_spill_files_to_merge(
+            1,
+            2,
+            &mut merge_reservation,
+        )? {
+            SpillFilesToMerge::Ready(spills, buffer_len) => (spills, buffer_len),
+            SpillFilesToMerge::SplitThenRetry(index) => {
+                panic!("expected ready spill files, got retry for index {index}")
+            }
+        };
+
+        assert_eq!(spills.len(), 2);
+        assert_eq!(buffer_len, 1);
+        assert_eq!(builder.sorted_spill_files.len(), 2);
 
         Ok(())
     }
