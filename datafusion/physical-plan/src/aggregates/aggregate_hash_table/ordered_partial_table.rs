@@ -46,6 +46,8 @@ use super::common_ordered::OrderedAggregateTable;
 ///
 /// - Aggregate table stores: `k, sum(x), count(x)`
 /// - Input rows: `k, x`
+///
+/// See comments at [`OrderedAggregateTable`] for details.
 impl OrderedAggregateTable<PartialMarker> {
     pub(in crate::aggregates) fn new(
         agg: &AggregateExec,

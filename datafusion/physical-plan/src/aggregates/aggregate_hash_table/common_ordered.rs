@@ -42,9 +42,30 @@ use super::common::{AggregateAccumulator, EvaluatedAggregateBatch};
 
 /// Aggregate table shared by the ordered partial and final paths.
 ///
+/// # Ordering optimization
+///
 /// The table consumes input batches while `GroupOrdering` tracks which groups
 /// are proven complete. Completed groups can be emitted before the input stream
 /// ends, which keeps memory bounded by the active ordered key range.
+///
+/// # Partial and final variant difference
+///
+/// The partial and final aggregate tables implement the two stages of grouped
+/// aggregation. See
+/// [`OrderedPartialAggregateStream`](crate::aggregates::ordered_partial_stream::OrderedPartialAggregateStream)
+/// for the high-level plan shape.
+///
+/// Example: `AVG(v) FILTER (WHERE v>0) GROUP BY k`
+///
+/// Partial table ([`AggregateMode::Partial`], with optional filter from query):
+/// - Input rows: `k, v`
+/// - Table stores: `k, sum(v), count(v)`
+/// - Output schema: `k, sum(v), count(v)`
+///
+/// Final table ([`AggregateMode::Final`], no filters):
+/// - Input rows: `k, sum(v), count(v)`
+/// - Table stores: `k, sum(v), count(v)`
+/// - Output schema: `k, avg(v)`
 ///
 /// # Marker Type
 ///

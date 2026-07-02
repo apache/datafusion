@@ -1001,6 +1001,8 @@ impl AggregateExec {
         Arc::clone(&self.input_schema)
     }
 
+    /// Aggregation has multiple specialized implementations optimized for
+    /// different workloads. This function picks the best available path.
     fn execute_typed(
         &self,
         partition: usize,
@@ -3378,7 +3380,7 @@ mod tests {
         Ok(())
     }
 
-    /// Ensures for ordered input, `OrderedPartilAggregateStream` is used.
+    /// Ensures for ordered input, `OrderedPartialAggregateStream` is used.
     #[tokio::test]
     async fn ordered_partial_aggregate_planning() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
