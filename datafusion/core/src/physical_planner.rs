@@ -927,6 +927,26 @@ impl DefaultPhysicalPlanner {
                     );
                 }
             }
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                target,
+                op: WriteOp::MergeInto(merge_op),
+                ..
+            }) => {
+                let provider = source_as_provider(target)?;
+                let input_exec = children.one()?;
+                provider
+                    .merge_into(
+                        session_state,
+                        input_exec,
+                        merge_op.on.clone(),
+                        merge_op.clauses.clone(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        e.context(format!("MERGE INTO operation on table '{table_name}'"))
+                    })?
+            }
             LogicalPlan::Window(Window { window_expr, .. }) => {
                 assert_or_internal_err!(
                     !window_expr.is_empty(),
