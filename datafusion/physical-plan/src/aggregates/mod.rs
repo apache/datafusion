@@ -1036,7 +1036,7 @@ impl AggregateExec {
             .execution
             .enable_migration_aggregate
         {
-            if self.should_use_ordered_partial_aggregate_stream() {
+            if self.should_use_ordered_partial_aggregate_stream(context) {
                 return Ok(StreamType::OrderedPartialAggregate(
                     OrderedPartialAggregateStream::new(self, context, partition)?,
                 ));
@@ -1048,7 +1048,7 @@ impl AggregateExec {
                 )?));
             }
 
-            if self.should_use_ordered_final_aggregate_stream() {
+            if self.should_use_ordered_final_aggregate_stream(context) {
                 return Ok(StreamType::OrderedFinalAggregate(
                     OrderedFinalAggregateStream::new(self, context, partition)?,
                 ));
@@ -1080,7 +1080,12 @@ impl AggregateExec {
             && self.limit_options_supported_by_hash_stream()
     }
 
-    fn should_use_ordered_partial_aggregate_stream(&self) -> bool {
+    fn should_use_ordered_partial_aggregate_stream(&self, context: &TaskContext) -> bool {
+        // TODO: implement memory-limited path and remove this limitation
+        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
+            return false;
+        }
+
         self.mode == AggregateMode::Partial
             && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
@@ -1103,7 +1108,12 @@ impl AggregateExec {
             && self.group_by.is_single()
     }
 
-    fn should_use_ordered_final_aggregate_stream(&self) -> bool {
+    fn should_use_ordered_final_aggregate_stream(&self, context: &TaskContext) -> bool {
+        // TODO: implement memory-limited path and remove this limitation
+        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
+            return false;
+        }
+
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
@@ -2615,14 +2625,32 @@ mod tests {
         Arc::new(task_ctx)
     }
 
+    fn migrated_hash_session_config(batch_size: usize) -> SessionConfig {
+        SessionConfig::new()
+            .with_batch_size(batch_size)
+            .set_bool("datafusion.execution.enable_migration_aggregate", true)
+    }
+
     fn new_migrated_hash_ctx(batch_size: usize) -> Arc<TaskContext> {
         Arc::new(
-            TaskContext::default().with_session_config(
-                SessionConfig::new()
-                    .with_batch_size(batch_size)
-                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
-            ),
+            TaskContext::default()
+                .with_session_config(migrated_hash_session_config(batch_size)),
         )
+    }
+
+    fn new_finite_memory_migrated_hash_ctx(
+        batch_size: usize,
+        max_memory: usize,
+    ) -> Result<Arc<TaskContext>> {
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(max_memory, 1.0)
+            .build_arc()?;
+
+        Ok(Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(migrated_hash_session_config(batch_size)),
+        ))
     }
 
     async fn check_grouping_sets(
@@ -3455,6 +3483,11 @@ mod tests {
 +----------+-----------+-------------------------+
 ");
 
+        // Ordered streams don't implement memory limits yet.
+        let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
+        let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
+        assert!(matches!(stream, StreamType::GroupedHash(_)));
+
         Ok(())
     }
 
@@ -3526,6 +3559,11 @@ mod tests {
 | 3   | 7            |
 +-----+--------------+
 ");
+
+        // Ordered streams don't implement memory limits yet.
+        let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
+        let stream = final_aggregate.execute_typed(0, &finite_memory_task_ctx)?;
+        assert!(matches!(stream, StreamType::GroupedHash(_)));
 
         Ok(())
     }
