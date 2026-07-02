@@ -198,17 +198,6 @@ pub struct FileScanConfig {
     /// would be incorrect if there are filters being applied, thus this should be accessed
     /// via [`FileScanConfig::statistics`].
     pub(crate) statistics: Statistics,
-    /// When true, file_groups are organized by partition column values
-    /// and output_partitioning will return Hash partitioning on partition columns.
-    /// This allows the optimizer to skip hash repartitioning for aggregates and joins
-    /// on partition columns.
-    ///
-    /// If the number of file partitions > target_partitions, the file partitions will be grouped
-    /// in a round-robin fashion such that number of file partitions = target_partitions.
-    ///
-    /// Follow-up: remove this redundant field in favor of
-    /// `output_partitioning`, see <https://github.com/apache/datafusion/issues/23099>.
-    pub partitioned_by_file_group: bool,
     /// Declared physical output partitioning for this scan.
     ///
     /// Expressions are against the full table schema, before scan projection or
@@ -288,7 +277,6 @@ pub struct FileScanConfigBuilder {
     file_compression_type: Option<FileCompressionType>,
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
-    partitioned_by_file_group: bool,
 }
 
 impl FileScanConfigBuilder {
@@ -315,7 +303,6 @@ impl FileScanConfigBuilder {
             constraints: None,
             batch_size: None,
             expr_adapter_factory: None,
-            partitioned_by_file_group: false,
         }
     }
 
@@ -513,18 +500,6 @@ impl FileScanConfigBuilder {
         self
     }
 
-    /// Set whether file groups are organized by partition column values.
-    ///
-    /// When set to true, the output partitioning will be declared as Hash partitioning
-    /// on the partition columns.
-    pub fn with_partitioned_by_file_group(
-        mut self,
-        partitioned_by_file_group: bool,
-    ) -> Self {
-        self.partitioned_by_file_group = partitioned_by_file_group;
-        self
-    }
-
     /// Build the final [`FileScanConfig`] with all the configured settings.
     ///
     /// This method takes ownership of the builder and returns the constructed `FileScanConfig`.
@@ -546,7 +521,6 @@ impl FileScanConfigBuilder {
             file_compression_type,
             batch_size,
             expr_adapter_factory: expr_adapter,
-            partitioned_by_file_group,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
@@ -571,7 +545,6 @@ impl FileScanConfigBuilder {
             batch_size,
             expr_adapter_factory: expr_adapter,
             statistics,
-            partitioned_by_file_group,
             output_partitioning,
         }
     }
@@ -592,12 +565,15 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
-            partitioned_by_file_group: config.partitioned_by_file_group,
         }
     }
 }
 
-fn hash_partitioning_from_partition_fields(
+/// Builds `Partitioning::Hash` over `partition_cols` (resolved to their indices in
+/// `schema`) with `partition_count` partitions. Returns `None` when there are no
+/// partition columns. Callers use this to declare the output partitioning of a scan
+/// whose file groups are organized by partition column values.
+pub fn hash_partitioning_from_partition_fields(
     schema: &Schema,
     partition_cols: &Fields,
     partition_count: usize,
@@ -759,7 +735,7 @@ impl DataSource for FileScanConfig {
     ) -> Result<Option<Arc<dyn DataSource>>> {
         // When file groups define output partitioning, repartitioning files
         // would invalidate the partition-to-file-group mapping.
-        if self.output_partitioning.is_some() || self.partitioned_by_file_group {
+        if self.output_partitioning.is_some() {
             return Ok(None);
         }
 
@@ -776,10 +752,8 @@ impl DataSource for FileScanConfig {
     /// Returns the output partitioning for this file scan.
     ///
     /// When `output_partitioning` is set, this returns the declared partitioning
-    /// after applying scan projection. When `partitioned_by_file_group` is true,
-    /// this returns `Partitioning::Hash` on the Hive partition columns, allowing
-    /// the optimizer to skip hash repartitioning for aggregates and joins on
-    /// those columns.
+    /// after applying scan projection, allowing the optimizer to skip hash
+    /// repartitioning for aggregates and joins on the partitioning columns.
     ///
     /// If projection or partition count validation fails, this returns
     /// `UnknownPartitioning`.
@@ -795,15 +769,7 @@ impl DataSource for FileScanConfig {
     /// - Idea: Could allow byte-range splitting within partition-aware groups,
     ///   preserving I/O parallelism while maintaining partition semantics.
     fn output_partitioning(&self) -> Partitioning {
-        let Some(output_partitioning) = self.output_partitioning.clone().or_else(|| {
-            self.partitioned_by_file_group.then(|| {
-                hash_partitioning_from_partition_fields(
-                    self.file_source.table_schema().table_schema(),
-                    self.table_partition_cols(),
-                    self.file_groups.len(),
-                )
-            })?
-        }) else {
+        let Some(output_partitioning) = self.output_partitioning.clone() else {
             return Partitioning::UnknownPartitioning(self.file_groups.len());
         };
         if output_partitioning.partition_count() != self.file_groups.len() {
@@ -1127,10 +1093,7 @@ impl DataSource for FileScanConfig {
     /// when file order must be preserved or the file groups define the output
     /// partitioning needed for the rest of the plan
     fn create_sibling_state(&self) -> Option<Arc<dyn Any + Send + Sync>> {
-        if self.preserve_order
-            || self.output_partitioning.is_some()
-            || self.partitioned_by_file_group
-        {
+        if self.preserve_order || self.output_partitioning.is_some() {
             return None;
         }
 
@@ -2541,7 +2504,7 @@ mod tests {
             vec![partition_col],
         );
 
-        // partitioned_by_file_group defaults to false
+        // output_partitioning defaults to None
         let partitioning = config.output_partitioning();
         assert!(matches!(partitioning, Partitioning::UnknownPartitioning(_)));
     }
@@ -2601,13 +2564,12 @@ mod tests {
     #[test]
     fn test_output_partitioning_no_partition_columns() {
         let file_schema = aggr_test_schema();
-        let mut config = config_for_projection(
+        let config = config_for_projection(
             Arc::clone(&file_schema),
             None,
             Statistics::new_unknown(&file_schema),
             vec![], // No partition columns
         );
-        config.partitioned_by_file_group = true;
 
         let partitioning = config.output_partitioning();
         assert!(matches!(partitioning, Partitioning::UnknownPartitioning(_)));
@@ -2630,12 +2592,16 @@ mod tests {
             Statistics::new_unknown(&file_schema),
             single_partition_col,
         );
-        config.partitioned_by_file_group = true;
         config.file_groups = vec![
             FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f3.parquet".to_string(), 1024)]),
         ];
+        config.output_partitioning = hash_partitioning_from_partition_fields(
+            config.file_source.table_schema().table_schema(),
+            config.table_partition_cols(),
+            config.file_groups.len(),
+        );
 
         let partitioning = config.output_partitioning();
         match partitioning {
@@ -2659,11 +2625,15 @@ mod tests {
             Statistics::new_unknown(&file_schema),
             multiple_partition_cols,
         );
-        config.partitioned_by_file_group = true;
         config.file_groups = vec![
             FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
         ];
+        config.output_partitioning = hash_partitioning_from_partition_fields(
+            config.file_source.table_schema().table_schema(),
+            config.table_partition_cols(),
+            config.file_groups.len(),
+        );
 
         let partitioning = config.output_partitioning();
         match partitioning {
