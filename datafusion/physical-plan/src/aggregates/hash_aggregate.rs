@@ -43,7 +43,7 @@ use super::aggregate_hash_table::{
 };
 use super::skip_partial::SkipAggregationProbe;
 use super::{
-    AggregateExec, SubpartitionSliceBuffer, partition_runs, slice_by_subpartition,
+    AggregateExec, SubpartitionReorderBuffer, partition_runs, reorder_by_subpartition,
 };
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
@@ -79,7 +79,7 @@ struct FinalPartitionRunState {
     total_runs_size: usize,
     replaying_run_size: usize,
     is_draining: bool,
-    subpartition_slice_buffer: SubpartitionSliceBuffer,
+    subpartition_reorder_buffer: SubpartitionReorderBuffer,
 }
 
 impl FinalPartitionRunState {
@@ -90,7 +90,7 @@ impl FinalPartitionRunState {
             total_runs_size: 0,
             replaying_run_size: 0,
             is_draining: false,
-            subpartition_slice_buffer: SubpartitionSliceBuffer::new(),
+            subpartition_reorder_buffer: SubpartitionReorderBuffer::new(),
         }
     }
 
@@ -897,13 +897,13 @@ impl FinalHashAggregateStream {
     fn stage_partition_runs(&mut self, batch: &RecordBatch) -> Result<Option<usize>> {
         if let Some(state) = self.partition_run_state.as_mut()
             && let Some(batch) =
-                slice_by_subpartition(batch, &mut state.subpartition_slice_buffer)?
+                reorder_by_subpartition(batch, &mut state.subpartition_reorder_buffer)?
         {
             let mut offset = 0;
             let mut staged_memory = 0;
-            let num_runs = state.subpartition_slice_buffer.runs().len();
+            let num_runs = state.subpartition_reorder_buffer.runs().len();
             for run_idx in 0..num_runs {
-                let run = state.subpartition_slice_buffer.runs()[run_idx];
+                let run = state.subpartition_reorder_buffer.runs()[run_idx];
                 let run_batch = batch.slice(offset, run.len);
                 offset += run.len;
                 staged_memory += state.stage_batch(run_batch, run.relative_partition);

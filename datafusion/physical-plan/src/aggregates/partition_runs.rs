@@ -21,12 +21,13 @@
 //! internal contracts used to describe relative aggregate subpartitions passed
 //! from repartition to final hash aggregation.
 //!
-//! Entry points: [`append_subpartition_column`], [`slice_by_subpartition`],
+//! Entry points: [`append_subpartition_column`], [`reorder_by_subpartition`],
 //! [`set_partition_runs_metadata`] and [`partition_runs`].
 
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UInt32Array};
+use arrow::compute::take_arrays;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::cast::as_uint32_array;
 use datafusion_common::{Result, internal_err};
@@ -106,32 +107,38 @@ pub(crate) fn append_subpartition_column(
     RecordBatch::try_new_with_options(schema, columns, &options).map_err(Into::into)
 }
 
-/// Reusable scratch space for [`slice_by_subpartition`].
+/// Reusable scratch space for [`reorder_by_subpartition`].
 #[derive(Default)]
-pub(crate) struct SubpartitionSliceBuffer {
+pub(crate) struct SubpartitionReorderBuffer {
+    counts: Vec<usize>,
+    offsets: Vec<usize>,
+    indices: Vec<u32>,
     runs: Vec<PartitionRun>,
 }
 
-impl SubpartitionSliceBuffer {
-    /// Create an empty slice scratch buffer.
+impl SubpartitionReorderBuffer {
+    /// Create an empty reorder scratch buffer.
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    /// Return partition runs produced by the latest scan.
+    /// Return partition runs produced by the latest reorder.
     pub(crate) fn runs(&self) -> &[PartitionRun] {
         &self.runs
     }
 
     fn clear(&mut self) {
+        self.counts.clear();
+        self.offsets.clear();
+        self.indices.clear();
         self.runs.clear();
     }
 }
 
-/// Strip the internal subpartition column and record contiguous subpartition runs.
-pub(crate) fn slice_by_subpartition(
+/// Reorder `batch` by its internal subpartition column and strip that column.
+pub(crate) fn reorder_by_subpartition(
     batch: &RecordBatch,
-    buffer: &mut SubpartitionSliceBuffer,
+    buffer: &mut SubpartitionReorderBuffer,
 ) -> Result<Option<RecordBatch>> {
     buffer.clear();
 
@@ -146,34 +153,61 @@ pub(crate) fn slice_by_subpartition(
         );
     }
 
-    let mut values = subpartitions.values().iter().copied();
-    let Some(first_partition) = values.next() else {
-        let schema = strip_subpartition_schema(batch.schema_ref(), subpartition_idx);
-        let columns = strip_subpartition_columns(batch, subpartition_idx);
-        return Ok(Some(RecordBatch::try_new(schema, columns)?));
-    };
+    let num_rows = batch.num_rows();
+    if num_rows > u32::MAX as usize {
+        return internal_err!(
+            "Hash aggregate batch row count {num_rows} does not fit UInt32"
+        );
+    }
 
-    let mut current_partition = first_partition as usize;
-    let mut current_len = 1;
-    for relative_partition in values {
+    for relative_partition in subpartitions.values().iter().copied() {
         let relative_partition = relative_partition as usize;
-        if relative_partition == current_partition {
-            current_len += 1;
-        } else {
+        if relative_partition >= buffer.counts.len() {
+            buffer.counts.resize(relative_partition + 1, 0);
+        }
+        buffer.counts[relative_partition] += 1;
+    }
+
+    buffer.offsets.resize(buffer.counts.len(), 0);
+    let mut offset = 0;
+    for (relative_partition, len) in buffer.counts.iter().copied().enumerate() {
+        buffer.offsets[relative_partition] = offset;
+        if len != 0 {
             buffer
                 .runs
-                .push(PartitionRun::new(current_partition, current_len)?);
-            current_partition = relative_partition;
-            current_len = 1;
+                .push(PartitionRun::new(relative_partition, len)?);
         }
+        offset += len;
     }
-    buffer
-        .runs
-        .push(PartitionRun::new(current_partition, current_len)?);
+    debug_assert_eq!(offset, num_rows);
+
+    buffer.indices.resize(num_rows, 0);
+    let mut is_identity = true;
+    for (row_idx, relative_partition) in
+        subpartitions.values().iter().copied().enumerate()
+    {
+        let relative_partition = relative_partition as usize;
+        let output_idx = buffer.offsets[relative_partition];
+        buffer.offsets[relative_partition] += 1;
+        is_identity &= output_idx == row_idx;
+        buffer.indices[output_idx] = row_idx as u32;
+    }
 
     let schema = strip_subpartition_schema(batch.schema_ref(), subpartition_idx);
     let columns = strip_subpartition_columns(batch, subpartition_idx);
-    Ok(Some(RecordBatch::try_new(schema, columns)?))
+    let output = if is_identity {
+        RecordBatch::try_new(schema, columns)?
+    } else {
+        let indices = UInt32Array::from(std::mem::take(&mut buffer.indices));
+        let columns = take_arrays(&columns, &indices, None)?;
+        let num_indices = indices.len();
+        let (_, values, _) = indices.into_parts();
+        buffer.indices = values.into();
+        let options = RecordBatchOptions::new().with_row_count(Some(num_indices));
+        RecordBatch::try_new_with_options(schema, columns, &options)?
+    };
+
+    Ok(Some(output))
 }
 
 /// Return partition runs encoded on `schema`, if present.
@@ -332,8 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn test_slice_by_subpartition_records_contiguous_runs_and_strips_column() -> Result<()>
-    {
+    fn test_reorder_by_subpartition_groups_rows_and_strips_column() -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, false)]));
         let batch = RecordBatch::try_new(
@@ -349,18 +382,14 @@ mod tests {
             ],
         )?;
 
-        let mut buffer = SubpartitionSliceBuffer::new();
-        let batch = slice_by_subpartition(&batch, &mut buffer)?.unwrap();
+        let mut buffer = SubpartitionReorderBuffer::new();
+        let batch = reorder_by_subpartition(&batch, &mut buffer)?.unwrap();
         let values = as_uint32_array(batch.column(0).as_ref())?;
-        assert_eq!(values.values(), &[10, 11, 12, 13]);
+        assert_eq!(values.values(), &[11, 12, 10, 13]);
         assert_eq!(batch.num_columns(), 1);
         assert_eq!(
             buffer.runs(),
-            &[
-                PartitionRun::new(1, 1)?,
-                PartitionRun::new(0, 2)?,
-                PartitionRun::new(1, 1)?,
-            ]
+            &[PartitionRun::new(0, 2)?, PartitionRun::new(1, 2)?]
         );
         Ok(())
     }
