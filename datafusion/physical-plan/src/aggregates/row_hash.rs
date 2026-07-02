@@ -1221,6 +1221,9 @@ impl GroupedHashAggregateStream {
                 self.spill_state.spills.push(SortedSpillFile {
                     file: spillfile,
                     max_record_batch_memory,
+                    // Spilled aggregate runs use the normal batch size, so they
+                    // impose no cap on later merge output batch sizes.
+                    batch_size_limit: None,
                 })
             }
             None => {
