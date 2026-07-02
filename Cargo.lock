@@ -1765,6 +1765,7 @@ dependencies = [
  "criterion",
  "datafusion",
  "datafusion-common",
+ "datafusion-common-runtime",
  "datafusion-proto",
  "env_logger",
  "futures",
