@@ -96,7 +96,15 @@ impl AggregateHashTable<FinalMarker> {
 
         let batch = RecordBatch::try_new(output_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
-        Ok(MaterializedAggregateOutput::new(batch))
+
+        let num_rows = batch.num_rows();
+        state.group_values.clear_shrink(num_rows);
+        state.batch_group_indices.clear();
+        state.batch_group_indices.shrink_to(num_rows);
+
+        Ok(MaterializedAggregateOutput::new_with_reusable_buffer(
+            batch, state,
+        ))
     }
 
     fn emit_next_materialized_batch(
@@ -106,7 +114,10 @@ impl AggregateHashTable<FinalMarker> {
     ) -> Option<RecordBatch> {
         let batch = output.next_batch(batch_size);
         if output.is_exhausted() {
-            self.state = AggregateHashTableState::Done;
+            self.state = output
+                .take_reusable_buffer()
+                .map(AggregateHashTableState::Building)
+                .unwrap_or(AggregateHashTableState::Done);
         } else {
             self.state = AggregateHashTableState::OutputtingMaterialized(output);
         }

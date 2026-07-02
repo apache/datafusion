@@ -1222,7 +1222,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         self.group_values = Self::build_group_columns(&self.schema)
             .expect("schema previously validated in try_new");
         self.map.clear();
-        self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
+        // self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
         self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(num_rows);

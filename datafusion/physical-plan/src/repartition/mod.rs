@@ -31,6 +31,7 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
+use crate::aggregates::{PartitionRun, append_subpartition_column, subpartition_schema};
 use crate::coalesce::LimitedBatchCoalescer;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::hash_utils::create_hashes;
@@ -229,10 +230,10 @@ struct SharedCoalescer {
 }
 
 impl SharedCoalescer {
-    fn new(schema: SchemaRef, target_batch_size: usize, num_senders: usize) -> Self {
+    fn new(schema: &SchemaRef, target_batch_size: usize, num_senders: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(LimitedBatchCoalescer::new(
-                schema,
+                Arc::clone(schema),
                 target_batch_size,
                 None,
             ))),
@@ -244,10 +245,10 @@ impl SharedCoalescer {
     /// batches. The mutex is held only briefly.
     fn push_and_drain(&self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
         let mut acc = Vec::new();
-        let mut c = self.inner.lock();
-        c.push_batch(batch)?;
-        while let Some(b) = c.next_completed_batch() {
-            acc.push(b);
+        let mut coalescer = self.inner.lock();
+        coalescer.push_batch(batch)?;
+        while let Some(batch) = coalescer.next_completed_batch() {
+            acc.push(batch);
         }
         Ok(acc)
     }
@@ -261,10 +262,10 @@ impl SharedCoalescer {
             return Ok(vec![]);
         }
         let mut acc = Vec::new();
-        let mut c = self.inner.lock();
-        c.finish()?;
-        while let Some(b) = c.next_completed_batch() {
-            acc.push(b);
+        let mut coalescer = self.inner.lock();
+        coalescer.finish()?;
+        while let Some(batch) = coalescer.next_completed_batch() {
+            acc.push(batch);
         }
         Ok(acc)
     }
@@ -396,6 +397,7 @@ impl RepartitionExecState {
         name: &str,
         context: &Arc<TaskContext>,
         spill_manager: SpillManager,
+        max_aggr_partition_factor: usize,
     ) -> Result<&mut ConsumingInputStreamsState> {
         let streams_and_metrics = match self {
             RepartitionExecState::NotInitialized => {
@@ -475,9 +477,14 @@ impl RepartitionExecState {
             // the consumer never sees the per-input-task small batches.
             // Skip in preserve-order mode: each input has its own dedicated
             // channel and `StreamingMergeBuilder` handles batching.
+            let coalesce_schema = if max_aggr_partition_factor > 1 {
+                subpartition_schema(&input.schema())
+            } else {
+                input.schema()
+            };
             let shared_coalescer = (!preserve_order).then(|| {
                 SharedCoalescer::new(
-                    input.schema(),
+                    &coalesce_schema,
                     context.session_config().batch_size(),
                     num_input_partitions,
                 )
@@ -534,6 +541,7 @@ impl RepartitionExecState {
                 // preserve_order depends on partition index to start from 0
                 if preserve_order { 0 } else { i },
                 num_input_partitions,
+                max_aggr_partition_factor,
             ));
 
             // In a separate task, wait for each input to be done
@@ -566,10 +574,57 @@ enum BatchPartitionerState {
         hash_buffer: Vec<u64>,
         indices: Vec<Vec<u32>>,
     },
+    HashAggregate(HashAggregateBatchPartitioner),
     RoundRobin {
         num_partitions: usize,
         next_idx: usize,
     },
+}
+
+/// Partitions partial aggregate output into aggregate subpartitions.
+struct HashAggregateBatchPartitioner {
+    exprs: Vec<Arc<dyn PhysicalExpr>>,
+    partition_reducer: StrengthReducedU64,
+    hash_buffer: Vec<u64>,
+    indices: Vec<Vec<u32>>,
+    num_partitions: usize,
+    max_aggr_partition_factor: usize,
+}
+
+impl HashAggregateBatchPartitioner {
+    fn new(
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+        num_partitions: usize,
+        max_aggr_partition_factor: usize,
+    ) -> Result<Self> {
+        if num_partitions == 0 {
+            return internal_err!(
+                "Hash aggregate repartition requires at least one partition"
+            );
+        }
+        if max_aggr_partition_factor == 0 {
+            return internal_err!(
+                "Hash aggregate repartition requires at least one aggregate partition per output partition"
+            );
+        }
+
+        let max_aggr_partitions = num_partitions
+            .checked_mul(max_aggr_partition_factor)
+            .ok_or_else(|| {
+            DataFusionError::Internal(
+                "Hash aggregate repartition partition count overflow".to_string(),
+            )
+        })?;
+
+        Ok(Self {
+            exprs,
+            partition_reducer: StrengthReducedU64::new(max_aggr_partitions as u64),
+            hash_buffer: vec![],
+            indices: vec![vec![]; max_aggr_partitions],
+            num_partitions,
+            max_aggr_partition_factor,
+        })
+    }
 }
 
 /// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
@@ -681,6 +736,29 @@ impl BatchPartitioner {
         })
     }
 
+    /// Create a new [`BatchPartitioner`] for hash aggregation repartitioning.
+    ///
+    /// Rows are first split into `num_partitions * max_aggr_partition_factor`
+    /// aggregate partitions. Each group of `max_aggr_partition_factor`
+    /// aggregate partitions maps back to one output partition.
+    pub fn new_hash_aggregate_partitioner(
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+        num_partitions: usize,
+        max_aggr_partition_factor: usize,
+        timer: metrics::Time,
+    ) -> Result<Self> {
+        Ok(Self {
+            state: BatchPartitionerState::HashAggregate(
+                HashAggregateBatchPartitioner::new(
+                    exprs,
+                    num_partitions,
+                    max_aggr_partition_factor,
+                )?,
+            ),
+            timer,
+        })
+    }
+
     /// Create a new [`BatchPartitioner`] for round-robin repartitioning.
     ///
     /// # Parameters
@@ -788,7 +866,17 @@ impl BatchPartitioner {
         &mut self,
         batch: RecordBatch,
     ) -> Result<impl Iterator<Item = Result<(usize, RecordBatch)>> + Send + '_> {
-        let it: Box<dyn Iterator<Item = Result<(usize, RecordBatch)>> + Send> =
+        Ok(self
+            .partition_iter_with_relative_partition(batch)?
+            .map(|res| res.map(|(partition, _, batch)| (partition, batch))))
+    }
+
+    fn partition_iter_with_relative_partition(
+        &mut self,
+        batch: RecordBatch,
+    ) -> Result<impl Iterator<Item = Result<(usize, usize, RecordBatch)>> + Send + '_>
+    {
+        let it: Box<dyn Iterator<Item = Result<(usize, usize, RecordBatch)>> + Send> =
             match &mut self.state {
                 BatchPartitionerState::RoundRobin {
                     num_partitions,
@@ -796,7 +884,7 @@ impl BatchPartitioner {
                 } => {
                     let idx = *next_idx;
                     *next_idx = (*next_idx + 1) % *num_partitions;
-                    Box::new(std::iter::once(Ok((idx, batch))))
+                    Box::new(std::iter::once(Ok((idx, 0, batch))))
                 }
                 BatchPartitionerState::Hash {
                     exprs,
@@ -804,30 +892,28 @@ impl BatchPartitioner {
                     hash_buffer,
                     indices,
                 } => {
-                    // Tracking time required for distributing indexes across output partitions
-                    let timer = self.timer.timer();
-
-                    let arrays =
-                        evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
-
-                    hash_buffer.clear();
-                    hash_buffer.resize(batch.num_rows(), 0);
-
-                    create_hashes(
-                        &arrays,
-                        REPARTITION_RANDOM_STATE.random_state(),
+                    let partitioned_batches = Self::partition_hash_batch(
+                        &batch,
+                        exprs,
+                        *partition_reducer,
                         hash_buffer,
+                        indices,
+                        &self.timer,
+                        |partition| (partition, 0),
                     )?;
 
-                    indices.iter_mut().for_each(|v| v.clear());
-
-                    partition_reducer.partition_indices(hash_buffer, indices);
-
-                    // Finished building index-arrays for output partitions
-                    timer.done();
-
-                    let partitioned_batches =
-                        Self::partition_grouped_take(&batch, indices, &self.timer)?;
+                    Box::new(partitioned_batches.into_iter())
+                }
+                BatchPartitionerState::HashAggregate(partitioner) => {
+                    let partitioned_batches = Self::partition_hash_aggregate_batch(
+                        &batch,
+                        &partitioner.exprs,
+                        partitioner.partition_reducer,
+                        &mut partitioner.hash_buffer,
+                        &mut partitioner.indices,
+                        &self.timer,
+                        partitioner.max_aggr_partition_factor,
+                    )?;
 
                     Box::new(partitioned_batches.into_iter())
                 }
@@ -841,6 +927,9 @@ impl BatchPartitioner {
         match &self.state {
             BatchPartitionerState::RoundRobin { num_partitions, .. } => *num_partitions,
             BatchPartitionerState::Hash { indices, .. } => indices.len(),
+            BatchPartitionerState::HashAggregate(partitioner) => {
+                partitioner.num_partitions
+            }
         }
     }
 
@@ -860,11 +949,158 @@ impl BatchPartitioner {
     ///
     /// this method takes rows in `[2, 5, 0, 3, 4]` order once, then returns
     /// `partition 0 = slice(0, 2)` and `partition 2 = slice(2, 3)`.
+    fn partition_hash_batch(
+        batch: &RecordBatch,
+        exprs: &[Arc<dyn PhysicalExpr>],
+        partition_reducer: StrengthReducedU64,
+        hash_buffer: &mut Vec<u64>,
+        indices: &mut [Vec<u32>],
+        timer: &metrics::Time,
+        mut map_partition: impl FnMut(usize) -> (usize, usize),
+    ) -> Result<Vec<Result<(usize, usize, RecordBatch)>>> {
+        let partition_timer = timer.timer();
+
+        let arrays = evaluate_expressions_to_arrays(exprs, batch)?;
+
+        hash_buffer.clear();
+        hash_buffer.resize(batch.num_rows(), 0);
+
+        create_hashes(
+            &arrays,
+            REPARTITION_RANDOM_STATE.random_state(),
+            hash_buffer,
+        )?;
+
+        indices.iter_mut().for_each(|values| values.clear());
+
+        partition_reducer.partition_indices(hash_buffer, indices);
+
+        partition_timer.done();
+
+        Self::partition_grouped_take(batch, indices, timer, |partition| {
+            map_partition(partition)
+        })
+    }
+
+    fn partition_hash_aggregate_batch(
+        batch: &RecordBatch,
+        exprs: &[Arc<dyn PhysicalExpr>],
+        partition_reducer: StrengthReducedU64,
+        hash_buffer: &mut Vec<u64>,
+        indices: &mut [Vec<u32>],
+        timer: &metrics::Time,
+        max_aggr_partition_factor: usize,
+    ) -> Result<Vec<Result<(usize, usize, RecordBatch)>>> {
+        let partition_timer = timer.timer();
+
+        let arrays = evaluate_expressions_to_arrays(exprs, batch)?;
+
+        hash_buffer.clear();
+        hash_buffer.resize(batch.num_rows(), 0);
+
+        create_hashes(
+            &arrays,
+            REPARTITION_RANDOM_STATE.random_state(),
+            hash_buffer,
+        )?;
+
+        indices.iter_mut().for_each(|values| values.clear());
+
+        partition_reducer.partition_indices(hash_buffer, indices);
+
+        partition_timer.done();
+
+        Self::partition_hash_aggregate_grouped_take(
+            batch,
+            indices,
+            timer,
+            max_aggr_partition_factor,
+        )
+    }
+
+    fn partition_hash_aggregate_grouped_take(
+        batch: &RecordBatch,
+        indices: &mut [Vec<u32>],
+        timer: &metrics::Time,
+        max_aggr_partition_factor: usize,
+    ) -> Result<Vec<Result<(usize, usize, RecordBatch)>>> {
+        let mut output_ranges = Vec::with_capacity(indices.len());
+        let mut reordered_indices = Vec::with_capacity(batch.num_rows());
+
+        for (aggr_partition, p_indices) in indices.iter_mut().enumerate() {
+            if p_indices.is_empty() {
+                continue;
+            }
+
+            let start = reordered_indices.len();
+            reordered_indices.extend_from_slice(p_indices);
+            output_ranges.push((
+                aggr_partition / max_aggr_partition_factor,
+                PartitionRun::new(
+                    aggr_partition % max_aggr_partition_factor,
+                    p_indices.len(),
+                )?,
+                start,
+            ));
+            p_indices.clear();
+        }
+
+        if reordered_indices.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let batches = {
+            let _timer = timer.timer();
+            let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.into();
+            let columns = take_arrays(batch.columns(), &indices_array, None)?;
+
+            let mut options = RecordBatchOptions::new();
+            options = options.with_row_count(Some(indices_array.len()));
+            let reordered_batch =
+                RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
+
+            let mut output_batches = Vec::new();
+            let mut current_output_partition = None;
+            let mut current_start = 0;
+            let mut current_len = 0;
+            let mut current_runs = Vec::new();
+
+            for (output_partition, run, start) in output_ranges {
+                if current_output_partition != Some(output_partition) {
+                    if let Some(partition) = current_output_partition {
+                        let batch = reordered_batch.slice(current_start, current_len);
+                        let batch = append_subpartition_column(&batch, &current_runs)?;
+                        output_batches.push(Ok((partition, 0, batch)));
+                    }
+
+                    current_output_partition = Some(output_partition);
+                    current_start = start;
+                    current_len = 0;
+                    current_runs.clear();
+                }
+
+                current_len += run.len;
+                current_runs.push(run);
+            }
+
+            if let Some(partition) = current_output_partition {
+                let batch = reordered_batch.slice(current_start, current_len);
+                let batch = append_subpartition_column(&batch, &current_runs)?;
+                output_batches.push(Ok((partition, 0, batch)));
+            }
+
+            output_batches
+        };
+
+        Ok(batches)
+    }
+
     fn partition_grouped_take(
         batch: &RecordBatch,
         indices: &mut [Vec<u32>],
         timer: &metrics::Time,
-    ) -> Result<Vec<Result<(usize, RecordBatch)>>> {
+        mut map_partition: impl FnMut(usize) -> (usize, usize),
+    ) -> Result<Vec<Result<(usize, usize, RecordBatch)>>> {
         let mut partition_ranges = Vec::with_capacity(indices.len());
         let mut reordered_indices = Vec::with_capacity(batch.num_rows());
 
@@ -875,7 +1111,13 @@ impl BatchPartitioner {
 
             let start = reordered_indices.len();
             reordered_indices.extend_from_slice(p_indices);
-            partition_ranges.push((partition, start, p_indices.len()));
+            let (output_partition, relative_partition) = map_partition(partition);
+            partition_ranges.push((
+                output_partition,
+                relative_partition,
+                start,
+                p_indices.len(),
+            ));
             p_indices.clear();
         }
 
@@ -895,8 +1137,12 @@ impl BatchPartitioner {
 
             partition_ranges
                 .into_iter()
-                .map(|(partition, start, len)| {
-                    Ok((partition, reordered_batch.slice(start, len)))
+                .map(|(partition, relative_partition, start, len)| {
+                    Ok((
+                        partition,
+                        relative_partition,
+                        reordered_batch.slice(start, len),
+                    ))
                 })
                 .collect()
         };
@@ -1047,6 +1293,8 @@ pub struct RepartitionExec {
     /// Boolean flag to decide whether to preserve ordering. If true means
     /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
     preserve_order: bool,
+    /// Number of aggregate partitions mapped to one output partition.
+    max_aggr_partition_factor: usize,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
 }
@@ -1113,6 +1361,11 @@ impl RepartitionExec {
         self.preserve_order
     }
 
+    /// Return the number of aggregate partitions per output partition.
+    pub fn max_aggr_partition_factor(&self) -> usize {
+        self.max_aggr_partition_factor
+    }
+
     /// Get name used to display this Exec
     pub fn name(&self) -> &str {
         "RepartitionExec"
@@ -1146,6 +1399,13 @@ impl DisplayAs for RepartitionExec {
 
                 if self.preserve_order {
                     write!(f, ", preserve_order=true")?;
+                }
+                if self.max_aggr_partition_factor > 1 {
+                    write!(
+                        f,
+                        ", max_aggr_partition_factor={}",
+                        self.max_aggr_partition_factor
+                    )?;
                 } else if input_partition_count <= 1
                     && self.input.output_ordering().is_some()
                 {
@@ -1171,6 +1431,13 @@ impl DisplayAs for RepartitionExec {
 
                 if self.preserve_order {
                     writeln!(f, "preserve_order={}", self.preserve_order)?;
+                }
+                if self.max_aggr_partition_factor > 1 {
+                    writeln!(
+                        f,
+                        "max_aggr_partition_factor={}",
+                        self.max_aggr_partition_factor
+                    )?;
                 }
                 Ok(())
             }
@@ -1201,6 +1468,7 @@ impl ExecutionPlan for RepartitionExec {
             children.swap_remove(0),
             self.partitioning().clone(),
         )?;
+        repartition.max_aggr_partition_factor = self.max_aggr_partition_factor;
         if self.preserve_order {
             repartition = repartition.with_preserve_order();
         }
@@ -1232,14 +1500,20 @@ impl ExecutionPlan for RepartitionExec {
         let partitioning = self.partitioning().clone();
         let metrics = self.metrics.clone();
         let preserve_order = self.sort_exprs().is_some();
+        let max_aggr_partition_factor = self.max_aggr_partition_factor;
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
 
+        let spill_schema = if max_aggr_partition_factor > 1 {
+            subpartition_schema(&input.schema())
+        } else {
+            input.schema()
+        };
         let spill_manager = SpillManager::new(
             Arc::clone(&context.runtime_env()),
             spill_metrics,
-            input.schema(),
+            spill_schema,
         );
 
         // Get existing ordering to use for merging
@@ -1270,6 +1544,7 @@ impl ExecutionPlan for RepartitionExec {
                     &name,
                     &context,
                     spill_manager.clone(),
+                    max_aggr_partition_factor,
                 )?;
 
                 // now return stream for the specified *output* partition which will
@@ -1536,6 +1811,7 @@ impl ExecutionPlan for RepartitionExec {
             state: Arc::clone(&self.state),
             metrics: self.metrics.clone(),
             preserve_order: self.preserve_order,
+            max_aggr_partition_factor: self.max_aggr_partition_factor,
             cache: new_properties.into(),
         })))
     }
@@ -1549,6 +1825,28 @@ impl RepartitionExec {
         input: Arc<dyn ExecutionPlan>,
         partitioning: Partitioning,
     ) -> Result<Self> {
+        Self::try_new_with_max_aggr_partition_factor(input, partitioning, 1)
+    }
+
+    /// Create a repartition operator with aggregate subpartitioning enabled.
+    pub fn try_new_with_max_aggr_partition_factor(
+        input: Arc<dyn ExecutionPlan>,
+        partitioning: Partitioning,
+        max_aggr_partition_factor: usize,
+    ) -> Result<Self> {
+        if max_aggr_partition_factor == 0 {
+            return internal_err!(
+                "RepartitionExec requires max_aggr_partition_factor to be at least one"
+            );
+        }
+        if max_aggr_partition_factor > 1
+            && !matches!(partitioning, Partitioning::Hash(_, _))
+        {
+            return internal_err!(
+                "Hash aggregate repartition can only be used with hash partitioning"
+            );
+        }
+
         let preserve_order = false;
         let cache = Self::compute_properties(&input, partitioning, preserve_order);
         Ok(RepartitionExec {
@@ -1556,6 +1854,7 @@ impl RepartitionExec {
             state: Default::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
+            max_aggr_partition_factor,
             cache: Arc::new(cache),
         })
     }
@@ -1641,14 +1940,24 @@ impl RepartitionExec {
         metrics: RepartitionMetrics,
         input_partition: usize,
         num_input_partitions: usize,
+        max_aggr_partition_factor: usize,
     ) -> Result<()> {
         let mut partitioner = match &partitioning {
             Partitioning::Hash(exprs, num_partitions) => {
-                BatchPartitioner::new_hash_partitioner(
-                    exprs.clone(),
-                    *num_partitions,
-                    metrics.repartition_time.clone(),
-                )?
+                if max_aggr_partition_factor > 1 {
+                    BatchPartitioner::new_hash_aggregate_partitioner(
+                        exprs.clone(),
+                        *num_partitions,
+                        max_aggr_partition_factor,
+                        metrics.repartition_time.clone(),
+                    )?
+                } else {
+                    BatchPartitioner::new_hash_partitioner(
+                        exprs.clone(),
+                        *num_partitions,
+                        metrics.repartition_time.clone(),
+                    )?
+                }
             }
             Partitioning::RoundRobinBatch(num_partitions) => {
                 BatchPartitioner::new_round_robin_partitioner(
@@ -1689,8 +1998,8 @@ impl RepartitionExec {
                 continue;
             }
 
-            for res in partitioner.partition_iter(batch)? {
-                let (partition, batch) = res?;
+            for res in partitioner.partition_iter_with_relative_partition(batch)? {
+                let (partition, _relative_partition, batch) = res?;
 
                 let timer = metrics.send_time[partition].timer();
                 // if there is still a receiver, send to it
@@ -2032,6 +2341,53 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning, SplitPoint};
     use insta::assert_snapshot;
+
+    // Covers hash aggregate partitioning mapping multiple aggregate partitions
+    // back to one output partition through an internal subpartition column.
+    // Example: with 2 output partitions and factor 4, each output batch has
+    // visible data plus one internal subpartition column.
+    #[test]
+    fn test_hash_aggregate_partitioner_appends_subpartition_column() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from_iter_values(0..128))],
+        )?;
+        let timer = metrics::Time::default();
+        let mut partitioner = BatchPartitioner::new_hash_aggregate_partitioner(
+            vec![col("c0", &schema)?],
+            2,
+            4,
+            timer,
+        )?;
+
+        let mut seen = vec![vec![false; 4]; 2];
+        let mut num_rows = 0;
+        for result in partitioner.partition_iter_with_relative_partition(batch)? {
+            let (partition, relative_partition, batch) = result?;
+            assert!(partition < 2);
+            assert_eq!(relative_partition, 0);
+            assert_eq!(batch.num_columns(), 2);
+            num_rows += batch.num_rows();
+
+            let subpartitions = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .expect("subpartition column should be UInt32");
+            for value in subpartitions.iter() {
+                let value =
+                    value.expect("subpartition value should not be null") as usize;
+                assert!(value < 4);
+                seen[partition][value] = true;
+            }
+        }
+
+        assert_eq!(num_rows, 128);
+        assert!(seen.iter().flatten().all(|seen| *seen));
+        Ok(())
+    }
 
     #[test]
     fn strength_reduced_u64_remainder_matches_modulo() {
