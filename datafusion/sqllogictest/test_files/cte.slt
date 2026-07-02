@@ -1699,9 +1699,7 @@ physical_plan
 07)----------FilterExec: k@0 < scalar_subquery(<pending>)
 08)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)--------------WorkTableExec: name=r
-10)--FilterExec: k@0 = 2, projection=[v2@1]
-11)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte/test.parquet]]}, projection=[k, v2], output_ordering=[k@0 ASC NULLS LAST], file_type=parquet, predicate=k@0 = 2, pruning_predicate=k_null_count@2 != row_count@3 AND k_min@0 <= 2 AND 2 <= k_max@1, required_guarantees=[k in (2)]
+10)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte/test.parquet]]}, projection=[v2], file_type=parquet, predicate=k@0 = 2, pruning_predicate=k_null_count@2 != row_count@3 AND k_min@0 <= 2 AND 2 <= k_max@1, required_guarantees=[k in (2)]
 
 query II
 with recursive r as (

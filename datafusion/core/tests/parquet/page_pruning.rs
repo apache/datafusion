@@ -113,13 +113,10 @@ async fn page_index_filter_one_col() {
     let filter = col("month").eq(lit(1_i32));
 
     let batches = get_filter_results(&state, filter.clone(), false).await;
-    // `month = 1` from the page index should create below RowSelection
-    //  vec.push(RowSelector::select(312));
-    //  vec.push(RowSelector::skip(3330));
-    //  vec.push(RowSelector::select(339));
-    //  vec.push(RowSelector::skip(3319));
-    // total 651 row
-    assert_eq!(batches[0].num_rows(), 651);
+    // `month = 1` from the page index narrows IO to ~651 candidate rows
+    // (RowSelector skip/select pattern), and the in-scan post-scan filter
+    // then rejects the 31 page-aligned rows that don't actually match.
+    assert_eq!(batches[0].num_rows(), 620);
 
     let batches = get_filter_results(&state, filter, true).await;
     assert_eq!(batches[0].num_rows(), 620);
@@ -127,16 +124,9 @@ async fn page_index_filter_one_col() {
     // 2. create filter month == 1 or month == 2;
     let filter = col("month").eq(lit(1_i32)).or(col("month").eq(lit(2_i32)));
     let batches = get_filter_results(&state, filter.clone(), false).await;
-    // `month = 1` or `month = 2` from the page index should create below RowSelection
-    //  vec.push(RowSelector::select(312));
-    //  vec.push(RowSelector::skip(900));
-    //  vec.push(RowSelector::select(312));
-    //  vec.push(RowSelector::skip(2118));
-    //  vec.push(RowSelector::select(339));
-    //  vec.push(RowSelector::skip(873));
-    //  vec.push(RowSelector::select(318));
-    //  vec.push(RowSelector::skip(2128));
-    assert_eq!(batches[0].num_rows(), 1281);
+    // Page-index pruning leaves a 1281-row candidate set; the scan applies
+    // the predicate (RowFilter or post-scan) to land on 1180 matches.
+    assert_eq!(batches[0].num_rows(), 1180);
 
     let batches = get_filter_results(&state, filter, true).await;
     assert_eq!(batches[0].num_rows(), 1180);
@@ -154,8 +144,8 @@ async fn page_index_filter_one_col() {
     // 4.create filter 0 < month < 2 ;
     let filter = col("month").gt(lit(0_i32)).and(col("month").lt(lit(2_i32)));
     let batches = get_filter_results(&state, filter.clone(), false).await;
-    // should same with `month = 1`
-    assert_eq!(batches[0].num_rows(), 651);
+    // Same matching set as `month = 1`.
+    assert_eq!(batches[0].num_rows(), 620);
     let batches = get_filter_results(&state, filter, true).await;
     assert_eq!(batches[0].num_rows(), 620);
 
@@ -163,14 +153,9 @@ async fn page_index_filter_one_col() {
     // Note this test doesn't apply type coercion so the literal must match the actual view type
     let filter = col("date_string_col").eq(lit(ScalarValue::new_utf8view("01/01/09")));
     let batches = get_filter_results(&state, filter.clone(), false).await;
-    assert_eq!(batches[0].num_rows(), 14);
-
-    // there should only two pages match the filter
-    //                                  min                                        max
-    // page-20                        0  01/01/09                                  01/02/09
-    // page-21                        0  01/01/09                                  01/01/09
-    // each 7 rows
-    assert_eq!(batches[0].num_rows(), 14);
+    // Page index narrows to two pages of 7 rows each (14 rows); the scan
+    // then rejects the 4 page-aligned rows that don't actually match.
+    assert_eq!(batches[0].num_rows(), 10);
     let batches = get_filter_results(&state, filter, true).await;
     assert_eq!(batches[0].num_rows(), 10);
 }
@@ -183,11 +168,9 @@ async fn page_index_filter_multi_col() {
     // create filter month == 1 and year = 2009;
     let filter = col("month").eq(lit(1_i32)).and(col("year").eq(lit(2009)));
     let batches = get_filter_results(&state, filter.clone(), false).await;
-    //  `year = 2009` from the page index should create below RowSelection
-    //  vec.push(RowSelector::select(3663));
-    //  vec.push(RowSelector::skip(3642));
-    //  combine with `month = 1` total 333 row
-    assert_eq!(batches[0].num_rows(), 333);
+    // Page index narrows IO to ~333 candidate rows; the scan then rejects
+    // the page-aligned rows that don't actually match, landing on 310.
+    assert_eq!(batches[0].num_rows(), 310);
     let batches = get_filter_results(&state, filter, true).await;
     assert_eq!(batches[0].num_rows(), 310);
 
@@ -197,7 +180,7 @@ async fn page_index_filter_multi_col() {
         .eq(lit(1_i32))
         .and(col("year").eq(lit(2009)).or(col("id").eq(lit(1))));
     let batches = get_filter_results(&state, filter.clone(), false).await;
-    assert_eq!(batches[0].num_rows(), 651);
+    assert_eq!(batches[0].num_rows(), 310);
     let batches = get_filter_results(&state, filter, true).await;
     assert_eq!(batches[0].num_rows(), 310);
 
@@ -205,7 +188,7 @@ async fn page_index_filter_multi_col() {
     // this filter use two columns will not push down
     let filter = col("year").eq(lit(2009)).or(col("id").eq(lit(1)));
     let batches = get_filter_results(&state, filter.clone(), false).await;
-    assert_eq!(batches[0].num_rows(), 7300);
+    assert_eq!(batches[0].num_rows(), 3650);
     let batches = get_filter_results(&state, filter, true).await;
     assert_eq!(batches[0].num_rows(), 3650);
 
@@ -218,7 +201,7 @@ async fn page_index_filter_multi_col() {
         .and(col("id").eq(lit(1)))
         .or(col("year").eq(lit(2010)));
     let batches = get_filter_results(&state, filter.clone(), false).await;
-    assert_eq!(batches[0].num_rows(), 7300);
+    assert_eq!(batches[0].num_rows(), 3651);
     let batches = get_filter_results(&state, filter, true).await;
     assert_eq!(batches[0].num_rows(), 3651);
 }
