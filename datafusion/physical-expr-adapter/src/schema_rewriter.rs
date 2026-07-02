@@ -449,7 +449,7 @@ impl DefaultPhysicalExprAdapterRewriter {
 
         Ok(Transformed::yes(Arc::new(CastExpr::new_with_target_field(
             Arc::new(resolved_column),
-            Arc::new(logical_field.clone()),
+            &Arc::new(logical_field.clone()),
             None,
         ))))
     }
@@ -851,7 +851,7 @@ mod tests {
 
         let expected = Arc::new(CastExpr::new_with_target_field(
             Arc::new(Column::new("data", 0)),
-            logical_field,
+            &logical_field,
             None,
         )) as Arc<dyn PhysicalExpr>;
 

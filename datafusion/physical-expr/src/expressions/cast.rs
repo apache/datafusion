@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -22,9 +23,9 @@ use std::sync::Arc;
 use crate::physical_expr::PhysicalExpr;
 
 use arrow::compute::{CastOptions, can_cast_types};
-use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
+use arrow::datatypes::{DataType, DataType::*, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::datatype::DataTypeExt;
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
@@ -59,8 +60,16 @@ fn can_cast_named_struct_types(source: &DataType, target: &DataType) -> bool {
 pub struct CastExpr {
     /// The expression to cast
     pub expr: Arc<dyn PhysicalExpr>,
-    /// Field metadata describing the desired output after casting
-    target_field: FieldRef,
+    /// The target data type to cast to
+    target_type: DataType,
+    /// Explicit metadata for the output field, or `None` to pass through source metadata
+    /// (with extension type keys stripped).
+    ///
+    /// When `Some`, this is the exact metadata to use for the output field.
+    /// When `None`, source metadata passes through (stripping extension keys).
+    target_metadata: Option<HashMap<String, String>>,
+    /// Explicit nullability for the output field, or `None` to pass through source nullability.
+    target_nullable: Option<bool>,
     /// Cast options
     cast_options: CastOptions<'static>,
 }
@@ -69,7 +78,9 @@ pub struct CastExpr {
 impl PartialEq for CastExpr {
     fn eq(&self, other: &Self) -> bool {
         self.expr.eq(&other.expr)
-            && self.target_field.eq(&other.target_field)
+            && self.target_type.eq(&other.target_type)
+            && self.target_metadata.eq(&other.target_metadata)
+            && self.target_nullable.eq(&other.target_nullable)
             && self.cast_options.eq(&other.cast_options)
     }
 }
@@ -77,7 +88,17 @@ impl PartialEq for CastExpr {
 impl Hash for CastExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
-        self.target_field.hash(state);
+        self.target_type.hash(state);
+        // Hash the metadata by iterating over sorted keys for deterministic ordering
+        if let Some(metadata) = &self.target_metadata {
+            let mut entries: Vec<_> = metadata.iter().collect();
+            entries.sort_by_key(|(k, _)| *k);
+            for (k, v) in entries {
+                k.hash(state);
+                v.hash(state);
+            }
+        }
+        self.target_nullable.hash(state);
         self.cast_options.hash(state);
     }
 }
@@ -85,47 +106,50 @@ impl Hash for CastExpr {
 impl CastExpr {
     /// Create a new `CastExpr` using only a `DataType`.
     ///
-    /// This constructor is provided for compatibility with existing call sites
-    /// that only know the target type.  It synthesizes a ``Field`` with the
-    /// given type (**nullable by default**) and no name metadata.  Callers that
-    /// already have a `FieldRef` (for example, coming from schema inference or a
-    /// resolved column) should prefer [`CastExpr::new_with_target_field`], which
-    /// preserves the field's name, nullability, and other metadata.  In other
-    /// words:
+    /// This constructor creates a type-only cast where metadata and nullability
+    /// are passed through from the source expression (with extension type keys
+    /// stripped from metadata). This is the most common use case when you only
+    /// need to change the data type.
     ///
-    /// * use `new()` when only a `DataType` is available and you want the legacy
-    ///   semantics of a type-only cast
-    /// * use `new_with_target_field()` when you need explicit field
-    ///   metadata/name/nullability preserved
+    /// For explicit control over the output field's metadata and nullability,
+    /// use [`CastExpr::new_with_target_field`] or the individual builder methods.
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         cast_type: DataType,
         cast_options: Option<CastOptions<'static>>,
     ) -> Self {
-        Self::new_with_target_field(
+        Self {
             expr,
-            cast_type.into_nullable_field_ref(),
-            cast_options,
-        )
+            target_type: cast_type,
+            target_metadata: None,
+            target_nullable: None,
+            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
+        }
     }
 
     /// Create a new `CastExpr` with an explicit target `FieldRef`.
     ///
-    /// The provided `target_field` is used verbatim for the expression's
-    /// return schema, so the field's name, nullability, and other metadata are
-    /// preserved.  This is the preferred constructor when the caller already
-    /// has field information (for example, during logical-to-physical planning).
+    /// The provided `target_field` determines the output characteristics:
+    /// - The field's data type becomes the cast target type
+    /// - The field's metadata is used exactly as provided
+    /// - The field's nullability is preserved
     ///
-    /// See [`CastExpr::new`] for the compatibility constructor that only accepts
-    /// a `DataType`.
+    /// This is the preferred constructor when the caller has explicit field
+    /// information that should be used exactly (for example, during schema
+    /// enforcement or adapter layers).
+    ///
+    /// See [`CastExpr::new`] for type-only casts where source metadata should
+    /// pass through.
     pub fn new_with_target_field(
         expr: Arc<dyn PhysicalExpr>,
-        target_field: FieldRef,
+        target_field: &FieldRef,
         cast_options: Option<CastOptions<'static>>,
     ) -> Self {
         Self {
             expr,
-            target_field,
+            target_type: target_field.data_type().clone(),
+            target_metadata: Some(target_field.metadata().clone()),
+            target_nullable: Some(target_field.is_nullable()),
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
         }
     }
@@ -137,12 +161,37 @@ impl CastExpr {
 
     /// The data type to cast to
     pub fn cast_type(&self) -> &DataType {
-        self.target_field.data_type()
+        &self.target_type
     }
 
-    /// Field metadata describing the output column after casting.
-    pub fn target_field(&self) -> &FieldRef {
-        &self.target_field
+    /// Explicit metadata for the output field, or `None` to pass through source metadata.
+    pub fn target_metadata(&self) -> Option<&HashMap<String, String>> {
+        self.target_metadata.as_ref()
+    }
+
+    /// Explicit nullability for the output field, or `None` to pass through source nullability.
+    pub fn target_nullable(&self) -> Option<bool> {
+        self.target_nullable
+    }
+
+    /// Returns a computed target `FieldRef` for compatibility with existing callers.
+    ///
+    /// This synthesizes a field based on the current configuration. The returned
+    /// field may not match what `return_field()` returns when evaluated against
+    /// a schema, since `return_field()` may incorporate source field information.
+    ///
+    /// Prefer using [`cast_type()`], [`target_metadata()`], and [`target_nullable()`]
+    /// for direct access to the individual components.
+    ///
+    /// [`cast_type()`]: CastExpr::cast_type
+    /// [`target_metadata()`]: CastExpr::target_metadata
+    /// [`target_nullable()`]: CastExpr::target_nullable
+    pub fn target_field(&self) -> FieldRef {
+        let metadata = self.target_metadata.clone().unwrap_or_default();
+        let nullable = self.target_nullable.unwrap_or(true);
+        Arc::new(
+            Field::new("", self.target_type.clone(), nullable).with_metadata(metadata),
+        )
     }
 
     /// The cast options
@@ -150,19 +199,63 @@ impl CastExpr {
         &self.cast_options
     }
 
+    /// Whether this cast has explicit metadata (vs pass-through from source).
+    pub fn has_explicit_metadata(&self) -> bool {
+        self.target_metadata.is_some()
+    }
+
+    /// Whether this cast has explicit nullability (vs pass-through from source).
+    pub fn has_explicit_nullability(&self) -> bool {
+        self.target_nullable.is_some()
+    }
+
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        if is_default_target_field(&self.target_field) {
-            self.expr.return_field(input_schema).map(|field| {
-                Arc::new(
-                    field
-                        .as_ref()
-                        .clone()
-                        .with_data_type(self.cast_type().clone()),
-                )
-            })
-        } else {
-            Ok(Arc::clone(&self.target_field))
+        // Try to get the source field for the name. If both metadata and nullability
+        // are explicit, we can fall back to an empty name if the source lookup fails
+        // (e.g., for virtual row-index columns appended at scan time).
+        let source_result = self.expr.return_field(input_schema);
+
+        if let (Some(metadata), Some(nullable)) =
+            (&self.target_metadata, self.target_nullable)
+        {
+            // Both metadata and nullability are explicit
+            let name = source_result
+                .as_ref()
+                .map(|f| f.name().to_string())
+                .unwrap_or_default();
+            return Ok(Arc::new(
+                Field::new(name, self.target_type.clone(), nullable)
+                    .with_metadata(metadata.clone()),
+            ));
         }
+
+        // Need source field for metadata or nullability
+        source_result.map(|source_field| {
+            // Build metadata: use explicit if provided, otherwise pass through
+            // from source (stripping extension keys)
+            let metadata = if let Some(explicit_metadata) = &self.target_metadata {
+                explicit_metadata.clone()
+            } else {
+                let mut meta = source_field.metadata().clone();
+                meta.remove(EXTENSION_TYPE_NAME_KEY);
+                meta.remove(EXTENSION_TYPE_METADATA_KEY);
+                meta
+            };
+
+            // Determine nullability: explicit or from source
+            let nullable = self
+                .target_nullable
+                .unwrap_or_else(|| source_field.is_nullable());
+
+            Arc::new(
+                source_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(self.target_type.clone())
+                    .with_nullable(nullable)
+                    .with_metadata(metadata),
+            )
+        })
     }
 
     /// Check if casting from the specified source type to the target type is a
@@ -192,12 +285,6 @@ impl CastExpr {
     pub fn is_bigger_cast(&self, src: &DataType) -> bool {
         Self::check_bigger_cast(self.cast_type(), src)
     }
-}
-
-fn is_default_target_field(target_field: &FieldRef) -> bool {
-    target_field.name().is_empty()
-        && target_field.is_nullable()
-        && target_field.metadata().is_empty()
 }
 
 pub(crate) fn is_order_preserving_cast_family(
@@ -260,11 +347,13 @@ impl PhysicalExpr for CastExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(CastExpr::new_with_target_field(
-            Arc::clone(&children[0]),
-            Arc::clone(&self.target_field),
-            Some(self.cast_options.clone()),
-        )))
+        Ok(Arc::new(CastExpr {
+            expr: Arc::clone(&children[0]),
+            target_type: self.target_type.clone(),
+            target_metadata: self.target_metadata.clone(),
+            target_nullable: self.target_nullable,
+            cast_options: self.cast_options.clone(),
+        }))
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
@@ -365,32 +454,61 @@ pub fn cast_with_options(
     cast_type: DataType,
     cast_options: Option<CastOptions<'static>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    cast_with_target_field(
-        expr,
-        input_schema,
-        cast_type.into_nullable_field_ref(),
-        cast_options,
-    )
+    let expr_type = expr.data_type(input_schema)?;
+
+    // If the types match, no cast is needed for a type-only cast
+    if expr_type == cast_type {
+        return Ok(Arc::clone(&expr));
+    }
+
+    let can_build_cast = if requires_nested_struct_cast(&expr_type, &cast_type) {
+        can_cast_named_struct_types(&expr_type, &cast_type)
+    } else {
+        can_cast_types(&expr_type, &cast_type)
+    };
+
+    if !can_build_cast {
+        return not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}");
+    }
+
+    Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
 }
 
 /// Return a PhysicalExpression representing `expr` casted to `target_field`,
 /// preserving any explicit field semantics such as name, nullability, and
 /// metadata.
 ///
-/// If the input expression already has the same data type, this helper still
-/// preserves an explicit `target_field` by constructing a field-aware
-/// [`CastExpr`]. Only the default synthesized field created by the legacy
-/// type-only API is elided back to the original child expression.
+/// If the input expression already has the same data type and the target field
+/// has no explicit metadata or nullability constraints, the original expression
+/// is returned unchanged.
 pub fn cast_with_target_field(
     expr: Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
-    target_field: FieldRef,
+    target_field: &FieldRef,
     cast_options: Option<CastOptions<'static>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = expr.data_type(input_schema)?;
     let cast_type = target_field.data_type();
-    if expr_type == *cast_type && is_default_target_field(&target_field) {
-        return Ok(Arc::clone(&expr));
+
+    // Check if this is a "default" target field (type-only cast with no explicit
+    // metadata or nullability constraints). This is the field created by
+    // `into_nullable_field_ref()` when only a DataType is known.
+    let is_type_only = target_field.name().is_empty()
+        && target_field.is_nullable()
+        && target_field.metadata().is_empty();
+
+    // For same-type casts, we can skip creating a CastExpr only if:
+    // 1. The target is type-only (no explicit metadata)
+    // 2. The source has no extension metadata that needs to be stripped
+    // Otherwise we need the CastExpr to strip extension metadata from the source.
+    if expr_type == *cast_type && is_type_only {
+        let source_field = expr.return_field(input_schema)?;
+        let has_extension_metadata = source_field
+            .metadata()
+            .contains_key(EXTENSION_TYPE_NAME_KEY);
+        if !has_extension_metadata {
+            return Ok(Arc::clone(&expr));
+        }
     }
 
     let can_build_cast = if requires_nested_struct_cast(&expr_type, cast_type) {
@@ -408,11 +526,22 @@ pub fn cast_with_target_field(
         return not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}");
     }
 
-    Ok(Arc::new(CastExpr::new_with_target_field(
-        expr,
-        target_field,
-        cast_options,
-    )))
+    // For type-only casts, use CastExpr::new which preserves source metadata/nullability.
+    // For explicit target fields, use new_with_target_field which applies the target's
+    // extension metadata and nullability.
+    if is_type_only {
+        Ok(Arc::new(CastExpr::new(
+            expr,
+            cast_type.clone(),
+            cast_options,
+        )))
+    } else {
+        Ok(Arc::new(CastExpr::new_with_target_field(
+            expr,
+            target_field,
+            cast_options,
+        )))
+    }
 }
 
 /// Return a PhysicalExpression representing `expr` casted to
@@ -467,7 +596,7 @@ mod tests {
         )?;
         let expr = CastExpr::new_with_target_field(
             col(column, schema.as_ref())?,
-            Arc::new(target_field),
+            &Arc::new(target_field),
             None,
         );
 
@@ -983,26 +1112,29 @@ mod tests {
 
     #[test]
     fn field_aware_cast_preserves_target_field_semantics() -> Result<()> {
+        // Target field metadata should be preserved exactly (no merging with source).
         let metadata = HashMap::from([("target_meta".to_string(), "1".to_string())]);
 
         for (child_nullable, target_nullable) in [(true, false), (false, true)] {
             let schema = Schema::new(vec![Field::new("a", Int32, child_nullable)]);
-            let expr = CastExpr::new_with_target_field(
-                col("a", &schema)?,
-                Arc::new(
-                    Field::new("cast_target", Int64, target_nullable)
-                        .with_metadata(metadata.clone()),
-                ),
-                None,
+            let target_field = Arc::new(
+                Field::new("cast_target", Int64, target_nullable)
+                    .with_metadata(metadata.clone()),
             );
+            let expr =
+                CastExpr::new_with_target_field(col("a", &schema)?, &target_field, None);
 
             let field = expr.return_field(&schema)?;
-            assert_eq!(field.name(), "cast_target");
+            // Field name comes from source
+            assert_eq!(field.name(), "a");
             assert_eq!(field.data_type(), &Int64);
+            // Nullability comes from target
             assert_eq!(field.is_nullable(), target_nullable);
+            // Target metadata should be preserved exactly
             assert_eq!(
-                field.metadata().get("target_meta").map(String::as_str),
-                Some("1")
+                field.metadata().get("target_meta"),
+                Some(&"1".to_string()),
+                "Target metadata should be preserved exactly"
             );
             assert_eq!(expr.nullable(&schema)?, child_nullable || target_nullable);
         }
@@ -1163,7 +1295,8 @@ mod tests {
         let literal = Arc::new(crate::expressions::Literal::new(ScalarValue::Struct(
             Arc::new(scalar_struct),
         )));
-        let expr = CastExpr::new_with_target_field(literal, Arc::new(target_field), None);
+        let target_field = Arc::new(target_field);
+        let expr = CastExpr::new_with_target_field(literal, &target_field, None);
 
         let batch = RecordBatch::new_empty(schema);
         let result = expr.evaluate(&batch)?;
@@ -1205,6 +1338,90 @@ mod tests {
         assert_eq!(display_string, "CAST(b@0 AS Int32)");
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         assert_eq!(sql_string, "CAST(b AS Int32)");
+
+        Ok(())
+    }
+
+    #[test]
+    fn type_only_cast_strips_extension_metadata() -> Result<()> {
+        // When using type-only cast (new()), extension metadata from source should NOT propagate
+        let source_meta = HashMap::from([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                "arrow.uuid".to_string(),
+            ),
+            ("custom_key".to_string(), "custom_value".to_string()),
+        ]);
+        let schema = Schema::new(vec![
+            Field::new("a", FixedSizeBinary(16), false).with_metadata(source_meta),
+        ]);
+
+        let expr = CastExpr::new(col("a", &schema)?, Utf8, None);
+
+        let field = expr.return_field(&schema)?;
+        assert!(
+            field.metadata().get(EXTENSION_TYPE_NAME_KEY).is_none(),
+            "Type-only cast should strip extension type name from source"
+        );
+        assert_eq!(
+            field.metadata().get("custom_key"),
+            Some(&"custom_value".to_string()),
+            "Type-only cast should preserve non-extension metadata"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn field_aware_cast_uses_exact_target_metadata() -> Result<()> {
+        // When using field-aware cast, target's metadata should be used exactly
+        let source_meta = HashMap::from([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                "source.type".to_string(),
+            ),
+            ("source_key".to_string(), "source_value".to_string()),
+        ]);
+        let target_meta = HashMap::from([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                "target.type".to_string(),
+            ),
+            (
+                EXTENSION_TYPE_METADATA_KEY.to_string(),
+                "target_ext_meta".to_string(),
+            ),
+            ("target_key".to_string(), "target_value".to_string()),
+        ]);
+        let schema = Schema::new(vec![
+            Field::new("a", FixedSizeBinary(16), false).with_metadata(source_meta),
+        ]);
+
+        let target_field =
+            Arc::new(Field::new("b", Utf8, true).with_metadata(target_meta));
+        let expr =
+            CastExpr::new_with_target_field(col("a", &schema)?, &target_field, None);
+
+        let field = expr.return_field(&schema)?;
+        assert_eq!(
+            field.metadata().get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"target.type".to_string()),
+            "Field-aware cast should use target's extension type name"
+        );
+        assert_eq!(
+            field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
+            Some(&"target_ext_meta".to_string()),
+            "Field-aware cast should use target's extension type metadata"
+        );
+        assert!(
+            field.metadata().get("source_key").is_none(),
+            "Field-aware cast should NOT preserve source metadata"
+        );
+        assert_eq!(
+            field.metadata().get("target_key"),
+            Some(&"target_value".to_string()),
+            "Field-aware cast should preserve target's non-extension metadata"
+        );
 
         Ok(())
     }
