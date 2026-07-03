@@ -78,23 +78,60 @@ impl BitmapStorage for Box<[u64; 1024]> {
 /// Arrow primitive types supported by [`BitmapFilter`].
 ///
 /// Arrow already defines the Rust value type as `T::Native`. This trait only
-/// supplies the bitmap storage size for the two integer domains that are small
-/// enough to represent with one bit per possible value.
+/// supplies the bitmap storage size and maps values to their bit-pattern index
+/// for the two integer domains that are small enough to represent with one bit
+/// per possible value.
 pub(super) trait BitmapFilterType:
     ArrowPrimitiveType + Send + Sync + 'static
 {
     type Storage: BitmapStorage;
+
+    /// Returns the index in the bitmap to check for this value.
+    fn index(value: Self::Native) -> usize;
+}
+
+/// `Int8` has 256 possible bit patterns, so four `u64` words cover the full domain.
+impl BitmapFilterType for Int8Type {
+    type Storage = [u64; 4];
+
+    #[inline(always)]
+    fn index(value: Self::Native) -> usize {
+        // Reinterpret the signed value's bit pattern into a bitmap index.
+        value as u8 as usize
+    }
 }
 
 /// `UInt8` has 256 possible values, so four `u64` words cover the full domain.
 impl BitmapFilterType for UInt8Type {
     type Storage = [u64; 4];
+
+    #[inline(always)]
+    fn index(value: Self::Native) -> usize {
+        value as usize
+    }
+}
+
+/// `Int16` has 65,536 possible bit patterns, so 1,024 `u64` words cover the full
+/// domain.
+impl BitmapFilterType for Int16Type {
+    type Storage = Box<[u64; 1024]>;
+
+    #[inline(always)]
+    fn index(value: Self::Native) -> usize {
+        // Reinterpret the signed value's bit pattern into a bitmap index.
+        value as u16 as usize
+    }
 }
 
 /// `UInt16` has 65,536 possible values, so 1,024 `u64` words cover the full
 /// domain.
 impl BitmapFilterType for UInt16Type {
     type Storage = Box<[u64; 1024]>;
+
+    #[inline(always)]
+    fn index(value: Self::Native) -> usize {
+        value as usize
+    }
 }
 
 /// `IN` filter backed by one bit per possible value.
@@ -121,14 +158,14 @@ where
         match prim_array.nulls() {
             None => {
                 for &v in values {
-                    bits.set_bit(v.as_usize());
+                    bits.set_bit(T::index(v));
                 }
             }
             Some(nulls) => {
                 for i in
                     BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
                 {
-                    bits.set_bit(values[i].as_usize());
+                    bits.set_bit(T::index(values[i]));
                 }
             }
         }
@@ -140,7 +177,7 @@ where
 
     #[inline(always)]
     fn check(&self, needle: T::Native) -> bool {
-        self.bits.get_bit(needle.as_usize())
+        self.bits.get_bit(T::index(needle))
     }
 }
 
@@ -359,9 +396,6 @@ macro_rules! primitive_static_filter {
     };
 }
 
-// Generate specialized filters for all integer primitive types
-primitive_static_filter!(Int8StaticFilter, Int8Type);
-primitive_static_filter!(Int16StaticFilter, Int16Type);
 primitive_static_filter!(Int32StaticFilter, Int32Type);
 primitive_static_filter!(Int64StaticFilter, Int64Type);
 primitive_static_filter!(UInt32StaticFilter, UInt32Type);
@@ -384,7 +418,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use arrow::array::{DictionaryArray, Int8Array, UInt8Array, UInt16Array};
+    use arrow::array::{DictionaryArray, Int8Array, Int16Array, UInt8Array, UInt16Array};
 
     fn assert_contains(
         filter: &dyn StaticFilter,
@@ -426,6 +460,28 @@ mod tests {
     }
 
     #[test]
+    fn bitmap_filter_i8_handles_signed_boundaries_and_slices() -> Result<()> {
+        let haystack: ArrayRef = Arc::new(
+            Int8Array::from(vec![Some(99), Some(i8::MIN), None, Some(-1), Some(42)])
+                .slice(1, 3),
+        );
+        let filter = BitmapFilter::<Int8Type>::try_new(&haystack)?;
+        let needles =
+            Int8Array::from(vec![Some(7), Some(i8::MIN), Some(-1), None]).slice(1, 3);
+
+        assert_eq!(
+            filter.contains(&needles, false)?,
+            BooleanArray::from(vec![Some(true), Some(true), None])
+        );
+        assert_eq!(
+            filter.contains(&needles, true)?,
+            BooleanArray::from(vec![Some(false), Some(false), None])
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn bitmap_filter_u16_handles_boundaries_and_nulls() -> Result<()> {
         let haystack: ArrayRef = Arc::new(UInt16Array::from(vec![
             Some(0),
@@ -445,6 +501,35 @@ mod tests {
         assert_eq!(
             filter.contains(&needles, true)?,
             BooleanArray::from(vec![Some(false), None, Some(false), Some(false), None])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn bitmap_filter_i16_handles_signed_boundaries_and_slices() -> Result<()> {
+        let haystack: ArrayRef = Arc::new(
+            Int16Array::from(vec![
+                Some(123),
+                Some(i16::MIN),
+                None,
+                Some(-1),
+                Some(i16::MAX),
+            ])
+            .slice(1, 4),
+        );
+        let filter = BitmapFilter::<Int16Type>::try_new(&haystack)?;
+        let needles =
+            Int16Array::from(vec![Some(0), Some(i16::MIN), Some(7), Some(i16::MAX)])
+                .slice(1, 3);
+
+        assert_eq!(
+            filter.contains(&needles, false)?,
+            BooleanArray::from(vec![Some(true), None, Some(true)])
+        );
+        assert_eq!(
+            filter.contains(&needles, true)?,
+            BooleanArray::from(vec![Some(false), None, Some(false)])
         );
 
         Ok(())
