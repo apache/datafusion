@@ -887,4 +887,30 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn min_max_statistics_missing_column_stats_returns_error() {
+        let schema = test_schema();
+        let sort_order =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
+        let files = [
+            file_with_stats("f1.parquet", Statistics::default()),
+            file_with_stats("f2.parquet", Statistics::default()),
+        ];
+
+        let err = match MinMaxStatistics::new_from_files(
+            &sort_order,
+            &schema,
+            None,
+            files.iter(),
+        ) {
+            Ok(_) => panic!("expected missing statistics error"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("statistics not found"),
+            "unexpected error: {err:?}"
+        );
+    }
 }

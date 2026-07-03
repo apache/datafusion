@@ -1944,57 +1944,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_split_groups_by_statistics_missing_stats_no_partition_values() {
-        use arrow::compute::SortOptions;
-
-        let table_schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Float64, false),
-            Field::new("b", DataType::Float64, false),
-        ]));
-
-        // Two files in a single group. Each file has statistics for only the
-        // first column "a" and no partition values and the statistics
-        // are missing for the second column "b"
-        let make_file = |name: &str, min: f64, max: f64| {
-            PartitionedFile::new(name.to_string(), 1024).with_statistics(Arc::new(
-                Statistics {
-                    num_rows: Precision::Exact(100),
-                    total_byte_size: Precision::Exact(1024),
-                    column_statistics: vec![ColumnStatistics {
-                        min_value: Precision::Exact(ScalarValue::Float64(Some(min))),
-                        max_value: Precision::Exact(ScalarValue::Float64(Some(max))),
-                        ..Default::default()
-                    }],
-                },
-            ))
-        };
-
-        let file_group = FileGroup::new(vec![
-            make_file("file1.parquet", 0.0, 1.0),
-            make_file("file2.parquet", 2.0, 3.0),
-        ]);
-
-        // Sort by column "b" with index 1, which has no statistics
-        let sort_order = LexOrdering::new(vec![PhysicalSortExpr::new(
-            Arc::new(Column::new("b", 1)),
-            SortOptions::default(),
-        )])
-        .unwrap();
-
-        // Statistics are unavailable for this column, must not panic
-        let result = FileScanConfig::split_groups_by_statistics(
-            &table_schema,
-            std::slice::from_ref(&file_group),
-            &sort_order,
-        );
-
-        assert!(
-            result.is_err(),
-            "expected an error because statistics are missing, got: {result:?}"
-        );
-    }
-
     // sets default for configs that play no role in projections
     fn config_for_projection(
         file_schema: SchemaRef,
