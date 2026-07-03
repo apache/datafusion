@@ -566,6 +566,24 @@ impl ExecutionPlan for FilterExec {
         }))
     }
 
+    /// Reset per-execution state so an independent re-execution (e.g. a
+    /// recursive query) does not inherit runtime state from a prior run.
+    ///
+    /// The pooled adaptive-conjunct measurements (`AdaptiveFilterShared`) and
+    /// the execution metrics are the per-execution state that must be reset —
+    /// otherwise the adaptive reordering learned in one execution would leak
+    /// into the next. The predicate, input, and cached plan properties are
+    /// unchanged and remain valid, so they are preserved (unlike
+    /// [`with_new_children`](Self::with_new_children), this does not recompute
+    /// them). Any dynamic filters *inside* the predicate are owned and reset by
+    /// the operator that created them, not by `FilterExec`.
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut new = (*self).clone();
+        new.adaptive_stats = Arc::new(AdaptiveFilterShared::new());
+        new.metrics = ExecutionPlanMetricsSet::new();
+        Ok(Arc::new(new))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -2044,6 +2062,34 @@ mod tests {
         let statistics = filter.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(statistics.num_rows, Precision::Inexact(400));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(1600));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reset_state_gives_fresh_adaptive_stats() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&schema),
+            schema,
+        ));
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+        let filter = Arc::new(FilterExec::try_new(predicate, input)?);
+
+        let reset = Arc::clone(&filter).reset_state()?;
+        let reset = reset
+            .as_ref()
+            .downcast_ref::<FilterExec>()
+            .expect("reset_state returns a FilterExec");
+
+        // The per-execution adaptive state is a fresh instance, so learning
+        // cannot leak across independent executions...
+        assert!(!Arc::ptr_eq(&filter.adaptive_stats, &reset.adaptive_stats));
+        // ...while the predicate (which the reset does not touch) is preserved.
+        assert!(Arc::ptr_eq(&filter.predicate, &reset.predicate));
         Ok(())
     }
 
