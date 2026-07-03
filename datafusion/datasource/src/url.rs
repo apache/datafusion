@@ -350,18 +350,19 @@ impl ListingTableUrl {
     pub fn resolve(&self, env: &RuntimeEnv) -> Result<ResolvedTableUrl> {
         let (store, path) = env.object_store_registry.resolve(&self.url)?;
 
-        // Store identity = scheme + authority + registered prefix, i.e. the
-        // leading segments of `url` the registry stripped to produce `path`,
+        // Store identity = `url` with the store-relative `path` stripped off its
+        // tail: scheme + authority + the leading segments the registry consumed,
         // keeping their original percent-encoding.
-        let segments = || self.url.path().split('/').filter(|s| !s.is_empty());
-        let kept = segments().count().saturating_sub(path.parts().count());
+        let segments: Vec<&str> = self
+            .url
+            .path()
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect();
+        let kept = segments.len().saturating_sub(path.parts().count());
         let authority = &self.url[url::Position::BeforeScheme..url::Position::BeforePath];
-        let identity = if kept == 0 {
-            ObjectStoreUrl::parse(authority)?
-        } else {
-            let prefix = segments().take(kept).collect::<Vec<_>>().join("/");
-            ObjectStoreUrl::parse(format!("{authority}/{prefix}"))?
-        };
+        let identity =
+            ObjectStoreUrl::parse(format!("{authority}/{}", segments[..kept].join("/")))?;
 
         Ok(ResolvedTableUrl {
             store,
