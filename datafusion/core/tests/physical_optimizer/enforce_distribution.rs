@@ -59,7 +59,9 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 
-use datafusion_physical_expr::Distribution;
+use datafusion_physical_expr::{
+    Distribution, Partitioning, RangePartitioning, SplitPoint,
+};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
@@ -323,6 +325,47 @@ fn parquet_exec_multiple_sorted(
     .build();
 
     DataSourceExec::from_data_source(config)
+}
+
+fn parquet_exec_with_output_partitioning(
+    output_partitioning: Partitioning,
+) -> Arc<DataSourceExec> {
+    let file_groups = (0..output_partitioning.partition_count())
+        .map(|partition| {
+            FileGroup::new(vec![PartitionedFile::new(format!("p{partition}"), 100)])
+        })
+        .collect::<Vec<_>>();
+
+    let config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        Arc::new(ParquetSource::new(schema())),
+    )
+    .with_file_groups(file_groups)
+    .with_output_partitioning(Some(output_partitioning))
+    .build();
+
+    DataSourceExec::from_data_source(config)
+}
+
+fn range_partitioning(
+    column: &str,
+    split_values: impl IntoIterator<Item = i64>,
+    options: SortOptions,
+) -> Result<Partitioning> {
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col(column, &schema())?,
+        options,
+    }]
+    .into();
+    let split_points = split_values
+        .into_iter()
+        .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
+        .collect::<Vec<_>>();
+
+    Ok(Partitioning::Range(RangePartitioning::try_new(
+        ordering,
+        split_points,
+    )?))
 }
 
 fn csv_exec() -> Arc<DataSourceExec> {
@@ -698,6 +741,86 @@ impl TestConfig {
     ) -> Arc<dyn ExecutionPlan> {
         self.try_to_plan(plan, optimizers_to_run).unwrap()
     }
+}
+
+#[test]
+fn range_aggregate_reuses_range_partitioning() -> Result<()> {
+    let input = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let aggregate =
+        aggregate_exec_with_alias(input, vec![("a".to_string(), "a".to_string())]);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(aggregate, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
+      AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_grouping_set_aggregate_rehashes_with_grouping_id() -> Result<()> {
+    let input = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20],
+        SortOptions::default(),
+    )?);
+    let input_schema = input.schema();
+    let group_by = PhysicalGroupBy::new(
+        vec![
+            (col("a", &input_schema)?, "a".to_string()),
+            (col("b", &input_schema)?, "b".to_string()),
+        ],
+        vec![
+            (lit(ScalarValue::Int64(None)), "a".to_string()),
+            (lit(ScalarValue::Int64(None)), "b".to_string()),
+        ],
+        vec![vec![false, true], vec![false, false]],
+        true,
+    );
+    let partial = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        group_by.clone(),
+        vec![],
+        vec![],
+        input,
+        Arc::clone(&input_schema),
+    )?);
+    let aggregate = Arc::new(AggregateExec::try_new(
+        AggregateMode::FinalPartitioned,
+        group_by.as_final(),
+        vec![],
+        vec![],
+        Arc::clone(&partial) as _,
+        partial.schema(),
+    )?);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(3)
+        .to_plan(aggregate, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b, __grouping_id@2 as __grouping_id], aggr=[]
+      RepartitionExec: partitioning=Hash([a@0, b@1, __grouping_id@2], 3), input_partitions=3
+        AggregateExec: mode=Partial, gby=[(a@0 as a, NULL as b), (a@0 as a, b@1 as b)], aggr=[]
+          DataSourceExec: file_groups={3 groups: [[p0], [p1], [p2]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20)], 3), file_type=parquet
+    "
+    );
+
+    Ok(())
 }
 
 #[test]

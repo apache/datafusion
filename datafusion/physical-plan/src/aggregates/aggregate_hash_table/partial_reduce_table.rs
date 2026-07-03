@@ -25,18 +25,12 @@ use datafusion_expr::EmitTo;
 use crate::aggregates::AggregateExec;
 
 use super::common::{
-    AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState, FinalMarker,
-    MaterializedAggregateOutput,
+    AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
+    MaterializedAggregateOutput, PartialReduceMarker,
 };
 
-/// Implementation specific to final aggregation, where the table stores partial
-/// aggregate states and the input rows are also partial states.
-///
-/// Example: `AVG(x) GROUP BY k`
-///
-/// - Aggregate table stores: `k, sum(x), count(x)`
-/// - Input rows: `k, sum(x), count(x)`
-impl AggregateHashTable<FinalMarker> {
+/// Methods specific to the aggregate hash table used in the partial-reduce stage.
+impl AggregateHashTable<PartialReduceMarker> {
     pub(in crate::aggregates) fn new(
         agg: &AggregateExec,
         partition: usize,
@@ -52,7 +46,7 @@ impl AggregateHashTable<FinalMarker> {
         )
     }
 
-    /// Emits the next batch of aggregated group keys and final aggregate values.
+    /// Emits the next batch of aggregated group keys and aggregate states.
     ///
     /// The output batch size is determined by `self.batch_size`.
     ///
@@ -63,15 +57,16 @@ impl AggregateHashTable<FinalMarker> {
     ) -> Result<Option<RecordBatch>> {
         let output_schema = Arc::clone(&self.output_schema);
         let batch_size = self.batch_size;
-        // Take ownership of the output state. `emit_next_materialized_batch`
-        // restores `self.state` to `OutputtingMaterialized` or `Done`.
+        // Take ownership of the output state. Note `emit_next_materialized_batch`
+        // updates state after it emits a materialized slice.
         match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
             AggregateHashTableState::Outputting(state) => {
                 if state.group_values.is_empty() {
                     return Ok(None);
                 }
 
-                let output = self.materialize_final_output(state, output_schema)?;
+                let output =
+                    self.materialize_partial_reduce_output(state, output_schema)?;
                 Ok(self.emit_next_materialized_batch(output, batch_size))
             }
             AggregateHashTableState::OutputtingMaterialized(output) => {
@@ -84,19 +79,19 @@ impl AggregateHashTable<FinalMarker> {
         }
     }
 
-    fn materialize_final_output(
+    fn materialize_partial_reduce_output(
         &self,
         mut state: AggregateHashTableBuffer,
         output_schema: SchemaRef,
     ) -> Result<MaterializedAggregateOutput> {
-        // Final aggregate evaluation consumes accumulator state. Evaluate all
-        // groups once, then slice the materialized batch on subsequent polls.
-        let emit_to = EmitTo::All;
+        // `state(EmitTo::All)` consumes accumulator state. Emit all groups once,
+        // then slice the materialized batch on subsequent polls.
+        let emit_to_all = EmitTo::All;
         let timer = self.group_by_metrics.emitting_time.timer();
-        let mut output = state.group_values.emit(emit_to)?;
+        let mut output = state.group_values.emit(emit_to_all)?;
 
         for acc in state.accumulators.iter_mut() {
-            output.push(acc.evaluate(emit_to)?);
+            output.extend(acc.state(emit_to_all)?);
         }
         drop(timer);
 

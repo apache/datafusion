@@ -15,16 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod common;
-mod common_ordered;
-mod final_table;
-mod ordered_final_table;
-mod ordered_partial_table;
-mod partial_reduce_table;
-mod partial_table;
+//! DataFusion SQL benchmark runner.
 
-pub(super) use common::{
-    AggregateHashTable, FinalMarker, PartialMarker, PartialReduceMarker,
-    PartialSkipMarker,
-};
-pub(super) use common_ordered::OrderedAggregateTable;
+use datafusion_benchmarks::sql_benchmark_runner;
+
+#[cfg(feature = "snmalloc")]
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+
+// `cargo clippy --all-features` enables both allocator features, so prefer
+// `snmalloc` in that case and fall back to `mimalloc` otherwise.
+#[cfg(all(not(feature = "snmalloc"), feature = "mimalloc"))]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[tokio::main]
+async fn main() {
+    env_logger::init();
+    if let Err(error) = sql_benchmark_runner::run_cli().await {
+        eprintln!("Error: {error}");
+        std::process::exit(1);
+    }
+}

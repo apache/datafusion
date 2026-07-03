@@ -168,6 +168,7 @@ The columns of the returned table are:
 | num_rows              | Utf8      | Number of rows in the table                                                  |
 | num_columns           | UInt64    | Number of columns in the table                                               |
 | table_size_bytes      | Utf8      | Size of the table, in bytes                                                  |
+| hits                  | UInt64    | Number of times the cached file statistics has been accessed                 |
 | statistics_size_bytes | UInt64    | Size of the cached statistics in memory                                      |
 
 ## `list_files_cache`
@@ -200,13 +201,14 @@ location 's3://overturemaps-us-west-2/release/2025-12-17.0/theme=base/type=infra
 ```
 
 The columns of the returned table are:
-| column_name | data_type | Description |
-| ------------------- | ------------ | ----------------------------------------------------------------------------------------- |
-| table | Utf8 | Name of the table |
-| path | Utf8 | File path relative to the object store / filesystem root |
-| metadata_size_bytes | UInt64 | Size of the cached metadata in memory (not its thrift encoded form) |
-| expires_in | Duration(ms) | Last modified time of the file |
-| metadata_list | List(Struct) | List of metadatas, one for each file under the path. |
+
+| column_name         | data_type    | Description                                                         |
+| ------------------- | ------------ | ------------------------------------------------------------------- |
+| table               | Utf8         | Name of the table                                                   |
+| path                | Utf8         | File path relative to the object store / filesystem root            |
+| metadata_size_bytes | UInt64       | Size of the cached metadata in memory (not its thrift encoded form) |
+| expires_in          | Duration(ms) | Last modified time of the file                                      |
+| metadata_list       | List(Struct) | List of metadatas, one for each file under the path.                |
 
 A metadata struct in the metadata_list contains the following fields:
 

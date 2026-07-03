@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType, i256};
+use arrow::datatypes::DecimalType;
 use bigdecimal::BigDecimal;
 use half::f16;
 use std::str::FromStr;
@@ -96,21 +96,15 @@ pub(crate) fn spark_f64_to_str(value: f64) -> String {
     }
 }
 
-pub(crate) fn decimal_128_to_str(value: i128, scale: i8) -> String {
+pub(crate) fn arrow_decimal_to_str<T: DecimalType>(
+    value: T::Native,
+    scale: i8,
+) -> String {
     let precision = u8::MAX; // does not matter
+    let value = T::format_decimal(value, precision, scale);
     big_decimal_to_str(
-        BigDecimal::from_str(&Decimal128Type::format_decimal(value, precision, scale))
-            .unwrap(),
-        None,
-    )
-}
-
-pub(crate) fn decimal_256_to_str(value: i256, scale: i8) -> String {
-    let precision = u8::MAX; // does not matter
-    big_decimal_to_str(
-        BigDecimal::from_str(&Decimal256Type::format_decimal(value, precision, scale))
-            .unwrap(),
-        None,
+        BigDecimal::from_str(&value).unwrap(),
+        Some(i64::from(scale)),
     )
 }
 
@@ -132,7 +126,10 @@ pub(crate) fn big_decimal_to_str(value: BigDecimal, round_digits: Option<i64>) -
 
 #[cfg(test)]
 mod tests {
-    use super::big_decimal_to_str;
+    use super::{arrow_decimal_to_str, big_decimal_to_str};
+    use arrow::datatypes::{
+        Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, i256,
+    };
     use bigdecimal::{BigDecimal, num_bigint::BigInt};
 
     macro_rules! assert_decimal_str_eq {
@@ -195,5 +192,16 @@ mod tests {
         assert_decimal_str_eq!(10_i128.pow(13) + 11, 13, Some(12), "1.000000000001");
 
         assert_decimal_str_eq!(10_i128.pow(13) + 11, 13, Some(13), "1.0000000000011");
+    }
+
+    #[test]
+    fn test_arrow_decimal_to_str() {
+        assert_eq!(arrow_decimal_to_str::<Decimal32Type>(12345, 2), "123.45");
+        assert_eq!(arrow_decimal_to_str::<Decimal64Type>(12345, 2), "123.45");
+        assert_eq!(arrow_decimal_to_str::<Decimal128Type>(12345, 2), "123.45");
+        assert_eq!(
+            arrow_decimal_to_str::<Decimal256Type>(i256::from(12345), 2),
+            "123.45"
+        );
     }
 }
