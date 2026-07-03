@@ -996,7 +996,7 @@ impl ListingTable {
         // stats computed under a different file schema.
         if let Some(cache) = &self.collected_statistics
             && let Some(cached) = cache.get(&path)
-            && cached.is_valid_for(meta, self.file_schema_fingerprint.as_ref())
+            && cached.is_valid_for(meta, &self.file_schema_fingerprint)
         {
             // Return cached statistics and ordering
             return Ok((Arc::clone(&cached.statistics), cached.ordering.clone()));

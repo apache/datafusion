@@ -127,11 +127,13 @@ impl CachedFileMetadata {
     pub fn is_valid_for(
         &self,
         current_meta: &ObjectMeta,
-        current_schema_fingerprint: &SchemaFingerprint,
+        current_schema_fingerprint: &Arc<SchemaFingerprint>,
     ) -> bool {
         self.meta.size == current_meta.size
             && self.meta.last_modified == current_meta.last_modified
-            && self.schema_fingerprint.as_ref() == current_schema_fingerprint
+            && (Arc::ptr_eq(&self.schema_fingerprint, current_schema_fingerprint)
+                || self.schema_fingerprint.as_ref()
+                    == current_schema_fingerprint.as_ref())
     }
 }
 

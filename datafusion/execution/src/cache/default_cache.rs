@@ -850,7 +850,15 @@ mod tests {
         assert!(result.is_some());
 
         let cached = result.unwrap();
-        assert!(cached.is_valid_for(&meta, schema_fingerprint.as_ref()));
+        assert!(cached.is_valid_for(&meta, &schema_fingerprint));
+
+        let equivalent_schema_fingerprint =
+            Arc::new(SchemaFingerprint::from_schema(&schema));
+        assert!(!Arc::ptr_eq(
+            &schema_fingerprint,
+            &equivalent_schema_fingerprint
+        ));
+        assert!(cached.is_valid_for(&meta, &equivalent_schema_fingerprint));
 
         let different_schema = Schema::new(vec![Field::new(
             "different_column",
@@ -858,14 +866,14 @@ mod tests {
             false,
         )]);
         let different_schema_fingerprint =
-            SchemaFingerprint::from_schema(&different_schema);
+            Arc::new(SchemaFingerprint::from_schema(&different_schema));
         assert!(!cached.is_valid_for(&meta, &different_schema_fingerprint));
 
         // File size changed - validation should fail
         let meta2 = create_test_meta("test", 2048);
 
         let cached = cache.get(&path).unwrap();
-        assert!(!cached.is_valid_for(&meta2, schema_fingerprint.as_ref()));
+        assert!(!cached.is_valid_for(&meta2, &schema_fingerprint));
 
         // Update with new value
         let cached_value2 = CachedFileMetadata::new(
@@ -967,9 +975,7 @@ mod tests {
 
         // Update to add ordering
         let mut cached = cache.get(&path).unwrap();
-        if cached.is_valid_for(&meta, schema_fingerprint.as_ref())
-            && cached.ordering.is_none()
-        {
+        if cached.is_valid_for(&meta, &schema_fingerprint) && cached.ordering.is_none() {
             cached.ordering = Some(ordering());
         }
         cache.put(&path, cached);
@@ -1009,7 +1015,7 @@ mod tests {
 
         let cached = cache.get(&path).unwrap();
         // Should not be valid for new meta
-        assert!(!cached.is_valid_for(&meta_v2, schema_fingerprint.as_ref()));
+        assert!(!cached.is_valid_for(&meta_v2, &schema_fingerprint));
 
         // Compute new value and update
         let new_cached = CachedFileMetadata::new(
@@ -1056,7 +1062,7 @@ mod tests {
 
         // Verify cached ordering is valid
         let cached = cache.get(&path).unwrap();
-        assert!(cached.is_valid_for(&meta_v1, schema_fingerprint.as_ref()));
+        assert!(cached.is_valid_for(&meta_v1, &schema_fingerprint));
         assert!(cached.ordering.is_some());
 
         // File modified (size changed)
@@ -1072,7 +1078,7 @@ mod tests {
 
         // Cache entry exists but should be invalid for new metadata
         let cached = cache.get(&path).unwrap();
-        assert!(!cached.is_valid_for(&meta_v2, schema_fingerprint.as_ref()));
+        assert!(!cached.is_valid_for(&meta_v2, &schema_fingerprint));
 
         // Cache new version with different ordering
         let ordering_v2 = ordering(); // New ordering instance
@@ -1086,10 +1092,10 @@ mod tests {
 
         // Old metadata should be invalid
         let cached = cache.get(&path).unwrap();
-        assert!(!cached.is_valid_for(&meta_v1, schema_fingerprint.as_ref()));
+        assert!(!cached.is_valid_for(&meta_v1, &schema_fingerprint));
 
         // New metadata should be valid
-        assert!(cached.is_valid_for(&meta_v2, schema_fingerprint.as_ref()));
+        assert!(cached.is_valid_for(&meta_v2, &schema_fingerprint));
         assert!(cached.ordering.is_some());
     }
 
