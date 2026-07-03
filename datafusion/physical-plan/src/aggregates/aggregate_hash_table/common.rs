@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::marker::PhantomData;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, new_null_array};
+use arrow::array::{ArrayRef, AsArray, BooleanArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
@@ -31,19 +31,31 @@ use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_val
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::row_hash::create_group_accumulator;
 use crate::aggregates::{
-    AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
+    AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
+    evaluate_group_by, group_id_array, max_duplicate_ordinal,
 };
 
-/// Marker for raw rows -> partial state aggregation.
+/// Semantic mode for the aggregate hash table.
+///
+/// See [`AggregateHashTable`] comment's 'Mode' section for details.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(in crate::aggregates) enum AggregateTableMode {
+    /// Raw rows -> partial aggregate state rows.
+    Partial,
+    /// Partial aggregate state rows -> final aggregate value rows.
+    Final,
+    /// Partial aggregate state rows -> merged partial aggregate state rows.
+    PartialReduce,
+    /// Raw rows -> final aggregate value rows.
+    Single,
+}
+
+/// Marker for ordered raw rows -> partial state aggregation.
 pub(in crate::aggregates) struct PartialMarker;
-/// Marker for partial state -> partial state aggregation.
-pub(in crate::aggregates) struct PartialReduceMarker;
-/// Marker for raw rows -> partial state conversion without aggregation.
-pub(in crate::aggregates) struct PartialSkipMarker;
-/// Marker for partial state -> final value aggregation.
+/// Marker for ordered partial state -> final value aggregation.
 pub(in crate::aggregates) struct FinalMarker;
 
-/// Grouped hash table shared by the partial and final paths.
+/// Grouped hash table shared by different hash aggregation modes.
 ///
 /// While building, it consumes input batches and updates group / accumulator
 /// state. While outputting, it incrementally drains that state into output
@@ -60,18 +72,35 @@ pub(in crate::aggregates) struct FinalMarker;
 /// [`GroupsAccumulator`]. Both use columnar storage so aggregation can stay
 /// vectorized.
 ///
-/// # Marker Type
-/// `AggrMode` selects the aggregate semantics.
+/// # Mode
 ///
-/// e.g. `AggregateHashTable::<PartialMarker>::new(...)` creates an aggregate hash table
-/// for the partial hash aggregate stage, the input schema is raw rows and output
-/// schema is intermediate states.
+/// [`AggregateTableMode`] controls how input batches update accumulator state
+/// and how output batches are materialized.
 ///
-/// It is a zero-sized compile-time marker, so each stage keeps its update logic
-/// in a separate impl block, to make the behavior difference explicit.
-pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
+/// ```text
+/// Example: `AVG(x) GROUP BY k`.
+///
+/// In `Partial` mode, the table stores partial state:
+///     k, sum(x), count(x)
+/// The input batch contains raw values:
+///     k, x
+/// The output batch also contains partial state:
+///     k, sum(x), count(x)
+/// ```
+///
+/// So input uses [`GroupsAccumulator::update_batch`], and output uses
+/// [`GroupsAccumulator::state`].
+///
+/// Other modes use different input/output combinations:
+/// - `Final`: merge_batch + evaluate
+/// - `PartialReduce`: merge_batch + state
+/// - `Single`: update_batch + evaluate
+pub(in crate::aggregates) struct AggregateHashTable {
     /// Grouping and accumulator-specific timing metrics.
     pub(super) group_by_metrics: GroupByMetrics,
+
+    /// Semantic behavior for this table.
+    pub(super) mode: AggregateTableMode,
 
     /// Raw input schema, used to evaluate expressions and synthesize empty
     /// grouping-set rows.
@@ -85,29 +114,63 @@ pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
 
     /// Lifecycle-specific state: building stage / outputting stage.
     pub(super) state: AggregateHashTableState,
-
-    pub(super) _mode: PhantomData<AggrMode>,
 }
 
 /// Methods shared by all aggregate hash table modes.
-impl<AggrMode> AggregateHashTable<AggrMode> {
-    pub(super) fn new_with_filters(
+impl AggregateHashTable {
+    pub(in crate::aggregates) fn new(
         agg: &AggregateExec,
         partition: usize,
         output_schema: SchemaRef,
         batch_size: usize,
-        filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
     ) -> Result<Self> {
         if batch_size == 0 {
             return internal_err!("AggregateHashTable requires config batch_size >= 1");
         }
 
+        // Infer the internal `AggregateTableMode` based on `AggregateExec`'s mode
+        //
+        // TODO(simplification): `AggregateMode` seems bloated for aggregate hash
+        // table semantics. Consider remove `AggregateMode` and only use `AggregateTableMode`
+        // after the refactor has finished.
+        //
+        // Issue: <https://github.com/apache/datafusion/pull/22729>
+        let mode = match agg.mode {
+            AggregateMode::Partial => AggregateTableMode::Partial,
+            AggregateMode::Final | AggregateMode::FinalPartitioned => {
+                AggregateTableMode::Final
+            }
+            AggregateMode::PartialReduce => AggregateTableMode::PartialReduce,
+            AggregateMode::Single | AggregateMode::SinglePartitioned => {
+                AggregateTableMode::Single
+            }
+        };
+
         let input_schema = agg.input().schema();
+        let aggregate_mode = match mode {
+            AggregateTableMode::Partial => AggregateMode::Partial,
+            AggregateTableMode::Final => AggregateMode::Final,
+            AggregateTableMode::PartialReduce => AggregateMode::PartialReduce,
+            AggregateTableMode::Single => AggregateMode::Single,
+        };
         let aggregate_arguments = aggregate_expressions(
             &agg.aggr_expr,
-            &agg.mode,
+            &aggregate_mode,
             agg.group_by.num_group_exprs(),
         )?;
+
+        // Filters apply only when the table consumes raw input rows. Final and
+        // partial-reduce modes consume partial states, so their filters are not
+        // applicable.
+        let filters = match mode {
+            AggregateTableMode::Partial | AggregateTableMode::Single => {
+                agg.filter_expr.iter().cloned().collect()
+            }
+            AggregateTableMode::Final | AggregateTableMode::PartialReduce => {
+                vec![None; agg.aggr_expr.len()]
+            }
+        };
+
         let accumulators: Vec<_> = agg
             .aggr_expr
             .iter()
@@ -129,6 +192,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
         Ok(Self {
             group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
+            mode,
             input_schema,
             output_schema,
             batch_size,
@@ -138,8 +202,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 batch_group_indices: Default::default(),
                 accumulators,
             }),
-            _mode: PhantomData,
         })
+    }
+
+    pub(in crate::aggregates) fn mode(&self) -> AggregateTableMode {
+        self.mode
     }
 
     /// See comments in [`EvaluatedAggregateBatch`]
@@ -196,6 +263,46 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         self.state.building().group_values.len()
     }
 
+    pub(in crate::aggregates) fn can_skip_aggregation(&self) -> bool {
+        self.state
+            .building()
+            .accumulators
+            .iter()
+            .all(|acc| acc.supports_convert_to_state())
+    }
+
+    /// In skip-partial-aggregation optimization, when a decision has been made
+    /// to skip partial stage, build a table only for converting raw input rows
+    /// into partial aggregate state rows.
+    pub(in crate::aggregates) fn partial_skip_table(
+        &self,
+    ) -> Result<PartialSkipHashTable> {
+        let state = self.state.building();
+        let group_schema = state.group_by.group_schema(&self.input_schema)?;
+        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        let accumulators = state
+            .accumulators
+            .iter()
+            .map(HashAggregateAccumulator::empty_like)
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(PartialSkipHashTable {
+            table: AggregateHashTable {
+                group_by_metrics: self.group_by_metrics.clone(),
+                mode: AggregateTableMode::Partial,
+                input_schema: Arc::clone(&self.input_schema),
+                output_schema: Arc::clone(&self.output_schema),
+                batch_size: self.batch_size,
+                state: AggregateHashTableState::Building(AggregateHashTableBuffer {
+                    group_by: Arc::clone(&state.group_by),
+                    group_values,
+                    batch_group_indices: Default::default(),
+                    accumulators,
+                }),
+            },
+        })
+    }
+
     pub(in crate::aggregates) fn is_building(&self) -> bool {
         matches!(self.state, AggregateHashTableState::Building(_))
     }
@@ -213,6 +320,239 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
         state.batch_group_indices = Vec::new();
         self.state = AggregateHashTableState::Outputting(state);
+    }
+
+    /// Aggregates one input batch according to this table's input semantics.
+    ///
+    /// `Partial` and `Single` update accumulator state from raw input rows.
+    /// `Final` and `PartialReduce` merge accumulator state emitted by an
+    /// earlier aggregate stage.
+    pub(in crate::aggregates) fn aggregate_batch(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<()> {
+        let evaluated_batch = self.evaluate_batch(batch)?;
+        let mode = self.mode;
+        let state = self.state.building_mut();
+
+        let timer = self.group_by_metrics.aggregation_time.timer();
+        for group_values in &evaluated_batch.grouping_set_args {
+            state
+                .group_values
+                .intern(group_values, &mut state.batch_group_indices)?;
+            let group_indices = &state.batch_group_indices;
+            let total_num_groups = state.group_values.len();
+
+            for (acc, values) in state
+                .accumulators
+                .iter_mut()
+                .zip(evaluated_batch.accumulator_args.iter())
+            {
+                match mode {
+                    AggregateTableMode::Partial | AggregateTableMode::Single => {
+                        acc.update_batch(values, group_indices, total_num_groups)?
+                    }
+                    AggregateTableMode::Final | AggregateTableMode::PartialReduce => {
+                        acc.merge_batch(values, group_indices, total_num_groups)?
+                    }
+                }
+            }
+        }
+        drop(timer);
+
+        Ok(())
+    }
+
+    /// Emits the next output batch according to this table's output semantics.
+    ///
+    /// `Partial` and `PartialReduce` emit accumulator states for downstream
+    /// aggregate stages. `Final` and `Single` evaluate final aggregate values
+    /// for the query result.
+    pub(in crate::aggregates) fn next_output_batch(
+        &mut self,
+    ) -> Result<Option<RecordBatch>> {
+        let output_schema = Arc::clone(&self.output_schema);
+        let batch_size = self.batch_size;
+        // Take ownership of the output state. `emit_next_materialized_batch`
+        // restores `self.state` to `OutputtingMaterialized` or `Done`.
+        match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
+            AggregateHashTableState::Outputting(state) => {
+                if state.group_values.is_empty() {
+                    return Ok(None);
+                }
+
+                let output = self.materialize_output(state, output_schema)?;
+                Ok(self.emit_next_materialized_batch(output, batch_size))
+            }
+            AggregateHashTableState::OutputtingMaterialized(output) => {
+                Ok(self.emit_next_materialized_batch(output, batch_size))
+            }
+            AggregateHashTableState::Done => Ok(None),
+            AggregateHashTableState::Building(_) => {
+                internal_err!("next_output_batch must be called in the outputting state")
+            }
+        }
+    }
+
+    fn materialize_output(
+        &self,
+        mut state: AggregateHashTableBuffer,
+        output_schema: SchemaRef,
+    ) -> Result<MaterializedAggregateOutput> {
+        // Final evaluation and partial state emission both consume accumulator
+        // state. Materialize all groups once, then slice on subsequent polls.
+        let emit_to = EmitTo::All;
+        let timer = self.group_by_metrics.emitting_time.timer();
+        let mut output = state.group_values.emit(emit_to)?;
+
+        for acc in state.accumulators.iter_mut() {
+            match self.mode {
+                AggregateTableMode::Partial | AggregateTableMode::PartialReduce => {
+                    output.extend(acc.state(emit_to)?)
+                }
+                AggregateTableMode::Final | AggregateTableMode::Single => {
+                    output.push(acc.evaluate(emit_to)?)
+                }
+            }
+        }
+        drop(timer);
+
+        let batch = RecordBatch::try_new(output_schema, output)?;
+        debug_assert!(batch.num_rows() > 0);
+        Ok(MaterializedAggregateOutput::new(batch))
+    }
+
+    fn emit_next_materialized_batch(
+        &mut self,
+        mut output: MaterializedAggregateOutput,
+        batch_size: usize,
+    ) -> Option<RecordBatch> {
+        let batch = output.next_batch(batch_size);
+        if output.is_exhausted() {
+            self.state = AggregateHashTableState::Done;
+        } else {
+            self.state = AggregateHashTableState::OutputtingMaterialized(output);
+        }
+        batch
+    }
+
+    pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {
+        if matches!(
+            self.mode,
+            AggregateTableMode::Partial | AggregateTableMode::Single
+        ) {
+            self.init_empty_grouping_sets()?;
+        }
+        self.start_outputting();
+        Ok(())
+    }
+
+    /// Creates the required empty grouping-set rows when the input is empty.
+    ///
+    /// For example, this query must still produce one grand-total group even if
+    /// `t` has no rows:
+    ///
+    /// ```sql
+    /// SELECT COUNT(v)
+    /// FROM t
+    /// GROUP BY GROUPING SETS (());
+    /// ```
+    ///
+    /// The synthetic row is filtered out before accumulator update so aggregates
+    /// see the same state they would see for an empty input, rather than a real
+    /// null-valued row.
+    pub(super) fn init_empty_grouping_sets(&mut self) -> Result<()> {
+        let state = self.state.building_mut();
+        if !state.group_by.has_grouping_set() || !state.group_values.is_empty() {
+            return Ok(());
+        }
+
+        let max_ordinal = max_duplicate_ordinal(state.group_by.groups());
+        let mut ordinals: HashMap<&[bool], usize> = HashMap::new();
+        let group_schema = state.group_by.group_schema(&self.input_schema)?;
+        let n_expr = state.group_by.expr().len();
+        let mut any_interned = false;
+
+        for group in state.group_by.groups() {
+            let ordinal = {
+                let entry = ordinals.entry(group.as_slice()).or_insert(0);
+                let ordinal = *entry;
+                *entry += 1;
+                ordinal
+            };
+
+            if !group.iter().all(|&is_null| is_null) {
+                continue;
+            }
+
+            let mut cols: Vec<ArrayRef> = group_schema
+                .fields()
+                .iter()
+                .take(n_expr)
+                .map(|field| new_null_array(field.data_type(), 1))
+                .collect();
+            cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
+
+            state
+                .group_values
+                .intern(&cols, &mut state.batch_group_indices)?;
+            any_interned = true;
+        }
+
+        if any_interned {
+            let total_groups = state.group_values.len();
+            let false_filter = BooleanArray::from(vec![false]);
+            for acc in state.accumulators.iter_mut() {
+                let null_args = acc.null_arguments(&self.input_schema)?;
+                let values = EvaluatedAccumulatorArgs {
+                    arguments: null_args,
+                    filter: Some(Arc::new(false_filter.clone())),
+                };
+                acc.update_batch(&values, &[0], total_groups)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Hash table used only for converting raw input rows directly into partial
+/// aggregate state rows after partial aggregation has been skipped.
+pub(in crate::aggregates) struct PartialSkipHashTable {
+    pub(super) table: AggregateHashTable,
+}
+
+impl PartialSkipHashTable {
+    pub(in crate::aggregates) fn convert_batch_to_state(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<RecordBatch> {
+        let evaluated_batch = self.table.evaluate_batch(batch)?;
+
+        assert_eq_or_internal_err!(
+            evaluated_batch.grouping_set_args.len(),
+            1,
+            "group_values expected to have single element"
+        );
+        let mut output = evaluated_batch
+            .grouping_set_args
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+
+        let state = self.table.state.building_mut();
+        for (acc, values) in state
+            .accumulators
+            .iter_mut()
+            .zip(evaluated_batch.accumulator_args.iter())
+        {
+            output.extend(acc.convert_to_state(values)?);
+        }
+
+        Ok(RecordBatch::try_new(
+            Arc::clone(&self.table.output_schema),
+            output,
+        )?)
     }
 }
 

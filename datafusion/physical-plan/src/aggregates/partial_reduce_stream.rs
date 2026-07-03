@@ -28,13 +28,13 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
-use super::aggregate_hash_table::{AggregateHashTable, PartialReduceMarker};
+use super::aggregate_hash_table::{AggregateHashTable, AggregateTableMode};
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
@@ -90,12 +90,8 @@ pub(crate) struct PartialReduceHashAggregateStream {
 // The typestate pattern mirrors the final stream and keeps the input/output
 // semantics explicit for this mode.
 enum PartialReduceHashAggregateState {
-    ReadingInput {
-        hash_table: AggregateHashTable<PartialReduceMarker>,
-    },
-    ProducingOutput {
-        hash_table: AggregateHashTable<PartialReduceMarker>,
-    },
+    ReadingInput { hash_table: AggregateHashTable },
+    ProducingOutput { hash_table: AggregateHashTable },
     Done,
 }
 
@@ -109,7 +105,7 @@ type PartialReduceHashAggregateStateTransition = ControlFlow<
 >;
 
 impl PartialReduceHashAggregateState {
-    fn hash_table(&self) -> &AggregateHashTable<PartialReduceMarker> {
+    fn hash_table(&self) -> &AggregateHashTable {
         match self {
             Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
                 hash_table
@@ -118,7 +114,7 @@ impl PartialReduceHashAggregateState {
         }
     }
 
-    fn hash_table_mut(&mut self) -> &mut AggregateHashTable<PartialReduceMarker> {
+    fn hash_table_mut(&mut self) -> &mut AggregateHashTable {
         match self {
             Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
                 hash_table
@@ -127,7 +123,7 @@ impl PartialReduceHashAggregateState {
         }
     }
 
-    fn into_hash_table(self) -> AggregateHashTable<PartialReduceMarker> {
+    fn into_hash_table(self) -> AggregateHashTable {
         match self {
             Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
                 hash_table
@@ -164,12 +160,12 @@ impl PartialReduceHashAggregateStream {
         // Preserve the existing aggregate metric surface for this plan node.
         let _spill_metrics = SpillMetrics::new(&agg.metrics, partition);
 
-        let hash_table = AggregateHashTable::<PartialReduceMarker>::new(
-            agg,
-            partition,
-            Arc::clone(&schema),
-            batch_size,
-        )?;
+        let hash_table =
+            AggregateHashTable::new(agg, partition, Arc::clone(&schema), batch_size)?;
+        assert_or_internal_err!(
+            hash_table.mode() == AggregateTableMode::PartialReduce,
+            "PartialReduceHashAggregateStream expected partial-reduce aggregate hash table"
+        );
 
         let reservation =
             MemoryConsumer::new(format!("PartialReduceHashAggregateStream[{partition}]"))
@@ -184,10 +180,7 @@ impl PartialReduceHashAggregateStream {
         })
     }
 
-    fn start_output(
-        &mut self,
-        hash_table: &mut AggregateHashTable<PartialReduceMarker>,
-    ) -> Result<()> {
+    fn start_output(&mut self, hash_table: &mut AggregateHashTable) -> Result<()> {
         let input_schema = self.input.schema();
         self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
         hash_table.start_output()
