@@ -148,8 +148,13 @@ minus_one false false false false false false false false
 one false false false false false false false false
 zero false false false false false false false false
 
+# Cleanup
 statement ok
 DROP TABLE in_list_ints;
+
+####
+## Integer Null Handling
+####
 
 # Table with nulls to test null handling for integer IN list specializations
 statement ok
@@ -206,6 +211,6 @@ match true true true true true true true true
 no_match NULL NULL NULL NULL NULL NULL NULL NULL
 nulls NULL NULL NULL NULL NULL NULL NULL NULL
 
-
+# Cleanup
 statement ok
 DROP TABLE in_list_ints_nullable
