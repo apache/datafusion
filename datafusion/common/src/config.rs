@@ -639,6 +639,19 @@ config_namespace! {
         /// Should DataFusion keep the columns used for partition_by in the output RecordBatches
         pub keep_partition_by_columns: bool, default = false
 
+        /// When `true` (the default), DataFusion's built-in file scans
+        /// dynamically rebalance files across partitions at query execution
+        /// time: a partition that goes idle reads files (or byte-range morsels)
+        /// originally assigned to a sibling partition, which keeps all
+        /// partitions busy in a single process.
+        ///
+        /// Executors that depend on the plan-time partition assignment — such as
+        /// Ballista and datafusion-distributed, which run each partition as an
+        /// isolated task and never poll the siblings — should set this to
+        /// `false` so each partition reads only its own file group and no
+        /// runtime reassignment occurs.
+        pub enable_file_stream_work_stealing: bool, default = true
+
         /// Aggregation ratio (number of distinct groups / number of input rows)
         /// threshold for skipping partial aggregation. If the value is greater
         /// then partial aggregation will skip aggregation for further input
