@@ -99,6 +99,51 @@ ORDER BY label
 eleven false false false false false false false false
 max false false false false false false false false
 min true true true true true true true true
-minus_one false true false true false true false true
-one true true true true true true true true
+minus_one false false false false false false false false
+one false false false false false false false false
 zero false true false true false true false true
+
+# Max for each type (use values that cover the entire input range
+# so there are some values in each byte)
+query TBBBBBBBB
+SELECT
+  label,
+  i8 IN (-64, -32, 32, 64, 127),
+  u8 IN (32, 64, 128, 200, 255),
+  i16 IN (-257, 257, 4097, 16385, 32767),
+  u16 IN (257, 4097, 16385, 60000, 65535),
+  i32 IN (-16711936, 66051, 16909060, 305419896, 2147483647),
+  u32 IN (66051, 16909060, 305419896, 2309737967, 4294967295),
+  i64 IN (-72057594037927936, 72623859790382856, 81985529216486895, 1234605616436508552, 9223372036854775807),
+  u64 IN (72623859790382856, 81985529216486895, 1234605616436508552, 18364758544493064720, 18446744073709551615)
+FROM in_list_ints
+ORDER BY label
+----
+eleven false false false false false false false false
+max true true true true true true true true
+min false false false false false false false false
+minus_one false false false false false false false false
+one false false false false false false false false
+zero false false false false false false false false
+
+# Five item IN list with no matches (also cover the entire range)
+query TBBBBBBBB
+SELECT
+  label,
+  i8 IN (-64, -32, 32, 64, 100),
+  u8 IN (2, 32, 64, 128, 200),
+  i16 IN (-257, 257, 4097, 16385, 30000),
+  u16 IN (2, 257, 4097, 16385, 60000),
+  i32 IN (-16711936, 66051, 16909060, 305419896, 1076895760),
+  u32 IN (2, 66051, 16909060, 305419896, 2309737967),
+  i64 IN (-72057594037927936, 72623859790382856, 81985529216486895, 1234605616436508552, 819855292164868960),
+  u64 IN (2, 72623859790382856, 81985529216486895, 1234605616436508552, 18364758544493064720)
+FROM in_list_ints
+ORDER BY label
+----
+eleven false false false false false false false false
+max false false false false false false false false
+min false false false false false false false false
+minus_one false false false false false false false false
+one false false false false false false false false
+zero false false false false false false false false
