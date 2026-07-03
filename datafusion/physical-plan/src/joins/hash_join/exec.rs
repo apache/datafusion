@@ -49,7 +49,7 @@ use crate::joins::{JoinOn, JoinOnRef, PartitionMode, SharedBitmapBuilder};
 use crate::metrics::{Count, MetricBuilder, MetricCategory};
 use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
-    try_pushdown_through_join,
+    try_pushdown_through_join_with_column_indices,
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::statistics::StatisticsArgs;
@@ -1563,7 +1563,7 @@ impl ExecutionPlan for HashJoinExec {
             projected_right_child,
             join_filter,
             join_on,
-        }) = try_pushdown_through_join(
+        }) = try_pushdown_through_join_with_column_indices(
             projection,
             self.left(),
             self.right(),

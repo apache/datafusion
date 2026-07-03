@@ -642,7 +642,71 @@ pub struct JoinData {
     pub join_on: JoinOn,
 }
 
-pub(crate) fn try_pushdown_through_join(
+pub fn try_pushdown_through_join(
+    projection: &ProjectionExec,
+    join_left: &Arc<dyn ExecutionPlan>,
+    join_right: &Arc<dyn ExecutionPlan>,
+    join_on: JoinOnRef,
+    schema: &SchemaRef,
+    filter: Option<&JoinFilter>,
+) -> Result<Option<JoinData>> {
+    // Convert projected expressions to columns. We can not proceed if this is not possible.
+    let Some(projection_as_columns) = physical_to_column_exprs(projection.expr()) else {
+        return Ok(None);
+    };
+
+    let (far_right_left_col_ind, far_left_right_col_ind) =
+        join_table_borders(join_left.schema().fields().len(), &projection_as_columns);
+
+    if !join_allows_pushdown(
+        &projection_as_columns,
+        schema,
+        far_right_left_col_ind,
+        far_left_right_col_ind,
+    ) {
+        return Ok(None);
+    }
+
+    let new_filter = if let Some(filter) = filter {
+        match update_join_filter(
+            &projection_as_columns[0..=far_right_left_col_ind as _],
+            &projection_as_columns[far_left_right_col_ind as _..],
+            filter,
+            join_left.schema().fields().len(),
+        ) {
+            Some(updated_filter) => Some(updated_filter),
+            None => return Ok(None),
+        }
+    } else {
+        None
+    };
+
+    let Some(new_on) = update_join_on(
+        &projection_as_columns[0..=far_right_left_col_ind as _],
+        &projection_as_columns[far_left_right_col_ind as _..],
+        join_on,
+        join_left.schema().fields().len(),
+    ) else {
+        return Ok(None);
+    };
+
+    let (new_left, new_right) = new_join_children(
+        &projection_as_columns,
+        far_right_left_col_ind,
+        far_left_right_col_ind,
+        join_left,
+        join_right,
+    )?;
+
+    Ok(Some(JoinData {
+        projected_left_child: new_left,
+        projected_right_child: new_right,
+        join_filter: new_filter,
+        join_on: new_on,
+    }))
+}
+
+pub(crate) fn try_pushdown_through_join_with_column_indices(
     projection: &ProjectionExec,
     join_left: &Arc<dyn ExecutionPlan>,
     join_right: &Arc<dyn ExecutionPlan>,

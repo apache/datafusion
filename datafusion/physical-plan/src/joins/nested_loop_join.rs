@@ -40,7 +40,7 @@ use crate::metrics::{
 };
 use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
-    try_pushdown_through_join,
+    try_pushdown_through_join_with_column_indices,
 };
 use crate::statistics::StatisticsArgs;
 use crate::{
@@ -739,7 +739,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             projected_right_child,
             join_filter,
             ..
-        }) = try_pushdown_through_join(
+        }) = try_pushdown_through_join_with_column_indices(
             projection,
             self.left(),
             self.right(),
