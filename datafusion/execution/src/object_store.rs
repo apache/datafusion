@@ -189,8 +189,9 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// path prefix (e.g. `hf://bucket/user/repo`). When resolving a longer URL
     /// (e.g. `hf://bucket/user/repo/data/f.parquet`) the registered prefix is
     /// stripped from the returned path (`data/f.parquet`), so a store rooted at
-    /// that prefix is not prefixed twice. The store with the longest matching
-    /// path prefix is returned.
+    /// that prefix is not prefixed twice. The store with the longest matching path
+    /// prefix is returned. The store identity (scheme + authority + registered
+    /// prefix) can be reconstructed from `url` and the returned path.
     ///
     /// The default implementation preserves the legacy behavior of matching on
     /// scheme + authority only, returning the full URL path unchanged.
@@ -328,7 +329,8 @@ mod tests {
             Arc::clone(&repo2),
         );
 
-        // Each query resolves to its own store, with the registered prefix stripped.
+        // Each query resolves to its own store, with the registered prefix
+        // stripped from the returned path.
         let (store, path) = registry
             .resolve(&Url::parse("hf://bucket/userA/repo1/data/f.parquet").unwrap())
             .unwrap();
