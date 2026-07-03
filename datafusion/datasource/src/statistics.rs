@@ -102,7 +102,10 @@ impl MinMaxStatistics {
                         {
                             Ok((partition_value.clone(), partition_value.clone()))
                         } else {
-                            Err(plan_datafusion_err!("statistics not found"))
+                            Err(plan_datafusion_err!(
+                                "statistics not found for partition, expected at most {}",
+                                s.column_statistics.len()
+                            ))
                         }
                     }
                 })
@@ -909,7 +912,8 @@ mod tests {
         };
 
         assert!(
-            err.to_string().contains("statistics not found"),
+            err.to_string()
+                .contains("statistics not found for partition"),
             "unexpected error: {err:?}"
         );
     }
