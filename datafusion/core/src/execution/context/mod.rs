@@ -82,7 +82,7 @@ use datafusion_execution::cache::cache_manager::{
 };
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{
-    DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
+    DEFAULT_MAX_SPILL_MERGE_FAN_IN, DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::HigherOrderUDF;
@@ -1208,6 +1208,14 @@ impl SessionContext {
                 let limit = Self::parse_capacity_limit(variable, value)?;
                 builder.with_file_statistics_cache_limit(limit)
             }
+            "max_spill_merge_fan_in" => {
+                let fan_in = value.parse::<usize>().map_err(|e| {
+                    DataFusionError::Plan(format!(
+                        "Failed to parse non-negative integer from '{variable}', value '{value}': {e}"
+                    ))
+                })?;
+                builder.with_max_spill_merge_fan_in(fan_in)
+            }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
             // Remember to update `reset_runtime_variable()` when adding new options
         };
@@ -1251,6 +1259,10 @@ impl SessionContext {
                 builder = builder.with_file_statistics_cache_limit(
                     DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
                 );
+            }
+            "max_spill_merge_fan_in" => {
+                builder =
+                    builder.with_max_spill_merge_fan_in(DEFAULT_MAX_SPILL_MERGE_FAN_IN);
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };
