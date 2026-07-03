@@ -21,6 +21,7 @@
 /// default 128 KiB red zone in debug builds. Keep this value local to each
 /// stack-growth checkpoint rather than mutating `recursive`'s process-global
 /// minimum stack size.
+#[cfg(feature = "recursive_protection")]
 pub(crate) const SQL_RECURSION_RED_ZONE: usize = 256 * 1024;
 
 /// Runs `callback` on a stack with enough space for SQL recursive entry points.
