@@ -36,6 +36,8 @@ use crate::aggregates::{
 
 /// Marker for raw rows -> partial state aggregation.
 pub(in crate::aggregates) struct PartialMarker;
+/// Marker for partial state -> partial state aggregation.
+pub(in crate::aggregates) struct PartialReduceMarker;
 /// Marker for raw rows -> partial state conversion without aggregation.
 pub(in crate::aggregates) struct PartialSkipMarker;
 /// Marker for partial state -> final value aggregation.

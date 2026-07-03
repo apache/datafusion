@@ -26,6 +26,7 @@ use crate::aggregates::{
     no_grouping::AggregateStream,
     ordered_final_stream::OrderedFinalAggregateStream,
     ordered_partial_stream::OrderedPartialAggregateStream,
+    partial_reduce_stream::PartialReduceHashAggregateStream,
     row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
@@ -81,6 +82,7 @@ mod no_grouping;
 pub mod order;
 mod ordered_final_stream;
 mod ordered_partial_stream;
+mod partial_reduce_stream;
 mod row_hash;
 mod skip_partial;
 mod topk;
@@ -531,6 +533,9 @@ enum StreamType {
     /// Partial stage of the hash aggregation
     /// Input output scheme: initial input -> partial state
     PartialHash(PartialHashAggregateStream),
+    /// Partial-reduce stage of the hash aggregation
+    /// Input output scheme: partial state -> partial state
+    PartialReduceHash(PartialReduceHashAggregateStream),
     /// Final stage of the hash aggregation
     /// Input output scheme: partial state -> final result
     FinalHash(FinalHashAggregateStream),
@@ -560,6 +565,7 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::PartialHash(stream) => Box::pin(stream),
+            StreamType::PartialReduceHash(stream) => Box::pin(stream),
             StreamType::FinalHash(stream) => Box::pin(stream),
             StreamType::OrderedPartialAggregate(stream) => Box::pin(stream),
             StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
@@ -1048,6 +1054,12 @@ impl AggregateExec {
                 )?));
             }
 
+            if self.should_use_partial_reduce_hash_stream(context) {
+                return Ok(StreamType::PartialReduceHash(
+                    PartialReduceHashAggregateStream::new(self, context, partition)?,
+                ));
+            }
+
             if self.should_use_ordered_final_aggregate_stream(context) {
                 return Ok(StreamType::OrderedFinalAggregate(
                     OrderedFinalAggregateStream::new(self, context, partition)?,
@@ -1103,6 +1115,19 @@ impl AggregateExec {
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
         ) && self.limit_options_supported_by_hash_stream()
+            && self.input_order_mode == InputOrderMode::Linear
+            && !self.group_by.is_true_no_grouping()
+            && self.group_by.is_single()
+    }
+
+    fn should_use_partial_reduce_hash_stream(&self, context: &TaskContext) -> bool {
+        // TODO: implement memory-limited path and remove this limitation
+        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
+            return false;
+        }
+
+        self.mode == AggregateMode::PartialReduce
+            && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
@@ -3477,6 +3502,99 @@ mod tests {
 | 2 |
 +---+
 ");
+
+        Ok(())
+    }
+
+    fn partial_reduce_test_aggregate() -> Result<AggregateExec> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(b)")
+                .build()?,
+        )];
+
+        let empty_input =
+            TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggregates.clone(),
+            vec![None],
+            empty_input,
+            Arc::clone(&schema),
+        )?;
+        let partial_schema = partial.schema();
+        let partial_state_batch = RecordBatch::try_new(
+            Arc::clone(&partial_schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 1, 3])),
+                Arc::new(Float64Array::from(vec![10.0, 20.0, 40.0, 30.0])),
+            ],
+        )?;
+        let partial_reduce_input = TestMemoryExec::try_new_exec(
+            &[vec![partial_state_batch]],
+            Arc::clone(&partial_schema),
+            None,
+        )?;
+
+        AggregateExec::try_new(
+            AggregateMode::PartialReduce,
+            group_by,
+            aggregates,
+            vec![None],
+            partial_reduce_input,
+            partial_schema,
+        )
+    }
+
+    /// For partial-reduce aggregation, ensures `PartialReduceHashAggregateStream`
+    /// is used when enabled by migration config.
+    #[tokio::test]
+    async fn partial_reduce_aggregate_planning() -> Result<()> {
+        let partial_reduce = partial_reduce_test_aggregate()?;
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
+            ),
+        );
+
+        let stream = partial_reduce.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::PartialReduceHash(_)));
+        let stream: SendableRecordBatchStream = stream.into();
+        let output = collect(stream).await?;
+        assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+
+        Ok(())
+    }
+
+    /// Spilling behavior is not implemented for partial-reduce stream yet, so fall
+    /// back to the existing `GroupedHashAggregateStream`
+    #[tokio::test]
+    async fn partial_reduce_aggregate_with_memory_limit_planning() -> Result<()> {
+        let partial_reduce = partial_reduce_test_aggregate()?;
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(1, 1.0)
+            .build_arc()?;
+        let task_ctx =
+            Arc::new(
+                TaskContext::default()
+                    .with_session_config(SessionConfig::new().set_bool(
+                        "datafusion.execution.enable_migration_aggregate",
+                        true,
+                    ))
+                    .with_runtime(runtime),
+            );
+
+        let stream = partial_reduce.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::GroupedHash(_)));
 
         Ok(())
     }
