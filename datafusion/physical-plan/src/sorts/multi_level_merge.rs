@@ -33,7 +33,7 @@ use datafusion_execution::memory_pool::MemoryReservation;
 use crate::sorts::builder::try_grow_reservation_to_at_least;
 use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::stream::RecordBatchStreamAdapter;
+use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::TryStreamExt;
@@ -242,27 +242,34 @@ impl MultiLevelMergeBuilder {
     fn merge_sorted_runs_within_mem_limit(&mut self) -> Result<MergeStep> {
         match (self.sorted_spill_files.len(), self.sorted_streams.len()) {
             // No data so empty batch
-            (0, 0) => Ok(MergeStep::Stream(Box::pin(EmptyRecordBatchStream::new(
-                Arc::clone(&self.schema),
-            )))),
+            (0, 0) => {
+                let empty_stream =
+                    Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)));
+                Ok(MergeStep::Stream(self.observe_output(empty_stream)))
+            }
 
             // Only in-memory stream, return that
-            (0, 1) => Ok(MergeStep::Stream(self.sorted_streams.remove(0))),
+            (0, 1) => {
+                let output_stream = self.sorted_streams.remove(0);
+                Ok(MergeStep::Stream(self.observe_output(output_stream)))
+            }
 
             // Only single sorted spill file so return it
             (1, 0) => {
                 let spill_file = self.sorted_spill_files.remove(0);
 
                 // Not reserving any memory for this disk as we are not holding it in memory
-                Ok(MergeStep::Stream(
-                    self.spill_manager
-                        .read_spill_as_stream(spill_file.file, None)?,
-                ))
+                let output_stream = self
+                    .spill_manager
+                    .read_spill_as_stream(spill_file.file, None)?;
+
+                Ok(MergeStep::Stream(self.observe_output(output_stream)))
             }
 
             // Only in memory streams, so merge them all in a single pass
             (0, _) => {
                 let sorted_stream = mem::take(&mut self.sorted_streams);
+                // No need to wrap with observed stream since merge sort will update the observed metrics
                 Ok(MergeStep::Stream(self.create_new_merge_sort(
                     sorted_stream,
                     // If we have no sorted spill files left, this is the last run
@@ -573,6 +580,13 @@ impl MultiLevelMergeBuilder {
         self.sorted_spill_files.swap(index, last);
 
         Ok(())
+    }
+
+    fn observe_output(
+        &self,
+        stream: SendableRecordBatchStream,
+    ) -> SendableRecordBatchStream {
+        Box::pin(ObservedStream::new(stream, self.metrics.clone(), None))
     }
 }
 
