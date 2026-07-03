@@ -94,12 +94,11 @@ impl AggregateUDFImpl for SparkCollectList {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let field = &acc_args.expr_fields[0];
-        let data_type = field.data_type().clone();
+        let element_type = acc_args.expr_fields[0].data_type().clone();
         let ignore_nulls = true;
         Ok(Box::new(NullToEmptyListAccumulator::new(
-            ArrayAggAccumulator::try_new(&data_type, ignore_nulls)?,
-            data_type,
+            ArrayAggAccumulator::try_new(&element_type, ignore_nulls)?,
+            acc_args.return_type().clone(),
         )))
     }
 
@@ -156,12 +155,11 @@ impl AggregateUDFImpl for SparkCollectSet {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let field = &acc_args.expr_fields[0];
-        let data_type = field.data_type().clone();
+        let element_type = acc_args.expr_fields[0].data_type().clone();
         let ignore_nulls = true;
         Ok(Box::new(NullToEmptyListAccumulator::new(
-            DistinctArrayAggAccumulator::try_new(&data_type, None, ignore_nulls)?,
-            data_type,
+            DistinctArrayAggAccumulator::try_new(&element_type, None, ignore_nulls)?,
+            acc_args.return_type().clone(),
         )))
     }
 
@@ -175,12 +173,12 @@ impl AggregateUDFImpl for SparkCollectSet {
 #[derive(Debug)]
 struct NullToEmptyListAccumulator<T: Accumulator> {
     inner: T,
-    data_type: DataType,
+    list_type: DataType,
 }
 
 impl<T: Accumulator> NullToEmptyListAccumulator<T> {
-    pub fn new(inner: T, data_type: DataType) -> Self {
-        Self { inner, data_type }
+    pub fn new(inner: T, list_type: DataType) -> Self {
+        Self { inner, list_type }
     }
 }
 
@@ -200,8 +198,7 @@ impl<T: Accumulator> Accumulator for NullToEmptyListAccumulator<T> {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let result = self.inner.evaluate()?;
         if result.is_null() {
-            let empty_array = arrow::array::new_empty_array(&self.data_type);
-            Ok(SingleRowListArrayBuilder::new(empty_array).build_list_scalar())
+            empty_list_scalar(&self.list_type)
         } else {
             Ok(result)
         }
@@ -216,6 +213,6 @@ impl<T: Accumulator> Accumulator for NullToEmptyListAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        self.inner.size() + self.data_type.size()
+        self.inner.size() + self.list_type.size()
     }
 }
