@@ -611,6 +611,18 @@ SHOW datafusion.runtime.max_temp_directory_size
 ----
 datafusion.runtime.max_temp_directory_size 10G
 
+# Test SET and SHOW runtime.max_spill_merge_fan_in
+statement ok
+SET datafusion.runtime.max_spill_merge_fan_in = '16'
+
+query TT
+SHOW datafusion.runtime.max_spill_merge_fan_in
+----
+datafusion.runtime.max_spill_merge_fan_in 16
+
+statement ok
+RESET datafusion.runtime.max_spill_merge_fan_in
+
 # Test SET and SHOW runtime.file_statistics_cache_limit
 statement ok
 SET datafusion.runtime.file_statistics_cache_limit = '42M'
@@ -669,6 +681,7 @@ SELECT name FROM information_schema.df_settings WHERE name LIKE 'datafusion.runt
 datafusion.runtime.file_statistics_cache_limit
 datafusion.runtime.list_files_cache_limit
 datafusion.runtime.list_files_cache_ttl
+datafusion.runtime.max_spill_merge_fan_in
 datafusion.runtime.max_temp_directory_size
 datafusion.runtime.memory_limit
 datafusion.runtime.metadata_cache_limit
