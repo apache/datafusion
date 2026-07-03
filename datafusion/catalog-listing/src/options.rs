@@ -279,11 +279,11 @@ impl ListingOptions {
     ) -> datafusion_common::Result<SchemaRef> {
         // Resolve through the registry so a store registered under a path prefix
         // receives store-relative paths (see `ListingTableUrl::resolve`).
-        let (store, _, table_path) =
-            table_path.resolve(state.runtime_env().object_store_registry.as_ref())?;
+        let resolved = table_path.resolve(state.runtime_env())?;
 
-        let all_files: Vec<_> = table_path
-            .list_all_files(state, store.as_ref(), &self.file_extension)
+        let all_files: Vec<_> = resolved
+            .table_url
+            .list_all_files(state, resolved.store.as_ref(), &self.file_extension)
             .await?
             .try_collect()
             .await?;
@@ -293,7 +293,7 @@ impl ListingOptions {
                 "No files found at {}. \
                  Cannot infer schema from an empty location; either add data files \
                  or declare an explicit schema for the table.",
-                table_path
+                resolved.table_url
             );
         }
 
@@ -303,7 +303,10 @@ impl ListingOptions {
             .filter(|object_meta| object_meta.size > 0)
             .collect();
 
-        let schema = self.format.infer_schema(state, &store, &files).await?;
+        let schema = self
+            .format
+            .infer_schema(state, &resolved.store, &files)
+            .await?;
 
         Ok(schema)
     }
@@ -374,21 +377,22 @@ impl ListingOptions {
     ) -> datafusion_common::Result<Vec<String>> {
         // Resolve through the registry so a store registered under a path prefix
         // receives store-relative paths (see `ListingTableUrl::resolve`).
-        let (store, _, table_path) =
-            table_path.resolve(state.runtime_env().object_store_registry.as_ref())?;
+        let resolved = table_path.resolve(state.runtime_env())?;
 
         // only use 10 files for inference
         // This can fail to detect inconsistent partition keys
         // A DFS traversal approach of the store can help here
-        let files: Vec<_> = table_path
-            .list_all_files(state, store.as_ref(), &self.file_extension)
+        let files: Vec<_> = resolved
+            .table_url
+            .list_all_files(state, resolved.store.as_ref(), &self.file_extension)
             .await?
             .take(10)
             .try_collect()
             .await?;
 
         let stripped_path_parts = files.iter().map(|file| {
-            table_path
+            resolved
+                .table_url
                 .strip_prefix(&file.location)
                 .unwrap()
                 .collect_vec()

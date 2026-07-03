@@ -569,17 +569,6 @@ mod tests {
     }
 
     #[test]
-    fn test_object_store_listing_url() {
-        let listing = ListingTableUrl::parse("file:///").unwrap();
-        let store = listing.object_store();
-        assert_eq!(store.as_str(), "file:///");
-
-        let listing = ListingTableUrl::parse("s3://bucket/").unwrap();
-        let store = listing.object_store();
-        assert_eq!(store.as_str(), "s3://bucket/");
-    }
-
-    #[test]
     fn test_get_store_hdfs() {
         let sut = DefaultObjectStoreRegistry::default();
         let url = Url::parse("hdfs://localhost:8020").unwrap();

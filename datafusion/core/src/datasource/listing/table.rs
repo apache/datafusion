@@ -56,11 +56,11 @@ impl ListingTableConfigExt for ListingTableConfig {
         };
         // Resolve through the registry so a store registered under a path prefix
         // receives store-relative paths (see `ListingTableUrl::resolve`).
-        let (store, _, table_path) =
-            first.resolve(state.runtime_env().object_store_registry.as_ref())?;
+        let resolved = first.resolve(state.runtime_env())?;
 
-        let file = table_path
-            .list_all_files(state, store.as_ref(), "")
+        let file = resolved
+            .table_url
+            .list_all_files(state, resolved.store.as_ref(), "")
             .await?
             .next()
             .await

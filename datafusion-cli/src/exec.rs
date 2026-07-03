@@ -32,6 +32,7 @@ use datafusion::config::{ConfigFileType, Dialect};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryConsumer;
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::spill::get_record_batch_memory_size;
@@ -515,10 +516,13 @@ pub(crate) async fn register_object_store_and_config_extensions(
 
     // Register the retrieved object store in the session context's runtime
     // environment. The stdin store is shared across all `stdin://` object paths,
-    // so it is keyed by scheme/authority (its `object_store()` identity) rather
-    // than by the object path.
+    // so it is registered at its scheme/authority identity rather than at the
+    // object path (the registry then resolves every `stdin://` path to it).
     if scheme == StdinUtils::SCHEME {
-        ctx.register_object_store(table_path.object_store().as_ref(), store);
+        let identity = ObjectStoreUrl::parse(
+            &url[::url::Position::BeforeScheme..::url::Position::BeforePath],
+        )?;
+        ctx.register_object_store(identity.as_ref(), store);
     } else {
         ctx.register_object_store(url, store);
     }

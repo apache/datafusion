@@ -20,7 +20,8 @@ use std::sync::Arc;
 use datafusion_common::{DataFusionError, Result, TableReference};
 use datafusion_execution::cache::cache_manager::CachedFileList;
 use datafusion_execution::cache::cache_manager::TableScopedPath;
-use datafusion_execution::object_store::{ObjectStoreRegistry, ObjectStoreUrl};
+use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_session::Session;
 
 use futures::stream::BoxStream;
@@ -32,6 +33,24 @@ use object_store::path::DELIMITER;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use url::Url;
+
+/// The outcome of resolving a [`ListingTableUrl`] against the object store
+/// registry (see [`ListingTableUrl::resolve`]).
+///
+/// A short-lived, local value: use its fields directly, taking only the ones a
+/// given call site needs.
+#[derive(Debug, Clone)]
+pub struct ResolvedTableUrl {
+    /// The object store serving the url.
+    pub store: Arc<dyn ObjectStore>,
+    /// The store's identity (scheme + authority + any registered path prefix).
+    /// Use as the scan/sink key so the store re-resolves at execution time.
+    pub identity: ObjectStoreUrl,
+    /// This url rebased into the store's coordinate space: its
+    /// [`prefix`](ListingTableUrl::prefix) is store-relative, so listing and
+    /// partition parsing operate on paths relative to the store.
+    pub table_url: ListingTableUrl,
+}
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
 /// for more information on the supported expressions
@@ -319,74 +338,41 @@ impl ListingTableUrl {
         self.as_ref()
     }
 
-    /// Return the [`ObjectStoreUrl`] for this [`ListingTableUrl`]
+    /// Resolves this url against the object store registry in `env`. See
+    /// [`ResolvedTableUrl`].
     ///
-    /// This returns the scheme + authority only, and does not account for any
-    /// store registered under a path prefix. For reading, prefer
-    /// [`Self::resolve`], which consults the registry and strips the registered
-    /// prefix from the path handed to the store.
-    pub fn object_store(&self) -> ObjectStoreUrl {
-        let url = &self.url[url::Position::BeforeScheme..url::Position::BeforePath];
-        ObjectStoreUrl::parse(url).unwrap()
-    }
+    /// The returned [`table_url`](ResolvedTableUrl::table_url) is this url rebased
+    /// into the store's coordinate space: its [`prefix`](Self::prefix) is replaced
+    /// by the store-relative path the registry stripped, so listing and partition
+    /// parsing operate on paths relative to the store (avoiding double-prefixing
+    /// for a store rooted at a path prefix). Only `prefix` changes; `url` / `glob`
+    /// / `table_ref` are preserved.
+    pub fn resolve(&self, env: &RuntimeEnv) -> Result<ResolvedTableUrl> {
+        let (store, path) = env.object_store_registry.resolve(&self.url)?;
 
-    /// Resolve this url against the object store `registry`.
-    ///
-    /// Returns:
-    /// - the [`ObjectStore`] serving this url,
-    /// - the [`ObjectStoreUrl`] (scheme + authority + any registered path prefix)
-    ///   to use as the scan key so the same store can be re-resolved at execution
-    ///   time, and
-    /// - a copy of this [`ListingTableUrl`] rebased into the resolved store's
-    ///   coordinate space: its [`prefix`](Self::prefix) has the registered prefix
-    ///   stripped, so listing/`head`/partition parsing operate on paths relative
-    ///   to the store (avoiding double-prefixing for stores rooted at a prefix).
-    ///
-    /// For a store registered by scheme + authority only (e.g. `s3://bucket`), the
-    /// rebased prefix is identical to [`Self::prefix`] and the behavior is
-    /// unchanged.
-    pub fn resolve(
-        &self,
-        registry: &dyn ObjectStoreRegistry,
-    ) -> Result<(Arc<dyn ObjectStore>, ObjectStoreUrl, ListingTableUrl)> {
-        let (store, store_relative_prefix) = registry.resolve(&self.url)?;
-
-        // The registered prefix is the leading path segments that the registry
-        // stripped: full prefix segments minus the store-relative ones.
-        let stripped = self
-            .prefix
-            .parts()
-            .count()
-            .saturating_sub(store_relative_prefix.parts().count());
-
-        // Rebuild the base URL (scheme + authority + registered prefix) preserving
-        // the original percent-encoding of the retained segments.
+        // Store identity = scheme + authority + registered prefix, i.e. the
+        // leading segments of `url` the registry stripped to produce `path`,
+        // keeping their original percent-encoding.
+        let segments = || self.url.path().split('/').filter(|s| !s.is_empty());
+        let kept = segments().count().saturating_sub(path.parts().count());
         let authority = &self.url[url::Position::BeforeScheme..url::Position::BeforePath];
-        let kept: Vec<&str> = self
-            .url
-            .path()
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .take(stripped)
-            .collect();
-        let base_str = if kept.is_empty() {
-            authority.to_string()
+        let identity = if kept == 0 {
+            ObjectStoreUrl::parse(authority)?
         } else {
-            format!("{authority}/{}", kept.join("/"))
-        };
-        let object_store_url = ObjectStoreUrl::parse(&base_str)?;
-
-        // The rebased url keeps the original `url` (used only for scheme /
-        // is_collection / display); only `prefix` becomes store-relative, which is
-        // what all listing and partition-parsing logic keys off.
-        let rebased = ListingTableUrl {
-            url: self.url.clone(),
-            prefix: store_relative_prefix,
-            glob: self.glob.clone(),
-            table_ref: self.table_ref.clone(),
+            let prefix = segments().take(kept).collect::<Vec<_>>().join("/");
+            ObjectStoreUrl::parse(format!("{authority}/{prefix}"))?
         };
 
-        Ok((store, object_store_url, rebased))
+        Ok(ResolvedTableUrl {
+            store,
+            identity,
+            table_url: Self {
+                url: self.url.clone(),
+                prefix: path,
+                glob: self.glob.clone(),
+                table_ref: self.table_ref.clone(),
+            },
+        })
     }
 
     /// Returns true if the [`ListingTableUrl`] points to the folder
@@ -579,8 +565,9 @@ mod tests {
     use datafusion_common::config::TableOptions;
     use datafusion_execution::TaskContext;
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::object_store::DefaultObjectStoreRegistry;
-    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_execution::object_store::{
+        DefaultObjectStoreRegistry, ObjectStoreRegistry,
+    };
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::registry::ExtensionTypeRegistryRef;
     use datafusion_expr::{
@@ -694,68 +681,72 @@ mod tests {
         assert!(url.strip_prefix(&path).is_none());
     }
 
-    fn registry_with(base: &str) -> DefaultObjectStoreRegistry {
+    fn env_with(base: &str) -> Arc<RuntimeEnv> {
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
         let registry = DefaultObjectStoreRegistry::new();
         registry.register_store(
             &Url::parse(base).unwrap(),
             Arc::new(object_store::memory::InMemory::new()),
         );
-        registry
+        RuntimeEnvBuilder::new()
+            .with_object_store_registry(Arc::new(registry))
+            .build_arc()
+            .unwrap()
     }
 
     #[test]
     fn test_resolve_authority_only_store() {
         // A store registered by scheme+authority only leaves the prefix unchanged.
-        let registry = registry_with("s3://bucket");
+        let env = env_with("s3://bucket");
         let url = ListingTableUrl::parse("s3://bucket/foo/bar/file.parquet").unwrap();
-        let (_, base, rebased) = url.resolve(&registry).unwrap();
-        assert_eq!(base.as_str(), "s3://bucket/");
-        assert_eq!(rebased.prefix().as_ref(), "foo/bar/file.parquet");
-        assert_eq!(rebased.prefix(), url.prefix());
+        let resolved = url.resolve(&env).unwrap();
+        assert_eq!(resolved.identity.as_str(), "s3://bucket/");
+        assert_eq!(resolved.table_url.prefix().as_ref(), "foo/bar/file.parquet");
+        assert_eq!(resolved.table_url.prefix(), url.prefix());
     }
 
     #[test]
     fn test_resolve_prefixed_store_strips_prefix() {
         // A store registered under a path prefix: the prefix is stripped from the
-        // rebased url and retained in the base ObjectStoreUrl (the scan key).
-        let registry = registry_with("s3://bucket/user/repo");
+        // rebased url and retained in the store identity (the scan key).
+        let env = env_with("s3://bucket/user/repo");
         let url =
             ListingTableUrl::parse("s3://bucket/user/repo/data/file.parquet").unwrap();
-        let (_, base, rebased) = url.resolve(&registry).unwrap();
-        assert_eq!(base.as_str(), "s3://bucket/user/repo");
-        assert_eq!(rebased.prefix().as_ref(), "data/file.parquet");
-        assert!(!rebased.is_collection());
+        let resolved = url.resolve(&env).unwrap();
+        assert_eq!(resolved.identity.as_str(), "s3://bucket/user/repo");
+        assert_eq!(resolved.table_url.prefix().as_ref(), "data/file.parquet");
+        assert!(!resolved.table_url.is_collection());
     }
 
     #[test]
     fn test_resolve_prefixed_collection_preserves_trailing_slash() {
         // A directory url keeps its collection-ness after rebasing.
-        let registry = registry_with("s3://bucket/user/repo");
+        let env = env_with("s3://bucket/user/repo");
         let url = ListingTableUrl::parse("s3://bucket/user/repo/data/").unwrap();
-        let (_, base, rebased) = url.resolve(&registry).unwrap();
-        assert_eq!(base.as_str(), "s3://bucket/user/repo");
-        assert_eq!(rebased.prefix().as_ref(), "data");
-        assert!(rebased.is_collection());
+        let resolved = url.resolve(&env).unwrap();
+        assert_eq!(resolved.identity.as_str(), "s3://bucket/user/repo");
+        assert_eq!(resolved.table_url.prefix().as_ref(), "data");
+        assert!(resolved.table_url.is_collection());
     }
 
     #[test]
     fn test_resolve_query_at_registered_root() {
         // Querying exactly the registered prefix yields an empty rebased prefix.
-        let registry = registry_with("s3://bucket/user/repo");
+        let env = env_with("s3://bucket/user/repo");
         let url = ListingTableUrl::parse("s3://bucket/user/repo/").unwrap();
-        let (_, base, rebased) = url.resolve(&registry).unwrap();
-        assert_eq!(base.as_str(), "s3://bucket/user/repo");
-        assert_eq!(rebased.prefix().as_ref(), "");
+        let resolved = url.resolve(&env).unwrap();
+        assert_eq!(resolved.identity.as_str(), "s3://bucket/user/repo");
+        assert_eq!(resolved.table_url.prefix().as_ref(), "");
     }
 
     #[test]
-    fn test_resolve_preserves_percent_encoding_in_base() {
+    fn test_resolve_preserves_percent_encoding_in_identity() {
         // The retained (registered-prefix) segments keep their original encoding.
-        let registry = registry_with("s3://bucket/us%20er");
+        let env = env_with("s3://bucket/us%20er");
         let url = ListingTableUrl::parse("s3://bucket/us%20er/data.parquet").unwrap();
-        let (_, base, rebased) = url.resolve(&registry).unwrap();
-        assert_eq!(base.as_str(), "s3://bucket/us%20er");
-        assert_eq!(rebased.prefix().as_ref(), "data.parquet");
+        let resolved = url.resolve(&env).unwrap();
+        assert_eq!(resolved.identity.as_str(), "s3://bucket/us%20er");
+        assert_eq!(resolved.table_url.prefix().as_ref(), "data.parquet");
     }
 
     #[test]

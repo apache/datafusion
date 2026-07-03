@@ -709,13 +709,21 @@ impl TableProvider for ListingTable {
             );
         }
 
-        // Get the object store for the table path.
-        let store = state.runtime_env().object_store(table_path)?;
+        // Resolve through the registry so a store registered under a path prefix
+        // gets store-relative paths (see `ListingTableUrl::with_prefix`). The
+        // resolved identity and rebased paths are embedded in the sink config so
+        // the store re-resolves and writes correctly at execution time.
+        let Some((store, object_store_url, rebased_paths)) =
+            self.resolve_object_store(state)?
+        else {
+            return Err(internal_datafusion_err!("ListingTable has no table paths"));
+        };
+        let rebased = &rebased_paths[0];
 
         let file_list_stream = pruned_partition_list(
             state,
             store.as_ref(),
-            table_path,
+            rebased,
             &[],
             &self.options.file_extension,
             &self.options.table_partition_cols,
@@ -729,8 +737,8 @@ impl TableProvider for ListingTable {
         // Invalidate cache entries for this table if they exist
         if let Some(lfc) = state.runtime_env().cache_manager.get_list_files_cache() {
             let key = TableScopedPath {
-                table: table_path.get_table_ref().clone(),
-                path: table_path.prefix().clone(),
+                table: rebased.get_table_ref().clone(),
+                path: rebased.prefix().clone(),
             };
             let _ = lfc.remove(&key);
         }
@@ -738,8 +746,8 @@ impl TableProvider for ListingTable {
         // Sink related option, apart from format
         let config = FileSinkConfig {
             original_url: String::default(),
-            object_store_url: self.table_paths()[0].object_store(),
-            table_paths: self.table_paths().clone(),
+            object_store_url,
+            table_paths: rebased_paths,
             file_group,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
@@ -803,14 +811,14 @@ impl ListingTable {
         let Some(first) = self.table_paths.first() else {
             return Ok(None);
         };
-        let registry = Arc::clone(&ctx.runtime_env().object_store_registry);
-        let (store, object_store_url, _) = first.resolve(registry.as_ref())?;
+        let env = ctx.runtime_env();
+        let resolved = first.resolve(env)?;
         let rebased = self
             .table_paths
             .iter()
-            .map(|p| Ok(p.resolve(registry.as_ref())?.2))
+            .map(|p| Ok(p.resolve(env)?.table_url))
             .collect::<datafusion_common::Result<Vec<_>>>()?;
-        Ok(Some((store, object_store_url, rebased)))
+        Ok(Some((resolved.store, resolved.identity, rebased)))
     }
 
     async fn collect_files_for_scan<'a>(
