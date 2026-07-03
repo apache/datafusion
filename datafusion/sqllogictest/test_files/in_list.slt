@@ -1,0 +1,171 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## IN List Tests
+##########
+
+
+# IN LIST has specializations for integer types. This test verifies the correctness
+# of the various specializations.
+statement ok
+CREATE TABLE in_list_ints (
+  label VARCHAR,
+  i8 TINYINT,
+  u8 TINYINT UNSIGNED,
+  i16 SMALLINT,
+  u16 SMALLINT UNSIGNED,
+  i32 INT,
+  u32 INT UNSIGNED,
+  i64 BIGINT,
+  u64 BIGINT UNSIGNED
+) AS VALUES
+  ('min', -128, 0, -32768, 0, -2147483648, 0, -9223372036854775808, 0),
+  ('minus_one', -1, 1, -1, 1, -1, 1, -1, 1),
+  ('zero', 0, 0, 0, 0, 0, 0, 0, 0),
+  ('one', 1, 1, 1, 1, 1, 1, 1, 1),
+  ('eleven', 11, 11, 11, 11, 11, 11, 11, 11),
+  ('max', 127, 255, 32767, 65535, 2147483647, 4294967295, 9223372036854775807, 18446744073709551615);
+
+# Verify that the Arrow types of the columns are as expected. This is important because the IN LIST specializations are based on the column types.
+query TTTTTTTT
+SELECT
+  arrow_typeof(i8),
+  arrow_typeof(u8),
+  arrow_typeof(i16),
+  arrow_typeof(u16),
+  arrow_typeof(i32),
+  arrow_typeof(u32),
+  arrow_typeof(i64),
+  arrow_typeof(u64)
+FROM in_list_ints
+LIMIT 1
+----
+Int8 UInt8 Int16 UInt16 Int32 UInt32 Int64 UInt64
+
+# Verify the data is as expected.
+query TIIIIIIII
+SELECT label, i8, u8, i16, u16, i32, u32, i64, u64
+FROM in_list_ints
+ORDER BY label
+----
+eleven 11 11 11 11 11 11 11 11
+max 127 255 32767 65535 2147483647 4294967295 9223372036854775807 18446744073709551615
+min -128 0 -32768 0 -2147483648 0 -9223372036854775808 0
+minus_one -1 1 -1 1 -1 1 -1 1
+one 1 1 1 1 1 1 1 1
+zero 0 0 0 0 0 0 0 0
+
+# Empty IN lists are rejected by the SQL parser.
+statement error .*Expected: an expression, found: \).*
+SELECT 1 IN ();
+
+query BBBBBBBB
+SELECT
+  i8 IN (NULL),
+  u8 IN (NULL),
+  i16 IN (NULL),
+  u16 IN (NULL),
+  i32 IN (NULL),
+  u32 IN (NULL),
+  i64 IN (NULL),
+  u64 IN (NULL)
+FROM in_list_ints
+ORDER BY label
+----
+NULL NULL NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL
+
+query BBBBBBBB
+SELECT
+  i8 IN (-128),
+  u8 IN (0),
+  i16 IN (-32768),
+  u16 IN (0),
+  i32 IN (-2147483648),
+  u32 IN (0),
+  i64 IN (-9223372036854775808),
+  u64 IN (0)
+FROM in_list_ints
+ORDER BY label
+----
+false false false false false false false false
+false false false false false false false false
+true true true true true true true true
+false false false false false false false false
+false false false false false false false false
+false true false true false true false true
+
+query BBBBBBBB
+SELECT
+  i8 IN (127),
+  u8 IN (255),
+  i16 IN (32767),
+  u16 IN (65535),
+  i32 IN (2147483647),
+  u32 IN (4294967295),
+  i64 IN (9223372036854775807),
+  u64 IN (18446744073709551615)
+FROM in_list_ints
+ORDER BY label
+----
+false false false false false false false false
+true true true true true true true true
+false false false false false false false false
+false false false false false false false false
+false false false false false false false false
+false false false false false false false false
+
+query BBBBBBBB
+SELECT
+  i8 IN (11, 12),
+  u8 IN (11, 12),
+  i16 IN (11, 12),
+  u16 IN (11, 12),
+  i32 IN (11, 12),
+  u32 IN (11, 12),
+  i64 IN (11, 12),
+  u64 IN (11, 12)
+FROM in_list_ints
+ORDER BY label
+----
+true true true true true true true true
+false false false false false false false false
+false false false false false false false false
+false false false false false false false false
+false false false false false false false false
+false false false false false false false false
+
+query BBBB
+SELECT
+  i8 IN (12, -13),
+  i16 IN (12, -13),
+  i32 IN (12, -13),
+  i64 IN (12, -13)
+FROM in_list_ints
+ORDER BY label
+----
+false false false false
+false false false false
+false false false false
+false false false false
+false false false false
+false false false false
