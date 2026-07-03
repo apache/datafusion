@@ -50,6 +50,15 @@ pub mod join_hash_map;
 use array_map::ArrayMap;
 use utils::JoinHashMapType;
 
+/// The build-side map of a hash join, indexing build rows by join key.
+///
+/// Under [`NullEquality::NullEqualsNothing`], build rows with a NULL in any
+/// join key column can never match a probe row and are omitted from the map.
+/// [`Map::is_empty`] and [`Map::num_of_distinct_key`] therefore reflect the
+/// *matchable* build rows: the map can be empty even when the build side
+/// contains rows.
+///
+/// [`NullEquality::NullEqualsNothing`]: datafusion_common::NullEquality::NullEqualsNothing
 pub enum Map {
     HashMap(Box<dyn JoinHashMapType>),
     ArrayMap(ArrayMap),

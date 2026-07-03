@@ -16,7 +16,6 @@
 // under the License.
 
 //! DataFusion benchmark runner
-pub mod benchmark_runner;
 pub mod cancellation;
 pub mod clickbench;
 pub mod dict;
@@ -29,6 +28,7 @@ pub mod smj;
 pub mod sort_pushdown;
 pub mod sort_tpch;
 pub mod sql_benchmark;
+pub mod sql_benchmark_runner;
 pub mod tpcds;
 pub mod tpch;
 pub mod util;

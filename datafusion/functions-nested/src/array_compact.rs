@@ -130,14 +130,22 @@ fn compact_list<O: OffsetSizeTrait>(
     field: &Arc<arrow::datatypes::Field>,
 ) -> Result<ArrayRef> {
     let values = list_array.values();
-
-    // Fast path: no nulls in values, return input unchanged
-    if values.null_count() == 0 {
+    // Use logical nulls so element types without a validity buffer
+    // (e.g. NullArray) are still treated as null.
+    let Some(values_nulls) = values.logical_nulls() else {
+        // Fast path: no validity buffer, no nulls to remove
+        return Ok(Arc::new(list_array.clone()));
+    };
+    let values_null_count = values_nulls.null_count();
+    if values_null_count == 0 {
+        // Fast path: validity buffer present but no nulls set
         return Ok(Arc::new(list_array.clone()));
     }
 
+    let list_nulls = list_array.nulls();
+    let list_offsets = list_array.offsets();
     let original_data = values.to_data();
-    let capacity = original_data.len() - values.null_count();
+    let capacity = original_data.len() - values_null_count;
     let mut offsets = Vec::<O>::with_capacity(list_array.len() + 1);
     offsets.push(O::zero());
     let mut mutable = MutableArrayData::with_capacities(
@@ -147,25 +155,25 @@ fn compact_list<O: OffsetSizeTrait>(
     );
 
     for row_index in 0..list_array.len() {
-        if list_array.nulls().is_some_and(|n| n.is_null(row_index)) {
+        if list_nulls.is_some_and(|n| n.is_null(row_index)) {
             offsets.push(offsets[row_index]);
             continue;
         }
 
-        let start = list_array.offsets()[row_index].as_usize();
-        let end = list_array.offsets()[row_index + 1].as_usize();
-        let mut copied = 0usize;
+        let start = list_offsets[row_index].as_usize();
+        let end = list_offsets[row_index + 1].as_usize();
+        let row_null_count = values_nulls.slice(start, end - start).null_count();
+        let kept = (end - start) - row_null_count;
 
         // Batch consecutive non-null elements into single extend() calls
         // to reduce per-element overhead. For [1, 2, NULL, 3, 4] this
         // produces 2 extend calls (0..2, 3..5) instead of 4 individual ones.
         let mut batch_start: Option<usize> = None;
         for i in start..end {
-            if values.is_null(i) {
+            if values_nulls.is_null(i) {
                 // Null breaks the current batch — flush it
                 if let Some(bs) = batch_start {
                     mutable.extend(0, bs, i);
-                    copied += i - bs;
                     batch_start = None;
                 }
             } else if batch_start.is_none() {
@@ -175,10 +183,9 @@ fn compact_list<O: OffsetSizeTrait>(
         // Flush any remaining batch after the loop
         if let Some(bs) = batch_start {
             mutable.extend(0, bs, end);
-            copied += end - bs;
         }
 
-        offsets.push(offsets[row_index] + O::usize_as(copied));
+        offsets.push(offsets[row_index] + O::usize_as(kept));
     }
 
     let new_values = make_array(mutable.freeze());
@@ -186,6 +193,6 @@ fn compact_list<O: OffsetSizeTrait>(
         Arc::clone(field),
         OffsetBuffer::new(offsets.into()),
         new_values,
-        list_array.nulls().cloned(),
+        list_nulls.cloned(),
     )?))
 }

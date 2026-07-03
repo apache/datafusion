@@ -76,6 +76,7 @@ use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
 /// the parent to the child if applicable.
@@ -351,7 +352,9 @@ fn limit_eliminable_exact_num_rows(
     }
 
     if matches!(
-        current.partition_statistics(None)?.num_rows,
+        current
+            .statistics_with_args(&StatisticsArgs::new())?
+            .num_rows,
         Precision::Exact(0)
     ) {
         return Ok(Some(0));
@@ -373,6 +376,14 @@ pub(crate) fn pushdown_limits(
     // While limits exist, continue combining the global_state.
     while new_node.tnr == TreeNodeRecursion::Stop {
         (new_node, global_state) = pushdown_limit_helper(new_node.data, global_state)?;
+    }
+
+    // Once a limit has been materialized above the current node, child
+    // subtrees should not inherit its `skip`. Keep `fetch`, but clear
+    // `skip` before recursing so child-local limits are not merged with
+    // an `OFFSET` that has already been applied.
+    if global_state.satisfied {
+        global_state.skip = 0;
     }
 
     // Apply pushdown limits in children

@@ -56,7 +56,7 @@ logical_plan
 02)--Projection: profit.nation, profit.o_year, sum(profit.amount) AS sum_profit
 03)----Aggregate: groupBy=[[profit.nation, profit.o_year]], aggr=[[sum(profit.amount)]]
 04)------SubqueryAlias: profit
-05)--------Projection: nation.n_name AS nation, date_part(Utf8("YEAR"), orders.o_orderdate) AS o_year, lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount) - partsupp.ps_supplycost * lineitem.l_quantity AS amount
+05)--------Projection: nation.n_name AS nation, date_part(Utf8("YEAR"), orders.o_orderdate) AS o_year, lineitem.l_extendedprice * (Decimal128(1,20,0) - lineitem.l_discount) - partsupp.ps_supplycost * lineitem.l_quantity AS amount
 06)----------Inner Join: supplier.s_nationkey = nation.n_nationkey
 07)------------Projection: lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, partsupp.ps_supplycost, orders.o_orderdate
 08)--------------Inner Join: lineitem.l_orderkey = orders.o_orderkey
@@ -64,16 +64,15 @@ logical_plan
 10)------------------Inner Join: lineitem.l_suppkey = partsupp.ps_suppkey, lineitem.l_partkey = partsupp.ps_partkey
 11)--------------------Projection: lineitem.l_orderkey, lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey
 12)----------------------Inner Join: lineitem.l_suppkey = supplier.s_suppkey
-13)------------------------Projection: lineitem.l_orderkey, lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount
-14)--------------------------Inner Join: part.p_partkey = lineitem.l_partkey
-15)----------------------------Projection: part.p_partkey
-16)------------------------------Filter: part.p_name LIKE Utf8View("%green%")
-17)--------------------------------TableScan: part projection=[p_partkey, p_name], partial_filters=[part.p_name LIKE Utf8View("%green%")]
-18)----------------------------TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey, l_quantity, l_extendedprice, l_discount]
-19)------------------------TableScan: supplier projection=[s_suppkey, s_nationkey]
-20)--------------------TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
-21)----------------TableScan: orders projection=[o_orderkey, o_orderdate]
-22)------------TableScan: nation projection=[n_nationkey, n_name]
+13)------------------------RightSemi Join: part.p_partkey = lineitem.l_partkey
+14)--------------------------Projection: part.p_partkey
+15)----------------------------Filter: part.p_name LIKE Utf8View("%green%")
+16)------------------------------TableScan: part projection=[p_partkey, p_name], partial_filters=[part.p_name LIKE Utf8View("%green%")]
+17)--------------------------TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey, l_quantity, l_extendedprice, l_discount]
+18)------------------------TableScan: supplier projection=[s_suppkey, s_nationkey]
+19)--------------------TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
+20)----------------TableScan: orders projection=[o_orderkey, o_orderdate]
+21)------------TableScan: nation projection=[n_nationkey, n_name]
 physical_plan
 01)SortPreservingMergeExec: [nation@0 ASC NULLS LAST, o_year@1 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[nation@0 ASC NULLS LAST, o_year@1 DESC], preserve_partitioning=[true]
@@ -81,7 +80,7 @@ physical_plan
 04)------AggregateExec: mode=FinalPartitioned, gby=[nation@0 as nation, o_year@1 as o_year], aggr=[sum(profit.amount)]
 05)--------RepartitionExec: partitioning=Hash([nation@0, o_year@1], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[nation@0 as nation, o_year@1 as o_year], aggr=[sum(profit.amount)]
-07)------------ProjectionExec: expr=[n_name@0 as nation, date_part(YEAR, o_orderdate@1) as o_year, l_extendedprice@2 * (Some(1),20,0 - l_discount@3) - ps_supplycost@4 * l_quantity@5 as amount]
+07)------------ProjectionExec: expr=[n_name@0 as nation, date_part(YEAR, o_orderdate@1) as o_year, l_extendedprice@2 * (1 - l_discount@3) - ps_supplycost@4 * l_quantity@5 as amount]
 08)--------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@3, n_nationkey@0)], projection=[n_name@7, o_orderdate@5, l_extendedprice@1, l_discount@2, ps_supplycost@4, l_quantity@0]
 09)----------------RepartitionExec: partitioning=Hash([s_nationkey@3], 4), input_partitions=4
 10)------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_orderkey@0, o_orderkey@0)], projection=[l_quantity@1, l_extendedprice@2, l_discount@3, s_nationkey@4, ps_supplycost@5, o_orderdate@7]
@@ -90,18 +89,17 @@ physical_plan
 13)------------------------RepartitionExec: partitioning=Hash([l_suppkey@2, l_partkey@1], 4), input_partitions=4
 14)--------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_suppkey@2, s_suppkey@0)], projection=[l_orderkey@0, l_partkey@1, l_suppkey@2, l_quantity@3, l_extendedprice@4, l_discount@5, s_nationkey@7]
 15)----------------------------RepartitionExec: partitioning=Hash([l_suppkey@2], 4), input_partitions=4
-16)------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(p_partkey@0, l_partkey@1)], projection=[l_orderkey@1, l_partkey@2, l_suppkey@3, l_quantity@4, l_extendedprice@5, l_discount@6]
+16)------------------------------HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(p_partkey@0, l_partkey@1)]
 17)--------------------------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
 18)----------------------------------FilterExec: p_name@1 LIKE %green%, projection=[p_partkey@0]
-19)------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-20)--------------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl]]}, projection=[p_partkey, p_name], file_type=csv, has_header=false
-21)--------------------------------RepartitionExec: partitioning=Hash([l_partkey@1], 4), input_partitions=4
-22)----------------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_partkey, l_suppkey, l_quantity, l_extendedprice, l_discount], file_type=csv, has_header=false
-23)----------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=1
-24)------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_nationkey], file_type=csv, has_header=false
-25)------------------------RepartitionExec: partitioning=Hash([ps_suppkey@1, ps_partkey@0], 4), input_partitions=4
-26)--------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_partkey, ps_suppkey, ps_supplycost], file_type=csv, has_header=false
-27)--------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
-28)----------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_orderdate], file_type=csv, has_header=false
-29)----------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=1
-30)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], file_type=csv, has_header=false
+19)------------------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:0..597773], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:597773..1195546], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:1195546..1793319], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:1793319..2391090]]}, projection=[p_partkey, p_name], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
+20)--------------------------------RepartitionExec: partitioning=Hash([l_partkey@1], 4), input_partitions=4
+21)----------------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_partkey, l_suppkey, l_quantity, l_extendedprice, l_discount], constraints=[PrimaryKey([0, 3])], file_type=csv, has_header=false
+22)----------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=1
+23)------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_nationkey], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
+24)------------------------RepartitionExec: partitioning=Hash([ps_suppkey@1, ps_partkey@0], 4), input_partitions=4
+25)--------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_partkey, ps_suppkey, ps_supplycost], constraints=[PrimaryKey([0, 1])], file_type=csv, has_header=false
+26)--------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
+27)----------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_orderdate], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
+28)----------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=1
+29)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], constraints=[PrimaryKey([0])], file_type=csv, has_header=false

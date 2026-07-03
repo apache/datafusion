@@ -25,8 +25,11 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::config::CsvOptions;
+use datafusion_common::display::StringifiedPlan;
+use datafusion_common::format::ExplainFormat;
 use datafusion_common::{
-    DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
+    DataFusionError, JoinType, NullEquality, Result, internal_datafusion_err,
+    internal_err, not_impl_err,
 };
 #[cfg(feature = "parquet")]
 use datafusion_datasource::file::FileSource;
@@ -80,7 +83,7 @@ use datafusion_physical_plan::joins::{
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
-use datafusion_physical_plan::metrics::{MetricCategory, MetricType};
+use datafusion_physical_plan::metrics::MetricCategory;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -97,6 +100,8 @@ use prost::bytes::BufMut;
 use self::from_proto::parse_protobuf_partitioning;
 use self::to_proto::serialize_partitioning;
 use crate::common::{byte_to_string, str_to_byte};
+use crate::convert::{FromProto, TryFromProto};
+use crate::convert_required;
 use crate::physical_plan::from_proto::{
     parse_physical_expr_with_converter, parse_physical_sort_expr,
     parse_physical_sort_exprs, parse_physical_window_expr,
@@ -114,7 +119,6 @@ use crate::protobuf::{
     self, ListUnnest as ProtoListUnnest, SortExprNode, SortMergeJoinExecNode,
     proto_error, window_agg_exec_node,
 };
-use crate::{convert_required, into_required};
 
 pub mod from_proto;
 pub mod to_proto;
@@ -270,8 +274,24 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
     }
 }
 
-impl protobuf::PhysicalPlanNode {
-    pub fn try_into_physical_plan_with_converter(
+/// Extension methods on [`protobuf::PhysicalPlanNode`].
+///
+/// The prost-generated `PhysicalPlanNode` struct lives in
+/// `datafusion-proto-models`, which is foreign to this crate, so the orphan
+/// rule forbids inherent `impl` blocks here. Instead, all (de)serialization
+/// helpers are exposed through this trait. Callers can bring it in scope with
+/// `use datafusion_proto::physical_plan::PhysicalPlanNodeExt;`.
+///
+/// Method bodies live in the default trait implementation. To make the trait
+/// usable as if it were inherent (i.e. let bodies access fields on `self`),
+/// implementors provide [`PhysicalPlanNodeExt::node`] returning a reference
+/// back to the concrete `protobuf::PhysicalPlanNode`. Default method bodies
+/// then go through `self.node()` to read fields.
+pub trait PhysicalPlanNodeExt: Sized {
+    /// Returns a reference to the underlying [`protobuf::PhysicalPlanNode`].
+    fn node(&self) -> &protobuf::PhysicalPlanNode;
+
+    fn try_into_physical_plan_with_converter(
         &self,
         ctx: &TaskContext,
         codec: &dyn PhysicalExtensionCodec,
@@ -281,14 +301,15 @@ impl protobuf::PhysicalPlanNode {
         self.try_into_physical_plan_with_context(&decode_ctx, proto_converter)
     }
 
-    pub(crate) fn try_into_physical_plan_with_context(
+    fn try_into_physical_plan_with_context(
         &self,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan = self.physical_plan_type.as_ref().ok_or_else(|| {
+        let plan = self.node().physical_plan_type.as_ref().ok_or_else(|| {
             proto_error(format!(
-                "physical_plan::from_proto() Unsupported physical plan '{self:?}'"
+                "physical_plan::from_proto() Unsupported physical plan '{:?}'",
+                self.node(),
             ))
         })?;
         match plan {
@@ -415,16 +436,13 @@ impl protobuf::PhysicalPlanNode {
         }
     }
 
-    pub fn try_from_physical_plan_with_converter(
+    fn try_from_physical_plan_with_converter(
         plan: Arc<dyn ExecutionPlan>,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self>
-    where
-        Self: Sized,
-    {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let plan_clone = Arc::clone(&plan);
-        let plan = plan.as_ref() as &dyn Any;
+        let plan = plan.as_ref();
 
         if let Some(exec) = plan.downcast_ref::<ExplainExec>() {
             return protobuf::PhysicalPlanNode::try_from_explain_exec(exec, codec);
@@ -695,9 +713,7 @@ impl protobuf::PhysicalPlanNode {
             ),
         }
     }
-}
 
-impl protobuf::PhysicalPlanNode {
     fn try_into_explain_physical_plan(
         &self,
         explain: &protobuf::ExplainExecNode,
@@ -709,7 +725,7 @@ impl protobuf::PhysicalPlanNode {
             explain
                 .stringified_plans
                 .iter()
-                .map(|plan| plan.into())
+                .map(StringifiedPlan::from_proto)
                 .collect(),
             explain.verbose,
         )))
@@ -1482,26 +1498,25 @@ impl protobuf::PhysicalPlanNode {
             protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
             protobuf::PartitionMode::Auto => PartitionMode::Auto,
         };
-        let projection = if !hashjoin.projection.is_empty() {
-            Some(
-                hashjoin
-                    .projection
-                    .iter()
-                    .map(|i| *i as usize)
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            None
+        // Proto3 `repeated` cannot distinguish `None` from `Some(vec![])`. The latter
+        // is reachable via `try_embed_projection` for `SELECT count(1) … JOIN …` and
+        // changes the join's output schema, so the encoder reserves the single-element
+        // sentinel `[u32::MAX]` (never a valid column index) to mean "explicitly empty";
+        // every other state is sent as-is. See `try_from_hash_join_exec`.
+        let projection = match hashjoin.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
         let mut hash_join = HashJoinExec::try_new(
             left,
             right,
             on,
             filter,
-            &join_type.into(),
+            &JoinType::from_proto(join_type),
             projection,
             partition_mode,
-            null_equality.into(),
+            NullEquality::from_proto(null_equality),
             hashjoin.null_aware,
         )?;
 
@@ -1640,8 +1655,8 @@ impl protobuf::PhysicalPlanNode {
             right,
             on,
             filter,
-            &join_type.into(),
-            null_equality.into(),
+            &JoinType::from_proto(join_type),
+            NullEquality::from_proto(null_equality),
             left_sort_exprs,
             right_sort_exprs,
             partition_mode,
@@ -1713,6 +1728,7 @@ impl protobuf::PhysicalPlanNode {
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let node = self.node();
         let input = into_physical_plan(&sort.input, ctx, proto_converter)?;
         let exprs = sort
             .expr
@@ -1720,7 +1736,7 @@ impl protobuf::PhysicalPlanNode {
             .map(|expr| {
                 let expr = expr.expr_type.as_ref().ok_or_else(|| {
                     proto_error(format!(
-                        "physical_plan::from_proto() Unexpected expr {self:?}"
+                        "physical_plan::from_proto() Unexpected expr {node:?}"
                     ))
                 })?;
                 if let ExprType::Sort(sort_expr) = expr {
@@ -1729,7 +1745,7 @@ impl protobuf::PhysicalPlanNode {
                         .as_ref()
                         .ok_or_else(|| {
                             proto_error(format!(
-                                "physical_plan::from_proto() Unexpected sort expr {self:?}"
+                                "physical_plan::from_proto() Unexpected sort expr {node:?}"
                             ))
                         })?
                         .as_ref();
@@ -1746,7 +1762,7 @@ impl protobuf::PhysicalPlanNode {
                     })
                 } else {
                     internal_err!(
-                        "physical_plan::from_proto() {self:?}"
+                        "physical_plan::from_proto() {node:?}"
                     )
                 }
             })
@@ -1786,6 +1802,7 @@ impl protobuf::PhysicalPlanNode {
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let node = self.node();
         let input = into_physical_plan(&sort.input, ctx, proto_converter)?;
         let exprs = sort
             .expr
@@ -1793,7 +1810,7 @@ impl protobuf::PhysicalPlanNode {
             .map(|expr| {
                 let expr = expr.expr_type.as_ref().ok_or_else(|| {
                     proto_error(format!(
-                        "physical_plan::from_proto() Unexpected expr {self:?}"
+                        "physical_plan::from_proto() Unexpected expr {node:?}"
                     ))
                 })?;
                 if let ExprType::Sort(sort_expr) = expr {
@@ -1802,7 +1819,7 @@ impl protobuf::PhysicalPlanNode {
                         .as_ref()
                         .ok_or_else(|| {
                             proto_error(format!(
-                            "physical_plan::from_proto() Unexpected sort expr {self:?}"
+                            "physical_plan::from_proto() Unexpected sort expr {node:?}"
                         ))
                         })?
                         .as_ref();
@@ -1818,7 +1835,7 @@ impl protobuf::PhysicalPlanNode {
                         },
                     })
                 } else {
-                    internal_err!("physical_plan::from_proto() {self:?}")
+                    internal_err!("physical_plan::from_proto() {node:?}")
                 }
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1907,22 +1924,20 @@ impl protobuf::PhysicalPlanNode {
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
-        let projection = if !join.projection.is_empty() {
-            Some(
-                join.projection
-                    .iter()
-                    .map(|i| *i as usize)
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            None
+        // See `try_into_hash_join_physical_plan` for the rationale behind the
+        // `[u32::MAX]` sentinel; `NestedLoopJoinExec` has the same `Option<Vec<usize>>`
+        // projection field and shares the proto3 `repeated` ambiguity.
+        let projection = match join.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
 
         Ok(Arc::new(NestedLoopJoinExec::try_new(
             left,
             right,
             filter,
-            &join_type.into(),
+            &JoinType::from_proto(join_type),
             projection,
         )?))
     }
@@ -1945,14 +1960,30 @@ impl protobuf::PhysicalPlanNode {
         } else {
             None
         };
-        Ok(Arc::new(AnalyzeExec::new(
-            analyze.verbose,
-            analyze.show_statistics,
-            vec![MetricType::Summary, MetricType::Dev],
-            metric_categories,
-            input,
-            Arc::new(convert_required!(analyze.schema)?),
-        )))
+        let pb_format =
+            protobuf::ExplainFormat::try_from(analyze.format).map_err(|_| {
+                DataFusionError::Internal(format!(
+                    "Received an AnalyzeExecNode message with unknown ExplainFormat {}",
+                    analyze.format
+                ))
+            })?;
+        let format = match pb_format {
+            protobuf::ExplainFormat::Indent => ExplainFormat::Indent,
+            protobuf::ExplainFormat::Tree => ExplainFormat::Tree,
+            protobuf::ExplainFormat::Pgjson => ExplainFormat::PostgresJSON,
+            protobuf::ExplainFormat::Graphviz => ExplainFormat::Graphviz,
+        };
+        Ok(Arc::new(
+            AnalyzeExec::builder(
+                analyze.verbose,
+                analyze.show_statistics,
+                input,
+                Arc::new(convert_required!(analyze.schema)?),
+            )
+            .with_metric_categories(metric_categories)
+            .with_format(format)
+            .build(),
+        ))
     }
 
     fn try_into_json_sink_physical_plan(
@@ -1963,11 +1994,11 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input = into_physical_plan(&sink.input, ctx, proto_converter)?;
 
-        let data_sink: JsonSink = sink
-            .sink
-            .as_ref()
-            .ok_or_else(|| proto_error("Missing required field in protobuf"))?
-            .try_into()?;
+        let data_sink = JsonSink::try_from_proto(
+            sink.sink
+                .as_ref()
+                .ok_or_else(|| proto_error("Missing required field in protobuf"))?,
+        )?;
         let sink_schema = input.schema();
         let sort_order = sink
             .sort_order
@@ -2000,11 +2031,11 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input = into_physical_plan(&sink.input, ctx, proto_converter)?;
 
-        let data_sink: CsvSink = sink
-            .sink
-            .as_ref()
-            .ok_or_else(|| proto_error("Missing required field in protobuf"))?
-            .try_into()?;
+        let data_sink = CsvSink::try_from_proto(
+            sink.sink
+                .as_ref()
+                .ok_or_else(|| proto_error("Missing required field in protobuf"))?,
+        )?;
         let sink_schema = input.schema();
         let sort_order = sink
             .sort_order
@@ -2040,11 +2071,11 @@ impl protobuf::PhysicalPlanNode {
         {
             let input = into_physical_plan(&sink.input, ctx, proto_converter)?;
 
-            let data_sink: ParquetSink = sink
-                .sink
-                .as_ref()
-                .ok_or_else(|| proto_error("Missing required field in protobuf"))?
-                .try_into()?;
+            let data_sink = ParquetSink::try_from_proto(
+                sink.sink
+                    .as_ref()
+                    .ok_or_else(|| proto_error("Missing required field in protobuf"))?,
+            )?;
             let sink_schema = input.schema();
             let sort_order = sink
                 .sort_order
@@ -2092,7 +2123,11 @@ impl protobuf::PhysicalPlanNode {
                 .collect(),
             unnest.struct_type_columns.iter().map(|c| *c as _).collect(),
             Arc::new(convert_required!(unnest.schema)?),
-            into_required!(unnest.options)?,
+            unnest
+                .options
+                .as_ref()
+                .map(datafusion_common::UnnestOptions::from_proto)
+                .ok_or_else(|| proto_error("Missing required field in protobuf"))?,
         )?))
     }
 
@@ -2204,9 +2239,9 @@ impl protobuf::PhysicalPlanNode {
             right,
             on,
             filter,
-            join_type.into(),
+            JoinType::from_proto(join_type),
             sort_options,
-            null_equality.into(),
+            NullEquality::from_proto(null_equality),
         )?))
     }
 
@@ -2219,7 +2254,9 @@ impl protobuf::PhysicalPlanNode {
         let args = match &generate_series.args {
             Some(protobuf::generate_series_node::Args::ContainsNull(args)) => {
                 GenSeriesArgs::ContainsNull {
-                    name: Self::generate_series_name_to_str(args.name()),
+                    name: protobuf::PhysicalPlanNode::generate_series_name_to_str(
+                        args.name(),
+                    ),
                 }
             }
             Some(protobuf::generate_series_node::Args::Int64Args(args)) => {
@@ -2228,7 +2265,9 @@ impl protobuf::PhysicalPlanNode {
                     end: args.end,
                     step: args.step,
                     include_end: args.include_end,
-                    name: Self::generate_series_name_to_str(args.name()),
+                    name: protobuf::PhysicalPlanNode::generate_series_name_to_str(
+                        args.name(),
+                    ),
                 }
             }
             Some(protobuf::generate_series_node::Args::TimestampArgs(args)) => {
@@ -2246,7 +2285,9 @@ impl protobuf::PhysicalPlanNode {
                     step,
                     tz: args.tz.as_ref().map(|s| Arc::from(s.as_str())),
                     include_end: args.include_end,
-                    name: Self::generate_series_name_to_str(args.name()),
+                    name: protobuf::PhysicalPlanNode::generate_series_name_to_str(
+                        args.name(),
+                    ),
                 }
             }
             Some(protobuf::generate_series_node::Args::DateArgs(args)) => {
@@ -2263,7 +2304,9 @@ impl protobuf::PhysicalPlanNode {
                     end: args.end,
                     step,
                     include_end: args.include_end,
-                    name: Self::generate_series_name_to_str(args.name()),
+                    name: protobuf::PhysicalPlanNode::generate_series_name_to_str(
+                        args.name(),
+                    ),
                 }
             }
             None => return internal_err!("Missing args in GenerateSeriesNode"),
@@ -2371,7 +2414,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_from_explain_exec(
         exec: &ExplainExec,
         _codec: &dyn PhysicalExtensionCodec,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Explain(
                 protobuf::ExplainExecNode {
@@ -2379,7 +2422,7 @@ impl protobuf::PhysicalPlanNode {
                     stringified_plans: exec
                         .stringified_plans()
                         .iter()
-                        .map(|plan| plan.into())
+                        .map(protobuf::StringifiedPlan::from_proto)
                         .collect(),
                     verbose: exec.verbose(),
                 },
@@ -2391,7 +2434,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &ProjectionExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
@@ -2424,7 +2467,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &AnalyzeExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
@@ -2434,6 +2477,12 @@ impl protobuf::PhysicalPlanNode {
             Some(cats) => (true, cats.iter().map(|c| c.to_string()).collect()),
             None => (false, vec![]),
         };
+        let format = match exec.format() {
+            ExplainFormat::Indent => protobuf::ExplainFormat::Indent,
+            ExplainFormat::Tree => protobuf::ExplainFormat::Tree,
+            ExplainFormat::PostgresJSON => protobuf::ExplainFormat::Pgjson,
+            ExplainFormat::Graphviz => protobuf::ExplainFormat::Graphviz,
+        } as i32;
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Analyze(Box::new(
                 protobuf::AnalyzeExecNode {
@@ -2443,6 +2492,7 @@ impl protobuf::PhysicalPlanNode {
                     schema: Some(exec.schema().as_ref().try_into()?),
                     has_metric_categories,
                     metric_categories,
+                    format,
                 },
             ))),
         })
@@ -2452,7 +2502,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &FilterExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
@@ -2484,7 +2534,7 @@ impl protobuf::PhysicalPlanNode {
         limit: &GlobalLimitExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             limit.input().to_owned(),
             codec,
@@ -2509,7 +2559,7 @@ impl protobuf::PhysicalPlanNode {
         limit: &LocalLimitExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             limit.input().to_owned(),
             codec,
@@ -2529,7 +2579,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &HashJoinExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.left().to_owned(),
             codec,
@@ -2552,8 +2602,8 @@ impl protobuf::PhysicalPlanNode {
                 })
             })
             .collect::<Result<_>>()?;
-        let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
-        let null_equality: protobuf::NullEquality = exec.null_equality().into();
+        let join_type = protobuf::JoinType::from_proto(exec.join_type().to_owned());
+        let null_equality = protobuf::NullEquality::from_proto(exec.null_equality());
         let filter = exec
             .filter()
             .as_ref()
@@ -2605,9 +2655,14 @@ impl protobuf::PhysicalPlanNode {
                     partition_mode: partition_mode.into(),
                     null_equality: null_equality.into(),
                     filter,
-                    projection: exec.projection.as_ref().map_or_else(Vec::new, |v| {
-                        v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
-                    }),
+                    // Send `Some(vec![])` as `[u32::MAX]` (never a valid index) so the
+                    // wire format can distinguish it from `None` (which stays empty).
+                    // See `try_into_hash_join_physical_plan` for the matching decoder.
+                    projection: match exec.projection.as_ref() {
+                        None => Vec::new(),
+                        Some(v) if v.is_empty() => vec![u32::MAX],
+                        Some(v) => v.iter().map(|x| *x as u32).collect(),
+                    },
                     null_aware: exec.null_aware,
                     dynamic_filter,
                 },
@@ -2619,7 +2674,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &SymmetricHashJoinExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.left().to_owned(),
             codec,
@@ -2642,8 +2697,8 @@ impl protobuf::PhysicalPlanNode {
                 })
             })
             .collect::<Result<_>>()?;
-        let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
-        let null_equality: protobuf::NullEquality = exec.null_equality().into();
+        let join_type = protobuf::JoinType::from_proto(exec.join_type().to_owned());
+        let null_equality = protobuf::NullEquality::from_proto(exec.null_equality());
         let filter = exec
             .filter()
             .as_ref()
@@ -2740,7 +2795,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &SortMergeJoinExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.left().to_owned(),
             codec,
@@ -2763,8 +2818,8 @@ impl protobuf::PhysicalPlanNode {
                 })
             })
             .collect::<Result<_>>()?;
-        let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
-        let null_equality: protobuf::NullEquality = exec.null_equality().into();
+        let join_type = protobuf::JoinType::from_proto(exec.join_type().to_owned());
+        let null_equality = protobuf::NullEquality::from_proto(exec.null_equality());
         let filter = exec
             .filter()
             .as_ref()
@@ -2827,7 +2882,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &CrossJoinExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.left().to_owned(),
             codec,
@@ -2852,7 +2907,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &AggregateExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let groups: Vec<bool> = exec
             .group_expr()
             .groups()
@@ -2955,7 +3010,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_from_empty_exec(
         empty: &EmptyExec,
         _codec: &dyn PhysicalExtensionCodec,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let schema = empty.schema().as_ref().try_into()?;
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Empty(protobuf::EmptyExecNode {
@@ -2967,7 +3022,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_from_placeholder_row_exec(
         empty: &PlaceholderRowExec,
         _codec: &dyn PhysicalExtensionCodec,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let schema = empty.schema().as_ref().try_into()?;
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::PlaceholderRow(
@@ -2983,7 +3038,7 @@ impl protobuf::PhysicalPlanNode {
         coalesce_batches: &CoalesceBatchesExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             coalesce_batches.input().to_owned(),
             codec,
@@ -3004,7 +3059,7 @@ impl protobuf::PhysicalPlanNode {
         data_source_exec: &DataSourceExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Option<Self>> {
+    ) -> Result<Option<protobuf::PhysicalPlanNode>> {
         let data_source = data_source_exec.data_source();
         if let Some(maybe_csv) = data_source.downcast_ref::<FileScanConfig>() {
             let source = maybe_csv.file_source();
@@ -3176,7 +3231,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &CoalescePartitionsExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
@@ -3196,7 +3251,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &RepartitionExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
@@ -3221,7 +3276,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &SortExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = proto_converter.execution_plan_to_proto(exec.input(), codec)?;
         let expr = exec
             .expr()
@@ -3268,7 +3323,7 @@ impl protobuf::PhysicalPlanNode {
         union: &UnionExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
         for input in union.inputs() {
             inputs.push(
@@ -3290,7 +3345,7 @@ impl protobuf::PhysicalPlanNode {
         interleave: &InterleaveExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
         for input in interleave.inputs() {
             inputs.push(
@@ -3312,7 +3367,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &SortPreservingMergeExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
@@ -3350,7 +3405,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &NestedLoopJoinExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.left().to_owned(),
             codec,
@@ -3362,7 +3417,7 @@ impl protobuf::PhysicalPlanNode {
             proto_converter,
         )?;
 
-        let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+        let join_type = protobuf::JoinType::from_proto(exec.join_type().to_owned());
         let filter = exec
             .filter()
             .as_ref()
@@ -3396,9 +3451,13 @@ impl protobuf::PhysicalPlanNode {
                     right: Some(Box::new(right)),
                     join_type: join_type.into(),
                     filter,
-                    projection: exec.projection().as_ref().map_or_else(Vec::new, |v| {
-                        v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
-                    }),
+                    // `[u32::MAX]` sentinel distinguishes `Some(vec![])` from `None`;
+                    // see `try_from_hash_join_exec`.
+                    projection: match exec.projection().as_ref() {
+                        None => Vec::new(),
+                        Some(v) if v.is_empty() => vec![u32::MAX],
+                        Some(v) => v.iter().map(|x| *x as u32).collect(),
+                    },
                 },
             ))),
         })
@@ -3408,7 +3467,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &WindowAggExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
@@ -3443,7 +3502,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &BoundedWindowAggExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
@@ -3494,7 +3553,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &DataSinkExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Option<Self>> {
+    ) -> Result<Option<protobuf::PhysicalPlanNode>> {
         let input: protobuf::PhysicalPlanNode =
             protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
                 exec.input().to_owned(),
@@ -3530,7 +3589,7 @@ impl protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::JsonSink(Box::new(
                     protobuf::JsonSinkExecNode {
                         input: Some(Box::new(input)),
-                        sink: Some(sink.try_into()?),
+                        sink: Some(protobuf::JsonSink::try_from_proto(sink)?),
                         sink_schema: Some(exec.schema().as_ref().try_into()?),
                         sort_order,
                     },
@@ -3543,7 +3602,7 @@ impl protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::CsvSink(Box::new(
                     protobuf::CsvSinkExecNode {
                         input: Some(Box::new(input)),
-                        sink: Some(sink.try_into()?),
+                        sink: Some(protobuf::CsvSink::try_from_proto(sink)?),
                         sink_schema: Some(exec.schema().as_ref().try_into()?),
                         sort_order,
                     },
@@ -3557,7 +3616,7 @@ impl protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(
                     protobuf::ParquetSinkExecNode {
                         input: Some(Box::new(input)),
-                        sink: Some(sink.try_into()?),
+                        sink: Some(protobuf::ParquetSink::try_from_proto(sink)?),
                         sink_schema: Some(exec.schema().as_ref().try_into()?),
                         sort_order,
                     },
@@ -3573,7 +3632,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &UnnestExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
@@ -3598,7 +3657,7 @@ impl protobuf::PhysicalPlanNode {
                         .iter()
                         .map(|c| *c as _)
                         .collect(),
-                    options: Some(exec.options().into()),
+                    options: Some(protobuf::UnnestOptions::from_proto(exec.options())),
                 },
             ))),
         })
@@ -3608,7 +3667,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &CooperativeExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
@@ -3632,7 +3691,9 @@ impl protobuf::PhysicalPlanNode {
         }
     }
 
-    fn try_from_lazy_memory_exec(exec: &LazyMemoryExec) -> Result<Option<Self>> {
+    fn try_from_lazy_memory_exec(
+        exec: &LazyMemoryExec,
+    ) -> Result<Option<protobuf::PhysicalPlanNode>> {
         let generators = exec.generators();
 
         // ensure we only have one generator
@@ -3650,7 +3711,9 @@ impl protobuf::PhysicalPlanNode {
                 target_batch_size: 8192, // Default batch size
                 args: Some(protobuf::generate_series_node::Args::ContainsNull(
                     protobuf::GenerateSeriesArgsContainsNull {
-                        name: Self::str_to_generate_series_name(empty_gen.name())? as i32,
+                        name: protobuf::PhysicalPlanNode::str_to_generate_series_name(
+                            empty_gen.name(),
+                        )? as i32,
                     },
                 )),
             };
@@ -3674,7 +3737,9 @@ impl protobuf::PhysicalPlanNode {
                         end: *int_64.end(),
                         step: *int_64.step(),
                         include_end: int_64.include_end(),
-                        name: Self::str_to_generate_series_name(int_64.name())? as i32,
+                        name: protobuf::PhysicalPlanNode::str_to_generate_series_name(
+                            int_64.name(),
+                        )? as i32,
                     },
                 )),
             };
@@ -3701,7 +3766,9 @@ impl protobuf::PhysicalPlanNode {
                 nanos: step_value.nanoseconds,
             });
             let include_end = timestamp_args.include_end();
-            let name = Self::str_to_generate_series_name(timestamp_args.name())? as i32;
+            let name = protobuf::PhysicalPlanNode::str_to_generate_series_name(
+                timestamp_args.name(),
+            )? as i32;
 
             let args = match timestamp_args.current().tz_str() {
                 Some(tz) => protobuf::generate_series_node::Args::TimestampArgs(
@@ -3743,7 +3810,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &AsyncFuncExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             Arc::clone(exec.input()),
             codec,
@@ -3774,7 +3841,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &BufferExec,
         extension_codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             Arc::clone(exec.input()),
             extension_codec,
@@ -3795,7 +3862,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &ScalarSubqueryExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Self> {
+    ) -> Result<protobuf::PhysicalPlanNode> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             Arc::clone(exec.input()),
             codec,
@@ -3821,6 +3888,12 @@ impl protobuf::PhysicalPlanNode {
                 },
             ))),
         })
+    }
+}
+
+impl PhysicalPlanNodeExt for protobuf::PhysicalPlanNode {
+    fn node(&self) -> &protobuf::PhysicalPlanNode {
+        self
     }
 }
 

@@ -28,7 +28,6 @@ use crate::source::{DataSource, DataSourceExec};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, ScalarValue, assert_or_internal_err, plan_err, project_schema,
 };
@@ -256,20 +255,6 @@ impl DataSource for MemorySourceConfig {
                 })
             })
             .transpose()
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in sort_information
-        let mut tnr = TreeNodeRecursion::Continue;
-        for ordering in &self.sort_information {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
     }
 }
 
@@ -868,6 +853,7 @@ mod tests {
     use datafusion_common::stats::{ColumnStatistics, Precision};
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::expressions::lit;
+    use datafusion_physical_plan::statistics::StatisticsArgs;
 
     use datafusion_physical_plan::ExecutionPlan;
 
@@ -1000,7 +986,7 @@ mod tests {
         let values = MemorySourceConfig::try_new_as_values(schema, data)?;
 
         assert_eq!(
-            *values.partition_statistics(None)?,
+            *values.statistics_with_args(&StatisticsArgs::new())?,
             Statistics {
                 num_rows: Precision::Exact(rows),
                 total_byte_size: Precision::Exact(8), // not important

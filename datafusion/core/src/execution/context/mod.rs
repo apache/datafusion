@@ -17,6 +17,7 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
+use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
@@ -64,6 +65,7 @@ use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::{
     DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
+use datafusion_catalog_listing::SchemaSource;
 use datafusion_common::config::{ConfigField, ConfigOptions};
 use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
@@ -75,12 +77,12 @@ use datafusion_common::{
 };
 pub use datafusion_execution::TaskContext;
 use datafusion_execution::cache::cache_manager::{
-    DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_TTL,
-    DEFAULT_METADATA_CACHE_LIMIT,
+    DEFAULT_FILE_STATISTICS_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
+    DEFAULT_LIST_FILES_CACHE_TTL, DEFAULT_METADATA_CACHE_LIMIT,
 };
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{
-    DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
+    DEFAULT_MAX_SPILL_MERGE_FAN_IN, DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::HigherOrderUDF;
@@ -102,7 +104,6 @@ use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_execution::cache::file_statistics_cache::DEFAULT_FILE_STATISTICS_MEMORY_LIMIT;
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
@@ -713,7 +714,7 @@ impl SessionContext {
                         Box::pin(self.drop_schema(cmd)).await
                     }
                     DdlStatement::CreateFunction(cmd) => {
-                        Box::pin(self.create_function(cmd)).await
+                        Box::pin(self.create_function(*cmd)).await
                     }
                     DdlStatement::DropFunction(cmd) => {
                         Box::pin(self.drop_function(cmd)).await
@@ -1207,6 +1208,14 @@ impl SessionContext {
                 let limit = Self::parse_capacity_limit(variable, value)?;
                 builder.with_file_statistics_cache_limit(limit)
             }
+            "max_spill_merge_fan_in" => {
+                let fan_in = value.parse::<usize>().map_err(|e| {
+                    DataFusionError::Plan(format!(
+                        "Failed to parse non-negative integer from '{variable}', value '{value}': {e}"
+                    ))
+                })?;
+                builder.with_max_spill_merge_fan_in(fan_in)
+            }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
             // Remember to update `reset_runtime_variable()` when adding new options
         };
@@ -1250,6 +1259,10 @@ impl SessionContext {
                 builder = builder.with_file_statistics_cache_limit(
                     DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
                 );
+            }
+            "max_spill_merge_fan_in" => {
+                builder =
+                    builder.with_max_spill_merge_fan_in(DEFAULT_MAX_SPILL_MERGE_FAN_IN);
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };
@@ -1448,7 +1461,7 @@ impl SessionContext {
             && table_provider.table_type() == table_type
         {
             schema.deregister_table(&table)?;
-            self.invalidate_caches(&Some(table_ref.clone()), table_type)?;
+            self.invalidate_caches(&table_ref, table_type)?;
             return Ok(true);
         }
         Ok(false)
@@ -1456,7 +1469,7 @@ impl SessionContext {
 
     fn invalidate_caches(
         &self,
-        table_ref: &Option<TableReference>,
+        table_ref: &TableReference,
         table_type: TableType,
     ) -> Result<()> {
         if table_type == TableType::Base {
@@ -1626,7 +1639,7 @@ impl SessionContext {
     /// - `SELECT "my_HIGHER_ORDER_FUNC"(x)` will look for a function named `"my_HIGHER_ORDER_FUNC"`
     ///
     /// Any functions registered with the function name or its aliases will be overwritten with this new function
-    pub fn register_higher_order_function(&self, f: Arc<dyn HigherOrderUDF>) {
+    pub fn register_higher_order_function(&self, f: Arc<HigherOrderUDF>) {
         let mut state = self.state.write();
         state.register_higher_order_function(f).ok();
     }
@@ -1725,12 +1738,20 @@ impl SessionContext {
             }
         }
 
-        let resolved_schema = options
-            .get_resolved_schema(&session_config, self.state(), table_paths[0].clone())
-            .await?;
+        let schema_table_path = table_paths[0].clone();
         let config = ListingTableConfig::new_with_multi_paths(table_paths)
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
+            .with_listing_options(listing_options);
+        let config = match options.schema_source() {
+            SchemaSource::Inferred | SchemaSource::Unset => {
+                config.infer_schema(&self.state()).await?
+            }
+            SchemaSource::Specified => {
+                let resolved_schema = options
+                    .get_resolved_schema(&session_config, self.state(), schema_table_path)
+                    .await?;
+                config.with_schema(resolved_schema)
+            }
+        };
         let provider = ListingTable::try_new(config)?
             .with_cache(self.runtime_env().cache_manager.get_file_statistic_cache());
         self.read_table(Arc::new(provider))
@@ -1942,7 +1963,7 @@ impl SessionContext {
             .deregister_table(&table);
 
         if let Ok(Some(ref table_provider)) = result {
-            self.invalidate_caches(&Some(table_ref), table_provider.table_type())?;
+            self.invalidate_caches(&table_ref, table_provider.table_type())?;
         }
 
         result
@@ -2063,7 +2084,7 @@ impl FunctionRegistry for SessionContext {
         self.state.read().udf(name)
     }
 
-    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+    fn higher_order_function(&self, name: &str) -> Result<Arc<HigherOrderUDF>> {
         self.state.read().higher_order_function(name)
     }
 
@@ -2081,8 +2102,8 @@ impl FunctionRegistry for SessionContext {
 
     fn register_higher_order_function(
         &mut self,
-        function: Arc<dyn HigherOrderUDF>,
-    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        function: Arc<HigherOrderUDF>,
+    ) -> Result<Option<Arc<HigherOrderUDF>>> {
         self.state.write().register_higher_order_function(function)
     }
 
@@ -2155,7 +2176,7 @@ impl From<SessionContext> for SessionStateBuilder {
 
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
-pub trait QueryPlanner: Debug {
+pub trait QueryPlanner: Any + Debug {
     /// Given a [`LogicalPlan`], create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
@@ -2221,7 +2242,7 @@ pub enum RegisterFunction {
     /// Window user defined function
     Window(Arc<WindowUDF>),
     /// Higher-order user defined function
-    HigherOrder(Arc<dyn HigherOrderUDF>),
+    HigherOrder(Arc<HigherOrderUDF>),
     /// Table user defined function
     Table(String, Arc<dyn TableFunctionImpl>),
 }

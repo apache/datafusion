@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`HigherOrderUDF`] definitions for array_filter function.
+//! [`datafusion_expr::HigherOrderUDF`] definitions for array_filter function.
 
 use arrow::{
     array::{
         Array, ArrayRef, AsArray, BooleanArray, LargeListArray, ListArray,
-        OffsetBufferBuilder, OffsetSizeTrait, new_empty_array,
+        OffsetSizeTrait, new_empty_array,
     },
     buffer::{OffsetBuffer, ScalarBuffer},
     compute::{filter as arrow_filter, take_arrays},
@@ -32,7 +32,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
-    HigherOrderSignature, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda,
+    HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda,
     Volatility,
 };
 use datafusion_macros::user_doc;
@@ -96,7 +96,7 @@ impl ArrayFilter {
     }
 }
 
-impl HigherOrderUDF for ArrayFilter {
+impl HigherOrderUDFImpl for ArrayFilter {
     fn name(&self) -> &str {
         "array_filter"
     }
@@ -252,13 +252,11 @@ fn filter_list_values<O: OffsetSizeTrait>(
     offsets: &OffsetBuffer<O>,
 ) -> Result<(ArrayRef, OffsetBuffer<O>)> {
     let num_sublists = offsets.len().saturating_sub(1);
-    let mut builder = OffsetBufferBuilder::<O>::new(num_sublists);
-
     let has_nulls = predicate.null_count() > 0;
-    for i in 0..num_sublists {
+    let new_offsets = OffsetBuffer::<O>::from_lengths((0..num_sublists).map(|i| {
         let start = offsets[i].as_usize();
         let end = offsets[i + 1].as_usize();
-        let count = if has_nulls {
+        if has_nulls {
             (start..end)
                 .filter(|&j| predicate.is_valid(j) && predicate.value(j))
                 .count()
@@ -267,11 +265,8 @@ fn filter_list_values<O: OffsetSizeTrait>(
                 .values()
                 .slice(start, end - start)
                 .count_set_bits()
-        };
-        builder.push_length(count);
-    }
-
-    let new_offsets = builder.finish();
+        }
+    }));
 
     if new_offsets.last() == offsets.last() {
         return Ok((Arc::clone(values), offsets.clone()));

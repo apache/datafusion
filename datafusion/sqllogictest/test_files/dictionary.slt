@@ -80,12 +80,12 @@ SELECT * FROM m1;
 query TTT
 DESCRIBE m1;
 ----
-tag_id Dictionary(Int32, Utf8) YES
-f1 Float64 YES
-f2 Utf8 YES
-f3 Utf8 YES
-f4 Float64 YES
-time Timestamp(ns) YES
+tag_id Dictionary(Int32, Utf8) NO
+f1 Float64 NO
+f2 Utf8 NO
+f3 Utf8 NO
+f4 Float64 NO
+time Timestamp(ns) NO
 
 # in list with dictionary input
 query BBB
@@ -154,10 +154,10 @@ passive 1000 1000 2023-12-04T01:30:00
 query TTT
 DESCRIBE m2;
 ----
-type Dictionary(Int32, Utf8) YES
-tag_id Dictionary(Int32, Utf8) YES
-f5 Float64 YES
-time Timestamp(ns) YES
+type Dictionary(Int32, Utf8) NO
+tag_id Dictionary(Int32, Utf8) NO
+f5 Float64 NO
+time Timestamp(ns) NO
 
 query I
 select count(*) from m1 where tag_id = '1000' and time < '2024-01-03T14:46:35+01:00';
@@ -492,10 +492,10 @@ LOCATION 'test_files/scratch/dictionary/dict_hash_10.parquet';
 query TTT
 DESCRIBE dict_hash_10;
 ----
-id Int64 YES
-payload_hash Dictionary(Int32, Utf8) YES
-metric Float64 YES
-ts Timestamp(ns) YES
+id Int64 NO
+payload_hash Dictionary(Int32, Utf8) NO
+metric Float64 NO
+ts Timestamp(ns) NO
 
 query II
 SELECT COUNT(*), COUNT(DISTINCT payload_hash)

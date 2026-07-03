@@ -322,6 +322,31 @@ physical_plan
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], file_type=csv, has_header=true
 
+# Regression test: ARRAY_AGG with conflicting ASC/DESC ORDER BY in the same query.
+# get_finer_aggregate_exprs_requirement picks ASC as the common requirement and
+# reverses the DESC aggregate (is_reversed=true, ordering_req=[ASC]).
+# The optimizer then sets is_input_pre_ordered=true on both. Without the fix,
+# state() emits values reversed to DESC but ordering keys still in ASC order,
+# causing merge_batch to pair each value with the wrong key (silent wrong results).
+query TT
+explain select array_agg(c1 order by c1), array_agg(c1 order by c1 desc) from agg_order;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[array_agg(agg_order.c1) ORDER BY [agg_order.c1 ASC NULLS LAST], array_agg(agg_order.c1) ORDER BY [agg_order.c1 DESC NULLS FIRST]]]
+02)--TableScan: agg_order projection=[c1]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[array_agg(agg_order.c1) ORDER BY [agg_order.c1 ASC NULLS LAST], array_agg(agg_order.c1) ORDER BY [agg_order.c1 DESC NULLS FIRST]]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[array_agg(agg_order.c1) ORDER BY [agg_order.c1 ASC NULLS LAST], array_agg(agg_order.c1) ORDER BY [agg_order.c1 DESC NULLS FIRST]]
+04)------SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1], file_type=csv, has_header=true
+
+query ??
+select array_agg(c1 order by c1), array_agg(c1 order by c1 desc) from agg_order;
+----
+[1, 2, 3, 4, 5, 6, 7, 8, 9, 10] [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+
 # test array_agg_order with list data type
 statement ok
 CREATE TABLE array_agg_order_list_table AS VALUES
@@ -1835,6 +1860,181 @@ query IIIII
 SELECT approx_distinct(c14) AS a, approx_distinct(c15) AS b, approx_distinct(arrow_cast(c15, 'Date64')), approx_distinct(arrow_cast(c15, 'Time32(Second)')) as c, approx_distinct(arrow_cast(c15, 'Time64(Nanosecond)')) AS d FROM aggregate_test_100
 ----
 18 60 60 60 60
+
+# approx_distinct over Boolean: exact count via flag-pair accumulator (0..=2).
+statement ok
+CREATE TABLE approx_distinct_bool_test (g INT, b BOOLEAN) AS VALUES
+  (1, true), (1, true), (1, NULL),
+  (2, false), (2, false),
+  (3, true), (3, false), (3, NULL), (3, true),
+  (4, NULL), (4, NULL);
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 1;
+----
+1
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 2;
+----
+1
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 3;
+----
+2
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 4;
+----
+0
+
+query II
+SELECT g, approx_distinct(b) FROM approx_distinct_bool_test GROUP BY g ORDER BY g;
+----
+1 1
+2 1
+3 2
+4 0
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test;
+----
+2
+
+statement ok
+DROP TABLE approx_distinct_bool_test;
+
+# Grouped approx_distinct uses a dedicated GroupsAccumulator (adaptive
+# sparse -> dense HyperLogLog per group). Results are deterministic (the HLL uses
+# a fixed hash seed); for these specific small inputs the 16384-register HLL
+# estimates the true distinct count exactly. The key invariant is that the
+# grouped path agrees with the scalar (no GROUP BY) path on the same data, which
+# is checked explicitly below.
+statement ok
+CREATE TABLE approx_distinct_group_test (g INT, s VARCHAR, i INT) AS VALUES
+  (1, 'a', 10), (1, 'a', 10), (1, 'b', 20),
+  (2, 'c', 30), (2, 'd', 30), (2, 'c', 40),
+  (3, NULL, NULL), (3, NULL, NULL),
+  (4, 'e', 50);
+
+# Strings (Utf8): group 1 -> {a,b}=2, group 2 -> {c,d}=2, group 3 -> all null=0, group 4 -> {e}=1
+query II
+SELECT g, approx_distinct(s) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Utf8View takes the inline-view hashing path
+query II
+SELECT g, approx_distinct(arrow_cast(s, 'Utf8View')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Integers (Int32): group 1 -> {10,20}=2, group 2 -> {30,40}=2, group 3 -> 0, group 4 -> {50}=1
+query II
+SELECT g, approx_distinct(i) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Invariant: the scalar (no GROUP BY) path must agree with the grouped path on
+# the same data. The grouped result for g = 2 above is 2, and so is the scalar
+# result over only g = 2's rows.
+query I
+SELECT approx_distinct(s) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+query I
+SELECT approx_distinct(i) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+statement ok
+DROP TABLE approx_distinct_group_test;
+
+# Grouped approx_distinct that crosses the sparse -> dense promotion threshold:
+# 2000 distinct values in group 0 and 2000 in group 1. The estimate should be
+# within HyperLogLog's error margin (~0.8%) of the true cardinality.
+statement ok
+CREATE TABLE approx_distinct_dense_test AS
+  SELECT (v % 2) AS g, v AS i FROM generate_series(0, 3999) AS t(v);
+
+query B
+SELECT min(c) > 1900 AND max(c) < 2100 FROM (
+  SELECT g, approx_distinct(i) AS c FROM approx_distinct_dense_test GROUP BY g
+);
+----
+true
+
+statement ok
+DROP TABLE approx_distinct_dense_test;
+
+# This test runs approx_distinct over decimal128 and decimal256 for the scalar and the grouped path.
+statement ok
+CREATE TABLE approx_distinct_decimal_test (g INT, dec128 DECIMAL(20, 2), dec256 DECIMAL(40, 2)) AS VALUES
+  (1, 12345678901234.56,  12345678901234567890123456.78),
+  (1, 98765432109876.54,  98765432109876543210987654.32),
+  (1, 98765432109876.54,  98765432109876543210987654.32),
+  (2, 55555555555555.55,  55555555555555555555555555.55),
+  (2, -0.0,               -0.0),
+  (2, 0.0,                0.0);
+
+# Scalar path
+query II
+SELECT approx_distinct(dec128), approx_distinct(dec256) FROM approx_distinct_decimal_test;
+----
+4 4
+
+# Grouped path
+query III
+SELECT g, approx_distinct(dec128), approx_distinct(dec256)
+FROM approx_distinct_decimal_test GROUP BY g ORDER BY g;
+----
+1 2 2
+2 2 2
+
+statement ok
+DROP TABLE approx_distinct_decimal_test;
+
+
+# This test runs approx_distinct over the intervals YearMonth,
+# DayTime, MonthDayNano for the scalar and the grouped path.
+statement ok
+CREATE TABLE approx_distinct_interval_test (g INT, ym INTERVAL, dt INTERVAL, mdn INTERVAL) AS VALUES
+  (1, INTERVAL '1' MONTH,  INTERVAL '1' DAY,             INTERVAL '1' MONTH),
+  (1, INTERVAL '2' MONTH,  INTERVAL '1 day 5 hours',     INTERVAL '1 day 5 nanoseconds'),
+  (1, INTERVAL '2' MONTH,  INTERVAL '1 day 5 hours',     INTERVAL '1 day 5 nanoseconds'),
+  (2, INTERVAL '3' YEAR,   INTERVAL '2' DAY,             INTERVAL '2' DAY),
+  (2, INTERVAL '0' MONTH,  INTERVAL '0' DAY,             INTERVAL '0' DAY),
+  (2, INTERVAL '0' MONTH,  INTERVAL '0' DAY,             INTERVAL '0' DAY);
+
+# Scalar path
+query III
+SELECT approx_distinct(ym), approx_distinct(dt), approx_distinct(mdn) FROM approx_distinct_interval_test;
+----
+4 4 4
+
+# Grouped path
+query IIII
+SELECT g, approx_distinct(ym), approx_distinct(dt), approx_distinct(mdn)
+FROM approx_distinct_interval_test GROUP BY g ORDER BY g;
+----
+1 2 2 2
+2 2 2 2
+
+statement ok
+DROP TABLE approx_distinct_interval_test;
+
+
 
 ## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
 ## data, asserting the estimated quantiles are ±5% their actual values.
@@ -6197,6 +6397,40 @@ GROUP BY g
 ----
 0 0
 
+# query_with_untyped_null_filter
+query I
+SELECT count(*) FILTER (WHERE NULL)
+----
+0
+
+query I
+SELECT count(1) FILTER (WHERE NULL)
+----
+0
+
+query I
+SELECT sum(1) FILTER (WHERE NULL)
+----
+NULL
+
+query R
+SELECT avg(1) FILTER (WHERE NULL)
+----
+NULL
+
+# window_aggregate_with_untyped_null_filter
+query I
+SELECT count(*) FILTER (WHERE NULL) OVER ()
+FROM (VALUES (1)) AS t(x)
+----
+0
+
+query I
+SELECT sum(1) FILTER (WHERE NULL) OVER ()
+FROM (VALUES (1)) AS t(x)
+----
+NULL
+
 # query_with_and_without_filter
 query III rowsort
 SELECT
@@ -6374,6 +6608,99 @@ c NULL 2
 
 statement ok
 drop table dn;
+
+# sum_interval
+# Component-wise sum across all three Interval variants (matches PostgreSQL).
+
+# Basic Interval(MonthDayNano): the issue's repro.
+# (0 mons, 0 days, 1s) + (12 mons, 0, 0) + (1 mon, 0, 0) = (13 mons, 0, 1s)
+query T?
+SELECT arrow_typeof(sum(v)), sum(v) FROM (VALUES
+  (interval '1 second'),
+  (interval '1 year'),
+  (interval '1 month')) t(v);
+----
+Interval(MonthDayNano) 13 mons 1.000000000 secs
+
+# NULLs are skipped.
+query ?
+SELECT sum(v) FROM (VALUES
+  (interval '1 day'),
+  (NULL),
+  (interval '2 days')) t(v);
+----
+3 days
+
+# Empty input → NULL.
+query ?
+SELECT sum(v) FROM (VALUES (interval '1 day')) t(v) WHERE 1 = 0;
+----
+NULL
+
+# GROUP BY exercises the PrimitiveGroupsAccumulator path.
+query I? rowsort
+SELECT k, sum(v) FROM (VALUES
+  (1, interval '1 day'),
+  (1, interval '2 days'),
+  (2, interval '1 month')) t(k, v)
+GROUP BY k;
+----
+1 3 days
+2 1 mons
+
+# Interval(YearMonth) via cast.
+query T?
+SELECT arrow_typeof(sum(v)), sum(v) FROM (VALUES
+  (arrow_cast('1 year', 'Interval(YearMonth)')),
+  (arrow_cast('6 months', 'Interval(YearMonth)'))) t(v);
+----
+Interval(YearMonth) 1 years 6 mons
+
+# Interval(DayTime) via cast.
+query T?
+SELECT arrow_typeof(sum(v)), sum(v) FROM (VALUES
+  (arrow_cast('1 day', 'Interval(DayTime)')),
+  (arrow_cast('1 day', 'Interval(DayTime)'))) t(v);
+----
+Interval(DayTime) 2 days
+
+# Sliding window sum on intervals.
+query ??
+SELECT v, sum(v) OVER (ORDER BY v ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (VALUES
+  (interval '1 day'),
+  (interval '2 days'),
+  (interval '3 days')) t(v);
+----
+1 days 1 days
+2 days 3 days
+3 days 5 days
+
+# DISTINCT sum drops duplicates (DistinctSumAccumulator path).
+query ?
+SELECT sum(DISTINCT v) FROM (VALUES
+  (interval '1 day'),
+  (interval '1 day'),
+  (interval '2 days')) t(v);
+----
+3 days
+
+# SUM(col + interval_lit) — exercises the simplify_expr_op_literal path.
+query ?
+SELECT sum(v + interval '1 day') FROM (VALUES
+  (interval '1 day'),
+  (interval '2 days'),
+  (interval '3 days')) t(v);
+----
+9 days
+
+# Negative intervals: component-wise wrapping_add over signed i32/i64.
+query ?
+SELECT sum(v) FROM (VALUES
+  (interval '1 day'),
+  (interval '-3 days')) t(v);
+----
+-2 days
 
 # Prepare the table with dictionary values for testing
 statement ok
@@ -8852,7 +9179,7 @@ ORDER BY g;
 
 # Config reset
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

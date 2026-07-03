@@ -20,7 +20,8 @@
 //! [`DecoderProjection`] owns the two halves of "project a decoded parquet
 //! batch onto the scan's output schema":
 //!
-//! * the [`ProjectionMask`] installed on every parquet decoder run, and
+//! * the [`ProjectionMask`] installed on the parquet decoder (and on any
+//!   rebuild performed via `into_builder` at a row-group boundary), and
 //! * the per-batch transform ([`DecoderProjection::map`]) that applies the
 //!   projector and, when needed, rebuilds the batch with the user's
 //!   `output_schema` to recover metadata / nullability the file schema does
@@ -38,19 +39,22 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr_adapter::replace_columns_with_literals;
 
 use parquet::arrow::ProjectionMask;
 use parquet::schema::types::SchemaDescriptor;
 
+use crate::opener::{VirtualColumnsState, append_fields};
 use crate::row_filter::build_projection_read_plan;
 
-/// Per-file decoder projection: the [`ProjectionMask`] installed on every
-/// parquet decoder run, plus the per-batch transform that maps the decoder's
+/// Per-file decoder projection: the [`ProjectionMask`] installed on the
+/// parquet decoder, plus the per-batch transform that maps the decoder's
 /// output onto the scan's `output_schema`.
 ///
 /// Built once per file by the opener via [`Self::try_new`]; the
-/// push-decoder stream installs [`Self::projection_mask`] on each decoder
-/// and calls [`Self::map`] on every decoded batch.
+/// push-decoder stream installs [`Self::projection_mask`] on the decoder
+/// (and on any rebuild performed via `into_builder` at a row-group
+/// boundary) and calls [`Self::map`] on every decoded batch.
 pub(crate) struct DecoderProjection {
     projection_mask: ProjectionMask,
     projector: Projector,
@@ -68,19 +72,46 @@ impl DecoderProjection {
     /// adapted by the per-file expr adapter); `parquet_schema` is the
     /// corresponding parquet [`SchemaDescriptor`]. `output_schema` is what
     /// consumers of the scan stream expect.
+    ///
+    /// `virtual_state`, when present, describes virtual columns the reader
+    /// will append to each decoded batch (e.g. parquet `row_number`). Virtual
+    /// columns are stripped from the projection fed into
+    /// `build_projection_read_plan` (which only understands file columns) and
+    /// appended to the stream schema so the projector can resolve them.
     pub(crate) fn try_new(
         projection: &ProjectionExprs,
         physical_file_schema: &SchemaRef,
         parquet_schema: &SchemaDescriptor,
         output_schema: &SchemaRef,
+        virtual_state: Option<&VirtualColumnsState>,
     ) -> Result<Self> {
+        // Virtual columns are produced by the reader separately from the
+        // projection mask, so strip them from the expressions we feed into
+        // `build_projection_read_plan`. We substitute each virtual column
+        // reference with a null literal; that leaves the remaining Column
+        // refs (into `physical_file_schema`) intact for
+        // `ProjectionMask::roots`, which only understands file columns.
+        let projection_for_read_plan = match virtual_state {
+            None => projection.clone(),
+            Some(state) => projection.clone().try_map_exprs(|expr| {
+                replace_columns_with_literals(expr, state.null_replacements())
+            })?,
+        };
         let read_plan = build_projection_read_plan(
-            projection.expr_iter(),
+            projection_for_read_plan.expr_iter(),
             physical_file_schema,
             parquet_schema,
         );
 
-        let stream_schema = read_plan.projected_schema;
+        // The reader produces projected file columns followed by any virtual
+        // columns (`ArrowReaderOptions::with_virtual_columns` appends them to
+        // each decoded batch).
+        let stream_schema = match virtual_state {
+            Some(state) => {
+                append_fields(&read_plan.projected_schema, state.virtual_columns())
+            }
+            None => Arc::clone(&read_plan.projected_schema),
+        };
 
         // Rebase the projection onto the decoder's stream schema (column
         // indices change because the decoder yields only the masked columns).

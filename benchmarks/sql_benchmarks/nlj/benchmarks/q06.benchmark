@@ -1,0 +1,12 @@
+
+name Q06
+group nlj
+
+expect_plan NestedLoopJoinExec
+
+run
+-- Q6: INNER 200K x 10K | LOW 0.1% (large to small)
+SELECT *
+FROM range(200000) AS t1
+         JOIN range(10000) AS t2
+              ON (t1.value + t2.value) % 1000 = 0;

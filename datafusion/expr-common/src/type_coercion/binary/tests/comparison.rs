@@ -575,6 +575,24 @@ fn test_type_coercion_compare() -> Result<()> {
         Operator::Eq,
         DataType::Timestamp(Second, Some("Europe/Brussels".into()))
     );
+    test_coercion_binary_rule!(
+        DataType::Timestamp(Second, None),
+        DataType::Timestamp(Millisecond, None),
+        Operator::Eq,
+        DataType::Timestamp(Millisecond, None)
+    );
+    test_coercion_binary_rule!(
+        DataType::Timestamp(Second, Some("America/New_York".into())),
+        DataType::Timestamp(Nanosecond, Some("Europe/Brussels".into())),
+        Operator::Lt,
+        DataType::Timestamp(Nanosecond, Some("America/New_York".into()))
+    );
+    test_coercion_binary_rule!(
+        DataType::Timestamp(Microsecond, None),
+        DataType::Timestamp(Nanosecond, None),
+        Operator::GtEq,
+        DataType::Timestamp(Nanosecond, None)
+    );
 
     // list
     let inner_field = Arc::new(Field::new_list_field(DataType::Int64, true));
@@ -872,6 +890,24 @@ fn test_type_union_coercion_prefers_string() {
     );
 }
 
+#[test]
+fn test_type_union_coercion_prefers_finer_timestamp_unit() {
+    assert_eq!(
+        type_union_coercion(
+            &DataType::Timestamp(Second, None),
+            &DataType::Timestamp(Millisecond, None),
+        ),
+        Some(DataType::Timestamp(Millisecond, None))
+    );
+    assert_eq!(
+        type_union_resolution(&[
+            DataType::Timestamp(Second, None),
+            DataType::Timestamp(Nanosecond, None),
+        ]),
+        Some(DataType::Timestamp(Nanosecond, None))
+    );
+}
+
 /// Tests that comparison operators coerce to numeric when comparing
 /// numeric and string types.
 #[test]
@@ -976,19 +1012,18 @@ fn test_string_concat_coercion() -> Result<()> {
             DataType::Binary,
             DataType::LargeBinary,
             DataType::BinaryView,
-            DataType::FixedSizeBinary(8),
         ] {
-            assert!(
-                BinaryTypeCoercer::new(&binary_dt, &Operator::StringConcat, &string_dt,)
-                    .get_input_types()
-                    .is_err(),
-                "{binary_dt} || {string_dt}"
+            test_coercion_binary_rule!(
+                &binary_dt,
+                &string_dt,
+                Operator::StringConcat,
+                string_dt
             );
-            assert!(
-                BinaryTypeCoercer::new(&string_dt, &Operator::StringConcat, &binary_dt,)
-                    .get_input_types()
-                    .is_err(),
-                "{string_dt} || {binary_dt}"
+            test_coercion_binary_rule!(
+                &string_dt,
+                &binary_dt,
+                Operator::StringConcat,
+                string_dt
             );
         }
     }

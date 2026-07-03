@@ -64,10 +64,24 @@ SELECT str_to_map('a=1&b=2&c=3', '&', '=');
 {a: 1, b: 2, c: 3}
 
 # Duplicate keys: EXCEPTION policy (Spark 3.0+ default)
-# TODO: Add LAST_WIN policy tests when spark.sql.mapKeyDedupPolicy config is supported
 statement error
 Duplicate map key
 SELECT str_to_map('a:1,b:2,a:3');
+
+# Triple+ occurrences of the same key still raise DUPLICATED_MAP_KEY.
+statement error
+Duplicate map key 'a'
+SELECT str_to_map('a:1,a:2,a:3');
+
+# Duplicate where one occurrence is missing the kv_delim (value = NULL) still errors.
+statement error
+Duplicate map key 'a'
+SELECT str_to_map('a,b:2,a:3');
+
+# Multi-row input: a clean row followed by a duplicate row fails on the duplicate row.
+statement error
+Duplicate map key 'a'
+SELECT str_to_map(col) FROM (VALUES ('a:1,b:2'), ('a:3,a:4')) AS t(col);
 
 # Additional tests (DataFusion-specific)
 
@@ -112,3 +126,38 @@ SELECT str_to_map(col1, col2, col3) FROM (VALUES ('a=1,b=2', ',', '='), ('x#9', 
 {a: 1, b: 2}
 {x: 9}
 NULL
+
+# LAST_WIN policy: duplicates are allowed; later occurrences overwrite earlier ones.
+statement ok
+set datafusion.spark.map_key_dedup_policy = 'LAST_WIN';
+
+query ?
+SELECT str_to_map('a:1,b:2,a:3');
+----
+{a: 3, b: 2}
+
+query ?
+SELECT str_to_map('a:1,a:2,a:3');
+----
+{a: 3}
+
+# Missing kv_delim: the later occurrence overwrites the value at the key's
+# first-seen position.
+query ?
+SELECT str_to_map('a:1,b:2,a');
+----
+{a: NULL, b: 2}
+
+# Multi-row: both clean and duplicate rows succeed under LAST_WIN.
+query ?
+SELECT str_to_map(col) FROM (VALUES ('a:1,b:2'), ('a:3,a:4')) AS t(col);
+----
+{a: 1, b: 2}
+{a: 4}
+
+statement ok
+set datafusion.spark.map_key_dedup_policy = 'EXCEPTION';
+
+# Invalid policy values are rejected at SET time with a clear message.
+statement error DataFusion error: Invalid or Unsupported Configuration: Invalid MapKeyDedupPolicy: BOGUS\. Expected one of: EXCEPTION, LAST_WIN
+set datafusion.spark.map_key_dedup_policy = 'BOGUS';

@@ -541,14 +541,6 @@ pub fn compute_all_files_statistics(
     Ok((file_groups_with_stats, statistics))
 }
 
-#[deprecated(since = "47.0.0", note = "Use Statistics::add")]
-pub fn add_row_stats(
-    file_num_rows: Precision<usize>,
-    num_rows: Precision<usize>,
-) -> Precision<usize> {
-    file_num_rows.add(&num_rows)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
