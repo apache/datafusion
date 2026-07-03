@@ -25,8 +25,8 @@ use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    Constraints, DFSchema, SchemaExt, Statistics, internal_datafusion_err, plan_err,
-    project_schema,
+    Constraints, DFSchema, SchemaExt, Statistics, exec_err, internal_datafusion_err,
+    plan_err, project_schema,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
@@ -59,11 +59,16 @@ use object_store::ObjectStore;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Result of resolving a table's paths against the object store registry: the
-/// store serving the table, the base [`ObjectStoreUrl`] (including any registered
-/// path prefix) to use as the scan key, and the table paths rebased into the
-/// store's coordinate space.
-type ResolvedTablePaths = (Arc<dyn ObjectStore>, ObjectStoreUrl, Vec<ListingTableUrl>);
+/// Result of resolving a table's paths against the object store registry.
+struct ResolvedTablePaths {
+    /// The object store serving the table (all `table_urls` resolve to it).
+    store: Arc<dyn ObjectStore>,
+    /// The base [`ObjectStoreUrl`] (including any registered path prefix) to use
+    /// as the scan/sink key.
+    identity: ObjectStoreUrl,
+    /// The table paths rebased into the store's coordinate space.
+    table_urls: Vec<ListingTableUrl>,
+}
 
 /// Result of a file listing operation from [`ListingTable::list_files_for_scan`].
 #[derive(Debug)]
@@ -647,14 +652,14 @@ impl TableProvider for ListingTable {
             None
         };
 
-        let Some((_, object_store_url, _)) = self.resolve_object_store(state)? else {
+        let Some(resolved) = self.resolve_object_store(state)? else {
             return Ok(ScanResult::new(Arc::new(EmptyExec::new(Arc::new(
                 Schema::empty(),
             )))));
         };
 
         let file_source = self.create_file_source();
-        let scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
+        let scan_config = FileScanConfigBuilder::new(resolved.identity, file_source)
             .with_file_groups(partitioned_file_lists)
             .with_constraints(self.constraints.clone())
             .with_statistics(statistics)
@@ -725,11 +730,14 @@ impl TableProvider for ListingTable {
         // gets store-relative paths (see `ListingTableUrl::with_prefix`). The
         // resolved identity and rebased paths are embedded in the sink config so
         // the store re-resolves and writes correctly at execution time.
-        let Some((store, object_store_url, rebased_paths)) =
-            self.resolve_object_store(state)?
-        else {
+        let Some(resolved) = self.resolve_object_store(state)? else {
             return Err(internal_datafusion_err!("ListingTable has no table paths"));
         };
+        let ResolvedTablePaths {
+            store,
+            identity: object_store_url,
+            table_urls: rebased_paths,
+        } = resolved;
         let rebased = &rebased_paths[0];
 
         let file_list_stream = pruned_partition_list(
@@ -816,6 +824,9 @@ impl ListingTable {
     /// url including any registered path prefix) to use as the scan key, and the
     /// table paths rebased into the store's coordinate space (registered prefix
     /// stripped). Returns `None` when the table has no paths.
+    ///
+    /// A [`FileScanConfig`]/[`FileSinkConfig`] carries a single object store, so
+    /// every table path must resolve to the same store; this errors otherwise.
     fn resolve_object_store(
         &self,
         ctx: &dyn Session,
@@ -825,12 +836,25 @@ impl ListingTable {
         };
         let env = ctx.runtime_env();
         let resolved = first.resolve(env)?;
-        let rebased = self
-            .table_paths
-            .iter()
-            .map(|p| Ok(p.resolve(env)?.table_url))
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
-        Ok(Some((resolved.store, resolved.identity, rebased)))
+        let mut table_urls = Vec::with_capacity(self.table_paths.len());
+        table_urls.push(resolved.table_url.clone());
+        for path in &self.table_paths[1..] {
+            let other = path.resolve(env)?;
+            if other.identity != resolved.identity {
+                return exec_err!(
+                    "ListingTable spans multiple object stores ({} and {}); \
+                     all table paths must resolve to the same object store",
+                    resolved.identity.as_str(),
+                    other.identity.as_str()
+                );
+            }
+            table_urls.push(other.table_url);
+        }
+        Ok(Some(ResolvedTablePaths {
+            store: resolved.store,
+            identity: resolved.identity,
+            table_urls,
+        }))
     }
 
     async fn collect_files_for_scan<'a>(
@@ -899,7 +923,7 @@ impl ListingTable {
             );
         }
 
-        let Some((store, _, rebased_paths)) = self.resolve_object_store(ctx)? else {
+        let Some(resolved) = self.resolve_object_store(ctx)? else {
             return Ok(ListFilesResult {
                 file_groups: vec![],
                 statistics: Statistics::new_unknown(&self.file_schema),
@@ -907,7 +931,13 @@ impl ListingTable {
             });
         };
         let (file_group, inexact_stats) = self
-            .collect_files_for_scan(ctx, &store, &rebased_paths, filters, limit)
+            .collect_files_for_scan(
+                ctx,
+                &resolved.store,
+                &resolved.table_urls,
+                filters,
+                limit,
+            )
             .await?;
 
         // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
@@ -959,7 +989,7 @@ impl ListingTable {
             );
         }
 
-        let Some((store, _, rebased_paths)) = self.resolve_object_store(ctx)? else {
+        let Some(resolved) = self.resolve_object_store(ctx)? else {
             return Ok(ListFilesResult {
                 file_groups: vec![],
                 statistics: Statistics::new_unknown(&self.file_schema),
@@ -967,7 +997,7 @@ impl ListingTable {
             });
         };
         let (file_group, inexact_stats) = self
-            .collect_files_for_scan(ctx, &store, &rebased_paths, &[], None)
+            .collect_files_for_scan(ctx, &resolved.store, &resolved.table_urls, &[], None)
             .await?;
         let mut file_groups = file_group.split_files(file_group_count);
         if !file_groups.is_empty() {
