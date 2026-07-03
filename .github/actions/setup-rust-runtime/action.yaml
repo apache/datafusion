@@ -31,3 +31,10 @@ runs:
       run: |
         echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
         echo "RUSTFLAGS=-C debuginfo=line-tables-only -C incremental=false" >> $GITHUB_ENV
+        # Work around intermittent "[16] Error in the HTTP2 framing layer"
+        # failures from curl when cargo fetches crates from crates.io.
+        # Disabling HTTP/2 multiplexing forces cargo to serialize requests,
+        # and raising retries makes transient network hiccups self-heal.
+        echo "CARGO_HTTP_MULTIPLEXING=false" >> $GITHUB_ENV
+        echo "CARGO_NET_RETRY=10" >> $GITHUB_ENV
+        echo "CARGO_HTTP_RETRY=10" >> $GITHUB_ENV
