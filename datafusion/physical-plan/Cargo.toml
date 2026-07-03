@@ -145,4 +145,8 @@ name = "hash_group_by_reuse"
 
 [[bench]]
 harness = false
+name = "limited_coalescer_split"
+
+[[bench]]
+harness = false
 name = "multi_group_by"
