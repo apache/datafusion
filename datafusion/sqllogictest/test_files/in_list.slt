@@ -16,12 +16,19 @@
 # under the License.
 
 ##########
-## IN List Tests
+# IN List Tests
+#
+# This file focuses on the IN operator and its various specializations
+#
+# Note that "short" IN LISTS do not go through the InList implementation at all,
+# instead they are rewritten into a series of OR expressions. See:
+# https://github.com/apache/datafusion/blob/ed37b6c9555bc278130dc774ed833b8c0bd29bfa/datafusion/optimizer/src/simplify_expressions/inlist_simplifier.rs#L39-L88
 ##########
 
 
-# IN LIST has specializations for integer types. This test verifies the correctness
-# of the various specializations.
+# Tests for IN LIST integer specializations
+
+
 statement ok
 CREATE TABLE in_list_ints (
   label VARCHAR,
@@ -74,98 +81,24 @@ zero 0 0 0 0 0 0 0 0
 statement error .*Expected: an expression, found: \).*
 SELECT 1 IN ();
 
-query BBBBBBBB
+# Min for each type
+query TBBBBBBBB
 SELECT
-  i8 IN (NULL),
-  u8 IN (NULL),
-  i16 IN (NULL),
-  u16 IN (NULL),
-  i32 IN (NULL),
-  u32 IN (NULL),
-  i64 IN (NULL),
-  u64 IN (NULL)
+  label,
+  i8 IN (1, 2, 3, -128),
+  u8 IN (1, 2, 3, 0),
+  i16 IN (1, 2, 3, -32768),
+  u16 IN (1, 2, 3, 0),
+  i32 IN (1, 2, 3, -2147483648),
+  u32 IN (1, 2, 3, 0),
+  i64 IN (1, 2, 3, -9223372036854775808),
+  u64 IN (1, 2, 3, 0)
 FROM in_list_ints
 ORDER BY label
 ----
-NULL NULL NULL NULL NULL NULL NULL NULL
-NULL NULL NULL NULL NULL NULL NULL NULL
-NULL NULL NULL NULL NULL NULL NULL NULL
-NULL NULL NULL NULL NULL NULL NULL NULL
-NULL NULL NULL NULL NULL NULL NULL NULL
-NULL NULL NULL NULL NULL NULL NULL NULL
-
-query BBBBBBBB
-SELECT
-  i8 IN (-128),
-  u8 IN (0),
-  i16 IN (-32768),
-  u16 IN (0),
-  i32 IN (-2147483648),
-  u32 IN (0),
-  i64 IN (-9223372036854775808),
-  u64 IN (0)
-FROM in_list_ints
-ORDER BY label
-----
-false false false false false false false false
-false false false false false false false false
-true true true true true true true true
-false false false false false false false false
-false false false false false false false false
-false true false true false true false true
-
-query BBBBBBBB
-SELECT
-  i8 IN (127),
-  u8 IN (255),
-  i16 IN (32767),
-  u16 IN (65535),
-  i32 IN (2147483647),
-  u32 IN (4294967295),
-  i64 IN (9223372036854775807),
-  u64 IN (18446744073709551615)
-FROM in_list_ints
-ORDER BY label
-----
-false false false false false false false false
-true true true true true true true true
-false false false false false false false false
-false false false false false false false false
-false false false false false false false false
-false false false false false false false false
-
-query BBBBBBBB
-SELECT
-  i8 IN (11, 12),
-  u8 IN (11, 12),
-  i16 IN (11, 12),
-  u16 IN (11, 12),
-  i32 IN (11, 12),
-  u32 IN (11, 12),
-  i64 IN (11, 12),
-  u64 IN (11, 12)
-FROM in_list_ints
-ORDER BY label
-----
-true true true true true true true true
-false false false false false false false false
-false false false false false false false false
-false false false false false false false false
-false false false false false false false false
-false false false false false false false false
-
-query BBBB
-SELECT
-  i8 IN (12, -13),
-  i16 IN (12, -13),
-  i32 IN (12, -13),
-  i64 IN (12, -13)
-FROM in_list_ints
-ORDER BY label
-----
-false false false false
-false false false false
-false false false false
-false false false false
-false false false false
-false false false false
+eleven false false false false false false false false
+max false false false false false false false false
+min true true true true true true true true
+minus_one false true false true false true false true
+one true true true true true true true true
+zero false true false true false true false true
