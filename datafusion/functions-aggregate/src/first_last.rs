@@ -442,7 +442,7 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
 
         match emit_to {
             EmitTo::All => self.size_of_orderings = 0,
-            EmitTo::First(_) => {
+            EmitTo::First(_) | EmitTo::FirstBlock(_) => {
                 self.size_of_orderings -=
                     result.iter().map(ScalarValue::size_of_vec).sum::<usize>()
             }

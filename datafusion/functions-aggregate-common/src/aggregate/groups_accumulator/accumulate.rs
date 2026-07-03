@@ -305,7 +305,7 @@ impl NullState {
                     }
                 }
             }
-            EmitTo::First(n) => match &mut self.seen_values {
+            EmitTo::First(n) | EmitTo::FirstBlock(n) => match &mut self.seen_values {
                 SeenValues::All { num_values } => {
                     *num_values = num_values.saturating_sub(n);
                     None

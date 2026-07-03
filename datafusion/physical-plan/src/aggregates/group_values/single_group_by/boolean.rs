@@ -102,7 +102,7 @@ impl GroupValues for GroupValuesBoolean {
         let mut builder = BooleanBufferBuilder::new(len);
         let emit_count = match emit_to {
             EmitTo::All => len,
-            EmitTo::First(n) => n,
+            EmitTo::First(n) | EmitTo::FirstBlock(n) => n,
         };
         builder.append_n(emit_count, false);
         if let Some(idx) = self.true_group.as_mut() {

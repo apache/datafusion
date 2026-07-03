@@ -655,7 +655,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let emit_groups = match emit_to {
             EmitTo::All => self.num_groups,
-            EmitTo::First(n) => n,
+            EmitTo::First(n) | EmitTo::FirstBlock(n) => n,
         };
 
         // Step 1: Count entries per group. For EmitTo::First(n), only groups
@@ -714,7 +714,9 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         // Step 4: Release state for emitted groups.
         match emit_to {
             EmitTo::All => self.clear_state(),
-            EmitTo::First(_) => self.compact_retained_state(emit_groups)?,
+            EmitTo::First(_) | EmitTo::FirstBlock(_) => {
+                self.compact_retained_state(emit_groups)?
+            }
         }
 
         let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));

@@ -210,7 +210,7 @@ where
                 self.map.clear();
                 build_primitive(std::mem::take(&mut self.values), self.null_group.take())
             }
-            EmitTo::First(n) => {
+            EmitTo::First(n) | EmitTo::FirstBlock(n) => {
                 self.map.retain(|entry| {
                     // Decrement group index by n
                     let group_idx = entry.0;
