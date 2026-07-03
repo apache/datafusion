@@ -15,19 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion benchmark runner
-pub mod cancellation;
-pub mod clickbench;
-pub mod dict;
-pub mod h2o;
-pub mod hj;
-pub mod imdb;
-pub mod nlj;
-pub mod smj;
-pub mod sort_pushdown;
-pub mod sort_tpch;
-pub mod sql_benchmark;
-pub mod sql_benchmark_runner;
-pub mod tpcds;
-pub mod tpch;
-pub mod util;
+//! DataFusion SQL benchmark runner.
+
+use datafusion_benchmarks::sql_benchmark_runner;
+
+#[cfg(feature = "snmalloc")]
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+
+// `cargo clippy --all-features` enables both allocator features, so prefer
+// `snmalloc` in that case and fall back to `mimalloc` otherwise.
+#[cfg(all(not(feature = "snmalloc"), feature = "mimalloc"))]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[tokio::main]
+async fn main() {
+    env_logger::init();
+    if let Err(error) = sql_benchmark_runner::run_cli().await {
+        eprintln!("Error: {error}");
+        std::process::exit(1);
+    }
+}
