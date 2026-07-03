@@ -147,3 +147,65 @@ min false false false false false false false false
 minus_one false false false false false false false false
 one false false false false false false false false
 zero false false false false false false false false
+
+statement ok
+DROP TABLE in_list_ints;
+
+# Table with nulls to test null handling for integer IN list specializations
+statement ok
+CREATE TABLE in_list_ints_nullable (
+  label VARCHAR,
+  i8 TINYINT,
+  u8 TINYINT UNSIGNED,
+  i16 SMALLINT,
+  u16 SMALLINT UNSIGNED,
+  i32 INT,
+  u32 INT UNSIGNED,
+  i64 BIGINT,
+  u64 BIGINT UNSIGNED
+) AS VALUES
+  ('match', 11, 11, 11, 11, 11, 11, 11, 11),
+  ('no_match', 7, 7, 7, 7, 7, 7, 7, 7),
+  ('nulls', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+
+# Null input values return NULL when the IN list has no nulls.
+query TBBBBBBBB
+SELECT
+  label,
+  i8 IN (3, 4, 5, 6, 11),
+  u8 IN (3, 4, 5, 6, 11),
+  i16 IN (3, 258, 4097, 16385, 11),
+  u16 IN (3, 258, 4097, 16385, 11),
+  i32 IN (3, 258, 66051, 16909060, 11),
+  u32 IN (3, 258, 66051, 16909060, 11),
+  i64 IN (3, 258, 66051, 16909060, 11),
+  u64 IN (3, 258, 66051, 16909060, 11)
+FROM in_list_ints_nullable
+ORDER BY label
+----
+match true true true true true true true true
+no_match false false false false false false false false
+nulls NULL NULL NULL NULL NULL NULL NULL NULL
+
+# Null IN list values return true for matches and NULL for non-matches.
+query TBBBBBBBB
+SELECT
+  label,
+  i8 IN (NULL, 3, 4, 5, 11),
+  u8 IN (NULL, 3, 4, 5, 11),
+  i16 IN (NULL, 3, 258, 4097, 11),
+  u16 IN (NULL, 3, 258, 4097, 11),
+  i32 IN (NULL, 3, 258, 66051, 11),
+  u32 IN (NULL, 3, 258, 66051, 11),
+  i64 IN (NULL, 3, 258, 66051, 11),
+  u64 IN (NULL, 3, 258, 66051, 11)
+FROM in_list_ints_nullable
+ORDER BY label
+----
+match true true true true true true true true
+no_match NULL NULL NULL NULL NULL NULL NULL NULL
+nulls NULL NULL NULL NULL NULL NULL NULL NULL
+
+
+statement ok
+DROP TABLE in_list_ints_nullable
