@@ -102,7 +102,7 @@ impl MinMaxStatistics {
                         {
                             Ok((partition_value.clone(), partition_value.clone()))
                         } else {
-                            return Err(plan_datafusion_err!("statistics not found"));
+                            Err(plan_datafusion_err!("statistics not found"))
                         }
                     }
                 })
