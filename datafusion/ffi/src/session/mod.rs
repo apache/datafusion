@@ -24,8 +24,6 @@ use arrow_schema::SchemaRef;
 use arrow_schema::ffi::FFI_ArrowSchema;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
-#[cfg(not(feature = "parquet"))]
-use datafusion_common::config::ConfigField;
 use datafusion_common::config::{ConfigFileType, ConfigOptions, TableOptions};
 use datafusion_common::{DFSchema, DataFusionError};
 use datafusion_execution::TaskContext;
@@ -509,16 +507,6 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
                 .unwrap_or_else(|err| log::warn!("Error parsing table options: {err}"));
         }
     }
-    #[cfg(not(feature = "parquet"))]
-    for (key, value) in options.iter().filter_map(|(k, v)| {
-        let (prefix, key) = k.split_once(".")?;
-        (prefix == "parquet").then(|| (key, v))
-    }) {
-        table_options.parquet.set(key, value).unwrap_or_else(|err| {
-            log::warn!("Error parsing parquet table option: {err}")
-        });
-    }
-
     let extension_options: HashMap<String, String> = options
         .iter()
         .filter_map(|(k, v)| {
@@ -676,7 +664,10 @@ mod tests {
         let mut table_options = TableOptions::default();
         table_options.csv.has_header = Some(true);
         table_options.json.schema_infer_max_rec = Some(10);
-        table_options.parquet.global.coerce_int96 = Some("123456789".into());
+        #[cfg(feature = "parquet")]
+        {
+            table_options.parquet.global.coerce_int96 = Some("123456789".into());
+        }
         table_options.current_format = Some(ConfigFileType::JSON);
 
         let state = SessionStateBuilder::new_from_existing(ctx.state())
