@@ -711,17 +711,48 @@ mod tests {
             .await?;
         }
 
-        let sql = "SELECT split_part(path, '/', -1) as filename, table, file_size_bytes, num_rows, num_columns, table_size_bytes from statistics_cache() order by filename";
+        let sql = "SELECT split_part(path, '/', -1) as filename, table, file_size_bytes, num_rows, num_columns, hits, table_size_bytes from statistics_cache() order by filename";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
-        assert_snapshot!(batches_to_string(&rbs),@r"
-          +-----------------------------------+---------------------------+-----------------+--------------+-------------+------------------+
-          | filename                          | table                     | file_size_bytes | num_rows     | num_columns | table_size_bytes |
-          +-----------------------------------+---------------------------+-----------------+--------------+-------------+------------------+
-          | alltypes_plain.parquet            | alltypes_plain            | 1851            | Exact(8)     | 11          | Absent           |
-          | alltypes_tiny_pages.parquet       | alltypes_tiny_pages       | 454233          | Exact(7300)  | 13          | Absent           |
-          | lz4_raw_compressed_larger.parquet | lz4_raw_compressed_larger | 380836          | Exact(10000) | 1           | Absent           |
-          +-----------------------------------+---------------------------+-----------------+--------------+-------------+------------------+
+        assert_snapshot!(batches_to_string(&rbs),@"
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        | filename                          | table                     | file_size_bytes | num_rows     | num_columns | hits | table_size_bytes |
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        | alltypes_plain.parquet            | alltypes_plain            | 1851            | Exact(8)     | 11          | 0    | Absent           |
+        | alltypes_tiny_pages.parquet       | alltypes_tiny_pages       | 454233          | Exact(7300)  | 13          | 0    | Absent           |
+        | lz4_raw_compressed_larger.parquet | lz4_raw_compressed_larger | 380836          | Exact(10000) | 1           | 0    | Absent           |
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        ");
+
+        // increase the number of hits
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from lz4_raw_compressed_larger")
+            .await?
+            .collect()
+            .await?;
+
+        let sql = "SELECT split_part(path, '/', -1) as filename, table, file_size_bytes, num_rows, num_columns, hits, table_size_bytes from statistics_cache() order by filename";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+        assert_snapshot!(batches_to_string(&rbs),@"
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        | filename                          | table                     | file_size_bytes | num_rows     | num_columns | hits | table_size_bytes |
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        | alltypes_plain.parquet            | alltypes_plain            | 1851            | Exact(8)     | 11          | 3    | Absent           |
+        | alltypes_tiny_pages.parquet       | alltypes_tiny_pages       | 454233          | Exact(7300)  | 13          | 0    | Absent           |
+        | lz4_raw_compressed_larger.parquet | lz4_raw_compressed_larger | 380836          | Exact(10000) | 1           | 1    | Absent           |
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
         ");
 
         Ok(())

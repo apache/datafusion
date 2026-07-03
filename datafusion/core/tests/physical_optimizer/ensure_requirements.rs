@@ -1113,7 +1113,7 @@ fn test_idempotent_window_over_multi_partition() {
     ])
     .unwrap();
 
-    let dist = Distribution::HashPartitioned(vec![Arc::new(Column::new("a", 0))]);
+    let dist = Distribution::KeyPartitioned(vec![Arc::new(Column::new("a", 0))]);
     let window_like: Arc<dyn ExecutionPlan> =
         Arc::new(MockReqExec::new(source, dist, Some(ord)));
 
