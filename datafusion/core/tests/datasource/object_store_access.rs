@@ -1063,6 +1063,47 @@ async fn two_prefixed_stores_coexist_under_one_authority() {
     );
 }
 
+/// A single `ListingTable` whose paths resolve to *different* stores under the
+/// same authority must be rejected: a scan carries a single object store, so
+/// silently reading every path from the first store would drop/duplicate rows.
+#[tokio::test]
+async fn multi_path_table_spanning_two_stores_is_rejected() {
+    use datafusion::catalog::TableProvider;
+    use datafusion_catalog_listing::ListingTableConfig;
+    use object_store::prefix::PrefixStore;
+
+    let ctx = SessionContext::new();
+    ctx.runtime_env().register_object_store(
+        &Url::parse("mem://bucket/userA/repo1").unwrap(),
+        Arc::new(PrefixStore::new(InMemory::new(), "userA/repo1"))
+            as Arc<dyn ObjectStore>,
+    );
+    ctx.runtime_env().register_object_store(
+        &Url::parse("mem://bucket/userB/repo2").unwrap(),
+        Arc::new(PrefixStore::new(InMemory::new(), "userB/repo2"))
+            as Arc<dyn ObjectStore>,
+    );
+
+    let options = ListingOptions::new(Arc::new(CsvFormat::default()));
+    let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+        arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Int32, false),
+    ]));
+    let config = ListingTableConfig::new_with_multi_paths(vec![
+        ListingTableUrl::parse("mem://bucket/userA/repo1/data/").unwrap(),
+        ListingTableUrl::parse("mem://bucket/userB/repo2/data/").unwrap(),
+    ])
+    .with_listing_options(options)
+    .with_schema(schema);
+    let table = ListingTable::try_new(config).unwrap();
+
+    let state = ctx.state();
+    let err = table.scan(&state, None, &[], None).await.unwrap_err();
+    assert!(
+        err.to_string().contains("multiple object stores"),
+        "unexpected error: {err}"
+    );
+}
+
 /// Runs tests with a request counting object store
 struct Test {
     object_store: Arc<RequestCountingObjectStore>,

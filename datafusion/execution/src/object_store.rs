@@ -27,7 +27,8 @@ use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 use object_store::registry::ObjectStoreRegistry as UpstreamObjectStoreRegistry;
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, RwLock};
 use url::Url;
 
 /// A parsed URL identifying a particular [`ObjectStore`] instance
@@ -215,29 +216,79 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
 ///   `hf://bucket/user/repo`, and [`ObjectStoreRegistry::resolve`] strips the
 ///   registered prefix from the returned path (`data/f.parquet`)
 ///
-/// Stores for known schemes (`file`, `s3`, `gs`, `az`, `http`, ...) are created
-/// lazily on first access via [`object_store::parse_url_opts`].
-#[derive(Debug, Default)]
+/// Only stores that have been explicitly registered (plus the default
+/// `file://` store) are resolved: a URL with no matching registration returns an
+/// error rather than lazily creating a store from the environment. This keeps
+/// object store configuration explicit and avoids silently picking up ambient
+/// (e.g. cloud) credentials.
+#[derive(Debug)]
 pub struct DefaultObjectStoreRegistry {
     inner: object_store::registry::DefaultObjectStoreRegistry,
+    /// Scheme+authority and path segments of every explicitly registered store.
+    ///
+    /// The inner registry would otherwise lazily create a store from the
+    /// environment for any known scheme; tracking registrations lets `resolve`
+    /// reject unregistered URLs before that fallback runs.
+    registered: RwLock<HashSet<(String, Vec<String>)>>,
+}
+
+impl Default for DefaultObjectStoreRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Splits `url` into its scheme+authority and non-empty path segments, the key
+/// under which a store is registered / matched.
+fn registration_key(url: &Url) -> (String, Vec<String>) {
+    let authority = url[..url::Position::AfterPort].to_string();
+    let segments = url
+        .path()
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    (authority, segments)
 }
 
 impl DefaultObjectStoreRegistry {
     /// This will register [`LocalFileSystem`] to handle `file://` paths
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {
-        let inner = object_store::registry::DefaultObjectStoreRegistry::new();
-        inner.register(
-            Url::parse("file://").unwrap(),
+        let this = Self {
+            inner: object_store::registry::DefaultObjectStoreRegistry::new(),
+            registered: RwLock::new(HashSet::new()),
+        };
+        this.register_store(
+            &Url::parse("file://").unwrap(),
             Arc::new(LocalFileSystem::new()),
         );
-        Self { inner }
+        this
     }
 
     /// Default without any backend registered.
     #[cfg(target_arch = "wasm32")]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            inner: object_store::registry::DefaultObjectStoreRegistry::new(),
+            registered: RwLock::new(HashSet::new()),
+        }
+    }
+
+    /// Returns `true` if some registered store's path is a prefix of `url`'s
+    /// (under the same scheme+authority), i.e. `url` resolves to a registered
+    /// store rather than requiring lazy creation.
+    fn has_registered_match(&self, url: &Url) -> bool {
+        let (authority, segments) = registration_key(url);
+        self.registered
+            .read()
+            .unwrap()
+            .iter()
+            .any(|(reg_authority, reg_segments)| {
+                *reg_authority == authority
+                    && reg_segments.len() <= segments.len()
+                    && reg_segments.iter().zip(&segments).all(|(a, b)| a == b)
+            })
     }
 }
 
@@ -247,13 +298,22 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         url: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
+        self.registered
+            .write()
+            .unwrap()
+            .insert(registration_key(url));
         self.inner.register(url.clone(), store)
     }
 
     fn deregister_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
-        self.inner.deregister(url).ok_or_else(|| {
+        let store = self.inner.deregister(url).ok_or_else(|| {
             internal_datafusion_err!("Failed to deregister object store. No suitable object store found for {url}. See `RuntimeEnv::register_object_store`")
-        })
+        })?;
+        self.registered
+            .write()
+            .unwrap()
+            .remove(&registration_key(url));
+        Ok(store)
     }
 
     fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
@@ -261,6 +321,13 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     }
 
     fn resolve(&self, url: &Url) -> Result<(Arc<dyn ObjectStore>, Path)> {
+        // Reject unregistered URLs before the inner registry's lazy
+        // `parse_url_opts` fallback can create a store from the environment.
+        if !self.has_registered_match(url) {
+            return Err(internal_datafusion_err!(
+                "No suitable object store found for {url}. See `RuntimeEnv::register_object_store`"
+            ));
+        }
         self.inner
             .resolve(url)
             .map_err(|e| DataFusionError::External(Box::new(e)))
@@ -380,5 +447,56 @@ mod tests {
             .unwrap();
         assert_eq!(path.as_ref(), "a/b/c.parquet");
         assert!(Arc::ptr_eq(&resolved, &store));
+    }
+
+    #[test]
+    fn test_registry_rejects_unregistered_store() {
+        use object_store::memory::InMemory;
+
+        let registry = DefaultObjectStoreRegistry::new();
+
+        // An unregistered scheme+authority is a strict error: the registry must
+        // not lazily create a store from the environment.
+        let err = registry
+            .resolve(&Url::parse("s3://bucket/data/f.parquet").unwrap())
+            .unwrap_err();
+        assert!(
+            err.strip_backtrace()
+                .contains("No suitable object store found"),
+            "unexpected error: {}",
+            err.strip_backtrace()
+        );
+        assert!(
+            registry
+                .get_store(&Url::parse("s3://bucket/x").unwrap())
+                .is_err()
+        );
+
+        // The default `file://` store is registered and still resolves.
+        assert!(
+            registry
+                .get_store(&Url::parse("file:///tmp/x").unwrap())
+                .is_ok()
+        );
+
+        // Once registered explicitly, the store resolves.
+        registry.register_store(
+            &Url::parse("s3://bucket").unwrap(),
+            Arc::new(InMemory::new()) as Arc<dyn ObjectStore>,
+        );
+        let (_, path) = registry
+            .resolve(&Url::parse("s3://bucket/data/f.parquet").unwrap())
+            .unwrap();
+        assert_eq!(path.as_ref(), "data/f.parquet");
+
+        // Deregistering restores the strict error.
+        registry
+            .deregister_store(&Url::parse("s3://bucket").unwrap())
+            .unwrap();
+        assert!(
+            registry
+                .resolve(&Url::parse("s3://bucket/data/f.parquet").unwrap())
+                .is_err()
+        );
     }
 }

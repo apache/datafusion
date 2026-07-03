@@ -515,17 +515,17 @@ pub(crate) async fn register_object_store_and_config_extensions(
     .await?;
 
     // Register the retrieved object store in the session context's runtime
-    // environment. The stdin store is shared across all `stdin://` object paths,
-    // so it is registered at its scheme/authority identity rather than at the
-    // object path (the registry then resolves every `stdin://` path to it).
-    if scheme == StdinUtils::SCHEME {
-        let identity = ObjectStoreUrl::parse(
-            &url[::url::Position::BeforeScheme..::url::Position::BeforePath],
-        )?;
-        ctx.register_object_store(identity.as_ref(), store);
-    } else {
-        ctx.register_object_store(url, store);
-    }
+    // environment at its scheme/authority identity rather than at the full object
+    // path. `get_object_store` always returns an authority/root-rooted store (an
+    // S3 bucket, the local filesystem, an HTTP origin, or the shared per-session
+    // stdin store), so the registry resolves every object path under that
+    // authority to it. Registering at the full path would instead scope the store
+    // to that single prefix and hand it store-relative paths with the prefix
+    // stripped, breaking reads/writes.
+    let identity = ObjectStoreUrl::parse(
+        &url[::url::Position::BeforeScheme..::url::Position::BeforePath],
+    )?;
+    ctx.register_object_store(identity.as_ref(), store);
 
     Ok(())
 }
@@ -599,6 +599,44 @@ mod tests {
         let sql =
             format!("CREATE EXTERNAL TABLE test STORED AS PARQUET LOCATION '{location}'");
         create_external_table_test(location, &sql).await?;
+
+        Ok(())
+    }
+
+    /// Regression test: `register_object_store_and_config_extensions` must
+    /// register the store at its scheme/authority identity, not at the full
+    /// object path. Otherwise the (root-rooted) store is scoped to a deep path
+    /// prefix and handed an empty store-relative path, so a `CREATE EXTERNAL
+    /// TABLE` over a local file can no longer be read back.
+    #[tokio::test]
+    async fn create_external_table_reads_local_file() -> Result<()> {
+        use datafusion::arrow::array::Int64Array;
+
+        let ctx = SessionContext::new();
+        // Relative to the datafusion-cli crate root (the test working dir).
+        let location = "../datafusion/core/tests/data/cars.csv";
+        let sql = format!(
+            "CREATE EXTERNAL TABLE cars STORED AS CSV LOCATION '{location}' \
+             OPTIONS ('has_header' 'TRUE')"
+        );
+
+        // Drive the full CLI planning path so the object store is registered.
+        let statement = DFParser::parse_sql(&sql)?.pop_front().unwrap();
+        let plan = create_plan(&ctx, statement, false).await?;
+        ctx.execute_logical_plan(plan).await?;
+
+        let batches = ctx
+            .sql("SELECT count(*) AS n FROM cars")
+            .await?
+            .collect()
+            .await?;
+        let n = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0);
+        assert_eq!(n, 25);
 
         Ok(())
     }
