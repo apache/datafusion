@@ -434,8 +434,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                     .map(|(l, r)| (Arc::clone(l) as _, Arc::clone(r) as _))
                     .unzip();
                 vec![
-                    Distribution::HashPartitioned(left_expr),
-                    Distribution::HashPartitioned(right_expr),
+                    Distribution::KeyPartitioned(left_expr),
+                    Distribution::KeyPartitioned(right_expr),
                 ]
             }
             StreamJoinPartitionMode::SinglePartition => {

@@ -27,6 +27,7 @@ on:
   push:
     branches-ignore:
       - 'gh-readonly-queue/**'
+      - 'dependabot/**'
     paths-ignore:
       - "docs/**"
       - "**.md"

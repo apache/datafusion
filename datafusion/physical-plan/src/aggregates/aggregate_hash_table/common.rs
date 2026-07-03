@@ -239,6 +239,8 @@ pub(super) struct HashAggregateAccumulator {
     accumulator: Box<dyn GroupsAccumulator>,
 }
 
+pub(super) type AggregateAccumulator = HashAggregateAccumulator;
+
 /// Evaluated aggregate arguments and filter for one input batch.
 ///
 /// For example, `AVG(x + 1) FILTER (WHERE x > 0)` evaluates both `x + 1`
@@ -342,7 +344,7 @@ impl MaterializedAggregateOutput {
 }
 
 impl HashAggregateAccumulator {
-    fn new(
+    pub(super) fn new(
         aggregate_expr: Arc<AggregateFunctionExpr>,
         arguments: Vec<Arc<dyn PhysicalExpr>>,
         filter: Option<Arc<dyn PhysicalExpr>>,
@@ -374,7 +376,10 @@ impl HashAggregateAccumulator {
     /// and `x > 0`.
     ///
     /// These arrays can be passed directly to [`GroupsAccumulator`] next.
-    fn evaluate_acc_args(&self, batch: &RecordBatch) -> Result<EvaluatedAccumulatorArgs> {
+    pub(super) fn evaluate_acc_args(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<EvaluatedAccumulatorArgs> {
         let arguments = self
             .arguments
             .iter()
@@ -395,6 +400,10 @@ impl HashAggregateAccumulator {
             .transpose()?;
 
         Ok(EvaluatedAccumulatorArgs { arguments, filter })
+    }
+
+    pub(super) fn size(&self) -> usize {
+        self.accumulator.size()
     }
 
     pub(super) fn update_batch(
