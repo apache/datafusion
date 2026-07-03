@@ -64,6 +64,18 @@ select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 5, 4);
 query error
 select array_resize(make_array(1, 2, 3), -5, 2);
 
+# array_resize with a very large size should error instead of panicking (capacity overflow)
+query error DataFusion error: Execution error: array_resize: resulting array of 9223372036854775807 elements exceeds the maximum array size
+select array_resize(make_array(1), 9223372036854775807, 0);
+
+query error DataFusion error: Execution error: array_resize: resulting array of 9223372036854775807 elements exceeds the maximum array size
+select array_resize(arrow_cast(make_array(1), 'LargeList(Int64)'), 9223372036854775807, 0);
+
+# List size above i32::MAX must error via the offset-type guard instead of
+# silently truncating the offsets or attempting a multi-GB allocation
+query error DataFusion error: Execution error: array_resize: resulting array of 3000000000 elements exceeds the maximum array size
+select array_resize(make_array(1), 3000000000, 0);
+
 # array_resize scalar function #5
 query ?
 select array_resize(make_array(1.1, 2.2, 3.3), 10, 9.9);
