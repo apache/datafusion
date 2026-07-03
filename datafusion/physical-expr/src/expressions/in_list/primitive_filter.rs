@@ -96,6 +96,7 @@ impl BitmapFilterType for Int8Type {
 
     #[inline(always)]
     fn index(value: Self::Native) -> usize {
+        // Reinterpret the signed value's bit pattern into a bitmap index.
         value as u8 as usize
     }
 }
@@ -117,6 +118,7 @@ impl BitmapFilterType for Int16Type {
 
     #[inline(always)]
     fn index(value: Self::Native) -> usize {
+        // Reinterpret the signed value's bit pattern into a bitmap index.
         value as u16 as usize
     }
 }
