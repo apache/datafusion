@@ -742,6 +742,103 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 mod tests {
     use super::*;
 
+    use arrow::array::{ArrayRef, Int32Array};
+    use datafusion_physical_expr::expressions::{Column, Literal};
+
+    fn test_on_right() -> Vec<PhysicalExprRef> {
+        vec![Arc::new(Column::new("probe_key", 0))]
+    }
+
+    fn test_probe_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![Field::new(
+            "probe_key",
+            DataType::Int32,
+            false,
+        )]))
+    }
+
+    fn test_dynamic_filter(
+        on_right: &[PhysicalExprRef],
+    ) -> Arc<DynamicFilterPhysicalExpr> {
+        Arc::new(DynamicFilterPhysicalExpr::new(on_right.to_vec(), lit(true)))
+    }
+
+    fn make_collect_left_accumulator_for_test() -> SharedBuildAccumulator {
+        let on_right = test_on_right();
+        SharedBuildAccumulator {
+            inner: Mutex::new(AccumulatorState {
+                data: AccumulatedBuildData::CollectLeft {
+                    data: PartitionStatus::Pending,
+                    reported_count: 0,
+                    expected_reports: 1,
+                },
+                completion: CompletionState::Pending,
+            }),
+            completion_notify: Notify::new(),
+            dynamic_filter: test_dynamic_filter(&on_right),
+            on_right,
+            repartition_random_state: SeededRandomState::with_seed(1),
+            probe_schema: test_probe_schema(),
+        }
+    }
+
+    fn make_partitioned_expr_accumulator_for_test(
+        num_partitions: usize,
+    ) -> SharedBuildAccumulator {
+        let on_right = test_on_right();
+        SharedBuildAccumulator {
+            inner: Mutex::new(AccumulatorState {
+                data: AccumulatedBuildData::Partitioned {
+                    partitions: vec![PartitionStatus::Pending; num_partitions],
+                    completed_partitions: 0,
+                },
+                completion: CompletionState::Pending,
+            }),
+            completion_notify: Notify::new(),
+            dynamic_filter: test_dynamic_filter(&on_right),
+            on_right,
+            repartition_random_state: SeededRandomState::with_seed(1),
+            probe_schema: test_probe_schema(),
+        }
+    }
+
+    fn in_list(values: &[i32]) -> PushdownStrategy {
+        PushdownStrategy::InList(Arc::new(Int32Array::from(values.to_vec())) as ArrayRef)
+    }
+
+    fn bounds(min: i32, max: i32) -> PartitionBounds {
+        PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Int32(Some(min)),
+            ScalarValue::Int32(Some(max)),
+        )])
+    }
+
+    fn no_bounds() -> PartitionBounds {
+        PartitionBounds::new(vec![])
+    }
+
+    fn reported(pushdown: PushdownStrategy, bounds: PartitionBounds) -> PartitionStatus {
+        PartitionStatus::Reported(PartitionData { pushdown, bounds })
+    }
+
+    fn current_expr(acc: &SharedBuildAccumulator) -> PhysicalExprRef {
+        acc.dynamic_filter.current().unwrap()
+    }
+
+    fn assert_literal_bool(expr: &PhysicalExprRef, expected: bool) {
+        let literal = expr
+            .downcast_ref::<Literal>()
+            .expect("expected literal expression");
+        assert_eq!(literal.value(), &ScalarValue::Boolean(Some(expected)));
+    }
+
+    fn assert_top_binary_op(expr: &PhysicalExprRef, expected: Operator) {
+        let binary = expr
+            .downcast_ref::<BinaryExpr>()
+            .expect("expected binary expression");
+        assert_eq!(binary.op(), &expected);
+    }
+
     fn partitioned_state(acc: &SharedBuildAccumulator) -> (Vec<PartitionStatus>, usize) {
         let guard = acc.inner.lock();
         let AccumulatedBuildData::Partitioned {
@@ -752,6 +849,138 @@ mod tests {
             panic!("expected partitioned accumulator");
         };
         (partitions.clone(), *completed_partitions)
+    }
+
+    #[test]
+    fn collect_left_updates_with_membership_only() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            in_list(&[1, 2, 3]),
+            no_bounds(),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(expr.downcast_ref::<InListExpr>().is_some());
+    }
+
+    #[test]
+    fn collect_left_updates_with_bounds_only() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            PushdownStrategy::Empty,
+            bounds(10, 20),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_top_binary_op(&expr, Operator::And);
+    }
+
+    #[test]
+    fn collect_left_combines_membership_and_bounds() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            in_list(&[10, 20]),
+            bounds(10, 20),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        let conjunction = expr
+            .downcast_ref::<BinaryExpr>()
+            .expect("expected membership and bounds conjunction");
+        assert_eq!(conjunction.op(), &Operator::And);
+        assert!(conjunction.left().downcast_ref::<BinaryExpr>().is_some());
+        assert!(conjunction.right().downcast_ref::<InListExpr>().is_some());
+    }
+
+    #[test]
+    fn collect_left_empty_build_data_does_not_update_filter() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            PushdownStrategy::Empty,
+            no_bounds(),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_literal_bool(&expr, true);
+    }
+
+    #[test]
+    fn partitioned_one_real_partition_with_rest_empty_skips_case() {
+        let acc = make_partitioned_expr_accumulator_for_test(3);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(PushdownStrategy::Empty, no_bounds()),
+            reported(in_list(&[2]), no_bounds()),
+            reported(PushdownStrategy::Empty, no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(expr.downcast_ref::<InListExpr>().is_some());
+        assert!(expr.downcast_ref::<CaseExpr>().is_none());
+    }
+
+    #[test]
+    fn partitioned_multiple_real_partitions_uses_case_with_false_fallback() {
+        let acc = make_partitioned_expr_accumulator_for_test(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1]), no_bounds()),
+            reported(in_list(&[2]), no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        let case = expr
+            .downcast_ref::<CaseExpr>()
+            .expect("expected partition routing CASE expression");
+        assert!(case.expr().is_some());
+        assert_eq!(case.when_then_expr().len(), 2);
+        assert_literal_bool(case.else_expr().expect("expected CASE fallback"), false);
+    }
+
+    #[test]
+    fn partitioned_all_empty_partitions_updates_filter_to_false() {
+        let acc = make_partitioned_expr_accumulator_for_test(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(PushdownStrategy::Empty, no_bounds()),
+            reported(PushdownStrategy::Empty, no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_literal_bool(&expr, false);
+    }
+
+    #[test]
+    fn partitioned_canceled_unknown_partitions_keep_unknown_routes_permissive() {
+        let acc = make_partitioned_expr_accumulator_for_test(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            PartitionStatus::CanceledUnknown,
+            reported(PushdownStrategy::Empty, no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        let case = expr
+            .downcast_ref::<CaseExpr>()
+            .expect("expected CASE expression for mixed empty and unknown partitions");
+        assert_eq!(case.when_then_expr().len(), 1);
+        assert_literal_bool(&case.when_then_expr()[0].1, false);
+        assert_literal_bool(
+            case.else_expr().expect("expected permissive fallback"),
+            true,
+        );
     }
 
     // Regression guard for the build-report lifecycle fix: on `Drop`, a stream
