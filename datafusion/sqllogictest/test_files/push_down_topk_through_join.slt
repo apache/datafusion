@@ -56,8 +56,9 @@ ORDER BY t1.b ASC LIMIT 3;
 logical_plan
 01)Sort: t1.b ASC NULLS LAST, fetch=3
 02)--Left Join: t1.a = t2.x
-03)----TableScan: t1 projection=[a, b]
-04)----TableScan: t2 projection=[x]
+03)----Sort: t1.b ASC NULLS LAST, fetch=3
+04)------TableScan: t1 projection=[a, b]
+05)----TableScan: t2 projection=[x]
 
 query III
 SELECT t1.a, t1.b, t2.x
@@ -78,7 +79,8 @@ logical_plan
 01)Sort: t2.y ASC NULLS LAST, fetch=3
 02)--Right Join: t1.a = t2.x
 03)----TableScan: t1 projection=[a]
-04)----TableScan: t2 projection=[x, y]
+04)----Sort: t2.y ASC NULLS LAST, fetch=3
+05)------TableScan: t2 projection=[x, y]
 
 query III
 SELECT t1.a, t2.x, t2.y
@@ -144,8 +146,9 @@ logical_plan
 01)Sort: t1.b ASC NULLS LAST, fetch=3
 02)--Projection: t1.a, t1.b, t2.x
 03)----Left Join: t1.a = t2.x Filter: t1.b > t2.y
-04)------TableScan: t1 projection=[a, b]
-05)------TableScan: t2 projection=[x, y]
+04)------Sort: t1.b ASC NULLS LAST, fetch=3
+05)--------TableScan: t1 projection=[a, b]
+06)------TableScan: t2 projection=[x, y]
 
 query III
 SELECT t1.a, t1.b, t2.x
@@ -165,10 +168,11 @@ ORDER BY t1.b ASC LIMIT 3;
 logical_plan
 01)Sort: t1.b ASC NULLS LAST, fetch=3
 02)--Left Join: t1.a = t2.x
-03)----TableScan: t1 projection=[a, b]
-04)----Projection: t2.x
-05)------Filter: t2.y > Int32(100)
-06)--------TableScan: t2 projection=[x, y]
+03)----Sort: t1.b ASC NULLS LAST, fetch=3
+04)------TableScan: t1 projection=[a, b]
+05)----Projection: t2.x
+06)------Filter: t2.y > Int32(100)
+07)--------TableScan: t2 projection=[x, y]
 
 # A preserved-side filter in the ON clause suppresses matches, but the rows
 # still appear NULL-filled, so it does not change which rows are preserved.
@@ -180,8 +184,9 @@ ORDER BY t1.b ASC LIMIT 3;
 logical_plan
 01)Sort: t1.b ASC NULLS LAST, fetch=3
 02)--Left Join: t1.a = t2.x Filter: t1.b > Int32(20)
-03)----TableScan: t1 projection=[a, b]
-04)----TableScan: t2 projection=[x]
+03)----Sort: t1.b ASC NULLS LAST, fetch=3
+04)------TableScan: t1 projection=[a, b]
+05)----TableScan: t2 projection=[x]
 
 query III
 SELECT t1.a, t1.b, t2.x
@@ -231,7 +236,7 @@ logical_plan
 02)--SubqueryAlias: sub
 03)----Left Join: t1.a = t2.x
 04)------SubqueryAlias: t1
-05)--------Sort: t1.b ASC NULLS LAST, fetch=5
+05)--------Sort: t1.b ASC NULLS LAST, fetch=2
 06)----------TableScan: t1 projection=[a, b]
 07)------TableScan: t2 projection=[x]
 
@@ -360,8 +365,9 @@ logical_plan
 01)Limit: skip=1, fetch=2
 02)--Sort: t1.b ASC NULLS LAST, fetch=3
 03)----Left Join: t1.a = t2.x
-04)------TableScan: t1 projection=[a, b]
-05)------TableScan: t2 projection=[x]
+04)------Sort: t1.b ASC NULLS LAST, fetch=3
+05)--------TableScan: t1 projection=[a, b]
+06)------TableScan: t2 projection=[x]
 
 query III
 SELECT t1.a, t1.b, t2.x
@@ -386,8 +392,9 @@ logical_plan
 01)Sort: neg_b ASC NULLS LAST, fetch=3
 02)--Projection: (- t1.b) AS neg_b, t2.x
 03)----Left Join: t1.a = t2.x
-04)------TableScan: t1 projection=[a, b]
-05)------TableScan: t2 projection=[x]
+04)------Sort: (- t1.b) ASC NULLS LAST, fetch=3
+05)--------TableScan: t1 projection=[a, b]
+06)------TableScan: t2 projection=[x]
 
 # -b ascending means largest b first
 query II
@@ -444,9 +451,10 @@ logical_plan
 01)Sort: sub.b ASC NULLS LAST, fetch=2
 02)--SubqueryAlias: sub
 03)----Left Join: t1.a = t2.x
-04)------SubqueryAlias: t1
-05)--------TableScan: t1 projection=[a, b]
-06)------TableScan: t2 projection=[x]
+04)------Sort: t1.b ASC NULLS LAST, fetch=2
+05)--------SubqueryAlias: t1
+06)----------TableScan: t1 projection=[a, b]
+07)------TableScan: t2 projection=[x]
 
 query III
 SELECT * FROM (
@@ -475,7 +483,7 @@ logical_plan
 03)----Right Join: t1.a = t2.x
 04)------TableScan: t1 projection=[a]
 05)------SubqueryAlias: t2
-06)--------Sort: t2.y ASC NULLS LAST, fetch=10
+06)--------Sort: t2.y ASC NULLS LAST, fetch=3
 07)----------TableScan: t2 projection=[x, y]
 
 query III
@@ -505,9 +513,10 @@ logical_plan
 01)Sort: sub.b ASC NULLS LAST, fetch=3
 02)--SubqueryAlias: sub
 03)----Left Join: foo.a = t2.x
-04)------SubqueryAlias: foo
-05)--------TableScan: t1 projection=[a, b]
-06)------TableScan: t2 projection=[x]
+04)------Sort: foo.b ASC NULLS LAST, fetch=3
+05)--------SubqueryAlias: foo
+06)----------TableScan: t1 projection=[a, b]
+07)------TableScan: t2 projection=[x]
 
 query III
 SELECT * FROM (
@@ -568,9 +577,10 @@ logical_plan
 01)Sort: sub.a ASC NULLS LAST, sub.b ASC NULLS LAST, fetch=3
 02)--SubqueryAlias: sub
 03)----Left Join: t1.a = t2.x
-04)------SubqueryAlias: t1
-05)--------TableScan: t1 projection=[a, b]
-06)------TableScan: t2 projection=[x]
+04)------Sort: t1.a ASC NULLS LAST, t1.b ASC NULLS LAST, fetch=3
+05)--------SubqueryAlias: t1
+06)----------TableScan: t1 projection=[a, b]
+07)------TableScan: t2 projection=[x]
 
 query III
 SELECT * FROM (
@@ -595,9 +605,10 @@ ORDER BY t1.b ASC LIMIT 3;
 logical_plan
 01)Sort: t1.b ASC NULLS LAST, fetch=3
 02)--Left Join: t1.a = t2.x
-03)----Filter: t1.b > Int32(10)
-04)------TableScan: t1 projection=[a, b]
-05)----TableScan: t2 projection=[x]
+03)----Sort: t1.b ASC NULLS LAST, fetch=3
+04)------Filter: t1.b > Int32(10)
+05)--------TableScan: t1 projection=[a, b]
+06)----TableScan: t2 projection=[x]
 
 query III
 SELECT t1.a, t1.b, t2.x
@@ -622,8 +633,9 @@ ORDER BY t1.b DESC LIMIT 3;
 logical_plan
 01)Sort: t1.b DESC NULLS FIRST, fetch=3
 02)--Left Join: t1.a = t2.x
-03)----TableScan: t1 projection=[a, b]
-04)----TableScan: t2 projection=[x]
+03)----Sort: t1.b DESC NULLS FIRST, fetch=3
+04)------TableScan: t1 projection=[a, b]
+05)----TableScan: t2 projection=[x]
 
 query III
 SELECT t1.a, t1.b, t2.x
@@ -643,8 +655,9 @@ ORDER BY t1.b ASC NULLS FIRST LIMIT 3;
 logical_plan
 01)Sort: t1.b ASC NULLS FIRST, fetch=3
 02)--Left Join: t1.a = t2.x
-03)----TableScan: t1 projection=[a, b]
-04)----TableScan: t2 projection=[x]
+03)----Sort: t1.b ASC NULLS FIRST, fetch=3
+04)------TableScan: t1 projection=[a, b]
+05)----TableScan: t2 projection=[x]
 
 query III
 SELECT t1.a, t1.b, t2.x
@@ -665,7 +678,8 @@ logical_plan
 01)Sort: t2.y DESC NULLS LAST, fetch=3
 02)--Right Join: t1.a = t2.x
 03)----TableScan: t1 projection=[a]
-04)----TableScan: t2 projection=[x, y]
+04)----Sort: t2.y DESC NULLS LAST, fetch=3
+05)------TableScan: t2 projection=[x, y]
 
 query III
 SELECT t1.a, t2.x, t2.y
@@ -690,8 +704,9 @@ ORDER BY t1.b ASC LIMIT 3;
 logical_plan
 01)Sort: t1.b ASC NULLS LAST, fetch=3
 02)--Cross Join:
-03)----TableScan: t1 projection=[a, b]
-04)----TableScan: t2 projection=[x]
+03)----Sort: t1.b ASC NULLS LAST, fetch=3
+04)------TableScan: t1 projection=[a, b]
+05)----TableScan: t2 projection=[x]
 
 query III
 SELECT t1.a, t1.b, t2.x
@@ -712,7 +727,8 @@ logical_plan
 01)Sort: t2.y ASC NULLS LAST, fetch=3
 02)--Cross Join:
 03)----TableScan: t1 projection=[a]
-04)----TableScan: t2 projection=[x, y]
+04)----Sort: t2.y ASC NULLS LAST, fetch=3
+05)------TableScan: t2 projection=[x, y]
 
 query III
 SELECT t1.a, t2.x, t2.y
@@ -770,10 +786,12 @@ ORDER BY t1.b ASC LIMIT 2;
 logical_plan
 01)Sort: t1.b ASC NULLS LAST, fetch=2
 02)--Left Join: t1.a = t3.p
-03)----Left Join: t1.a = t2.x
-04)------TableScan: t1 projection=[a, b]
-05)------TableScan: t2 projection=[x]
-06)----TableScan: t3 projection=[p]
+03)----Sort: t1.b ASC NULLS LAST, fetch=2
+04)------Left Join: t1.a = t2.x
+05)--------Sort: t1.b ASC NULLS LAST, fetch=2
+06)----------TableScan: t1 projection=[a, b]
+07)--------TableScan: t2 projection=[x]
+08)----TableScan: t3 projection=[p]
 
 query IIII
 SELECT t1.a, t1.b, t2.x, t3.p
@@ -812,8 +830,9 @@ ORDER BY t_tied.b ASC, t_tied.a ASC LIMIT 3;
 logical_plan
 01)Sort: t_tied.b ASC NULLS LAST, t_tied.a ASC NULLS LAST, fetch=3
 02)--Left Join: t_tied.a = t_other.x
-03)----TableScan: t_tied projection=[a, b]
-04)----TableScan: t_other projection=[x]
+03)----Sort: t_tied.b ASC NULLS LAST, t_tied.a ASC NULLS LAST, fetch=3
+04)------TableScan: t_tied projection=[a, b]
+05)----TableScan: t_other projection=[x]
 
 query III
 SELECT t_tied.a, t_tied.b, t_other.x
@@ -849,10 +868,11 @@ logical_plan
 01)Sort: outer_sub.b ASC NULLS LAST, fetch=2
 02)--SubqueryAlias: outer_sub
 03)----Left Join: inner_sub.a = t2.x
-04)------SubqueryAlias: inner_sub
-05)--------SubqueryAlias: inner_alias
-06)----------TableScan: t1 projection=[a, b]
-07)------TableScan: t2 projection=[x]
+04)------Sort: inner_sub.b ASC NULLS LAST, fetch=2
+05)--------SubqueryAlias: inner_sub
+06)----------SubqueryAlias: inner_alias
+07)------------TableScan: t1 projection=[a, b]
+08)------TableScan: t2 projection=[x]
 
 query III
 SELECT * FROM (
@@ -884,7 +904,7 @@ logical_plan
 03)----Left Join: inner_sub.a = t2.x
 04)------SubqueryAlias: inner_sub
 05)--------SubqueryAlias: inner_alias
-06)----------Sort: t1.b ASC NULLS LAST, fetch=5
+06)----------Sort: t1.b ASC NULLS LAST, fetch=2
 07)------------TableScan: t1 projection=[a, b]
 08)------TableScan: t2 projection=[x]
 
@@ -951,11 +971,12 @@ logical_plan
 01)Sort: outer_sub.b ASC NULLS LAST, fetch=2
 02)--SubqueryAlias: outer_sub
 03)----Left Join: inner_sub.a = t2.x
-04)------SubqueryAlias: inner_sub
-05)--------SubqueryAlias: inner_alias
-06)----------Sort: t1.a ASC NULLS LAST, fetch=5
-07)------------TableScan: t1 projection=[a, b]
-08)------TableScan: t2 projection=[x]
+04)------Sort: inner_sub.b ASC NULLS LAST, fetch=2
+05)--------SubqueryAlias: inner_sub
+06)----------SubqueryAlias: inner_alias
+07)------------Sort: t1.a ASC NULLS LAST, fetch=5
+08)--------------TableScan: t1 projection=[a, b]
+09)------TableScan: t2 projection=[x]
 
 query III
 SELECT * FROM (
@@ -985,10 +1006,11 @@ logical_plan
 01)Sort: outer_sub.b ASC NULLS LAST, fetch=2
 02)--SubqueryAlias: outer_sub
 03)----Left Join: inner_sub.a = t2.x
-04)------SubqueryAlias: inner_sub
-05)--------SubqueryAlias: inner_alias
-06)----------TableScan: t1 projection=[a, b]
-07)------TableScan: t2 projection=[x]
+04)------Sort: inner_sub.b ASC NULLS LAST, fetch=2
+05)--------SubqueryAlias: inner_sub
+06)----------SubqueryAlias: inner_alias
+07)------------TableScan: t1 projection=[a, b]
+08)------TableScan: t2 projection=[x]
 
 query III
 SELECT * FROM (
@@ -1022,7 +1044,7 @@ logical_plan
 04)------SubqueryAlias: inner_sub
 05)--------Projection: inner_alias.a, inner_alias.b AS renamed_b
 06)----------SubqueryAlias: inner_alias
-07)------------Sort: t1.b ASC NULLS LAST, fetch=5
+07)------------Sort: t1.b ASC NULLS LAST, fetch=2
 08)--------------TableScan: t1 projection=[a, b]
 09)------TableScan: t2 projection=[x]
 
@@ -1052,10 +1074,11 @@ logical_plan
 01)Sort: sub.renamed_b ASC NULLS LAST, fetch=2
 02)--SubqueryAlias: sub
 03)----Left Join: t1.a = t2.x
-04)------SubqueryAlias: t1
-05)--------Projection: t1.a, t1.b AS renamed_b
-06)----------TableScan: t1 projection=[a, b]
-07)------TableScan: t2 projection=[x]
+04)------Sort: t1.renamed_b ASC NULLS LAST, fetch=2
+05)--------SubqueryAlias: t1
+06)----------Projection: t1.a, t1.b AS renamed_b
+07)------------TableScan: t1 projection=[a, b]
+08)------TableScan: t2 projection=[x]
 
 query III
 SELECT * FROM (
@@ -1083,10 +1106,11 @@ logical_plan
 02)--SubqueryAlias: sub
 03)----Projection: t1.rand_col, t2.x
 04)------Left Join: t1.a = t2.x
-05)--------SubqueryAlias: t1
-06)----------Projection: random() AS rand_col, t1.a
-07)------------TableScan: t1 projection=[a]
-08)--------TableScan: t2 projection=[x]
+05)--------Sort: t1.rand_col ASC NULLS LAST, fetch=2
+06)----------SubqueryAlias: t1
+07)------------Projection: random() AS rand_col, t1.a
+08)--------------TableScan: t1 projection=[a]
+09)--------TableScan: t2 projection=[x]
 
 # The outer ORDER BY column resolves to random() through the Projection, and an
 # existing inner Sort is also on random() -- but they are independent random()
@@ -1108,11 +1132,12 @@ logical_plan
 02)--SubqueryAlias: sub
 03)----Projection: t1.rand_col, t2.x
 04)------Left Join: t1.a = t2.x
-05)--------SubqueryAlias: t1
-06)----------Projection: random() AS rand_col, t1.a
-07)------------Sort: random() ASC NULLS LAST, fetch=10
-08)--------------TableScan: t1 projection=[a]
-09)--------TableScan: t2 projection=[x]
+05)--------Sort: t1.rand_col ASC NULLS LAST, fetch=2
+06)----------SubqueryAlias: t1
+07)------------Projection: random() AS rand_col, t1.a
+08)--------------Sort: random() ASC NULLS LAST, fetch=10
+09)----------------TableScan: t1 projection=[a]
+10)--------TableScan: t2 projection=[x]
 
 statement ok
 set datafusion.execution.target_partitions = 4;
