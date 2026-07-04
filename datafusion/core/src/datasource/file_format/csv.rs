@@ -65,9 +65,9 @@ mod tests {
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{
-        Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
-        ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions,
-        PutPayload, PutResult,
+        GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
+        ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload,
+        PutResult,
     };
     use regex::Regex;
     use rstest::*;
@@ -135,7 +135,8 @@ mod tests {
                     version: None,
                 },
                 range: Default::default(),
-                attributes: Attributes::default(),
+                attributes: Default::default(),
+                extensions: Default::default(),
             })
         }
 
