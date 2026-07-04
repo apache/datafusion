@@ -18,7 +18,7 @@
 use std::ops::{Div, Mul};
 use std::sync::Arc;
 
-use crate::utils::make_scalar_function;
+use crate::utils::{calculate_binary_decimal_math_cast, make_scalar_function};
 
 use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
 use arrow::datatypes::DataType::{
@@ -319,102 +319,58 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
             _ => exec_err!("trunc function requires a scalar or array for precision"),
         },
-        Decimal32(lprecision, lscale) => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => {
-                let result = args[0]
-                    .as_primitive::<Decimal32Type>()
-                    .unary::<_, Decimal32Type>(|x| {
-                        compute_truncate_decimal::<Decimal32Type>(x, *lscale, 0)
-                    })
-                    .with_precision_and_scale(*lprecision, *lscale)?;
-
-                Ok(Arc::new(result) as ArrayRef)
-            }
-            ColumnarValue::Array(precision) => {
-                let num_array = num.as_primitive::<Decimal32Type>();
-                let precision_array = precision.as_primitive::<Int64Type>();
-                let result: PrimitiveArray<Decimal32Type> =
-                    arrow::compute::binary(num_array, precision_array, |x, y| {
-                        compute_truncate_decimal::<Decimal32Type>(x, *lscale, y)
-                    })?
-                    .with_precision_and_scale(*lprecision, *lscale)?;
-
-                Ok(Arc::new(result) as ArrayRef)
-            }
-            _ => exec_err!("trunc function requires a scalar or array for precision"),
-        },
-        Decimal64(lprecision, lscale) => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => {
-                let result = args[0]
-                    .as_primitive::<Decimal64Type>()
-                    .unary::<_, Decimal64Type>(|x| {
-                        compute_truncate_decimal::<Decimal64Type>(x, *lscale, 0)
-                    })
-                    .with_precision_and_scale(*lprecision, *lscale)?;
-
-                Ok(Arc::new(result) as ArrayRef)
-            }
-            ColumnarValue::Array(precision) => {
-                let num_array = num.as_primitive::<Decimal64Type>();
-                let precision_array = precision.as_primitive::<Int64Type>();
-                let result: PrimitiveArray<Decimal64Type> =
-                    arrow::compute::binary(num_array, precision_array, |x, y| {
-                        compute_truncate_decimal::<Decimal64Type>(x, *lscale, y)
-                    })?
-                    .with_precision_and_scale(*lprecision, *lscale)?;
-
-                Ok(Arc::new(result) as ArrayRef)
-            }
-            _ => exec_err!("trunc function requires a scalar or array for precision"),
-        },
-        Decimal128(lprecision, lscale) => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => {
-                let result = args[0]
-                    .as_primitive::<Decimal128Type>()
-                    .unary::<_, Decimal128Type>(|x| {
-                        compute_truncate_decimal::<Decimal128Type>(x, *lscale, 0)
-                    })
-                    .with_precision_and_scale(*lprecision, *lscale)?;
-
-                Ok(Arc::new(result) as ArrayRef)
-            }
-            ColumnarValue::Array(precision) => {
-                let num_array = num.as_primitive::<Decimal128Type>();
-                let precision_array = precision.as_primitive::<Int64Type>();
-                let result: PrimitiveArray<Decimal128Type> =
-                    arrow::compute::binary(num_array, precision_array, |x, y| {
-                        compute_truncate_decimal::<Decimal128Type>(x, *lscale, y)
-                    })?
-                    .with_precision_and_scale(*lprecision, *lscale)?;
-
-                Ok(Arc::new(result) as ArrayRef)
-            }
-            _ => exec_err!("trunc function requires a scalar or array for precision"),
-        },
-        Decimal256(lprecision, lscale) => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => {
-                let result = args[0]
-                    .as_primitive::<Decimal256Type>()
-                    .unary::<_, Decimal256Type>(|x| {
-                        compute_truncate_decimal::<Decimal256Type>(x, *lscale, 0)
-                    })
-                    .with_precision_and_scale(*lprecision, *lscale)?;
-
-                Ok(Arc::new(result) as ArrayRef)
-            }
-            ColumnarValue::Array(precision) => {
-                let num_array = num.as_primitive::<Decimal256Type>();
-                let precision_array = precision.as_primitive::<Int64Type>();
-                let result: PrimitiveArray<Decimal256Type> =
-                    arrow::compute::binary(num_array, precision_array, |x, y| {
-                        compute_truncate_decimal::<Decimal256Type>(x, *lscale, y)
-                    })?
-                    .with_precision_and_scale(*lprecision, *lscale)?;
-
-                Ok(Arc::new(result) as ArrayRef)
-            }
-            _ => exec_err!("trunc function requires a scalar or array for precision"),
-        },
+        Decimal32(lprecision, lscale) => Ok(calculate_binary_decimal_math_cast::<
+            Decimal32Type,
+            Int64Type,
+            Decimal32Type,
+            _,
+        >(
+            num.as_ref(),
+            &precision,
+            |v, y| Ok(compute_truncate_decimal::<Decimal32Type>(v, *lscale, y)),
+            *lprecision,
+            *lscale,
+            &DataType::Int64,
+        )? as ArrayRef),
+        Decimal64(lprecision, lscale) => Ok(calculate_binary_decimal_math_cast::<
+            Decimal64Type,
+            Int64Type,
+            Decimal64Type,
+            _,
+        >(
+            num.as_ref(),
+            &precision,
+            |v, y| Ok(compute_truncate_decimal::<Decimal64Type>(v, *lscale, y)),
+            *lprecision,
+            *lscale,
+            &DataType::Int64,
+        )? as ArrayRef),
+        Decimal128(lprecision, lscale) => Ok(calculate_binary_decimal_math_cast::<
+            Decimal128Type,
+            Int64Type,
+            Decimal128Type,
+            _,
+        >(
+            num.as_ref(),
+            &precision,
+            |v, y| Ok(compute_truncate_decimal::<Decimal128Type>(v, *lscale, y)),
+            *lprecision,
+            *lscale,
+            &DataType::Int64,
+        )? as ArrayRef),
+        Decimal256(lprecision, lscale) => Ok(calculate_binary_decimal_math_cast::<
+            Decimal256Type,
+            Int64Type,
+            Decimal256Type,
+            _,
+        >(
+            num.as_ref(),
+            &precision,
+            |v, y| Ok(compute_truncate_decimal::<Decimal256Type>(v, *lscale, y)),
+            *lprecision,
+            *lscale,
+            &DataType::Int64,
+        )? as ArrayRef),
         other => exec_err!("Unsupported data type {other:?} for function trunc"),
     }
 }
