@@ -851,6 +851,13 @@ mod tests {
         assert_eq!(literal.value(), &ScalarValue::Boolean(Some(expected)));
     }
 
+    fn assert_literal_u64(expr: &PhysicalExprRef, expected: u64) {
+        let literal = expr
+            .downcast_ref::<Literal>()
+            .expect("expected literal u64 CASE branch key");
+        assert_eq!(literal.value(), &ScalarValue::UInt64(Some(expected)));
+    }
+
     fn assert_top_binary_op(expr: &PhysicalExprRef, expected: Operator) {
         assert_eq!(binary_expr(expr).op(), &expected);
     }
@@ -915,6 +922,7 @@ mod tests {
     #[test]
     fn collect_left_empty_build_data_does_not_update_filter() {
         let acc = make_collect_left_accumulator_for_test();
+        let initial_generation = acc.dynamic_filter.snapshot_generation();
 
         acc.build_filter(FinalizeInput::CollectLeft(reported(
             PushdownStrategy::Empty,
@@ -922,6 +930,11 @@ mod tests {
         )))
         .unwrap();
 
+        assert_eq!(
+            acc.dynamic_filter.snapshot_generation(),
+            initial_generation,
+            "empty CollectLeft input must not update with a no-op filter"
+        );
         let expr = current_expr(&acc);
         assert_literal_bool(&expr, true);
     }
@@ -954,8 +967,13 @@ mod tests {
 
         let expr = current_expr(&acc);
         let case = case_expr(&expr);
-        assert!(case.expr().is_some());
+        let routing_expr = case.expr().expect("expected CASE routing expression");
+        assert_top_binary_op(routing_expr, Operator::Modulo);
         assert_eq!(case.when_then_expr().len(), 2);
+        assert_literal_u64(&case.when_then_expr()[0].0, 0);
+        in_list_expr(&case.when_then_expr()[0].1);
+        assert_literal_u64(&case.when_then_expr()[1].0, 1);
+        in_list_expr(&case.when_then_expr()[1].1);
         assert_literal_bool(case.else_expr().expect("expected CASE fallback"), false);
     }
 
