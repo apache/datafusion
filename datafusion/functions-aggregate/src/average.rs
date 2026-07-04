@@ -945,6 +945,50 @@ where
         Ok(())
     }
 
+    fn merge_partitioned_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        partition_indices: &[usize],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 2, "two arguments to merge_partitioned_batch");
+        let partial_counts = values[0].as_primitive::<UInt64Type>();
+        let partial_sums = values[1].as_primitive::<T>();
+
+        self.counts.resize(total_num_groups, 0);
+        self.null_state.accumulate_by_indices(
+            group_indices,
+            partial_counts,
+            partition_indices,
+            total_num_groups,
+            |group_index, partial_count| {
+                // SAFETY: group_index is guaranteed to be in bounds
+                let count = unsafe { self.counts.get_unchecked_mut(group_index) };
+                *count += partial_count;
+            },
+        );
+
+        self.sums.resize(total_num_groups, T::default_value());
+        self.null_state.accumulate_by_indices(
+            group_indices,
+            partial_sums,
+            partition_indices,
+            total_num_groups,
+            |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
+                // SAFETY: group_index is guaranteed to be in bounds
+                let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
+                *sum = sum.add_wrapping(new_value);
+            },
+        );
+
+        Ok(())
+    }
+
+    fn supports_merge_partitioned_batch(&self) -> bool {
+        true
+    }
+
     fn convert_to_state(
         &self,
         values: &[ArrayRef],

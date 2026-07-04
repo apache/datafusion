@@ -24,7 +24,8 @@ use arrow::array::types::{
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
-use datafusion_common::Result;
+use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::{Result, internal_err};
 
 use datafusion_expr::EmitTo;
 
@@ -98,6 +99,32 @@ pub trait GroupValues: Send {
     /// assigned. If a row has a new value, the next available group id is
     /// assigned.
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
+
+    /// Calculates group ids for selected rows by row index.
+    fn intern_partitioned(
+        &mut self,
+        _cols: &[ArrayRef],
+        _hashes: &[u64],
+        _groups: &mut Vec<usize>,
+        _partition_indices: &[usize],
+    ) -> Result<()> {
+        internal_err!(
+            "partitioned GroupValues::intern is not supported by this implementation"
+        )
+    }
+
+    /// Computes hash values for group values before partitioned intern.
+    fn create_hashes(&self, cols: &[ArrayRef], hashes: &mut Vec<u64>) -> Result<()> {
+        hashes.clear();
+        hashes.resize(cols[0].len(), 0);
+        create_hashes(cols, &crate::aggregates::AGGREGATION_HASH_SEED, hashes)?;
+        Ok(())
+    }
+
+    /// Returns true if [`Self::intern_partitioned`] is supported.
+    fn supports_intern_partitioned(&self) -> bool {
+        false
+    }
 
     /// Returns the number of bytes of memory used by this [`GroupValues`]
     fn size(&self) -> usize;

@@ -189,6 +189,39 @@ impl NullState {
         });
     }
 
+    /// Invokes `value_fn(group_index, value)` for each selected non null
+    /// value while tracking which groups have seen inputs if necessary.
+    pub fn accumulate_by_indices<T, F>(
+        &mut self,
+        group_indices: &[usize],
+        values: &PrimitiveArray<T>,
+        partition_indices: &[usize],
+        total_num_groups: usize,
+        mut value_fn: F,
+    ) where
+        T: ArrowPrimitiveType + Send,
+        F: FnMut(usize, T::Native) + Send,
+    {
+        if let SeenValues::All { num_values } = &mut self.seen_values
+            && values.null_count() == 0
+        {
+            accumulate_by_indices(group_indices, values, partition_indices, value_fn);
+            *num_values = total_num_groups;
+            return;
+        }
+
+        let seen_values = self.seen_values.get_builder(total_num_groups);
+        accumulate_by_indices(
+            group_indices,
+            values,
+            partition_indices,
+            |group_index, value| {
+                seen_values.set_bit(group_index, true);
+                value_fn(group_index, value);
+            },
+        );
+    }
+
     /// Invokes `value_fn(group_index, value)` for each non null, non
     /// filtered value in `values`, while tracking which groups have
     /// seen null inputs and which groups have seen any inputs, for
@@ -464,6 +497,39 @@ pub fn accumulate<T, F>(
                         value_fn(group_index, new_value)
                     }
                 })
+        }
+    }
+}
+
+/// Invokes `value_fn(group_index, value)` for each selected non null value.
+pub fn accumulate_by_indices<T, F>(
+    group_indices: &[usize],
+    values: &PrimitiveArray<T>,
+    partition_indices: &[usize],
+    mut value_fn: F,
+) where
+    T: ArrowPrimitiveType + Send,
+    F: FnMut(usize, T::Native) + Send,
+{
+    assert_eq!(values.len(), group_indices.len());
+    let data = values.values();
+
+    match values.nulls() {
+        None => {
+            for &row_idx in partition_indices {
+                let group_index = group_indices[row_idx];
+                debug_assert_ne!(group_index, usize::MAX);
+                value_fn(group_index, data[row_idx]);
+            }
+        }
+        Some(nulls) => {
+            for &row_idx in partition_indices {
+                if nulls.is_valid(row_idx) {
+                    let group_index = group_indices[row_idx];
+                    debug_assert_ne!(group_index, usize::MAX);
+                    value_fn(group_index, data[row_idx]);
+                }
+            }
         }
     }
 }

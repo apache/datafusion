@@ -686,6 +686,33 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         Ok(())
     }
 
+    fn merge_partitioned_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        partition_indices: &[usize],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "one argument to merge_partitioned_batch");
+        let partial_counts = values[0].as_primitive::<Int64Type>();
+
+        assert_eq!(partial_counts.null_count(), 0);
+        let partial_counts = partial_counts.values();
+
+        self.counts.resize(total_num_groups, 0);
+        for &row_idx in partition_indices {
+            let group_index = group_indices[row_idx];
+            debug_assert_ne!(group_index, usize::MAX);
+            self.counts[group_index] += partial_counts[row_idx];
+        }
+
+        Ok(())
+    }
+
+    fn supports_merge_partitioned_batch(&self) -> bool {
+        true
+    }
+
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let counts = emit_to.take_needed(&mut self.counts);
 

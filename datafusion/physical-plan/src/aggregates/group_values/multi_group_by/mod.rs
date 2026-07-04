@@ -29,7 +29,7 @@ use crate::aggregates::group_values::multi_group_by::{
     boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
     bytes_view::ByteViewGroupValueBuilder, primitive::PrimitiveGroupValueBuilder,
 };
-use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
+use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder};
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Field, Float32Type,
@@ -46,7 +46,7 @@ use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 
-use hashbrown::hash_table::HashTable;
+use hashbrown::hash_table::{Entry, HashTable};
 
 const NON_INLINED_FLAG: u64 = 0x8000000000000000;
 const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
@@ -215,6 +215,9 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// [`GroupValuesRows`]: crate::aggregates::group_values::GroupValuesRows
     group_values: Vec<Box<dyn GroupColumn>>,
 
+    /// Number of stored group rows.
+    num_groups: usize,
+
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
 
@@ -281,6 +284,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             vectorized_operation_buffers: VectorizedOperationBuffers::default(),
             map_size: 0,
             group_values,
+            num_groups: 0,
             hashes_buffer: Default::default(),
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         })
@@ -299,6 +303,13 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             v.push(make_group_column(f.as_ref())?);
         }
         Ok(v)
+    }
+
+    fn account_map_capacity_growth(&mut self, previous_capacity: usize) {
+        let current_capacity = self.map.capacity();
+        if current_capacity > previous_capacity {
+            self.map_size = current_capacity * size_of::<(u64, GroupIndexView)>();
+        }
     }
 
     // ========================================================================
@@ -348,11 +359,22 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<()> {
+        self.scalarized_intern_impl(cols, opt_filter, groups)
+    }
+
+    fn scalarized_intern_impl(
+        &mut self,
+        cols: &[ArrayRef],
+        filter_array: Option<&BooleanArray>,
+        groups: &mut Vec<usize>,
     ) -> Result<()> {
         let n_rows = cols[0].len();
 
         // tracks to which group each of the input rows belongs
         groups.clear();
+        groups.resize(n_rows, usize::MAX);
 
         // 1.1 Calculate the group keys for the group values
         let batch_hashes = &mut self.hashes_buffer;
@@ -361,6 +383,11 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
+            if filter_array
+                .is_some_and(|filter| !filter.is_valid(row) || !filter.value(row))
+            {
+                continue;
+            }
             let entry = self
                 .map
                 .find_mut(target_hash, |(exist_hash, group_idx_view)| {
@@ -407,17 +434,12 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                     // let group_idx = group_values.num_rows();
                     // group_values.push(group_rows.row(row));
 
-                    let mut checklen = 0;
-                    let group_idx = self.group_values[0].len();
+                    let group_idx = self.num_groups;
                     for (i, group_value) in self.group_values.iter_mut().enumerate() {
                         group_value.append_val(&cols[i], row)?;
-                        let len = group_value.len();
-                        if i == 0 {
-                            checklen = len;
-                        } else {
-                            debug_assert_eq!(checklen, len);
-                        }
+                        debug_assert_eq!(group_value.len(), group_idx + 1);
                     }
+                    self.num_groups += 1;
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
@@ -428,7 +450,75 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                     group_idx
                 }
             };
-            groups.push(group_idx);
+            groups[row] = group_idx;
+        }
+
+        Ok(())
+    }
+
+    fn scalarized_intern_partitioned_impl(
+        &mut self,
+        cols: &[ArrayRef],
+        batch_hashes: &[u64],
+        partition_indices: &[usize],
+        groups: &mut Vec<usize>,
+    ) -> Result<()> {
+        let n_rows = cols[0].len();
+        groups.clear();
+        groups.resize(n_rows, usize::MAX);
+
+        for &row in partition_indices {
+            let target_hash = batch_hashes[row];
+            let entry = self
+                .map
+                .find_mut(target_hash, |(exist_hash, group_idx_view)| {
+                    debug_assert!(!group_idx_view.is_non_inlined());
+                    if target_hash != *exist_hash {
+                        return false;
+                    }
+
+                    fn check_row_equal(
+                        array_row: &dyn GroupColumn,
+                        lhs_row: usize,
+                        array: &ArrayRef,
+                        rhs_row: usize,
+                    ) -> bool {
+                        array_row.equal_to(lhs_row, array, rhs_row)
+                    }
+
+                    for (idx, group_val) in self.group_values.iter().enumerate() {
+                        if !check_row_equal(
+                            group_val.as_ref(),
+                            group_idx_view.value() as usize,
+                            &cols[idx],
+                            row,
+                        ) {
+                            return false;
+                        }
+                    }
+
+                    true
+                });
+
+            let group_idx = match entry {
+                Some((_hash, group_idx_view)) => group_idx_view.value() as usize,
+                None => {
+                    let group_idx = self.num_groups;
+                    for (idx, group_value) in self.group_values.iter_mut().enumerate() {
+                        group_value.append_val(&cols[idx], row)?;
+                        debug_assert_eq!(group_value.len(), group_idx + 1);
+                    }
+                    self.num_groups += 1;
+
+                    self.map.insert_accounted(
+                        (target_hash, GroupIndexView::new_inlined(group_idx as u64)),
+                        |(hash, _group_index)| *hash,
+                        &mut self.map_size,
+                    );
+                    group_idx
+                }
+            };
+            groups[row] = group_idx;
         }
 
         Ok(())
@@ -448,6 +538,16 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     fn vectorized_intern(
         &mut self,
         cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<()> {
+        self.vectorized_intern_impl(cols, opt_filter, groups)
+    }
+
+    fn vectorized_intern_impl(
+        &mut self,
+        cols: &[ArrayRef],
+        filter_array: Option<&BooleanArray>,
         groups: &mut Vec<usize>,
     ) -> Result<()> {
         let n_rows = cols[0].len();
@@ -482,7 +582,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         //
 
         // 1. Collect vectorized context by checking hash values of `cols` in `map`
-        self.collect_vectorized_process_context(&batch_hashes, groups);
+        self.collect_vectorized_process_context(&batch_hashes, filter_array, groups);
 
         // 2. Perform `vectorized_append`
         self.vectorized_append(cols)?;
@@ -495,6 +595,30 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         self.scalarized_intern_remaining(cols, &batch_hashes, groups)?;
 
         self.hashes_buffer = batch_hashes;
+
+        Ok(())
+    }
+
+    fn vectorized_intern_partitioned_impl(
+        &mut self,
+        cols: &[ArrayRef],
+        batch_hashes: &[u64],
+        partition_indices: &[usize],
+        groups: &mut Vec<usize>,
+    ) -> Result<()> {
+        let n_rows = cols[0].len();
+
+        groups.clear();
+        groups.resize(n_rows, usize::MAX);
+
+        self.collect_vectorized_process_context_partitioned(
+            batch_hashes,
+            partition_indices,
+            groups,
+        );
+        self.vectorized_append(cols)?;
+        self.vectorized_equal_to(cols, groups);
+        self.scalarized_intern_remaining(cols, batch_hashes, groups)?;
 
         Ok(())
     }
@@ -515,6 +639,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     fn collect_vectorized_process_context(
         &mut self,
         batch_hashes: &[u64],
+        filter_array: Option<&BooleanArray>,
         groups: &mut [usize],
     ) {
         self.vectorized_operation_buffers.append_row_indices.clear();
@@ -526,35 +651,42 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             .clear();
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
-            let entry = self
-                .map
-                .find(target_hash, |(exist_hash, _)| target_hash == *exist_hash);
-
-            let Some((_, group_index_view)) = entry else {
-                // 1. Bucket not found case
-                // Build `new inlined group index view`
-                let current_group_idx = self.group_values[0].len()
-                    + self.vectorized_operation_buffers.append_row_indices.len();
-                let group_index_view =
-                    GroupIndexView::new_inlined(current_group_idx as u64);
-
-                // Insert the `group index view` and its hash into `map`
-                // for hasher function, use precomputed hash value
-                self.map.insert_accounted(
-                    (target_hash, group_index_view),
-                    |(hash, _)| *hash,
-                    &mut self.map_size,
-                );
-
-                // Add row index to `vectorized_append_row_indices`
-                self.vectorized_operation_buffers
-                    .append_row_indices
-                    .push(row);
-
-                // Set group index to row in `groups`
-                groups[row] = current_group_idx;
-
+            if filter_array
+                .is_some_and(|filter| !filter.is_valid(row) || !filter.value(row))
+            {
                 continue;
+            }
+
+            let previous_capacity = self.map.capacity();
+            let group_index_view = match self.map.entry(
+                target_hash,
+                |(exist_hash, _)| target_hash == *exist_hash,
+                |(hash, _)| *hash,
+            ) {
+                Entry::Occupied(entry) => entry.get().1,
+                Entry::Vacant(entry) => {
+                    // 1. Bucket not found case
+                    // Build `new inlined group index view`
+                    let current_group_idx = self.num_groups
+                        + self.vectorized_operation_buffers.append_row_indices.len();
+                    let group_index_view =
+                        GroupIndexView::new_inlined(current_group_idx as u64);
+
+                    // Insert the `group index view` and its hash into `map`
+                    // for hasher function, use precomputed hash value
+                    entry.insert((target_hash, group_index_view));
+                    self.account_map_capacity_growth(previous_capacity);
+
+                    // Add row index to `vectorized_append_row_indices`
+                    self.vectorized_operation_buffers
+                        .append_row_indices
+                        .push(row);
+
+                    // Set group index to row in `groups`
+                    groups[row] = current_group_idx;
+
+                    continue;
+                }
             };
 
             // 2. bucket found
@@ -563,6 +695,69 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                 // Non-inlined case, the value of view is offset in `group_index_lists`.
                 // We use it to get `group_index_list`, and add related `rows` and `group_indices`
                 // into `vectorized_equal_to_row_indices` and `vectorized_equal_to_group_indices`.
+                let list_offset = group_index_view.value() as usize;
+                let group_index_list = &self.group_index_lists[list_offset];
+
+                self.vectorized_operation_buffers
+                    .equal_to_group_indices
+                    .extend_from_slice(group_index_list);
+                self.vectorized_operation_buffers
+                    .equal_to_row_indices
+                    .extend(std::iter::repeat_n(row, group_index_list.len()));
+            } else {
+                let group_index = group_index_view.value() as usize;
+                self.vectorized_operation_buffers
+                    .equal_to_row_indices
+                    .push(row);
+                self.vectorized_operation_buffers
+                    .equal_to_group_indices
+                    .push(group_index);
+            }
+        }
+    }
+
+    fn collect_vectorized_process_context_partitioned(
+        &mut self,
+        batch_hashes: &[u64],
+        partition_indices: &[usize],
+        groups: &mut [usize],
+    ) {
+        self.vectorized_operation_buffers.append_row_indices.clear();
+        self.vectorized_operation_buffers
+            .equal_to_row_indices
+            .clear();
+        self.vectorized_operation_buffers
+            .equal_to_group_indices
+            .clear();
+
+        for &row in partition_indices {
+            let target_hash = batch_hashes[row];
+            let previous_capacity = self.map.capacity();
+            let group_index_view = match self.map.entry(
+                target_hash,
+                |(exist_hash, _)| target_hash == *exist_hash,
+                |(hash, _)| *hash,
+            ) {
+                Entry::Occupied(entry) => entry.get().1,
+                Entry::Vacant(entry) => {
+                    let current_group_idx = self.num_groups
+                        + self.vectorized_operation_buffers.append_row_indices.len();
+                    let group_index_view =
+                        GroupIndexView::new_inlined(current_group_idx as u64);
+
+                    entry.insert((target_hash, group_index_view));
+                    self.account_map_capacity_growth(previous_capacity);
+
+                    self.vectorized_operation_buffers
+                        .append_row_indices
+                        .push(row);
+                    groups[row] = current_group_idx;
+
+                    continue;
+                }
+            };
+
+            if group_index_view.is_non_inlined() {
                 let list_offset = group_index_view.value() as usize;
                 let group_index_list = &self.group_index_lists[list_offset];
 
@@ -594,13 +789,16 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             return Ok(());
         }
 
+        let num_new_groups = self.vectorized_operation_buffers.append_row_indices.len();
         let iter = self.group_values.iter_mut().zip(cols.iter());
         for (group_column, col) in iter {
             group_column.vectorized_append(
                 col,
                 &self.vectorized_operation_buffers.append_row_indices,
             )?;
+            debug_assert_eq!(group_column.len(), self.num_groups + num_new_groups);
         }
+        self.num_groups += num_new_groups;
 
         Ok(())
     }
@@ -779,17 +977,12 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             }
 
             // Insert the `row` to `group_values` before checking `next row`
-            let group_idx = self.group_values[0].len();
-            let mut checklen = 0;
+            let group_idx = self.num_groups;
             for (i, group_value) in self.group_values.iter_mut().enumerate() {
                 group_value.append_val(&cols[i], row)?;
-                let len = group_value.len();
-                if i == 0 {
-                    checklen = len;
-                } else {
-                    debug_assert_eq!(checklen, len);
-                }
+                debug_assert_eq!(group_value.len(), group_idx + 1);
             }
+            self.num_groups += 1;
 
             // Check if the `view` is `inlined` or `non-inlined`
             if group_index_view.is_non_inlined() {
@@ -1083,10 +1276,38 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         // `self.group_values` populated with one builder per schema field,
         // so no lazy initialization is needed here.
         if !STREAMING {
-            self.vectorized_intern(cols, groups)
+            self.vectorized_intern(cols, groups, None)
         } else {
-            self.scalarized_intern(cols, groups)
+            self.scalarized_intern(cols, groups, None)
         }
+    }
+
+    fn intern_partitioned(
+        &mut self,
+        cols: &[ArrayRef],
+        hashes: &[u64],
+        groups: &mut Vec<usize>,
+        partition_indices: &[usize],
+    ) -> Result<()> {
+        if !STREAMING {
+            self.vectorized_intern_partitioned_impl(
+                cols,
+                hashes,
+                partition_indices,
+                groups,
+            )
+        } else {
+            self.scalarized_intern_partitioned_impl(
+                cols,
+                hashes,
+                partition_indices,
+                groups,
+            )
+        }
+    }
+
+    fn supports_intern_partitioned(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {
@@ -1099,11 +1320,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     }
 
     fn len(&self) -> usize {
-        if self.group_values.is_empty() {
-            return 0;
-        }
-
-        self.group_values[0].len()
+        self.num_groups
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
@@ -1117,6 +1334,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                 // a real Result rather than panicking.
                 let fresh = Self::build_group_columns(&self.schema)?;
                 let group_values = mem::replace(&mut self.group_values, fresh);
+                self.num_groups = 0;
 
                 group_values
                     .into_iter()
@@ -1192,6 +1410,10 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                 if !STREAMING {
                     self.group_index_lists.truncate(next_new_list_offset);
                 }
+                self.num_groups = self
+                    .num_groups
+                    .checked_sub(n)
+                    .expect("EmitTo::First cannot emit more groups than stored");
 
                 output
             }
@@ -1221,6 +1443,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         // `clear_shrink` is infallible by trait signature.
         self.group_values = Self::build_group_columns(&self.schema)
             .expect("schema previously validated in try_new");
+        self.num_groups = 0;
         self.map.clear();
         // self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
         self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
@@ -1350,6 +1573,33 @@ mod tests {
                 "group_column_supported_type rejected {dt:?} but make_group_column accepted it"
             );
         }
+    }
+
+    #[test]
+    fn group_values_column_intern_partitioned_skips_unlisted_rows() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Utf8View, false),
+        ]));
+        let cols = vec![
+            Arc::new(Int64Array::from(vec![1, 2, 1, 3])) as ArrayRef,
+            Arc::new(StringViewArray::from(vec!["x", "y", "x", "z"])) as ArrayRef,
+        ];
+        let partition_indices = vec![0, 2, 3];
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
+        let mut groups = Vec::new();
+        let mut hashes = Vec::new();
+
+        group_values.create_hashes(&cols, &mut hashes).unwrap();
+        group_values
+            .intern_partitioned(&cols, &hashes, &mut groups, &partition_indices)
+            .unwrap();
+
+        assert_eq!(groups.len(), 4);
+        assert_eq!(groups[0], groups[2]);
+        assert_eq!(groups[1], usize::MAX);
+        assert_ne!(groups[0], groups[3]);
+        assert_eq!(group_values.len(), 2);
     }
 
     #[test]

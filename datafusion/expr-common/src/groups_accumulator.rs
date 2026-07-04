@@ -194,6 +194,26 @@ pub trait GroupsAccumulator: Send + std::any::Any {
         total_num_groups: usize,
     ) -> Result<()>;
 
+    /// Merges selected intermediate state rows into this accumulator's current state.
+    ///
+    /// `partition_indices` contains row indices into `values` and `group_indices`
+    /// that should be merged. This is used by final partition replay to avoid
+    /// materializing filtered state arrays.
+    fn merge_partitioned_batch(
+        &mut self,
+        _values: &[ArrayRef],
+        _group_indices: &[usize],
+        _partition_indices: &[usize],
+        _total_num_groups: usize,
+    ) -> Result<()> {
+        not_impl_err!("Partitioned grouped merge batch is not implemented")
+    }
+
+    /// Returns `true` if [`Self::merge_partitioned_batch`] is implemented.
+    fn supports_merge_partitioned_batch(&self) -> bool {
+        false
+    }
+
     /// Converts an input batch directly to the intermediate aggregate state.
     ///
     /// This is the equivalent of treating each input row as its own group. It

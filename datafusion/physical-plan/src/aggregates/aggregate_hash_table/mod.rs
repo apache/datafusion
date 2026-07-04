@@ -20,5 +20,6 @@ mod final_table;
 mod partial_table;
 
 pub(super) use common::{
-    AggregateHashTable, FinalMarker, PartialMarker, PartialSkipMarker,
+    AggregateHashTable, EvaluatedAggregateBatch, FinalMarker, PartialMarker,
+    PartialSkipMarker,
 };

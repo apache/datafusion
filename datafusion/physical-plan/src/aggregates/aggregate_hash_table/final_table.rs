@@ -19,14 +19,14 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_expr::EmitTo;
 
 use crate::aggregates::AggregateExec;
 
 use super::common::{
-    AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState, FinalMarker,
-    MaterializedAggregateOutput,
+    AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
+    EvaluatedAggregateBatch, FinalMarker, MaterializedAggregateOutput,
 };
 
 /// Methods specific to the aggregate hash table used in the final aggregation stage.
@@ -152,6 +152,77 @@ impl AggregateHashTable<FinalMarker> {
         Ok(())
     }
 
+    pub(in crate::aggregates) fn create_group_hashes(
+        &self,
+        evaluated_batch: &EvaluatedAggregateBatch,
+    ) -> Result<Vec<u64>> {
+        assert_eq_or_internal_err!(
+            evaluated_batch.grouping_set_args.len(),
+            1,
+            "final partition replay expects a single grouping set"
+        );
+
+        let state = self.state.building();
+        let group_values = &evaluated_batch.grouping_set_args[0];
+        let mut hashes = Vec::new();
+        let timer = self.group_by_metrics.time_calculating_group_ids.timer();
+        state
+            .group_values
+            .create_hashes(group_values, &mut hashes)?;
+        drop(timer);
+        Ok(hashes)
+    }
+
+    pub(in crate::aggregates) fn aggregate_partitioned_evaluated_batch(
+        &mut self,
+        evaluated_batch: &EvaluatedAggregateBatch,
+        group_hashes: &[u64],
+        partition_indices: &[usize],
+    ) -> Result<()> {
+        assert_eq_or_internal_err!(
+            evaluated_batch.grouping_set_args.len(),
+            1,
+            "final partition replay expects a single grouping set"
+        );
+
+        let state = self.state.building_mut();
+        let group_values = &evaluated_batch.grouping_set_args[0];
+
+        let timer = self.group_by_metrics.aggregation_time.timer();
+        state.group_values.intern_partitioned(
+            group_values,
+            group_hashes,
+            &mut state.batch_group_indices,
+            partition_indices,
+        )?;
+        let group_indices = &state.batch_group_indices;
+        let total_num_groups = state.group_values.len();
+
+        for (acc, values) in state
+            .accumulators
+            .iter_mut()
+            .zip(evaluated_batch.accumulator_args.iter())
+        {
+            acc.merge_partitioned_batch(
+                values,
+                group_indices,
+                partition_indices,
+                total_num_groups,
+            )?;
+        }
+        drop(timer);
+
+        Ok(())
+    }
+
+    pub(in crate::aggregates) fn supports_partitioned_merge(&self) -> bool {
+        let state = self.state.building();
+        state.group_values.supports_intern_partitioned()
+            && state
+                .accumulators
+                .iter()
+                .all(|acc| acc.supports_merge_partitioned_batch())
+    }
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {
         self.start_outputting();
         Ok(())

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![allow(dead_code)]
+
 //! Internal helpers for hash aggregate repartition subpartitions.
 //!
 //! This module does NOT perform repartitioning or aggregation. It only owns the
@@ -325,7 +327,7 @@ pub(crate) fn set_partition_runs_metadata(
     Ok(batch)
 }
 
-fn subpartition_column_index(schema: &Schema) -> Option<usize> {
+pub(crate) fn subpartition_column_index(schema: &Schema) -> Option<usize> {
     schema
         .fields()
         .iter()

@@ -137,6 +137,40 @@ where
         self.update_batch(values, group_indices, None, total_num_groups)
     }
 
+    fn merge_partitioned_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        partition_indices: &[usize],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(
+            values.len(),
+            1,
+            "single argument to merge_partitioned_batch"
+        );
+        let values = values[0].as_primitive::<T>();
+
+        self.values.resize(total_num_groups, self.starting_value);
+        self.null_state.accumulate_by_indices(
+            group_indices,
+            values,
+            partition_indices,
+            total_num_groups,
+            |group_index, new_value| {
+                // SAFETY: group_index is guaranteed to be in bounds
+                let value = unsafe { self.values.get_unchecked_mut(group_index) };
+                (self.prim_fn)(value, new_value);
+            },
+        );
+
+        Ok(())
+    }
+
+    fn supports_merge_partitioned_batch(&self) -> bool {
+        true
+    }
+
     /// Converts an input batch directly to a state batch
     ///
     /// The state is:

@@ -141,7 +141,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     }
 
     /// See comments in [`EvaluatedAggregateBatch`]
-    pub(super) fn evaluate_batch(
+    pub(in crate::aggregates) fn evaluate_batch(
         &self,
         batch: &RecordBatch,
     ) -> Result<EvaluatedAggregateBatch> {
@@ -234,24 +234,55 @@ pub(super) struct HashAggregateAccumulator {
 /// and `x > 0`.
 ///
 /// These arrays can be passed directly to [`GroupsAccumulator`].
-pub(super) struct EvaluatedAccumulatorArgs {
+pub(in crate::aggregates) struct EvaluatedAccumulatorArgs {
     /// Evaluated argument arrays. Some aggregate functions take multiple arguments.
-    pub(super) arguments: Vec<ArrayRef>,
+    pub(in crate::aggregates) arguments: Vec<ArrayRef>,
     /// Evaluated filter array, `Some` if the aggregate has a `FILTER` expression.
-    pub(super) filter: Option<ArrayRef>,
+    pub(in crate::aggregates) filter: Option<ArrayRef>,
+}
+
+impl EvaluatedAccumulatorArgs {
+    pub(in crate::aggregates) fn memory_size(&self) -> usize {
+        self.arguments
+            .iter()
+            .map(|array| array.get_array_memory_size())
+            .sum::<usize>()
+            + self
+                .filter
+                .as_ref()
+                .map(|array| array.get_array_memory_size())
+                .unwrap_or_default()
+    }
 }
 
 /// Evaluated all group by keys and accumulator args.
 ///
 /// e.g., `select k+1, sum(v*v) from t group by (k+1)`, this function evaluates
 /// `k+1`, `v*v`
-pub(super) struct EvaluatedAggregateBatch {
+pub(in crate::aggregates) struct EvaluatedAggregateBatch {
     /// One entry per grouping set; each entry contains all evaluated group key
     /// arrays for the current input batch.
-    pub(super) grouping_set_args: Vec<Vec<ArrayRef>>,
+    pub(in crate::aggregates) grouping_set_args: Vec<Vec<ArrayRef>>,
 
     /// Evaluated arguments and filters, one entry per aggregate expression.
-    pub(super) accumulator_args: Vec<EvaluatedAccumulatorArgs>,
+    pub(in crate::aggregates) accumulator_args: Vec<EvaluatedAccumulatorArgs>,
+}
+
+impl EvaluatedAggregateBatch {
+    pub(in crate::aggregates) fn memory_size(&self) -> usize {
+        let grouping_set_args_size = self
+            .grouping_set_args
+            .iter()
+            .flatten()
+            .map(|array| array.get_array_memory_size())
+            .sum::<usize>();
+        let accumulator_args_size = self
+            .accumulator_args
+            .iter()
+            .map(EvaluatedAccumulatorArgs::memory_size)
+            .sum::<usize>();
+        grouping_set_args_size + accumulator_args_size
+    }
 }
 
 /// Buffer for the aggregate hash table's group keys and accumulator states.
@@ -450,6 +481,26 @@ impl HashAggregateAccumulator {
         debug_assert!(values.filter.is_none());
         self.accumulator
             .merge_batch(&values.arguments, group_indices, total_num_groups)
+    }
+
+    pub(super) fn merge_partitioned_batch(
+        &mut self,
+        values: &EvaluatedAccumulatorArgs,
+        group_indices: &[usize],
+        partition_indices: &[usize],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        debug_assert!(values.filter.is_none());
+        self.accumulator.merge_partitioned_batch(
+            &values.arguments,
+            group_indices,
+            partition_indices,
+            total_num_groups,
+        )
+    }
+
+    pub(super) fn supports_merge_partitioned_batch(&self) -> bool {
+        self.accumulator.supports_merge_partitioned_batch()
     }
 
     /// Evaluating final aggregate results according to `EmitTo`, and reset inner
