@@ -1297,7 +1297,11 @@ impl SessionContext {
         if limit.trim().is_empty() {
             return Err(plan_datafusion_err!("Empty limit value found!"));
         }
-        let (number, unit) = limit.split_at(limit.len() - 1);
+        let (unit_start, unit) = limit
+            .char_indices()
+            .next_back()
+            .ok_or_else(|| plan_datafusion_err!("Empty limit value found!"))?;
+        let number = &limit[..unit_start];
         let number: f64 = number.parse().map_err(|_| {
             plan_datafusion_err!("Failed to parse number from memory limit '{limit}'")
         })?;
@@ -1308,9 +1312,9 @@ impl SessionContext {
         }
 
         match unit {
-            "K" => Ok((number * 1024.0) as usize),
-            "M" => Ok((number * 1024.0 * 1024.0) as usize),
-            "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
+            'K' => Ok((number * 1024.0) as usize),
+            'M' => Ok((number * 1024.0 * 1024.0) as usize),
+            'G' => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
             _ => plan_err!("Unsupported unit '{unit}' in memory limit '{limit}'"),
         }
     }
@@ -1340,7 +1344,10 @@ impl SessionContext {
         if limit == "0" {
             return Ok(0);
         }
-        let (number, unit) = limit.split_at(limit.len() - 1);
+        let (unit_start, unit) = limit.char_indices().next_back().ok_or_else(|| {
+            plan_datafusion_err!("Empty limit value found for '{config_name}'")
+        })?;
+        let number = &limit[..unit_start];
         let number: f64 = number.parse().map_err(|_| {
             plan_datafusion_err!(
                 "Failed to parse number from '{config_name}', limit '{limit}'"
@@ -1353,9 +1360,9 @@ impl SessionContext {
         }
 
         match unit {
-            "K" => Ok((number * 1024.0) as usize),
-            "M" => Ok((number * 1024.0 * 1024.0) as usize),
-            "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
+            'K' => Ok((number * 1024.0) as usize),
+            'M' => Ok((number * 1024.0 * 1024.0) as usize),
+            'G' => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
             _ => plan_err!(
                 "Unsupported unit '{unit}' in '{config_name}', limit '{limit}'. \
             Unit must be one of: 'K', 'M', 'G'"
@@ -1374,14 +1381,20 @@ impl SessionContext {
         let mut seconds = None;
 
         for duration in duration.split_inclusive(&['m', 's']) {
-            let (number, unit) = duration.split_at(duration.len() - 1);
+            let (unit_start, unit) =
+                duration.char_indices().next_back().ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Duration should not be empty or blank for '{config_name}'"
+                    )
+                })?;
+            let number = &duration[..unit_start];
             let number: u64 = number.parse().map_err(|_| {
                 plan_datafusion_err!("Failed to parse number from duration '{duration}' for '{config_name}'")
             })?;
 
             match unit {
-                "m" if minutes.is_none() && seconds.is_none() => minutes = Some(number),
-                "s" if seconds.is_none() => seconds = Some(number),
+                'm' if minutes.is_none() && seconds.is_none() => minutes = Some(number),
+                's' if seconds.is_none() => seconds = Some(number),
                 other => plan_err!(
                     "Invalid duration unit: '{other}'. The unit must be either 'm' (minutes), or 's' (seconds), and be in the correct order for '{config_name}'"
                 )?,
@@ -2969,7 +2982,7 @@ mod tests {
         // Invalid durations
         for duration in [
             "0s", "0m", "1s0m", "1s1m", "XYZ", "1h", "XYZm2s", "", " ", "-1m", "1m 1s",
-            "1m1s ", " 1m1s",
+            "1m1s ", " 1m1s", "1\u{b5}",
         ] {
             let have = SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration);
             assert!(have.is_err());
@@ -3065,6 +3078,7 @@ mod tests {
             "G",
             "1024B",
             "invalid_size",
+            "1\u{b5}",
         ] {
             #[expect(deprecated)]
             let have = SessionContext::parse_memory_limit(limit);
@@ -3100,6 +3114,7 @@ mod tests {
             "G",
             "1024B",
             "invalid_size",
+            "1\u{b5}",
         ] {
             let have = SessionContext::parse_capacity_limit(MEMORY_LIMIT, limit);
             assert!(have.is_err());
