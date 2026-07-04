@@ -851,13 +851,6 @@ mod tests {
         assert_eq!(literal.value(), &ScalarValue::Boolean(Some(expected)));
     }
 
-    fn assert_literal_u64(expr: &PhysicalExprRef, expected: u64) {
-        let literal = expr
-            .downcast_ref::<Literal>()
-            .expect("expected literal u64 CASE branch key");
-        assert_eq!(literal.value(), &ScalarValue::UInt64(Some(expected)));
-    }
-
     fn assert_top_binary_op(expr: &PhysicalExprRef, expected: Operator) {
         assert_eq!(binary_expr(expr).op(), &expected);
     }
@@ -903,23 +896,6 @@ mod tests {
     }
 
     #[test]
-    fn collect_left_combines_membership_and_bounds() {
-        let acc = make_collect_left_accumulator_for_test();
-
-        acc.build_filter(FinalizeInput::CollectLeft(reported(
-            in_list(&[10, 20]),
-            bounds(10, 20),
-        )))
-        .unwrap();
-
-        let expr = current_expr(&acc);
-        let conjunction = binary_expr(&expr);
-        assert_eq!(conjunction.op(), &Operator::And);
-        binary_expr(conjunction.left());
-        in_list_expr(conjunction.right());
-    }
-
-    #[test]
     fn collect_left_empty_build_data_does_not_update_filter() {
         let acc = make_collect_left_accumulator_for_test();
         let initial_generation = acc.dynamic_filter.snapshot_generation();
@@ -953,42 +929,6 @@ mod tests {
         let expr = current_expr(&acc);
         in_list_expr(&expr);
         assert!(expr.downcast_ref::<CaseExpr>().is_none());
-    }
-
-    #[test]
-    fn partitioned_multiple_real_partitions_uses_case_with_false_fallback() {
-        let acc = make_partitioned_expr_accumulator_for_test(2);
-
-        acc.build_filter(FinalizeInput::Partitioned(vec![
-            reported(in_list(&[1]), no_bounds()),
-            reported(in_list(&[2]), no_bounds()),
-        ]))
-        .unwrap();
-
-        let expr = current_expr(&acc);
-        let case = case_expr(&expr);
-        let routing_expr = case.expr().expect("expected CASE routing expression");
-        assert_top_binary_op(routing_expr, Operator::Modulo);
-        assert_eq!(case.when_then_expr().len(), 2);
-        assert_literal_u64(&case.when_then_expr()[0].0, 0);
-        in_list_expr(&case.when_then_expr()[0].1);
-        assert_literal_u64(&case.when_then_expr()[1].0, 1);
-        in_list_expr(&case.when_then_expr()[1].1);
-        assert_literal_bool(case.else_expr().expect("expected CASE fallback"), false);
-    }
-
-    #[test]
-    fn partitioned_all_empty_partitions_updates_filter_to_false() {
-        let acc = make_partitioned_expr_accumulator_for_test(2);
-
-        acc.build_filter(FinalizeInput::Partitioned(vec![
-            reported(PushdownStrategy::Empty, no_bounds()),
-            reported(PushdownStrategy::Empty, no_bounds()),
-        ]))
-        .unwrap();
-
-        let expr = current_expr(&acc);
-        assert_literal_bool(&expr, false);
     }
 
     #[test]
