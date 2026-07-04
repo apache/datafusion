@@ -99,7 +99,7 @@ pub(in crate::aggregates) struct AggregateHashTable {
     /// Grouping and accumulator-specific timing metrics.
     pub(super) group_by_metrics: GroupByMetrics,
 
-    /// Semantic behavior for this table.
+    /// Semantic behavior for this table. See struct comments for details.
     pub(super) mode: AggregateTableMode,
 
     /// Raw input schema, used to evaluate expressions and synthesize empty
@@ -322,11 +322,9 @@ impl AggregateHashTable {
         self.state = AggregateHashTableState::Outputting(state);
     }
 
-    /// Aggregates one input batch according to this table's input semantics.
+    /// Aggregates one input batch. The behavior depends on the aggregate mode.
     ///
-    /// `Partial` and `Single` update accumulator state from raw input rows.
-    /// `Final` and `PartialReduce` merge accumulator state emitted by an
-    /// earlier aggregate stage.
+    /// See comments at [`AggregateHashTable`] for details.
     pub(in crate::aggregates) fn aggregate_batch(
         &mut self,
         batch: &RecordBatch,
@@ -343,16 +341,22 @@ impl AggregateHashTable {
             let group_indices = &state.batch_group_indices;
             let total_num_groups = state.group_values.len();
 
-            for (acc, values) in state
-                .accumulators
-                .iter_mut()
-                .zip(evaluated_batch.accumulator_args.iter())
-            {
-                match mode {
-                    AggregateTableMode::Partial | AggregateTableMode::Single => {
+            match mode {
+                AggregateTableMode::Partial | AggregateTableMode::Single => {
+                    for (acc, values) in state
+                        .accumulators
+                        .iter_mut()
+                        .zip(evaluated_batch.accumulator_args.iter())
+                    {
                         acc.update_batch(values, group_indices, total_num_groups)?
                     }
-                    AggregateTableMode::Final | AggregateTableMode::PartialReduce => {
+                }
+                AggregateTableMode::Final | AggregateTableMode::PartialReduce => {
+                    for (acc, values) in state
+                        .accumulators
+                        .iter_mut()
+                        .zip(evaluated_batch.accumulator_args.iter())
+                    {
                         acc.merge_batch(values, group_indices, total_num_groups)?
                     }
                 }
@@ -393,7 +397,9 @@ impl AggregateHashTable {
             }
         }
     }
-
+    /// Materialize the aggregated output. The behavior depends on the aggregate mode.
+    ///
+    /// See comments at [`AggregateHashTable`] for details.
     fn materialize_output(
         &self,
         mut state: AggregateHashTableBuffer,
@@ -405,12 +411,14 @@ impl AggregateHashTable {
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = state.group_values.emit(emit_to)?;
 
-        for acc in state.accumulators.iter_mut() {
-            match self.mode {
-                AggregateTableMode::Partial | AggregateTableMode::PartialReduce => {
+        match self.mode {
+            AggregateTableMode::Partial | AggregateTableMode::PartialReduce => {
+                for acc in state.accumulators.iter_mut() {
                     output.extend(acc.state(emit_to)?)
                 }
-                AggregateTableMode::Final | AggregateTableMode::Single => {
+            }
+            AggregateTableMode::Final | AggregateTableMode::Single => {
+                for acc in state.accumulators.iter_mut() {
                     output.push(acc.evaluate(emit_to)?)
                 }
             }
