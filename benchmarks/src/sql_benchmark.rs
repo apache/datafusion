@@ -75,6 +75,20 @@ impl SqlBenchmark {
         full_path: impl AsRef<Path>,
         benchmark_directory: impl AsRef<Path>,
     ) -> Result<Self> {
+        Self::new_with_replacements(ctx, full_path, benchmark_directory, HashMap::new())
+            .await
+    }
+
+    /// Creates a benchmark using caller-provided template replacements.
+    ///
+    /// Caller values take precedence over environment variables during
+    /// `${...}` substitution; `BENCHMARK_DIR` is still set internally.
+    pub async fn new_with_replacements(
+        ctx: &SessionContext,
+        full_path: impl AsRef<Path>,
+        benchmark_directory: impl AsRef<Path>,
+        replacement_mapping: HashMap<String, String>,
+    ) -> Result<Self> {
         let full_path = full_path.as_ref();
         let benchmark_directory = benchmark_directory.as_ref();
         let group_name = parse_group_from_path(full_path, benchmark_directory);
@@ -83,7 +97,7 @@ impl SqlBenchmark {
             group: group_name,
             subgroup: String::new(),
             benchmark_path: full_path.to_path_buf(),
-            replacement_mapping: HashMap::new(),
+            replacement_mapping,
             expect: vec![],
             queries: HashMap::new(),
             result_queries: vec![],
@@ -201,7 +215,11 @@ impl SqlBenchmark {
     /// # Errors
     /// Returns an error if a `run` query fails or if expected plan strings
     /// are not found.
-    pub async fn run(&mut self, ctx: &SessionContext, save_results: bool) -> Result<()> {
+    pub async fn run(
+        &mut self,
+        ctx: &SessionContext,
+        save_results: bool,
+    ) -> Result<usize> {
         let run_queries = self
             .queries
             .get(&QueryDirective::Run)
@@ -270,7 +288,7 @@ impl SqlBenchmark {
         // Store results for verification
         self.last_results = Some(result);
 
-        Ok(())
+        Ok(result_count)
     }
 
     /// Calls run and persists results to disk as a CSV file.
@@ -283,7 +301,7 @@ impl SqlBenchmark {
     /// Returns an error if no results are available or if writing to the
     /// target path fails.
     pub async fn persist(&mut self, ctx: &SessionContext) -> Result<()> {
-        self.run(ctx, true).await?;
+        let _ = self.run(ctx, true).await?;
 
         // Check if we have result queries to persist for
         if self.result_queries.is_empty() {
@@ -837,10 +855,14 @@ impl BenchmarkDirective {
                 ));
             }
 
-            debug!("Processing {} file: {}", splits[0], splits[1]);
+            let query_path = resolve_benchmark_file_path(splits[1]);
+            debug!("Processing {} file: {}", splits[0], query_path.display());
 
-            let query_file = fs::read_to_string(splits[1]).map_err(|e| {
-                exec_datafusion_err!("Failed to read query file {}: {e}", splits[1])
+            let query_file = fs::read_to_string(&query_path).map_err(|e| {
+                exec_datafusion_err!(
+                    "Failed to read query file {}: {e}",
+                    query_path.display()
+                )
             })?;
             let query_file = query_file.replace("\r\n", "\n");
 
@@ -1121,7 +1143,8 @@ impl BenchmarkDirective {
         }
 
         // restart the load from the template file
-        Box::pin(bench.process_file(ctx, Path::new(splits[1]))).await
+        let path = resolve_benchmark_file_path(splits[1]);
+        Box::pin(bench.process_file(ctx, &path)).await
     }
 
     async fn process_include(
@@ -1137,7 +1160,8 @@ impl BenchmarkDirective {
             ));
         }
 
-        Box::pin(bench.process_file(ctx, Path::new(splits[1]))).await
+        let path = resolve_benchmark_file_path(splits[1]);
+        Box::pin(bench.process_file(ctx, &path)).await
     }
 
     fn process_echo(
@@ -1552,6 +1576,15 @@ fn make_array_formatter<'a>(
     }
 }
 
+fn resolve_benchmark_file_path(path: &str) -> PathBuf {
+    let path = PathBuf::from(path);
+    if path.is_absolute() || path.exists() {
+        path
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1633,6 +1666,42 @@ mod tests {
             insert_replacement(&mut replacements, key, value.to_string());
         }
         replacements
+    }
+
+    #[test]
+    fn resolves_sql_benchmarks_paths_from_manifest_directory() {
+        let path =
+            resolve_benchmark_file_path("sql_benchmarks/clickbench/init/set_config.sql");
+
+        assert!(path.exists(), "resolved path should exist: {path:?}");
+    }
+
+    #[tokio::test]
+    async fn run_returns_row_count_when_not_saving_results() {
+        let contents = "name Q01\n\nrun\nSELECT * FROM (VALUES (1), (2), (3)) AS t(v)\n";
+        let mut benchmark = parse_benchmark(contents).await.unwrap();
+        let ctx = SessionContext::new();
+
+        benchmark.initialize(&ctx).await.unwrap();
+        let row_count = benchmark.run(&ctx, false).await.unwrap();
+
+        assert_eq!(row_count, 3);
+    }
+
+    #[tokio::test]
+    async fn run_returns_row_count_when_saving_results() {
+        let contents = "name Q01\n\nrun\nSELECT * FROM (VALUES (1), (2)) AS t(v)\n";
+        let mut benchmark = parse_benchmark(contents).await.unwrap();
+        let ctx = SessionContext::new();
+
+        benchmark.initialize(&ctx).await.unwrap();
+        let row_count = benchmark.run(&ctx, true).await.unwrap();
+
+        assert_eq!(row_count, 2);
+        assert_eq!(
+            formatted_last_results(&benchmark),
+            vec![vec!["1"], vec!["2"]]
+        );
     }
 
     fn env_map(entries: &[(&str, &str)]) -> HashMap<String, String> {

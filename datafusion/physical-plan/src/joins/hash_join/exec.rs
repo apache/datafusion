@@ -1253,8 +1253,8 @@ impl ExecutionPlan for HashJoinExec {
                     .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
                     .unzip();
                 vec![
-                    Distribution::HashPartitioned(left_expr),
-                    Distribution::HashPartitioned(right_expr),
+                    Distribution::KeyPartitioned(left_expr),
+                    Distribution::KeyPartitioned(right_expr),
                 ]
             }
             PartitionMode::Auto => vec![

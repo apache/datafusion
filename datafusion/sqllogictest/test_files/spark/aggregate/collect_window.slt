@@ -1,0 +1,398 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#######
+# Tests for Spark-compat collect_list / collect_set as WINDOW functions.
+# Spark semantics:
+# - NULL inputs are skipped (Hive collect_list/collect_set behavior).
+# - An empty frame (or one where all inputs were NULL) evaluates to []
+#   rather than NULL (nullable = false in Spark's Collect aggregate).
+# - collect_list preserves frame order; collect_set deduplicates.
+# Validates that NullToEmptyListAccumulator forwards retract_batch
+# so the wrapped ArrayAggAccumulator / DistinctArrayAggAccumulator can
+# drive sliding window frames.
+#######
+
+statement ok
+CREATE TABLE t(ts INT, val TEXT) AS VALUES
+  (1, 'A'), (2, 'B'), (3, 'C'), (4, 'D'), (5, 'E');
+
+# Unbounded preceding frame — accumulator only sees update_batch.
+query ?
+SELECT collect_list(val)
+  OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM t;
+----
+[A]
+[A, B]
+[A, B, C]
+[A, B, C, D]
+[A, B, C, D, E]
+
+# Bounded sliding ROWS frame — requires retract_batch.
+query ?
+SELECT collect_list(val)
+  OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t;
+----
+[A]
+[A, B]
+[B, C]
+[C, D]
+[D, E]
+
+# Wider sliding window.
+query ?
+SELECT collect_list(val)
+  OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+FROM t;
+----
+[A]
+[A, B]
+[A, B, C]
+[B, C, D]
+[C, D, E]
+
+# Centered sliding window with PRECEDING + FOLLOWING.
+query ?
+SELECT collect_list(val)
+  OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+FROM t;
+----
+[A, B]
+[A, B, C]
+[B, C, D]
+[C, D, E]
+[D, E]
+
+# Unbounded both sides — every row sees the full input.
+query ?
+SELECT collect_list(val)
+  OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+FROM t;
+----
+[A, B, C, D, E]
+[A, B, C, D, E]
+[A, B, C, D, E]
+[A, B, C, D, E]
+[A, B, C, D, E]
+
+# Single-row frame.
+query ?
+SELECT collect_list(val)
+  OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
+FROM t;
+----
+[A]
+[B]
+[C]
+[D]
+[E]
+
+# Empty leading frame on the first row — Spark returns [].
+query ?
+SELECT collect_list(val)
+  OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING)
+FROM t;
+----
+[]
+[A]
+[A, B]
+[B, C]
+[C, D]
+
+# Empty trailing frame on the last row — Spark returns [].
+query ?
+SELECT collect_list(val)
+  OVER (ORDER BY ts ROWS BETWEEN 1 FOLLOWING AND 2 FOLLOWING)
+FROM t;
+----
+[B, C]
+[C, D]
+[D, E]
+[E]
+[]
+
+#######
+# NULL handling — Spark's collect_list skips NULL inputs.
+#######
+
+statement ok
+CREATE TABLE t_nulls(ts INT, val TEXT) AS VALUES
+  (1, 'A'), (2, NULL), (3, 'C'), (4, NULL), (5, 'E');
+
+# NULLs filtered out of the materialized list, but the row still emits one entry.
+query ?
+SELECT collect_list(val)
+  OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_nulls;
+----
+[A]
+[A]
+[C]
+[C]
+[E]
+
+# Wider frame.
+query ?
+SELECT collect_list(val)
+  OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+FROM t_nulls;
+----
+[A]
+[A]
+[A, C]
+[C]
+[C, E]
+
+# All-NULL frame collapses to [].
+statement ok
+CREATE TABLE t_allnull(ts INT, val TEXT) AS VALUES
+  (1, NULL), (2, NULL), (3, NULL);
+
+query ?
+SELECT collect_list(val)
+  OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM t_allnull;
+----
+[]
+[]
+[]
+
+#######
+# PARTITION BY — each partition starts with fresh accumulator state.
+#######
+
+statement ok
+CREATE TABLE t_parts(grp INT, ts INT, val TEXT) AS VALUES
+  (1, 1, 'A'), (1, 2, 'B'), (1, 3, 'C'),
+  (2, 1, 'X'), (2, 2, 'Y'), (2, 3, 'Z');
+
+query I?
+SELECT grp, collect_list(val)
+  OVER (PARTITION BY grp ORDER BY ts
+        ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_parts
+ORDER BY grp, ts;
+----
+1 [A]
+1 [A, B]
+1 [B, C]
+2 [X]
+2 [X, Y]
+2 [Y, Z]
+
+#######
+# RANGE frame with value gaps — exercises multi-row retract.
+#######
+
+statement ok
+CREATE TABLE t_range(ts INT, val TEXT) AS VALUES
+  (1, 'A'), (2, 'B'), (3, 'C'), (4, 'D'), (100, 'E');
+
+query ?
+SELECT collect_list(val)
+  OVER (ORDER BY ts RANGE BETWEEN 2 PRECEDING AND 2 FOLLOWING)
+FROM t_range;
+----
+[A, B, C]
+[A, B, C, D]
+[A, B, C, D]
+[B, C, D]
+[E]
+
+#######
+# GROUPS frame — rows tied on ORDER BY are processed together.
+#######
+
+statement ok
+CREATE TABLE t_groups(ts INT, val TEXT) AS VALUES
+  (1, 'A'), (1, 'B'), (2, 'C'), (2, 'D'), (3, 'E');
+
+query ?
+SELECT collect_list(val)
+  OVER (ORDER BY ts GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_groups;
+----
+[A, B]
+[A, B]
+[A, B, C, D]
+[A, B, C, D]
+[C, D, E]
+
+#######
+# Integer-typed input — guards against type-specific regressions.
+#######
+
+statement ok
+CREATE TABLE t_int(ts INT, val INT) AS VALUES
+  (1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+
+query ?
+SELECT collect_list(val)
+  OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_int;
+----
+[10]
+[10, 20]
+[20, 30]
+[30, 40]
+[40, 50]
+
+#######
+# collect_set as a WINDOW function.
+# array_sort wraps the result because the underlying HashMap iteration
+# order is not deterministic.
+#######
+
+statement ok
+CREATE TABLE t_set(ts INT, val TEXT) AS VALUES
+  (1,'A'),(2,'A'),(3,'B'),(4,'C'),(5,'B');
+
+# Sliding ROWS frame, 2 PRECEDING.
+# Frame contents per row:
+#   [A]        -> {A}
+#   [A,A]      -> {A}
+#   [A,A,B]    -> {A,B}
+#   [A,B,C]    -> {A,B,C}
+#   [B,C,B]    -> {B,C}
+query ?
+SELECT array_sort(collect_set(val)
+  OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW))
+FROM t_set;
+----
+[A]
+[A]
+[A, B]
+[A, B, C]
+[B, C]
+
+# Narrower frame.
+query ?
+SELECT array_sort(collect_set(val)
+  OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
+FROM t_set;
+----
+[A]
+[A]
+[A, B]
+[B, C]
+[B, C]
+
+# Unbounded preceding — every distinct seen so far stays in.
+query ?
+SELECT array_sort(collect_set(val)
+  OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW))
+FROM t_set;
+----
+[A]
+[A]
+[A, B]
+[A, B, C]
+[A, B, C]
+
+# collect_set with NULLs — NULL never enters the set.
+statement ok
+CREATE TABLE t_set_nulls(ts INT, val TEXT) AS VALUES
+  (1,'A'),(2,NULL),(3,'A'),(4,NULL),(5,'B');
+
+query ?
+SELECT array_sort(collect_set(val)
+  OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
+FROM t_set_nulls;
+----
+[A]
+[A]
+[A]
+[A]
+[B]
+
+# collect_set with PARTITION BY — partition isolation.
+statement ok
+CREATE TABLE t_set_parts(grp INT, ts INT, val TEXT) AS VALUES
+  (1, 1, 'A'), (1, 2, 'A'), (1, 3, 'B'),
+  (2, 1, 'B'), (2, 2, 'C'), (2, 3, 'C');
+
+query I?
+SELECT grp, array_sort(collect_set(val)
+  OVER (PARTITION BY grp ORDER BY ts
+        ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
+FROM t_set_parts
+ORDER BY grp, ts;
+----
+1 [A]
+1 [A]
+1 [A, B]
+2 [B]
+2 [B, C]
+2 [C]
+
+# Empty leading frame on the first row — Spark returns [].
+query ?
+SELECT array_sort(collect_set(val)
+  OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING))
+FROM t_set;
+----
+[]
+[A]
+[A]
+[A, B]
+[B, C]
+
+# All-NULL window — set is empty.
+query ?
+SELECT array_sort(collect_set(val)
+  OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW))
+FROM t_allnull;
+----
+[]
+[]
+[]
+
+#######
+# Cleanup
+#######
+
+statement ok
+DROP TABLE t;
+
+statement ok
+DROP TABLE t_nulls;
+
+statement ok
+DROP TABLE t_allnull;
+
+statement ok
+DROP TABLE t_parts;
+
+statement ok
+DROP TABLE t_range;
+
+statement ok
+DROP TABLE t_groups;
+
+statement ok
+DROP TABLE t_int;
+
+statement ok
+DROP TABLE t_set;
+
+statement ok
+DROP TABLE t_set_nulls;
+
+statement ok
+DROP TABLE t_set_parts;
