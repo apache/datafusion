@@ -247,9 +247,8 @@ impl RunOpt {
             ParquetFormat::default()
                 .with_options(ctx.state().table_options().parquet.clone()),
         );
-        let options = ListingOptions::new(format)
-            .with_file_extension(DEFAULT_PARQUET_EXTENSION)
-            .with_collect_stat(true);
+        let options =
+            ListingOptions::new(format).with_file_extension(DEFAULT_PARQUET_EXTENSION);
         let table_path = ListingTableUrl::parse(table_path)?;
         let schema = options.infer_schema(&state, &table_path).await?;
         let config = ListingTableConfig::new(table_path)
