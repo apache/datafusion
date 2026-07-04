@@ -763,43 +763,45 @@ mod tests {
         Arc::new(DynamicFilterPhysicalExpr::new(on_right.to_vec(), lit(true)))
     }
 
-    fn make_collect_left_accumulator_for_test() -> SharedBuildAccumulator {
-        let on_right = test_on_right();
+    fn make_accumulator_for_test(
+        data: AccumulatedBuildData,
+        on_right: Vec<PhysicalExprRef>,
+    ) -> SharedBuildAccumulator {
+        let dynamic_filter = test_dynamic_filter(&on_right);
         SharedBuildAccumulator {
             inner: Mutex::new(AccumulatorState {
-                data: AccumulatedBuildData::CollectLeft {
-                    data: PartitionStatus::Pending,
-                    reported_count: 0,
-                    expected_reports: 1,
-                },
+                data,
                 completion: CompletionState::Pending,
             }),
             completion_notify: Notify::new(),
-            dynamic_filter: test_dynamic_filter(&on_right),
+            dynamic_filter,
             on_right,
             repartition_random_state: SeededRandomState::with_seed(1),
             probe_schema: test_probe_schema(),
         }
     }
 
+    fn make_collect_left_accumulator_for_test() -> SharedBuildAccumulator {
+        make_accumulator_for_test(
+            AccumulatedBuildData::CollectLeft {
+                data: PartitionStatus::Pending,
+                reported_count: 0,
+                expected_reports: 1,
+            },
+            test_on_right(),
+        )
+    }
+
     fn make_partitioned_expr_accumulator_for_test(
         num_partitions: usize,
     ) -> SharedBuildAccumulator {
-        let on_right = test_on_right();
-        SharedBuildAccumulator {
-            inner: Mutex::new(AccumulatorState {
-                data: AccumulatedBuildData::Partitioned {
-                    partitions: vec![PartitionStatus::Pending; num_partitions],
-                    completed_partitions: 0,
-                },
-                completion: CompletionState::Pending,
-            }),
-            completion_notify: Notify::new(),
-            dynamic_filter: test_dynamic_filter(&on_right),
-            on_right,
-            repartition_random_state: SeededRandomState::with_seed(1),
-            probe_schema: test_probe_schema(),
-        }
+        make_accumulator_for_test(
+            AccumulatedBuildData::Partitioned {
+                partitions: vec![PartitionStatus::Pending; num_partitions],
+                completed_partitions: 0,
+            },
+            test_on_right(),
+        )
     }
 
     fn in_list(values: &[i32]) -> PushdownStrategy {
@@ -822,21 +824,35 @@ mod tests {
     }
 
     fn current_expr(acc: &SharedBuildAccumulator) -> PhysicalExprRef {
-        acc.dynamic_filter.current().unwrap()
+        acc.dynamic_filter
+            .current()
+            .expect("dynamic filter current expression should be available")
+    }
+
+    fn in_list_expr(expr: &PhysicalExprRef) -> &InListExpr {
+        expr.downcast_ref::<InListExpr>()
+            .expect("expected InListExpr dynamic filter")
+    }
+
+    fn binary_expr(expr: &PhysicalExprRef) -> &BinaryExpr {
+        expr.downcast_ref::<BinaryExpr>()
+            .expect("expected BinaryExpr dynamic filter")
+    }
+
+    fn case_expr(expr: &PhysicalExprRef) -> &CaseExpr {
+        expr.downcast_ref::<CaseExpr>()
+            .expect("expected CaseExpr dynamic filter")
     }
 
     fn assert_literal_bool(expr: &PhysicalExprRef, expected: bool) {
         let literal = expr
             .downcast_ref::<Literal>()
-            .expect("expected literal expression");
+            .expect("expected literal bool dynamic filter");
         assert_eq!(literal.value(), &ScalarValue::Boolean(Some(expected)));
     }
 
     fn assert_top_binary_op(expr: &PhysicalExprRef, expected: Operator) {
-        let binary = expr
-            .downcast_ref::<BinaryExpr>()
-            .expect("expected binary expression");
-        assert_eq!(binary.op(), &expected);
+        assert_eq!(binary_expr(expr).op(), &expected);
     }
 
     fn partitioned_state(acc: &SharedBuildAccumulator) -> (Vec<PartitionStatus>, usize) {
@@ -862,7 +878,7 @@ mod tests {
         .unwrap();
 
         let expr = current_expr(&acc);
-        assert!(expr.downcast_ref::<InListExpr>().is_some());
+        in_list_expr(&expr);
     }
 
     #[test]
@@ -890,12 +906,10 @@ mod tests {
         .unwrap();
 
         let expr = current_expr(&acc);
-        let conjunction = expr
-            .downcast_ref::<BinaryExpr>()
-            .expect("expected membership and bounds conjunction");
+        let conjunction = binary_expr(&expr);
         assert_eq!(conjunction.op(), &Operator::And);
-        assert!(conjunction.left().downcast_ref::<BinaryExpr>().is_some());
-        assert!(conjunction.right().downcast_ref::<InListExpr>().is_some());
+        binary_expr(conjunction.left());
+        in_list_expr(conjunction.right());
     }
 
     #[test]
@@ -924,7 +938,7 @@ mod tests {
         .unwrap();
 
         let expr = current_expr(&acc);
-        assert!(expr.downcast_ref::<InListExpr>().is_some());
+        in_list_expr(&expr);
         assert!(expr.downcast_ref::<CaseExpr>().is_none());
     }
 
@@ -939,9 +953,7 @@ mod tests {
         .unwrap();
 
         let expr = current_expr(&acc);
-        let case = expr
-            .downcast_ref::<CaseExpr>()
-            .expect("expected partition routing CASE expression");
+        let case = case_expr(&expr);
         assert!(case.expr().is_some());
         assert_eq!(case.when_then_expr().len(), 2);
         assert_literal_bool(case.else_expr().expect("expected CASE fallback"), false);
@@ -972,9 +984,7 @@ mod tests {
         .unwrap();
 
         let expr = current_expr(&acc);
-        let case = expr
-            .downcast_ref::<CaseExpr>()
-            .expect("expected CASE expression for mixed empty and unknown partitions");
+        let case = case_expr(&expr);
         assert_eq!(case.when_then_expr().len(), 1);
         assert_literal_bool(&case.when_then_expr()[0].1, false);
         assert_literal_bool(
