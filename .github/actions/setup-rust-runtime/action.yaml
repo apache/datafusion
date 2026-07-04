@@ -35,6 +35,10 @@ runs:
         # failures from curl when cargo fetches crates from crates.io.
         # Disabling HTTP/2 multiplexing forces cargo to serialize requests,
         # and raising retries makes transient network hiccups self-heal.
+        #
+        # Reference:
+        # https://doc.rust-lang.org/cargo/reference/config.html?#httpmultiplexing
+        # https://doc.rust-lang.org/cargo/reference/config.html?#netretry
         echo "CARGO_HTTP_MULTIPLEXING=false" >> $GITHUB_ENV
         echo "CARGO_NET_RETRY=10" >> $GITHUB_ENV
         echo "CARGO_HTTP_RETRY=10" >> $GITHUB_ENV
