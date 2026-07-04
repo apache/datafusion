@@ -134,7 +134,7 @@ impl AggregateHashTable {
         // table semantics. Consider remove `AggregateMode` and only use `AggregateTableMode`
         // after the refactor has finished.
         //
-        // Issue: <https://github.com/apache/datafusion/pull/22729>
+        // Issue: <https://github.com/apache/datafusion/issues/22710>
         let mode = match agg.mode {
             AggregateMode::Partial => AggregateTableMode::Partial,
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
