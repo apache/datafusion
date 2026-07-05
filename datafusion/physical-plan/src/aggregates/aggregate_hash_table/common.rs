@@ -173,6 +173,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
     /// Aggregates one input batch after selecting the mode-specific accumulator
     /// operation.
+    ///
+    /// Each aggregation mode chooses a different `aggregate_fn` according to its
+    /// semantics. For example, partial aggregation takes raw inputs, and update them
+    /// into stored partial states, so [`GroupsAccumulator::update_batch`] is used.
     pub(super) fn aggregate_batch_inner<F>(
         &mut self,
         batch: &RecordBatch,
