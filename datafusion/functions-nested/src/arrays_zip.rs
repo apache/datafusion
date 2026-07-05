@@ -88,7 +88,6 @@ make_udf_expr_and_func!(
 pub struct ArraysZip {
     signature: Signature,
     aliases: Vec<String>,
-    field_names: Option<Arc<[String]>>,
 }
 
 impl Default for ArraysZip {
@@ -102,25 +101,6 @@ impl ArraysZip {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
             aliases: vec![String::from("list_zip")],
-            field_names: None,
-        }
-    }
-
-    pub fn with_field_names(names: impl Into<Arc<[String]>>) -> Self {
-        Self {
-            field_names: Some(names.into()),
-            ..Self::new()
-        }
-    }
-
-    fn resolved_field_names(&self, len: usize) -> Result<Vec<String>> {
-        match &self.field_names {
-            Some(names) if names.len() != len => exec_err!(
-                "arrays_zip configured with {} field names but called with {len} arguments",
-                names.len()
-            ),
-            Some(names) => Ok(names.to_vec()),
-            None => Ok(arrays_zip_field_names(len)),
         }
     }
 }
@@ -138,33 +118,11 @@ impl ScalarUDFImpl for ArraysZip {
         if arg_types.is_empty() {
             return exec_err!("arrays_zip requires at least one argument");
         }
-
-        let field_names = self.resolved_field_names(arg_types.len())?;
-        let mut fields = Vec::with_capacity(arg_types.len());
-        for (i, arg_type) in arg_types.iter().enumerate() {
-            let element_type = match arg_type {
-                List(field) | LargeList(field) | FixedSizeList(field, _) => {
-                    field.data_type().clone()
-                }
-                Null => Null,
-                dt => {
-                    return exec_err!("arrays_zip expects array arguments, got {dt}");
-                }
-            };
-            fields.push(Field::new(field_names[i].clone(), element_type, true));
-        }
-
-        Ok(List(Arc::new(Field::new_list_field(
-            DataType::Struct(Fields::from(fields)),
-            true,
-        ))))
+        arrays_zip_return_type(arg_types, &arrays_zip_field_names(arg_types.len()))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let field_names = self.resolved_field_names(args.args.len())?;
-        make_scalar_function(move |columns: &[ArrayRef]| {
-            arrays_zip_inner(columns, &field_names)
-        })(&args.args)
+        make_scalar_function(arrays_zip_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -176,16 +134,51 @@ impl ScalarUDFImpl for ArraysZip {
     }
 }
 
+/// Zip with the native default field names — 1-based ordinals (`"1"`, `"2"`, ...)
+fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    arrays_zip_inner_with_names(args, &arrays_zip_field_names(args.len()))
+}
+
+pub fn arrays_zip_return_type(
+    arg_types: &[DataType],
+    field_names: &[String],
+) -> Result<DataType> {
+    debug_assert_eq!(arg_types.len(), field_names.len());
+    let mut fields = Vec::with_capacity(arg_types.len());
+    for (arg_type, name) in arg_types.iter().zip(field_names) {
+        let element_type = match arg_type {
+            List(field) | LargeList(field) | FixedSizeList(field, _) => {
+                field.data_type().clone()
+            }
+            Null => Null,
+            dt => {
+                return exec_err!("arrays_zip expects array arguments, got {dt}");
+            }
+        };
+        fields.push(Field::new(name.clone(), element_type, true));
+    }
+    Ok(List(Arc::new(Field::new_list_field(
+        DataType::Struct(Fields::from(fields)),
+        true,
+    ))))
+}
+
 /// Core implementation for arrays_zip.
 ///
-/// Takes N list arrays and produces a list of structs where each struct
-/// has one field per input array. If arrays within a row have different
-/// lengths, shorter arrays are padded with NULLs.
-/// Supports List, LargeList, and Null input types.
-fn arrays_zip_inner(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef> {
+/// Takes N list arrays and produces a list of structs where each struct has
+/// one field per input array, named with the corresponding entry of
+/// `field_names`. If arrays within a row have different lengths, shorter
+/// arrays are padded with NULLs. Supports List, LargeList, and Null inputs.
+///
+/// `field_names.len()` must equal `args.len()`.
+pub fn arrays_zip_inner_with_names(
+    args: &[ArrayRef],
+    field_names: &[String],
+) -> Result<ArrayRef> {
     if args.is_empty() {
         return exec_err!("arrays_zip requires at least one argument");
     }
+    debug_assert_eq!(args.len(), field_names.len());
 
     let num_rows = args[0].len();
 
@@ -465,7 +458,6 @@ mod tests {
     use super::*;
     use arrow::array::Int64Array;
     use arrow::buffer::NullBuffer;
-    use datafusion_common::DataFusionError;
 
     fn list(values: Vec<i64>, offsets: Vec<i32>) -> Arc<ListArray> {
         list_with_validity(values, offsets, None)
@@ -492,7 +484,7 @@ mod tests {
         let left = list(vec![1, 2, 3, 4, 5, 6], vec![0, 2, 3, 6]);
         let right = list(vec![10, 20, 30, 40, 50, 60], vec![0, 2, 3, 6]);
 
-        let result = arrays_zip_inner(
+        let result = arrays_zip_inner_with_names(
             &[
                 Arc::clone(&left) as ArrayRef,
                 Arc::clone(&right) as ArrayRef,
@@ -555,7 +547,7 @@ mod tests {
             Some(vec![true, false, true]),
         );
 
-        let result = arrays_zip_inner(
+        let result = arrays_zip_inner_with_names(
             &[
                 Arc::clone(&left) as ArrayRef,
                 Arc::clone(&right) as ArrayRef,
@@ -576,7 +568,7 @@ mod tests {
         let right =
             list_with_validity(vec![], vec![0, 0, 0, 0], Some(vec![true, false, false]));
 
-        let result = arrays_zip_inner(
+        let result = arrays_zip_inner_with_names(
             &[
                 Arc::clone(&left) as ArrayRef,
                 Arc::clone(&right) as ArrayRef,
@@ -602,7 +594,7 @@ mod tests {
             Some(vec![true, false]),
         );
 
-        let result = arrays_zip_inner(
+        let result = arrays_zip_inner_with_names(
             &[
                 Arc::clone(&left) as ArrayRef,
                 Arc::clone(&right) as ArrayRef,
@@ -627,7 +619,7 @@ mod tests {
             Some(vec![true, true]),
         );
 
-        let result = arrays_zip_inner(
+        let result = arrays_zip_inner_with_names(
             &[
                 Arc::clone(&left) as ArrayRef,
                 Arc::clone(&right) as ArrayRef,
@@ -655,16 +647,12 @@ mod tests {
     }
 
     #[test]
-    fn with_field_names_overrides_struct_field_names() {
-        let arg_types = vec![
-            list_arg_type(DataType::Int64),
-            list_arg_type(DataType::Utf8),
-        ];
-        let names: Arc<[String]> = vec!["a".to_string(), "b".to_string()].into();
+    fn return_type_uses_supplied_field_names() {
+        let arg_types =
+            vec![list_arg_type(DataType::Int64), list_arg_type(DataType::Utf8)];
+        let names = vec!["a".to_string(), "b".to_string()];
 
-        let dt = ArraysZip::with_field_names(names)
-            .return_type(&arg_types)
-            .unwrap();
+        let dt = arrays_zip_return_type(&arg_types, &names).unwrap();
 
         let List(list_field) = &dt else {
             panic!("expected List return type, got {dt:?}");
@@ -677,11 +665,9 @@ mod tests {
     }
 
     #[test]
-    fn without_field_names_keeps_ordinal_struct_field_names() {
-        let arg_types = vec![
-            list_arg_type(DataType::Int64),
-            list_arg_type(DataType::Utf8),
-        ];
+    fn native_udf_keeps_ordinal_struct_field_names() {
+        let arg_types =
+            vec![list_arg_type(DataType::Int64), list_arg_type(DataType::Utf8)];
 
         let dt = ArraysZip::new().return_type(&arg_types).unwrap();
 
@@ -693,25 +679,5 @@ mod tests {
         };
         let got: Vec<&str> = fields.iter().map(|f| f.name().as_str()).collect();
         assert_eq!(got, vec!["1", "2"]);
-    }
-
-    #[test]
-    fn with_field_names_length_mismatch_errors() {
-        let arg_types = vec![list_arg_type(DataType::Int64)];
-        let names: Arc<[String]> = vec!["a".to_string(), "b".to_string()].into();
-
-        let err = ArraysZip::with_field_names(names)
-            .return_type(&arg_types)
-            .unwrap_err();
-
-        assert!(
-            matches!(err, DataFusionError::Execution(_)),
-            "unexpected error kind: {err}"
-        );
-        let msg = err.to_string();
-        assert!(
-            msg.contains('2') && msg.contains('1'),
-            "error should report both counts, got: {msg}"
-        );
     }
 }

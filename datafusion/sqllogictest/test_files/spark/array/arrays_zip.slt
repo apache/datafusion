@@ -143,14 +143,13 @@ FROM (SELECT array(1, 2, 3) AS a, array(3, 4, 5) AS b);
 ----
 [{a: 1, b: 3}, {a: 2, b: 4}, {a: 3, b: 5}]
 
-# Spark produces `Struct<a, a, a>` for this case (fields inaccessible
-# by name; verified Spark 4.1.1). Diverge by deduping to
-# `Struct<a, a_1, a_2>` so field names stay unique and addressable.
+# Spark produces `Struct<a, a, a>` here — duplicate field names, inaccessible
+# by name (verified Spark 4.1.1). We match Spark and keep the duplicates.
 query ?
 SELECT arrays_zip(a, a, a)
 FROM (VALUES ([1, 2], [1, 2], [1, 2])) AS t(a, b, c);
 ----
-[{a: 1, a_1: 1, a_2: 1}, {a: 2, a_1: 2, a_2: 2}]
+[{a: 1, a: 1, a: 1}, {a: 2, a: 2, a: 2}]
 
 # LargeList inputs are accepted (DataFusion-specific list flavor).
 query ?
