@@ -27,14 +27,17 @@ use datafusion_functions_nested::arrays_zip::{
 use std::sync::Arc;
 
 /// Spark-compatible `arrays_zip` — struct field names follow the Spark naming
-/// policy rather than the native [`ArraysZip`]'s 1-based ordinals.
+/// policy rather than the native
+/// [`ArraysZip`](datafusion_functions_nested::arrays_zip::ArraysZip)'s 1-based
+/// ordinals.
 ///
 /// Names reach the struct one of two ways, then go straight into the native
 /// [`arrays_zip_return_type`] / [`arrays_zip_inner_with_names`]:
 /// * [`SparkArraysZip::with_field_names`] — explicit names. For SQL, the
-///   [`SparkArraysZipRewrite`] analyzer rule derives them from the argument
-///   expressions (column / alias names, else 0-based ordinals) and pins them
-///   here before optimizer passes can rename `arg_fields`.
+///   [`SparkArraysZipRewrite`](super::arrays_zip_rewrite::SparkArraysZipRewrite)
+///   analyzer rule derives them from the argument expressions (column / alias
+///   names, else 0-based ordinals) and pins them here before optimizer passes
+///   can rename `arg_fields`.
 /// * [`SparkArraysZip::new`] — nothing pinned; falls back to 0-based ordinals.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArraysZip {
