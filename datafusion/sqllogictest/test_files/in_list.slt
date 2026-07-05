@@ -1,0 +1,238 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+# IN List Tests
+#
+# This file focuses on the IN operator and its various specializations
+#
+# Note that "short" IN LISTS do not go through the InList implementation at all,
+# instead they are rewritten into a series of OR expressions. See:
+# https://github.com/apache/datafusion/blob/ed37b6c9555bc278130dc774ed833b8c0bd29bfa/datafusion/optimizer/src/simplify_expressions/inlist_simplifier.rs#L39-L88
+##########
+
+
+# Tests for IN LIST integer specializations
+
+
+statement ok
+CREATE TABLE in_list_ints (
+  label VARCHAR,
+  i8 TINYINT,
+  u8 TINYINT UNSIGNED,
+  i16 SMALLINT,
+  u16 SMALLINT UNSIGNED,
+  i32 INT,
+  u32 INT UNSIGNED,
+  i64 BIGINT,
+  u64 BIGINT UNSIGNED
+) AS VALUES
+  ('min', -128, 0, -32768, 0, -2147483648, 0, -9223372036854775808, 0),
+  ('minus_one', -1, 1, -1, 1, -1, 1, -1, 1),
+  ('zero', 0, 0, 0, 0, 0, 0, 0, 0),
+  ('one', 1, 1, 1, 1, 1, 1, 1, 1),
+  ('eleven', 11, 11, 11, 11, 11, 11, 11, 11),
+  ('max', 127, 255, 32767, 65535, 2147483647, 4294967295, 9223372036854775807, 18446744073709551615);
+
+# Verify that the Arrow types of the columns are as expected. This is important because the IN LIST specializations are based on the column types.
+query TTTTTTTT
+SELECT
+  arrow_typeof(i8),
+  arrow_typeof(u8),
+  arrow_typeof(i16),
+  arrow_typeof(u16),
+  arrow_typeof(i32),
+  arrow_typeof(u32),
+  arrow_typeof(i64),
+  arrow_typeof(u64)
+FROM in_list_ints
+LIMIT 1
+----
+Int8 UInt8 Int16 UInt16 Int32 UInt32 Int64 UInt64
+
+# Verify the data is as expected.
+query TIIIIIIII
+SELECT label, i8, u8, i16, u16, i32, u32, i64, u64
+FROM in_list_ints
+ORDER BY label
+----
+eleven 11 11 11 11 11 11 11 11
+max 127 255 32767 65535 2147483647 4294967295 9223372036854775807 18446744073709551615
+min -128 0 -32768 0 -2147483648 0 -9223372036854775808 0
+minus_one -1 1 -1 1 -1 1 -1 1
+one 1 1 1 1 1 1 1 1
+zero 0 0 0 0 0 0 0 0
+
+# Empty IN lists are rejected by the SQL parser.
+statement error .*Expected: an expression, found: \).*
+SELECT 1 IN ();
+
+# Min for each type
+query TBBBBBBBB
+SELECT
+  label,
+  i8 IN (1, 2, 3, -128),
+  u8 IN (1, 2, 3, 0),
+  i16 IN (1, 2, 3, -32768),
+  u16 IN (1, 2, 3, 0),
+  i32 IN (1, 2, 3, -2147483648),
+  u32 IN (1, 2, 3, 0),
+  i64 IN (1, 2, 3, -9223372036854775808),
+  u64 IN (1, 2, 3, 0)
+FROM in_list_ints
+ORDER BY label
+----
+eleven false false false false false false false false
+max false false false false false false false false
+min true true true true true true true true
+minus_one false true false true false true false true
+one true true true true true true true true
+zero false true false true false true false true
+
+# Max for each type (use values that cover the entire input range
+# e.g. values that have 1 non zero byte. 2 non zero bytes, etc)
+query TBBBBBBBB
+SELECT
+  label,
+  i8 IN (-64, -32, 32, 64, 127),
+  u8 IN (32, 64, 128, 200, 255),
+  i16 IN (3, 258, 4097, 16385, 32767),
+  u16 IN (3, 258, 4097, 16385, 65535),
+  i32 IN (3, 258, 66051, 16909060, 2147483647),
+  u32 IN (3, 258, 66051, 16909060, 4294967295),
+  i64 IN (3, 258, 66051, 16909060, 9223372036854775807),
+  u64 IN (3, 258, 66051, 16909060, 18446744073709551615)
+FROM in_list_ints
+ORDER BY label
+----
+eleven false false false false false false false false
+max true true true true true true true true
+min false false false false false false false false
+minus_one false false false false false false false false
+one false false false false false false false false
+zero false false false false false false false false
+
+# Twelve item IN list with no matches (also cover the entire range)
+query TBBBBBBBB
+SELECT
+  label,
+  i8 IN (-120, -64, -32, -16, -8, -4, -2, 2, 32, 64, 100, 126),
+  u8 IN (2, 3, 4, 8, 16, 32, 64, 100, 128, 150, 200, 254),
+  i16 IN (-30000, -16384, -1024, -257, 2, 257, 4097, 8192, 16385, 20000, 30000, 32000),
+  u16 IN (2, 3, 4, 8, 16, 32, 257, 4097, 16385, 32768, 60000, 65534),
+  i32 IN (-2000000000, -1000000000, -16711936, -65536, -1024, 2, 66051, 16909060, 305419896, 1076895760, 2000000000, 2147483646),
+  u32 IN (2, 3, 4, 8, 16, 66051, 16909060, 305419896, 1076895760, 2309737967, 4000000000, 4294967294),
+  i64 IN (-9000000000000000000, -72057594037927936, -1000000000000000000, -65536, -1024, 2, 72623859790382856, 81985529216486895, 819855292164868960, 1234605616436508552, 9000000000000000000, 9223372036854775806),
+  u64 IN (2, 3, 4, 8, 16, 72623859790382856, 81985529216486895, 819855292164868960, 1234605616436508552, 18000000000000000000, 18364758544493064720, 18446744073709551614)
+FROM in_list_ints
+ORDER BY label
+----
+eleven false false false false false false false false
+max false false false false false false false false
+min false false false false false false false false
+minus_one false false false false false false false false
+one false false false false false false false false
+zero false false false false false false false false
+
+# Twelve item IN list with matches, including 11.
+query TBBBBBBBB
+SELECT
+  label,
+  i8 IN (-120, -64, -32, -16, -8, -4, -2, -128, 1, 3, 5, 11),
+  u8 IN (2, 4, 8, 16, 32, 64, 128, 200, 0, 11, 250, 255),
+  i16 IN (-30000, -20000, -10000, -32768, -1024, -256, -128, 1, 2, 3, 5, 11),
+  u16 IN (2, 4, 8, 16, 32, 64, 128, 256, 0, 11, 60000, 65535),
+  i32 IN (-2000000000, -1000000000, -2147483648, -65536, -1024, -256, -128, 1, 2, 3, 5, 11),
+  u32 IN (2, 4, 8, 16, 32, 64, 128, 256, 0, 11, 4000000000, 4294967295),
+  i64 IN (-9000000000000000000, -9223372036854775808, -1000000000, -65536, -1024, -256, -128, 1, 2, 3, 5, 11),
+  u64 IN (2, 4, 8, 16, 32, 64, 128, 256, 0, 11, 18000000000000000000, 18446744073709551615)
+FROM in_list_ints
+ORDER BY label
+----
+eleven true true true true true true true true
+max false true false true false true false true
+min true true true true true true true true
+minus_one false false false false false false false false
+one true false true false true false true false
+zero false true false true false true false true
+
+# Cleanup
+statement ok
+DROP TABLE in_list_ints;
+
+####
+## Integer Null Handling
+####
+
+# Table with nulls to test null handling for integer IN list specializations
+statement ok
+CREATE TABLE in_list_ints_nullable (
+  label VARCHAR,
+  i8 TINYINT,
+  u8 TINYINT UNSIGNED,
+  i16 SMALLINT,
+  u16 SMALLINT UNSIGNED,
+  i32 INT,
+  u32 INT UNSIGNED,
+  i64 BIGINT,
+  u64 BIGINT UNSIGNED
+) AS VALUES
+  ('match', 11, 11, 11, 11, 11, 11, 11, 11),
+  ('no_match', 7, 7, 7, 7, 7, 7, 7, 7),
+  ('nulls', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+
+# Null input values return NULL when the IN list has no nulls.
+query TBBBBBBBB
+SELECT
+  label,
+  i8 IN (3, 4, 5, 6, 11),
+  u8 IN (3, 4, 5, 6, 11),
+  i16 IN (3, 258, 4097, 16385, 11),
+  u16 IN (3, 258, 4097, 16385, 11),
+  i32 IN (3, 258, 66051, 16909060, 11),
+  u32 IN (3, 258, 66051, 16909060, 11),
+  i64 IN (3, 258, 66051, 16909060, 11),
+  u64 IN (3, 258, 66051, 16909060, 11)
+FROM in_list_ints_nullable
+ORDER BY label
+----
+match true true true true true true true true
+no_match false false false false false false false false
+nulls NULL NULL NULL NULL NULL NULL NULL NULL
+
+# Null IN list values return true for matches and NULL for non-matches.
+query TBBBBBBBB
+SELECT
+  label,
+  i8 IN (NULL, 3, 4, 5, 11),
+  u8 IN (NULL, 3, 4, 5, 11),
+  i16 IN (NULL, 3, 258, 4097, 11),
+  u16 IN (NULL, 3, 258, 4097, 11),
+  i32 IN (NULL, 3, 258, 66051, 11),
+  u32 IN (NULL, 3, 258, 66051, 11),
+  i64 IN (NULL, 3, 258, 66051, 11),
+  u64 IN (NULL, 3, 258, 66051, 11)
+FROM in_list_ints_nullable
+ORDER BY label
+----
+match true true true true true true true true
+no_match NULL NULL NULL NULL NULL NULL NULL NULL
+nulls NULL NULL NULL NULL NULL NULL NULL NULL
+
+# Cleanup
+statement ok
+DROP TABLE in_list_ints_nullable
