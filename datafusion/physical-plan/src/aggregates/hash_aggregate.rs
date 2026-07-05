@@ -26,7 +26,6 @@
 //! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::mem::size_of;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -56,27 +55,18 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metric
 struct BufferedFinalPartitionBatch {
     batch: RecordBatch,
     evaluated_batch: EvaluatedAggregateBatch,
-    group_hashes: Vec<u64>,
 }
 
 impl BufferedFinalPartitionBatch {
-    fn new(
-        batch: RecordBatch,
-        evaluated_batch: EvaluatedAggregateBatch,
-        group_hashes: Vec<u64>,
-    ) -> Self {
+    fn new(batch: RecordBatch, evaluated_batch: EvaluatedAggregateBatch) -> Self {
         Self {
             batch,
             evaluated_batch,
-            group_hashes,
         }
     }
 
     fn memory_size(&self) -> usize {
-        let group_hashes_size = self.group_hashes.capacity() * size_of::<u64>();
-        get_record_batch_memory_size(&self.batch)
-            + self.evaluated_batch.memory_size()
-            + group_hashes_size
+        get_record_batch_memory_size(&self.batch) + self.evaluated_batch.memory_size()
     }
 }
 
@@ -86,6 +76,7 @@ struct FinalPartitionRunState {
     subpartition_column_idx: Option<usize>,
     total_runs_size: usize,
     partition_indices_buffer: Vec<usize>,
+    group_hashes_buffer: Vec<u64>,
 }
 
 impl FinalPartitionRunState {
@@ -96,6 +87,7 @@ impl FinalPartitionRunState {
             subpartition_column_idx: None,
             total_runs_size: 0,
             partition_indices_buffer: Vec::new(),
+            group_hashes_buffer: Vec::new(),
         }
     }
 
@@ -111,7 +103,6 @@ impl FinalPartitionRunState {
         &mut self,
         batch: RecordBatch,
         evaluated_batch: EvaluatedAggregateBatch,
-        group_hashes: Vec<u64>,
     ) -> Result<usize> {
         let subpartition_column_idx = match self.subpartition_column_idx {
             Some(idx) => idx,
@@ -146,8 +137,7 @@ impl FinalPartitionRunState {
             }
         }
 
-        let buffered_batch =
-            BufferedFinalPartitionBatch::new(batch, evaluated_batch, group_hashes);
+        let buffered_batch = BufferedFinalPartitionBatch::new(batch, evaluated_batch);
         let batch_size = buffered_batch.memory_size();
         self.total_runs_size += batch_size;
         self.batches.push(buffered_batch);
@@ -202,6 +192,14 @@ impl FinalPartitionRunState {
     fn return_partition_indices(&mut self, mut partition_indices: Vec<usize>) {
         partition_indices.clear();
         self.partition_indices_buffer = partition_indices;
+    }
+
+    fn take_group_hashes_buffer(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.group_hashes_buffer)
+    }
+
+    fn return_group_hashes_buffer(&mut self, group_hashes: Vec<u64>) {
+        self.group_hashes_buffer = group_hashes;
     }
 }
 
@@ -982,11 +980,10 @@ impl FinalHashAggregateStream {
         }
 
         let evaluated_batch = hash_table.evaluate_batch(batch)?;
-        let group_hashes = hash_table.create_group_hashes(&evaluated_batch)?;
 
         self.partition_run_state
             .as_mut()
-            .map(|state| state.stage_batch(batch.clone(), evaluated_batch, group_hashes))
+            .map(|state| state.stage_batch(batch.clone(), evaluated_batch))
             .transpose()
     }
 
@@ -1052,21 +1049,39 @@ impl FinalHashAggregateStream {
             };
 
             debug_assert!(!partition_indices.is_empty());
-            let buffered_batch = {
+            let mut group_hashes = self
+                .partition_run_state
+                .as_mut()
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "missing partition run state while building final aggregate hashes"
+                            .to_string(),
+                    )
+                })?
+                .take_group_hashes_buffer();
+
+            {
                 let state = self.partition_run_state.as_ref().ok_or_else(|| {
                     DataFusionError::Internal(
                         "missing partition run state while replaying final aggregate runs"
                             .to_string(),
                     )
                 })?;
-                &state.batches[batch_idx]
-            };
-            hash_table.aggregate_partitioned_evaluated_batch(
-                &buffered_batch.evaluated_batch,
-                &buffered_batch.group_hashes,
-                &partition_indices,
-            )?;
+                let buffered_batch = &state.batches[batch_idx];
+                hash_table.create_group_hashes_indices(
+                    &buffered_batch.evaluated_batch,
+                    &partition_indices,
+                    &mut group_hashes,
+                )?;
+                hash_table.aggregate_partitioned_evaluated_batch(
+                    &buffered_batch.evaluated_batch,
+                    &group_hashes,
+                    &partition_indices,
+                )?;
+            }
+
             if let Some(state) = self.partition_run_state.as_mut() {
+                state.return_group_hashes_buffer(group_hashes);
                 state.return_partition_indices(partition_indices);
             }
         }

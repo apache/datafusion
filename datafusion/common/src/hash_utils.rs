@@ -299,6 +299,57 @@ fn hash_array_primitive<T>(
     }
 }
 
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_array_primitive_indices<T>(
+    array: &PrimitiveArray<T>,
+    random_state: &impl HashState,
+    indices: &[usize],
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) where
+    T: ArrowPrimitiveType<Native: HashValue>,
+{
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    if array.null_count() == 0 {
+        if rehash {
+            for &row in indices {
+                let value = unsafe { array.value_unchecked(row) };
+                let mut hasher =
+                    random_state.seeded_state(hashes_buffer[row]).build_hasher();
+                value.hash_write(&mut hasher);
+                hashes_buffer[row] = hasher.finish();
+            }
+        } else {
+            for &row in indices {
+                let value = unsafe { array.value_unchecked(row) };
+                hashes_buffer[row] = value.hash_one(random_state);
+            }
+        }
+    } else if rehash {
+        for &row in indices {
+            if array.is_valid(row) {
+                let value = unsafe { array.value_unchecked(row) };
+                let mut hasher =
+                    random_state.seeded_state(hashes_buffer[row]).build_hasher();
+                value.hash_write(&mut hasher);
+                hashes_buffer[row] = hasher.finish();
+            }
+        }
+    } else {
+        for &row in indices {
+            if array.is_valid(row) {
+                let value = unsafe { array.value_unchecked(row) };
+                hashes_buffer[row] = value.hash_one(random_state);
+            }
+        }
+    }
+}
+
 /// Hashes one array into the `hashes_buffer`
 /// If `rehash==true` this combines the previous hash value in the buffer
 /// with the new hash using `combine_hashes`
@@ -340,6 +391,54 @@ fn hash_array<T>(
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
             hashes_buffer[i] = value.hash_one(random_state);
+        }
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_array_indices<T>(
+    array: &T,
+    random_state: &impl HashState,
+    indices: &[usize],
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) where
+    T: ArrayAccessor,
+    T::Item: HashValue,
+{
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    if array.null_count() == 0 {
+        if rehash {
+            for &row in indices {
+                let value = unsafe { array.value_unchecked(row) };
+                hashes_buffer[row] =
+                    combine_hashes(value.hash_one(random_state), hashes_buffer[row]);
+            }
+        } else {
+            for &row in indices {
+                let value = unsafe { array.value_unchecked(row) };
+                hashes_buffer[row] = value.hash_one(random_state);
+            }
+        }
+    } else if rehash {
+        for &row in indices {
+            if array.is_valid(row) {
+                let value = unsafe { array.value_unchecked(row) };
+                hashes_buffer[row] =
+                    combine_hashes(value.hash_one(random_state), hashes_buffer[row]);
+            }
+        }
+    } else {
+        for &row in indices {
+            if array.is_valid(row) {
+                let value = unsafe { array.value_unchecked(row) };
+                hashes_buffer[row] = value.hash_one(random_state);
+            }
         }
     }
 }
@@ -469,6 +568,62 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
             random_state,
             hashes_buffer,
         ),
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_generic_byte_view_array_indices<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    random_state: &impl HashState,
+    indices: &[usize],
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) {
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    let buffers = array.data_buffers();
+    let view_bytes = |view_len: u32, view: u128| {
+        let view = ByteView::from(view);
+        let offset = view.offset as usize;
+        unsafe {
+            let data = buffers.get_unchecked(view.buffer_index as usize);
+            data.get_unchecked(offset..offset + view_len as usize)
+        }
+    };
+
+    let has_nulls = array.null_count() != 0;
+    let has_buffers = !array.data_buffers().is_empty();
+    for &row in indices {
+        if has_nulls && array.is_null(row) {
+            continue;
+        }
+
+        let view = array.views()[row];
+        let view_len = view as u32;
+        if !has_buffers || view_len <= 12 {
+            if rehash {
+                let mut hasher =
+                    random_state.seeded_state(hashes_buffer[row]).build_hasher();
+                view.hash_write(&mut hasher);
+                hashes_buffer[row] = hasher.finish();
+            } else {
+                hashes_buffer[row] = view.hash_one(random_state);
+            }
+            continue;
+        }
+
+        let value = view_bytes(view_len, view);
+        if rehash {
+            let mut hasher = random_state.seeded_state(hashes_buffer[row]).build_hasher();
+            value.hash_write(&mut hasher);
+            hashes_buffer[row] = hasher.finish();
+        } else {
+            hashes_buffer[row] = value.hash_one(random_state);
+        }
     }
 }
 
@@ -1086,6 +1241,76 @@ fn hash_single_array(
     Ok(())
 }
 
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_null_indices<S: HashState>(
+    random_state: &S,
+    indices: &[usize],
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) {
+    if rehash {
+        for &row in indices {
+            hashes_buffer[row] =
+                combine_hashes(random_state.hash_one(1), hashes_buffer[row]);
+        }
+    } else {
+        for &row in indices {
+            hashes_buffer[row] = random_state.hash_one(1);
+        }
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_single_array_indices_fallback(
+    array: &dyn Array,
+    random_state: &impl HashState,
+    indices: &[usize],
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) -> Result<()> {
+    let take_indices =
+        UInt64Array::from_iter_values(indices.iter().map(|&idx| idx as u64));
+    let array = take(array, &take_indices, None)?;
+    let mut selected_hashes = if rehash {
+        indices.iter().map(|&idx| hashes_buffer[idx]).collect()
+    } else {
+        vec![0; indices.len()]
+    };
+
+    hash_single_array(array.as_ref(), random_state, &mut selected_hashes, rehash)?;
+    for (&row, hash) in indices.iter().zip(selected_hashes) {
+        hashes_buffer[row] = hash;
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_single_array_indices(
+    array: &dyn Array,
+    random_state: &impl HashState,
+    indices: &[usize],
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) -> Result<()> {
+    downcast_primitive_array! {
+        array => hash_array_primitive_indices(array, random_state, indices, hashes_buffer, rehash),
+        DataType::Null => hash_null_indices(random_state, indices, hashes_buffer, rehash),
+        DataType::Boolean => hash_array_indices(&as_boolean_array(array)?, random_state, indices, hashes_buffer, rehash),
+        DataType::Utf8 => hash_array_indices(&as_string_array(array)?, random_state, indices, hashes_buffer, rehash),
+        DataType::Utf8View => hash_generic_byte_view_array_indices(as_string_view_array(array)?, random_state, indices, hashes_buffer, rehash),
+        DataType::LargeUtf8 => hash_array_indices(&as_largestring_array(array), random_state, indices, hashes_buffer, rehash),
+        DataType::Binary => hash_array_indices(&as_generic_binary_array::<i32>(array)?, random_state, indices, hashes_buffer, rehash),
+        DataType::BinaryView => hash_generic_byte_view_array_indices(as_binary_view_array(array)?, random_state, indices, hashes_buffer, rehash),
+        DataType::LargeBinary => hash_array_indices(&as_generic_binary_array::<i64>(array)?, random_state, indices, hashes_buffer, rehash),
+        DataType::FixedSizeBinary(_) => {
+            let array: &FixedSizeBinaryArray = array.as_any().downcast_ref().unwrap();
+            hash_array_indices(&array, random_state, indices, hashes_buffer, rehash)
+        }
+        _ => hash_single_array_indices_fallback(array, random_state, indices, hashes_buffer, rehash)?,
+    }
+    Ok(())
+}
+
 /// Test version of `hash_single_array` that forces all hashes to collide to zero.
 #[cfg(feature = "force_hash_collisions")]
 fn hash_single_array(
@@ -1096,6 +1321,20 @@ fn hash_single_array(
 ) -> Result<()> {
     for hash in hashes_buffer.iter_mut() {
         *hash = 0
+    }
+    Ok(())
+}
+
+#[cfg(feature = "force_hash_collisions")]
+fn hash_single_array_indices(
+    _array: &dyn Array,
+    _random_state: &impl HashState,
+    indices: &[usize],
+    hashes_buffer: &mut [u64],
+    _rehash: bool,
+) -> Result<()> {
+    for &row in indices {
+        hashes_buffer[row] = 0;
     }
     Ok(())
 }
@@ -1158,6 +1397,38 @@ where
     Ok(hashes_buffer)
 }
 
+/// Creates hash values for selected rows, based on the values in the columns.
+///
+/// `hashes_buffer` must have the same length as the input arrays. Only rows in
+/// `indices` are updated. Values outside `indices` are left unchanged.
+pub fn create_hashes_indices<'a, I, T>(
+    arrays: I,
+    random_state: &impl HashState,
+    indices: &[usize],
+    hashes_buffer: &'a mut [u64],
+) -> Result<&'a mut [u64]>
+where
+    I: IntoIterator<Item = T>,
+    T: AsDynArray,
+{
+    for (col_idx, array) in arrays.into_iter().enumerate() {
+        let array = array.as_dyn_array();
+        assert_eq!(
+            hashes_buffer.len(),
+            array.len(),
+            "hashes_buffer and array should be of equal length"
+        );
+        let rehash = col_idx >= 1;
+        if !rehash {
+            for &row in indices {
+                hashes_buffer[row] = 0;
+            }
+        }
+        hash_single_array_indices(array, random_state, indices, hashes_buffer, rehash)?;
+    }
+    Ok(hashes_buffer)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1213,6 +1484,31 @@ mod tests {
         let hashes = create_hashes(&[f64_arr], &random_state, hashes_buff)?;
         assert_eq!(hashes.len(), 4,);
 
+        Ok(())
+    }
+
+    #[test]
+    fn create_hashes_indices_updates_only_selected_rows() -> Result<()> {
+        let int_array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let string_array: ArrayRef = Arc::new(StringViewArray::from(vec![
+            Some("a"),
+            None,
+            Some("c"),
+            Some("d"),
+        ]));
+        let arrays = [int_array, string_array];
+        let random_state = RandomState::with_seed(0);
+
+        let mut full_hashes = vec![0; arrays[0].len()];
+        create_hashes(&arrays, &random_state, &mut full_hashes)?;
+
+        let mut selected_hashes = vec![u64::MAX; arrays[0].len()];
+        create_hashes_indices(&arrays, &random_state, &[1, 3], &mut selected_hashes)?;
+
+        assert_eq!(selected_hashes[0], u64::MAX);
+        assert_eq!(selected_hashes[1], full_hashes[1]);
+        assert_eq!(selected_hashes[2], u64::MAX);
+        assert_eq!(selected_hashes[3], full_hashes[3]);
         Ok(())
     }
 

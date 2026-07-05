@@ -152,10 +152,12 @@ impl AggregateHashTable<FinalMarker> {
         Ok(())
     }
 
-    pub(in crate::aggregates) fn create_group_hashes(
+    pub(in crate::aggregates) fn create_group_hashes_indices(
         &self,
         evaluated_batch: &EvaluatedAggregateBatch,
-    ) -> Result<Vec<u64>> {
+        partition_indices: &[usize],
+        hashes: &mut Vec<u64>,
+    ) -> Result<()> {
         assert_eq_or_internal_err!(
             evaluated_batch.grouping_set_args.len(),
             1,
@@ -164,13 +166,14 @@ impl AggregateHashTable<FinalMarker> {
 
         let state = self.state.building();
         let group_values = &evaluated_batch.grouping_set_args[0];
-        let mut hashes = Vec::new();
         let timer = self.group_by_metrics.time_calculating_group_ids.timer();
-        state
-            .group_values
-            .create_hashes(group_values, &mut hashes)?;
+        state.group_values.create_hashes_indices(
+            group_values,
+            partition_indices,
+            hashes,
+        )?;
         drop(timer);
-        Ok(hashes)
+        Ok(())
     }
 
     pub(in crate::aggregates) fn aggregate_partitioned_evaluated_batch(
