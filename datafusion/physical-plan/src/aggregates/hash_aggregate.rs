@@ -1263,10 +1263,12 @@ impl FinalHashAggregateStream {
         match result {
             Ok(Some(batch)) => {
                 debug_assert!(batch.num_rows() > 0);
-                let next_state = if original_state.hash_table().is_done()
-                    || original_state.hash_table().is_building()
-                {
-                    if self
+
+                if original_state.hash_table().is_building() {
+                    // The current materialized output has been fully emitted, and
+                    // the reusable buffer has moved back to `Building`. Load the
+                    // next staged partition if one exists.
+                    let next_state = if self
                         .partition_run_state
                         .as_ref()
                         .is_some_and(FinalPartitionRunState::has_buffered_runs)
@@ -1284,16 +1286,32 @@ impl FinalHashAggregateStream {
                         }
                     } else {
                         FinalHashAggregateState::Done
-                    }
-                } else {
-                    let _ =
-                        self.update_memory_reservation(Some(original_state.hash_table()));
-                    original_state
-                };
+                    };
 
+                    return ControlFlow::Break((
+                        Poll::Ready(Some(
+                            Ok(batch.record_output(&self.baseline_metrics)),
+                        )),
+                        next_state,
+                    ));
+                }
+
+                if original_state.hash_table().is_done() {
+                    // The current materialized output has been fully emitted, but
+                    // there is no reusable buffer. This is the terminal output
+                    // path for non-replay final aggregation.
+                    return ControlFlow::Break((
+                        Poll::Ready(Some(
+                            Ok(batch.record_output(&self.baseline_metrics)),
+                        )),
+                        FinalHashAggregateState::Done,
+                    ));
+                }
+
+                let _ = self.update_memory_reservation(Some(original_state.hash_table()));
                 ControlFlow::Break((
                     Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
-                    next_state,
+                    original_state,
                 ))
             }
             Ok(None) => {
