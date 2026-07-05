@@ -24,7 +24,7 @@ use arrow::array::types::{
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
-use datafusion_common::hash_utils::{create_hashes, create_hashes_indices};
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{Result, internal_err};
 
 use datafusion_expr::EmitTo;
@@ -101,13 +101,9 @@ pub trait GroupValues: Send {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
     /// Calculates group ids for selected rows by row index.
-    ///
-    /// `hashes` is dense and aligned with `partition_indices`: `hashes[pos]`
-    /// contains the hash for row `partition_indices[pos]`.
     fn intern_partitioned(
         &mut self,
         _cols: &[ArrayRef],
-        _hashes: &[u64],
         _groups: &mut Vec<usize>,
         _partition_indices: &[usize],
     ) -> Result<()> {
@@ -121,24 +117,6 @@ pub trait GroupValues: Send {
         hashes.clear();
         hashes.resize(cols[0].len(), 0);
         create_hashes(cols, &crate::aggregates::AGGREGATION_HASH_SEED, hashes)?;
-        Ok(())
-    }
-
-    /// Computes hash values for selected group value rows before partitioned intern.
-    fn create_hashes_indices(
-        &self,
-        cols: &[ArrayRef],
-        indices: &[usize],
-        hashes: &mut Vec<u64>,
-    ) -> Result<()> {
-        hashes.clear();
-        hashes.resize(indices.len(), 0);
-        create_hashes_indices(
-            cols,
-            &crate::aggregates::AGGREGATION_HASH_SEED,
-            indices,
-            hashes,
-        )?;
         Ok(())
     }
 

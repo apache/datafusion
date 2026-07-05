@@ -40,7 +40,7 @@ use arrow::datatypes::{
     UInt64Type,
 };
 use datafusion_common::hash_utils::RandomState;
-use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::hash_utils::{create_hashes, create_hashes_indices};
 use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
@@ -462,13 +462,22 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     fn scalarized_intern_partitioned_impl(
         &mut self,
         cols: &[ArrayRef],
-        batch_hashes: &[u64],
         partition_indices: &[usize],
         groups: &mut Vec<usize>,
     ) -> Result<()> {
         let n_rows = cols[0].len();
         groups.clear();
         groups.resize(n_rows, usize::MAX);
+
+        let mut batch_hashes = mem::take(&mut self.hashes_buffer);
+        batch_hashes.clear();
+        batch_hashes.resize(partition_indices.len(), 0);
+        create_hashes_indices(
+            cols,
+            &self.random_state,
+            partition_indices,
+            &mut batch_hashes,
+        )?;
 
         for (hash_idx, &row) in partition_indices.iter().enumerate() {
             let target_hash = batch_hashes[hash_idx];
@@ -523,6 +532,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             };
             groups[row] = group_idx;
         }
+
+        self.hashes_buffer = batch_hashes;
 
         Ok(())
     }
@@ -605,7 +616,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     fn vectorized_intern_partitioned_impl(
         &mut self,
         cols: &[ArrayRef],
-        batch_hashes: &[u64],
         partition_indices: &[usize],
         groups: &mut Vec<usize>,
     ) -> Result<()> {
@@ -614,14 +624,26 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         groups.clear();
         groups.resize(n_rows, usize::MAX);
 
+        let mut batch_hashes = mem::take(&mut self.hashes_buffer);
+        batch_hashes.clear();
+        batch_hashes.resize(partition_indices.len(), 0);
+        create_hashes_indices(
+            cols,
+            &self.random_state,
+            partition_indices,
+            &mut batch_hashes,
+        )?;
+
         self.collect_vectorized_process_context_partitioned(
-            batch_hashes,
+            &batch_hashes,
             partition_indices,
             groups,
         );
         self.vectorized_append(cols)?;
         self.vectorized_equal_to(cols, groups, true);
-        self.scalarized_intern_remaining(cols, batch_hashes, groups, true)?;
+        self.scalarized_intern_remaining(cols, &batch_hashes, groups, true)?;
+
+        self.hashes_buffer = batch_hashes;
 
         Ok(())
     }
@@ -1321,24 +1343,13 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     fn intern_partitioned(
         &mut self,
         cols: &[ArrayRef],
-        hashes: &[u64],
         groups: &mut Vec<usize>,
         partition_indices: &[usize],
     ) -> Result<()> {
         if !STREAMING {
-            self.vectorized_intern_partitioned_impl(
-                cols,
-                hashes,
-                partition_indices,
-                groups,
-            )
+            self.vectorized_intern_partitioned_impl(cols, partition_indices, groups)
         } else {
-            self.scalarized_intern_partitioned_impl(
-                cols,
-                hashes,
-                partition_indices,
-                groups,
-            )
+            self.scalarized_intern_partitioned_impl(cols, partition_indices, groups)
         }
     }
 
@@ -1624,13 +1635,8 @@ mod tests {
         let partition_indices = vec![0, 2, 3];
         let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
         let mut groups = Vec::new();
-        let mut hashes = Vec::new();
-
         group_values
-            .create_hashes_indices(&cols, &partition_indices, &mut hashes)
-            .unwrap();
-        group_values
-            .intern_partitioned(&cols, &hashes, &mut groups, &partition_indices)
+            .intern_partitioned(&cols, &mut groups, &partition_indices)
             .unwrap();
 
         assert_eq!(groups.len(), 4);

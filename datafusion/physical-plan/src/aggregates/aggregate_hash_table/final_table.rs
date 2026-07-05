@@ -152,34 +152,9 @@ impl AggregateHashTable<FinalMarker> {
         Ok(())
     }
 
-    pub(in crate::aggregates) fn create_group_hashes_indices(
-        &self,
-        evaluated_batch: &EvaluatedAggregateBatch,
-        partition_indices: &[usize],
-        hashes: &mut Vec<u64>,
-    ) -> Result<()> {
-        assert_eq_or_internal_err!(
-            evaluated_batch.grouping_set_args.len(),
-            1,
-            "final partition replay expects a single grouping set"
-        );
-
-        let state = self.state.building();
-        let group_values = &evaluated_batch.grouping_set_args[0];
-        let timer = self.group_by_metrics.time_calculating_group_ids.timer();
-        state.group_values.create_hashes_indices(
-            group_values,
-            partition_indices,
-            hashes,
-        )?;
-        drop(timer);
-        Ok(())
-    }
-
     pub(in crate::aggregates) fn aggregate_partitioned_evaluated_batch(
         &mut self,
         evaluated_batch: &EvaluatedAggregateBatch,
-        group_hashes: &[u64],
         partition_indices: &[usize],
     ) -> Result<()> {
         assert_eq_or_internal_err!(
@@ -194,7 +169,6 @@ impl AggregateHashTable<FinalMarker> {
         let timer = self.group_by_metrics.aggregation_time.timer();
         state.group_values.intern_partitioned(
             group_values,
-            group_hashes,
             &mut state.batch_group_indices,
             partition_indices,
         )?;
