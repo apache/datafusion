@@ -648,8 +648,10 @@ mod tests {
 
     #[test]
     fn return_type_uses_supplied_field_names() {
-        let arg_types =
-            vec![list_arg_type(DataType::Int64), list_arg_type(DataType::Utf8)];
+        let arg_types = vec![
+            list_arg_type(DataType::Int64),
+            list_arg_type(DataType::Utf8),
+        ];
         let names = vec!["a".to_string(), "b".to_string()];
 
         let dt = arrays_zip_return_type(&arg_types, &names).unwrap();
@@ -666,8 +668,10 @@ mod tests {
 
     #[test]
     fn native_udf_keeps_ordinal_struct_field_names() {
-        let arg_types =
-            vec![list_arg_type(DataType::Int64), list_arg_type(DataType::Utf8)];
+        let arg_types = vec![
+            list_arg_type(DataType::Int64),
+            list_arg_type(DataType::Utf8),
+        ];
 
         let dt = ArraysZip::new().return_type(&arg_types).unwrap();
 

@@ -60,11 +60,7 @@ impl AnalyzerRule for SparkArraysZipRewrite {
         "spark_arrays_zip_rewrite"
     }
 
-    fn analyze(
-        &self,
-        plan: LogicalPlan,
-        _config: &ConfigOptions,
-    ) -> Result<LogicalPlan> {
+    fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
         plan.transform_up_with_subqueries(|plan| {
             let plan = plan.map_expressions(|expr| expr.transform_up(rewrite_expr))?;
             if plan.transformed {
@@ -101,11 +97,12 @@ fn rewrite_expr(expr: Expr) -> Result<Transformed<Expr>> {
         .map(|(i, e)| display_name_for(e, i))
         .collect();
 
-    let func =
-        Arc::new(ScalarUDF::new_from_impl(SparkArraysZip::with_field_names(names)));
-    Ok(Transformed::yes(Expr::ScalarFunction(ScalarFunction::new_udf(
-        func, sf.args,
-    ))))
+    let func = Arc::new(ScalarUDF::new_from_impl(SparkArraysZip::with_field_names(
+        names,
+    )));
+    Ok(Transformed::yes(Expr::ScalarFunction(
+        ScalarFunction::new_udf(func, sf.args),
+    )))
 }
 
 fn display_name_for(expr: &Expr, ordinal: usize) -> String {
@@ -182,11 +179,10 @@ mod tests {
         let inner_udf = Arc::new(ScalarUDF::new_from_impl(ArraysZip::new()));
         assert_eq!(inner_udf.name(), "arrays_zip");
 
-        let inner_call =
-            Expr::ScalarFunction(ScalarFunction::new_udf(
-                inner_udf,
-                vec![Expr::Column(Column::from_name("a"))],
-            ));
+        let inner_call = Expr::ScalarFunction(ScalarFunction::new_udf(
+            inner_udf,
+            vec![Expr::Column(Column::from_name("a"))],
+        ));
 
         let rewritten = run_rewrite(inner_call.clone()).expect("transform succeeded");
         assert!(

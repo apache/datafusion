@@ -135,7 +135,9 @@ mod tests {
     #[test]
     fn resolve_names_some_used_when_length_matches() {
         let udf = SparkArraysZip::with_field_names(vec!["a".into(), "b".into()]);
-        let names = udf.resolve_names(&[int_field("x"), int_field("y")]).unwrap();
+        let names = udf
+            .resolve_names(&[int_field("x"), int_field("y")])
+            .unwrap();
         assert_eq!(names, vec!["a", "b"]);
     }
 
