@@ -203,8 +203,7 @@ impl NullState {
         F: FnMut(usize, T::Native) + Send,
     {
         if let SeenValues::All { num_values } = &mut self.seen_values
-            && (values.null_count() == 0
-                || selected_values_have_no_nulls(values.nulls(), partition_indices))
+            && selected_values_have_no_nulls(values.nulls(), partition_indices)
         {
             accumulate_by_indices(group_indices, values, partition_indices, value_fn);
             *num_values = total_num_groups;
@@ -507,11 +506,32 @@ fn selected_values_have_no_nulls(
     nulls: Option<&NullBuffer>,
     partition_indices: &[usize],
 ) -> bool {
-    nulls.is_none_or(|nulls| {
-        partition_indices
-            .iter()
-            .all(|&row_idx| nulls.is_valid(row_idx))
-    })
+    let Some(nulls) = nulls else {
+        return true;
+    };
+    if nulls.null_count() == 0 {
+        return true;
+    }
+
+    let mut indices = partition_indices.iter().copied();
+    let Some(mut run_start) = indices.next() else {
+        return true;
+    };
+    let mut prev_idx = run_start;
+
+    for row_idx in indices {
+        if row_idx != prev_idx + 1 {
+            let run_len = prev_idx - run_start + 1;
+            if nulls.slice(run_start, run_len).null_count() != 0 {
+                return false;
+            }
+            run_start = row_idx;
+        }
+        prev_idx = row_idx;
+    }
+
+    let run_len = prev_idx - run_start + 1;
+    nulls.slice(run_start, run_len).null_count() == 0
 }
 
 pub fn accumulate_by_indices<T, F>(
