@@ -489,19 +489,19 @@ mod tests {
                 true,
             ),
             (
-                Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(col("x")),
-                    op: Operator::IsDistinctFrom,
-                    right: Box::new(lit(ScalarValue::Null)),
-                }),
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(col("x")),
+                    Operator::IsDistinctFrom,
+                    Box::new(lit(ScalarValue::Null)),
+                )),
                 true,
             ),
             (
-                Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(col("x")),
-                    op: Operator::IsDistinctFrom,
-                    right: Box::new(lit(ScalarValue::Date32(Some(17000)))),
-                }),
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(col("x")),
+                    Operator::IsDistinctFrom,
+                    Box::new(lit(ScalarValue::Date32(Some(17000)))),
+                )),
                 true,
             ),
         ];
@@ -547,19 +547,19 @@ mod tests {
         // (original_expr, expected_simplification)
         let simplified_cases = &[
             (
-                Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(col("x")),
-                    op: Operator::IsDistinctFrom,
-                    right: Box::new(lit("z")),
-                }),
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(col("x")),
+                    Operator::IsDistinctFrom,
+                    Box::new(lit("z")),
+                )),
                 true,
             ),
             (
-                Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(col("x")),
-                    op: Operator::IsNotDistinctFrom,
-                    right: Box::new(lit("z")),
-                }),
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(col("x")),
+                    Operator::IsNotDistinctFrom,
+                    Box::new(lit("z")),
+                )),
                 false,
             ),
         ];
@@ -575,11 +575,11 @@ mod tests {
             col("x").not_eq(lit("a")),
             col("x").between(lit("a"), lit("z")),
             col("x").not_between(lit("a"), lit("z")),
-            Expr::BinaryExpr(BinaryExpr {
-                left: Box::new(col("x")),
-                op: Operator::IsDistinctFrom,
-                right: Box::new(lit(ScalarValue::Null)),
-            }),
+            Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(col("x")),
+                Operator::IsDistinctFrom,
+                Box::new(lit(ScalarValue::Null)),
+            )),
         ];
 
         validate_unchanged_cases(&guarantees, unchanged_cases);

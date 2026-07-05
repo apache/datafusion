@@ -49,19 +49,15 @@ pub fn simplify_regex_expr(
 ) -> Result<Transformed<Expr>> {
     // Check if the right operand is a supported string literal
     let Some(string_scalar) = StringScalar::try_from_expr(right.as_ref()) else {
-        return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
-            left,
-            op,
-            right,
-        })));
+        return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr::new(
+            left, op, right,
+        ))));
     };
     let pattern = string_scalar.as_str();
     let Some(pattern) = pattern else {
-        return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
-            left,
-            op,
-            right,
-        })));
+        return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr::new(
+            left, op, right,
+        ))));
     };
 
     let mode = OperatorMode::new(&op);
@@ -69,11 +65,11 @@ pub fn simplify_regex_expr(
     if pattern == ANY_CHAR_REGEX_PATTERN {
         let new_expr = if mode.not {
             let null_bool = lit(ScalarValue::Boolean(None));
-            Expr::BinaryExpr(BinaryExpr {
-                left: Box::new(left.is_null()),
-                op: Operator::And,
-                right: Box::new(null_bool),
-            })
+            Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(left.is_null()),
+                Operator::And,
+                Box::new(null_bool),
+            ))
         } else {
             // not null
             left.is_not_null()
@@ -104,11 +100,9 @@ pub fn simplify_regex_expr(
     }
 
     // Leave untouched if optimization didn't work
-    Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
-        left,
-        op,
-        right,
-    })))
+    Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr::new(
+        left, op, right,
+    ))))
 }
 
 #[derive(Debug)]
@@ -156,7 +150,7 @@ impl OperatorMode {
         } else {
             Operator::Eq
         };
-        Expr::BinaryExpr(BinaryExpr { left, op, right })
+        Expr::BinaryExpr(BinaryExpr::new(left, op, right))
     }
 }
 

@@ -1075,8 +1075,8 @@ pub fn iter_conjunction_owned(expr: Expr) -> impl Iterator<Item = Expr> {
                     op: Operator::And,
                     left,
                 }) => {
-                    stack.push(*right);
-                    stack.push(*left);
+                    stack.push(*right.into_inner());
+                    stack.push(*left.into_inner());
                 }
                 Expr::Alias(Alias { expr, .. }) => stack.push(*expr),
                 other => return Some(other),
@@ -1138,8 +1138,8 @@ fn split_binary_owned_impl(
 ) -> Vec<Expr> {
     match expr {
         Expr::BinaryExpr(BinaryExpr { right, op, left }) if op == operator => {
-            let exprs = split_binary_owned_impl(*left, operator, exprs);
-            split_binary_owned_impl(*right, operator, exprs)
+            let exprs = split_binary_owned_impl(*left.into_inner(), operator, exprs);
+            split_binary_owned_impl(*right.into_inner(), operator, exprs)
         }
         Expr::Alias(Alias { expr, .. }) => {
             split_binary_owned_impl(*expr, operator, exprs)

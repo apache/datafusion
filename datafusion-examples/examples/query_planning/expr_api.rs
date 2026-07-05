@@ -591,9 +591,10 @@ fn type_coercion_demo() -> Result<()> {
             if let Expr::Column(ref col_expr) = *e.left {
                 let field = df_schema.field_with_name(None, col_expr.name())?;
                 let cast_to_type = field.data_type();
-                let coerced_right = e.right.cast_to(cast_to_type, &df_schema)?;
+                let coerced_right =
+                    (*e.right.into_inner()).cast_to(cast_to_type, &df_schema)?;
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
-                    e.left,
+                    e.left.into_inner(),
                     e.op,
                     Box::new(coerced_right),
                 ))))
