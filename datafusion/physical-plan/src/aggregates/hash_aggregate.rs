@@ -85,7 +85,6 @@ struct FinalPartitionRunState {
     run_batch_indices: BTreeMap<usize, Vec<usize>>,
     subpartition_column_idx: Option<usize>,
     total_runs_size: usize,
-    is_draining: bool,
     partition_indices_buffer: Vec<usize>,
 }
 
@@ -96,7 +95,6 @@ impl FinalPartitionRunState {
             run_batch_indices: BTreeMap::new(),
             subpartition_column_idx: None,
             total_runs_size: 0,
-            is_draining: false,
             partition_indices_buffer: Vec::new(),
         }
     }
@@ -154,10 +152,6 @@ impl FinalPartitionRunState {
         self.total_runs_size += batch_size;
         self.batches.push(buffered_batch);
         Ok(batch_size)
-    }
-
-    fn begin_replay(&mut self) {
-        self.is_draining = true;
     }
 
     fn next_partition_id(&self) -> Option<usize> {
@@ -953,7 +947,7 @@ impl FinalHashAggregateStream {
         if self
             .partition_run_state
             .as_ref()
-            .is_some_and(|state| state.is_draining || state.has_buffered_runs())
+            .is_some_and(FinalPartitionRunState::has_buffered_runs)
         {
             return false;
         }
@@ -966,11 +960,7 @@ impl FinalHashAggregateStream {
         &self,
         hash_table: &AggregateHashTable<FinalMarker>,
     ) -> bool {
-        hash_table.supports_partitioned_merge()
-            && self
-                .partition_run_state
-                .as_ref()
-                .is_some_and(|state| !state.is_draining)
+        hash_table.supports_partitioned_merge() && self.partition_run_state.is_some()
     }
 
     fn stage_partition_runs(
@@ -1027,10 +1017,6 @@ impl FinalHashAggregateStream {
         &mut self,
         hash_table: AggregateHashTable<FinalMarker>,
     ) -> Result<FinalHashAggregateState> {
-        if let Some(state) = self.partition_run_state.as_mut() {
-            state.begin_replay();
-        }
-
         self.load_next_partition_run(hash_table)
     }
 
@@ -1038,15 +1024,15 @@ impl FinalHashAggregateStream {
         &mut self,
         hash_table: AggregateHashTable<FinalMarker>,
     ) -> Result<FinalHashAggregateState> {
-        if !self
+        if self
             .partition_run_state
             .as_ref()
-            .is_some_and(|state| state.is_draining)
+            .is_some_and(FinalPartitionRunState::has_buffered_runs)
         {
-            return Ok(FinalHashAggregateState::Done);
+            self.load_next_partition_run(hash_table)
+        } else {
+            Ok(FinalHashAggregateState::Done)
         }
-
-        self.load_next_partition_run(hash_table)
     }
 
     fn load_next_partition_run(
@@ -1146,11 +1132,12 @@ impl FinalHashAggregateStream {
     }
 
     // FinalPartitioned inputs may carry an internal subpartition column. If the
-    // group value implementation supports filtered interning, the stream buffers
-    // those batches and replays one relative aggregate partition at a time using
-    // a reusable final hash table plus per-partition filters.
+    // group value and accumulator implementations support partitioned replay,
+    // the stream buffers those batches and replays one relative aggregate
+    // partition at a time using a reusable final hash table plus per-partition
+    // row indices.
     //
-    // If filtered interning is not supported, this optimization is skipped
+    // If partitioned replay is not supported, this optimization is skipped
     // entirely and input batches are processed by the normal aggregate path.
     //
     /// Handle ReadingInput state - aggregate partial state batches into the hash table.
@@ -1344,25 +1331,41 @@ impl Stream for FinalHashAggregateStream {
     /// ```text
     /// (start)
     ///   -> ReadingInput
-    ///      The stream starts by polling partial-state input and aggregating
-    ///      those states into the final hash table.
+    ///      The stream starts by polling partial-state input.
     ///
     /// ReadingInput
     ///   -> ReadingInput
-    ///      Aggregate one partial-state input batch, update the inner aggregate
-    ///      hash table, and continue with the next input batch.
+    ///      Normal path: aggregate one partial-state input batch into the final
+    ///      hash table, update memory, and continue reading real upstream input.
+    ///
+    ///   -> ReadingInput
+    ///      FinalPartitioned reuse path: stage one hidden-subpartition batch,
+    ///      including evaluated aggregate expressions and group hashes, then
+    ///      continue reading real upstream input. No fake input state is used.
     ///
     ///   -> ProducingOutput
-    ///      Input was exhausted, or the soft group limit was reached. Move to
-    ///      the next state to start outputting final aggregate values.
+    ///      Normal path: input was exhausted, or the soft group limit was
+    ///      reached. Start outputting final aggregate values.
+    ///
+    ///   -> ProducingOutput
+    ///      FinalPartitioned reuse path: input was exhausted and staged runs are
+    ///      present. Load the first partition run directly into the reusable hash
+    ///      table, then start output.
     ///
     /// ProducingOutput
     ///   -> ProducingOutput
-    ///      One final output batch was yielded; repeat to continue producing
-    ///      output incrementally.
+    ///      One final output batch was yielded and the current hash table still
+    ///      has output to emit.
+    ///
+    ///   -> ProducingOutput
+    ///      FinalPartitioned reuse path: the current partition output was
+    ///      exhausted and more staged runs remain. Reuse the hash table, load the
+    ///      next partition run directly, then start output.
     ///
     ///   -> Done
-    ///      All final output was emitted.
+    ///      Normal path: all final output was emitted. FinalPartitioned reuse
+    ///      path: the current partition output was emitted and no staged runs
+    ///      remain.
     ///
     /// Done
     ///   -> (end)
@@ -1524,14 +1527,9 @@ mod tests {
             actual,
             vec![(1, 10, 5), (1, 10, 12), (2, 10, 5), (3, 10, 7), (3, 10, 9),]
         );
-        assert!(
-            stream
-                .partition_run_state
-                .as_ref()
-                .is_some_and(
-                    |state| state.run_batch_indices.is_empty() && state.is_draining
-                )
-        );
+        assert!(stream.partition_run_state.as_ref().is_some_and(|state| {
+            state.run_batch_indices.is_empty() && !state.has_buffered_runs()
+        }));
 
         Ok(())
     }
