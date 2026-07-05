@@ -22,8 +22,9 @@ pub use stdin::{StdinCarriesCommands, is_stdin_location};
 
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
-use aws_credential_types::provider::{
-    ProvideCredentials, SharedCredentialsProvider, error::CredentialsError,
+use aws_credential_types::{
+    Credentials as AwsSdkCredentials,
+    provider::{ProvideCredentials, SharedCredentialsProvider, error::CredentialsError},
 };
 use datafusion::{
     common::{
@@ -48,7 +49,9 @@ use std::{
     error::Error,
     fmt::{Debug, Display},
     sync::Arc,
+    time::{Duration, SystemTime},
 };
+use tokio::sync::RwLock;
 use url::Url;
 
 #[cfg(not(test))]
@@ -117,7 +120,10 @@ async fn get_s3_object_store_builder_inner(
             builder = builder.with_region(region);
         }
         if let Some(credentials) = credentials {
-            let credentials = Arc::new(S3CredentialProvider { credentials });
+            let credentials = Arc::new(S3CredentialProvider::new(
+                credentials.provider,
+                &credentials.initial_credentials,
+            ));
             builder = builder.with_credentials(credentials);
         } else {
             debug!("No credentials found, defaulting to skip signature ");
@@ -170,7 +176,12 @@ async fn get_s3_object_store_builder_inner(
 /// Credentials from the AWS SDK
 struct CredentialsFromConfig {
     region: Option<String>,
-    credentials: Option<SharedCredentialsProvider>,
+    credentials: Option<CredentialsFromConfigProvider>,
+}
+
+struct CredentialsFromConfigProvider {
+    provider: SharedCredentialsProvider,
+    initial_credentials: AwsSdkCredentials,
 }
 
 impl CredentialsFromConfig {
@@ -193,7 +204,10 @@ impl CredentialsFromConfig {
         // until they are needed. To ensure that the credentials are valid,
         // we can call `provide_credentials` here.
         let credentials = match credentials.provide_credentials().await {
-            Ok(_) => Some(credentials),
+            Ok(initial_credentials) => Some(CredentialsFromConfigProvider {
+                provider: credentials,
+                initial_credentials,
+            }),
             Err(CredentialsError::CredentialsNotLoaded(_)) => {
                 debug!("Could not use AWS SDK to get credentials");
                 None
@@ -225,9 +239,51 @@ impl CredentialsFromConfig {
     }
 }
 
+const S3_CREDENTIAL_CACHE_EXPIRY_BUFFER: Duration = Duration::from_secs(10);
+
 #[derive(Debug)]
 struct S3CredentialProvider {
     credentials: SharedCredentialsProvider,
+    cache: RwLock<Option<CachedAwsCredential>>,
+}
+
+impl S3CredentialProvider {
+    fn new(
+        credentials: SharedCredentialsProvider,
+        initial_credentials: &AwsSdkCredentials,
+    ) -> Self {
+        Self {
+            credentials,
+            cache: RwLock::new(Some(CachedAwsCredential::new(initial_credentials))),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CachedAwsCredential {
+    credential: Arc<AwsCredential>,
+    expires_at: Option<SystemTime>,
+}
+
+impl CachedAwsCredential {
+    fn new(credentials: &AwsSdkCredentials) -> Self {
+        Self {
+            expires_at: credentials.expiry(),
+            credential: Arc::new(AwsCredential {
+                key_id: credentials.access_key_id().to_string(),
+                secret_key: credentials.secret_access_key().to_string(),
+                token: credentials.session_token().map(ToString::to_string),
+            }),
+        }
+    }
+
+    fn is_valid(&self, now: SystemTime) -> bool {
+        self.expires_at.is_none_or(|expires_at| {
+            expires_at
+                .duration_since(now)
+                .is_ok_and(|ttl| ttl > S3_CREDENTIAL_CACHE_EXPIRY_BUFFER)
+        })
+    }
 }
 
 #[async_trait]
@@ -235,7 +291,22 @@ impl CredentialProvider for S3CredentialProvider {
     type Credential = AwsCredential;
 
     async fn get_credential(&self) -> object_store::Result<Arc<Self::Credential>> {
-        let creds =
+        let now = SystemTime::now();
+        if let Some(cached) = self.cache.read().await.as_ref()
+            && cached.is_valid(now)
+        {
+            return Ok(Arc::clone(&cached.credential));
+        }
+
+        let mut cache = self.cache.write().await;
+        let now = SystemTime::now();
+        if let Some(cached) = cache.as_ref()
+            && cached.is_valid(now)
+        {
+            return Ok(Arc::clone(&cached.credential));
+        }
+
+        let credentials =
             self.credentials
                 .provide_credentials()
                 .await
@@ -243,11 +314,11 @@ impl CredentialProvider for S3CredentialProvider {
                     store: "S3",
                     source: Box::new(e),
                 })?;
-        Ok(Arc::new(AwsCredential {
-            key_id: creds.access_key_id().to_string(),
-            secret_key: creds.secret_access_key().to_string(),
-            token: creds.session_token().map(ToString::to_string),
-        }))
+        let cached = CachedAwsCredential::new(&credentials);
+        let credential = Arc::clone(&cached.credential);
+        *cache = Some(cached);
+
+        Ok(credential)
     }
 }
 
@@ -589,6 +660,7 @@ mod tests {
     use crate::cli_context::CliSessionContext;
 
     use super::*;
+    use aws_credential_types::provider::future;
 
     use datafusion::{
         datasource::listing::ListingTableUrl,
@@ -597,6 +669,149 @@ mod tests {
     };
 
     use object_store::{aws::AmazonS3ConfigKey, gcp::GoogleConfigKey};
+    use std::{
+        collections::VecDeque,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    #[derive(Debug)]
+    struct CountingCredentialsProvider {
+        credentials: Mutex<VecDeque<AwsSdkCredentials>>,
+        calls: AtomicUsize,
+    }
+
+    impl CountingCredentialsProvider {
+        fn new(credentials: Vec<AwsSdkCredentials>) -> Self {
+            assert!(!credentials.is_empty());
+            Self {
+                credentials: Mutex::new(credentials.into()),
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl ProvideCredentials for CountingCredentialsProvider {
+        fn provide_credentials<'a>(&'a self) -> future::ProvideCredentials<'a>
+        where
+            Self: 'a,
+        {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+
+            let credentials = {
+                let mut credentials = self.credentials.lock().unwrap();
+                if credentials.len() > 1 {
+                    credentials.pop_front().unwrap()
+                } else {
+                    credentials.front().unwrap().clone()
+                }
+            };
+
+            future::ProvideCredentials::ready(Ok(credentials))
+        }
+    }
+
+    fn shared_counting_provider(
+        credentials: Vec<AwsSdkCredentials>,
+    ) -> (SharedCredentialsProvider, Arc<CountingCredentialsProvider>) {
+        let provider = Arc::new(CountingCredentialsProvider::new(credentials));
+        let shared_provider = SharedCredentialsProvider::from(
+            Arc::clone(&provider) as Arc<dyn ProvideCredentials>
+        );
+        (shared_provider, provider)
+    }
+
+    fn sdk_credentials(
+        key_id: &'static str,
+        expires_after: Option<SystemTime>,
+    ) -> AwsSdkCredentials {
+        AwsSdkCredentials::new(
+            key_id,
+            format!("{key_id}_secret"),
+            Some(format!("{key_id}_token")),
+            expires_after,
+            "test",
+        )
+    }
+
+    #[tokio::test]
+    async fn s3_credential_provider_uses_seeded_credentials_without_refetching()
+    -> Result<()> {
+        let initial = sdk_credentials(
+            "initial",
+            Some(
+                SystemTime::now()
+                    + S3_CREDENTIAL_CACHE_EXPIRY_BUFFER
+                    + Duration::from_secs(60),
+            ),
+        );
+        let (shared_provider, counting_provider) =
+            shared_counting_provider(vec![sdk_credentials("refreshed", None)]);
+        let provider = S3CredentialProvider::new(shared_provider, &initial);
+
+        let first = provider.get_credential().await?;
+        let second = provider.get_credential().await?;
+
+        assert_eq!(first.key_id, "initial");
+        assert_eq!(second.key_id, "initial");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(counting_provider.calls(), 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn s3_credential_provider_reuses_non_expiring_credentials() -> Result<()> {
+        let initial = sdk_credentials("static", None);
+        let (shared_provider, counting_provider) =
+            shared_counting_provider(vec![sdk_credentials("refreshed", None)]);
+        let provider = S3CredentialProvider::new(shared_provider, &initial);
+
+        let first = provider.get_credential().await?;
+        let second = provider.get_credential().await?;
+
+        assert_eq!(first.key_id, "static");
+        assert_eq!(second.key_id, "static");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(counting_provider.calls(), 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn s3_credential_provider_refreshes_near_expiry_credentials() -> Result<()> {
+        let initial = sdk_credentials(
+            "initial",
+            Some(SystemTime::now() + S3_CREDENTIAL_CACHE_EXPIRY_BUFFER),
+        );
+        let refreshed = sdk_credentials(
+            "refreshed",
+            Some(
+                SystemTime::now()
+                    + S3_CREDENTIAL_CACHE_EXPIRY_BUFFER
+                    + Duration::from_secs(60),
+            ),
+        );
+        let (shared_provider, counting_provider) =
+            shared_counting_provider(vec![refreshed]);
+        let provider = S3CredentialProvider::new(shared_provider, &initial);
+
+        let first = provider.get_credential().await?;
+        let second = provider.get_credential().await?;
+
+        assert_eq!(first.key_id, "refreshed");
+        assert_eq!(second.key_id, "refreshed");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(counting_provider.calls(), 1);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn s3_object_store_builder_default() -> Result<()> {
