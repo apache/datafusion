@@ -43,6 +43,9 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::Result;
 use datafusion::datasource::empty::EmptyTable;
+use datafusion::optimizer::{
+    OptimizerRule, single_distinct_to_groupby::SingleDistinctToGroupBy,
+};
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::{CatalogProvider, MemoryCatalogProvider, SchemaProvider};
@@ -394,6 +397,119 @@ async fn optimized_duckdb_unparse_qualifies_nested_passthrough_column() -> Resul
     assert!(
         !sql.contains(r#"(SELECT "o"."order_id", CASE WHEN"#),
         "derived table must not reference out-of-scope alias o: {sql}"
+    );
+
+    Ok(())
+}
+
+// https://github.com/apache/datafusion/issues/23317
+//
+// `SingleDistinctToGroupBy` rewrites single DISTINCT aggregates into a
+// two-phase aggregate plan. The inner Aggregate defines intermediate fields
+// such as `group_alias_0`, `alias1`, and `alias2`. The unparser must preserve
+// that inner Aggregate as a derived table before the outer Aggregate
+// references those fields.
+//
+// Without `SingleDistinctToGroupBy`, the Aggregate still sits over an unnamed
+// derived Projection. In that SQL scope, base table aliases `cs` and `c` are no
+// longer visible, so aggregate expressions must refer to the derived table's
+// output columns unqualified.
+const ISSUE_23317_QUERY: &str = r#"
+WITH cohort AS (
+    SELECT
+        signup_year,
+        sum(customers) AS customers,
+        sum(revenue) AS revenue
+    FROM
+        (
+            SELECT
+                date_part('year', c.signup_date) AS signup_year,
+                count(DISTINCT cs.customer_id) AS customers,
+                round(sum(cs.total_revenue), 2) AS revenue
+            FROM
+                "warehouse"."main"."sales" cs
+                JOIN "warehouse"."main"."customers" c USING (customer_id)
+            GROUP BY
+                1
+        )
+    GROUP BY
+        signup_year
+)
+SELECT
+    *
+FROM
+    cohort
+"#;
+
+fn issue_23317_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+
+    let schema_provider = Arc::new(MemorySchemaProvider::new());
+    schema_provider.register_table(
+        "customers".to_string(),
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+            Field::new("customer_id", DataType::Int32, false),
+            Field::new("signup_date", DataType::Date32, true),
+        ])))),
+    )?;
+    schema_provider.register_table(
+        "sales".to_string(),
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+            Field::new("customer_id", DataType::Int32, false),
+            Field::new("total_revenue", DataType::Decimal128(12, 2), true),
+        ])))),
+    )?;
+
+    let catalog = Arc::new(MemoryCatalogProvider::new());
+    catalog.register_schema("main", schema_provider)?;
+    ctx.register_catalog("warehouse", catalog);
+
+    Ok(ctx)
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_preserves_nested_aggregate_scope() -> Result<()> {
+    let ctx = issue_23317_context()?;
+    let plan = ctx.sql(ISSUE_23317_QUERY).await?.into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert!(
+        sql.contains(concat!(
+            r#"FROM (SELECT sum("total_revenue") AS "alias2", "#,
+            r#"date_part('year', "signup_date") AS "group_alias_0", "#,
+            r#""customer_id" AS "alias1" "#
+        )),
+        "inner aggregate should define the aliases before the outer aggregate uses them: {sql}",
+    );
+    assert!(
+        !sql.contains(r#"date_part('year', "c"."signup_date") AS "group_alias_0""#),
+        "inner aggregate must not reference out-of-scope alias c: {sql}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_unqualifies_aggregate_input_projection() -> Result<()> {
+    let ctx = issue_23317_context()?;
+    assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
+
+    let plan = ctx.sql(ISSUE_23317_QUERY).await?.into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert!(
+        sql.contains(
+            r#"SELECT date_part('year', "signup_date") AS "signup_year", count(DISTINCT "customer_id") AS "customers", round(sum("total_revenue"), 2) AS "revenue" FROM ("#
+        ),
+        "aggregate expressions should resolve against the derived projection output: {sql}",
+    );
+    assert!(
+        !sql.contains(r#"date_part('year', "c"."signup_date") AS "signup_year""#),
+        "derived aggregate must not reference out-of-scope alias c: {sql}",
     );
 
     Ok(())
