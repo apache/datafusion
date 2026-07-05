@@ -129,6 +129,15 @@ impl BatchBuilder {
         &self.schema
     }
 
+    /// The rows of `stream_idx`'s current batch that have not been pushed
+    /// via [`Self::push_row`] yet, as a zero-copy slice.
+    pub(crate) fn remaining_rows_of(&self, stream_idx: usize) -> Option<RecordBatch> {
+        let cursor = &self.cursors[stream_idx];
+        let (_, batch) = &self.batches[cursor.batch_idx];
+        let remaining = batch.num_rows() - cursor.row_idx;
+        (remaining > 0).then(|| batch.slice(cursor.row_idx, remaining))
+    }
+
     /// Try to interleave all columns using the given index slice.
     fn try_interleave_columns(
         &self,
