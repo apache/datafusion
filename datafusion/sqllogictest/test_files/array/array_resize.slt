@@ -76,6 +76,11 @@ select array_resize(arrow_cast(make_array(1), 'LargeList(Int64)'), 9223372036854
 query error DataFusion error: Execution error: array_resize: resulting array of 3000000000 elements exceeds the maximum array size
 select array_resize(make_array(1), 3000000000, 0);
 
+# Non-primitive element types (e.g. Utf8) fall back to a conservative byte
+# width; a size above that cap must error instead of attempting a huge allocation.
+query error DataFusion error: Execution error: array_resize: resulting array of 600000000000000000 elements exceeds the maximum array size
+select array_resize(arrow_cast(make_array('a'), 'LargeList(Utf8)'), 600000000000000000);
+
 # array_resize scalar function #5
 query ?
 select array_resize(make_array(1.1, 2.2, 3.3), 10, 9.9);

@@ -355,11 +355,10 @@ where
 /// Only primitive and `FixedSizeBinary` leaves are byte-exact.
 fn max_resize_values(value_type: &DataType) -> usize {
     let element_width = match value_type {
-        DataType::FixedSizeBinary(size) if *size > 0 => {
-            (*size as usize).saturating_mul(u8::BITS as usize)
-        }
+        DataType::FixedSizeBinary(size) if *size > 0 => *size as usize,
         _ => value_type.primitive_width().unwrap_or(size_of::<u128>()),
     };
+
     (isize::MAX as usize) / element_width.max(1)
 }
 
@@ -415,7 +414,6 @@ mod tests {
 
     #[test]
     fn test_array_resize_fixed_size_binary_large_size_errors_without_panicking() {
-        // FixedSizeBinary is byte-accounted separately from the generic fallback.
         let values =
             FixedSizeBinaryArray::try_from_iter(vec![vec![0u8; 32]].into_iter()).unwrap();
         let elem_field =
@@ -431,6 +429,36 @@ mod tests {
         let size: ArrayRef = Arc::new(Int64Array::from(vec![400_000_000_000_000_000i64]));
 
         let err = array_resize_inner(&[array, size]).unwrap_err();
+        assert!(
+            err.to_string().contains("exceeds the maximum array size"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_array_resize_accumulates_values_across_rows() {
+        // Each row's target (6e17) is individually under the width-8 cap
+        // (isize::MAX / 8), but their sum (1.2e18) exceeds it, so the guard
+        // must reject based on the accumulated total rather than per row.
+        let values = Int64Array::from(vec![1, 2]);
+        let offsets = OffsetBuffer::<i64>::new(vec![0i64, 1, 2].into());
+        let elem_field = Arc::new(Field::new_list_field(DataType::Int64, true));
+        let array: ArrayRef = Arc::new(LargeListArray::new(
+            elem_field,
+            offsets,
+            Arc::new(values) as ArrayRef,
+            None,
+        ));
+        let size: ArrayRef = Arc::new(Int64Array::from(vec![
+            600_000_000_000_000_000i64,
+            600_000_000_000_000_000i64,
+        ]));
+
+        let err = array_resize_inner(&[array, size]).unwrap_err();
+        assert!(
+            err.to_string().contains("1200000000000000000"),
+            "expected accumulated total in error: {err}"
+        );
         assert!(
             err.to_string().contains("exceeds the maximum array size"),
             "unexpected error: {err}"
