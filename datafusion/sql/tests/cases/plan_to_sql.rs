@@ -2736,9 +2736,9 @@ fn test_unparse_inner_join_with_table_scan_projection() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn test_unparse_projected_join_unwraps_right_nested_passthrough_projection() -> Result<()>
-{
+/// Build the three base table scans (`left_table`, `mid_table`, `right_table`)
+/// shared by the nested passthrough-projection join unparsing tests.
+fn nested_passthrough_join_tables() -> Result<(LogicalPlan, LogicalPlan, LogicalPlan)> {
     let left_schema = Schema::new(vec![
         Field::new("left_id", DataType::Int32, false),
         Field::new("mid_id", DataType::Int32, false),
@@ -2755,6 +2755,13 @@ fn test_unparse_projected_join_unwraps_right_nested_passthrough_projection() -> 
     let left = table_scan(Some("left_table"), &left_schema, None)?.build()?;
     let mid = table_scan(Some("mid_table"), &mid_schema, None)?.build()?;
     let right = table_scan(Some("right_table"), &right_schema, None)?.build()?;
+    Ok((left, mid, right))
+}
+
+#[test]
+fn test_unparse_projected_join_unwraps_right_nested_passthrough_projection() -> Result<()>
+{
+    let (left, mid, right) = nested_passthrough_join_tables()?;
 
     let nested_right = LogicalPlanBuilder::from(mid)
         .join(
@@ -2788,6 +2795,52 @@ fn test_unparse_projected_join_unwraps_right_nested_passthrough_projection() -> 
     assert_snapshot!(
         sql,
         @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table INNER JOIN (mid_table INNER JOIN right_table ON mid_table.right_id = right_table.right_id) ON left_table.mid_id = mid_table.mid_id"#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_projected_join_unwraps_left_nested_passthrough_projection() -> Result<()>
+{
+    let (left, mid, right) = nested_passthrough_join_tables()?;
+
+    // Left join input is a qualified passthrough `Projection(Join)`, and the
+    // outer join condition (`mid_table.right_id`) references an alias from
+    // inside it. The unparser must not wrap this in a derived table that would
+    // hide `mid_table.right_id` from the outer condition.
+    let nested_left = LogicalPlanBuilder::from(left)
+        .join(
+            mid,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left_table.mid_id"], vec!["mid_table.mid_id"]),
+            None,
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("mid_table.right_id"),
+        ])?
+        .build()?;
+
+    let plan = LogicalPlanBuilder::from(nested_left)
+        .join(
+            right,
+            datafusion_expr::JoinType::Inner,
+            (vec!["mid_table.right_id"], vec!["right_table.right_id"]),
+            None,
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+
+    let sql = plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table INNER JOIN mid_table ON left_table.mid_id = mid_table.mid_id INNER JOIN right_table ON mid_table.right_id = right_table.right_id"#
     );
 
     Ok(())
