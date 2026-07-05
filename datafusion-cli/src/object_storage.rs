@@ -668,6 +668,8 @@ mod tests {
         prelude::SessionContext,
     };
 
+    #[cfg(unix)]
+    use object_store::{ObjectStoreExt, path::Path as ObjectStorePath};
     use object_store::{aws::AmazonS3ConfigKey, gcp::GoogleConfigKey};
     use std::{
         collections::VecDeque,
@@ -675,6 +677,13 @@ mod tests {
             Mutex,
             atomic::{AtomicUsize, Ordering},
         },
+    };
+    #[cfg(unix)]
+    use std::{ffi::OsString, fs, path::PathBuf, process};
+    #[cfg(unix)]
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
     };
 
     #[derive(Debug)]
@@ -838,6 +847,154 @@ mod tests {
         assert_eq!(counting_provider.calls(), 1);
 
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn s3_object_store_reuses_fetched_credentials_until_expiry() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let test_dir = unique_temp_dir("datafusion-s3-credential-cache")?;
+        let count_path = test_dir.join("credential_process_count");
+        let process_path = test_dir.join("credential_process.sh");
+        let config_path = test_dir.join("config");
+        let credentials_path = test_dir.join("credentials");
+
+        fs::write(
+            &process_path,
+            r#"#!/bin/sh
+count_file="$1"
+if [ -f "$count_file" ]; then
+  count=$(cat "$count_file")
+else
+  count=0
+fi
+count=$((count + 1))
+printf "%s" "$count" > "$count_file"
+cat <<'JSON'
+{"Version":1,"AccessKeyId":"test_access_key","SecretAccessKey":"test_secret_key","SessionToken":"test_session_token","Expiration":"2099-01-01T00:00:00Z"}
+JSON
+"#,
+        )?;
+        let mut permissions = fs::metadata(&process_path)?.permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&process_path, permissions)?;
+
+        fs::write(
+            &config_path,
+            format!(
+                "[profile datafusion-cache-test]\nregion = us-east-1\ncredential_process = {} {}\n",
+                process_path.display(),
+                count_path.display()
+            ),
+        )?;
+        fs::write(&credentials_path, "")?;
+
+        let _env = EnvGuard::set([
+            ("AWS_CONFIG_FILE", Some(config_path.into_os_string())),
+            (
+                "AWS_SHARED_CREDENTIALS_FILE",
+                Some(credentials_path.into_os_string()),
+            ),
+            ("AWS_PROFILE", Some(OsString::from("datafusion-cache-test"))),
+            ("AWS_EC2_METADATA_DISABLED", Some(OsString::from("true"))),
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+            ("AWS_SESSION_TOKEN", None),
+            ("AWS_REGION", None),
+        ]);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}", listener.local_addr()?);
+        let server = async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 1024];
+                let _ = socket.read(&mut request).await;
+                socket
+                    .write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await
+                    .unwrap();
+            }
+        };
+
+        let url = Url::parse("s3://bucket/path/file.parquet").unwrap();
+        let aws_options = AwsOptions {
+            region: Some("us-east-1".to_string()),
+            endpoint: Some(endpoint),
+            allow_http: Some(true),
+            ..Default::default()
+        };
+        let store = get_s3_object_store_builder(&url, &aws_options, false)
+            .await?
+            .build()?;
+
+        let path = ObjectStorePath::from("path/file.parquet");
+        let requests = async {
+            let _ = store.head(&path).await;
+            let _ = store.head(&path).await;
+        };
+        tokio::join!(server, requests);
+
+        assert_eq!(fs::read_to_string(count_path)?, "1");
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    #[cfg(unix)]
+    impl EnvGuard {
+        fn set<const N: usize>(updates: [(&'static str, Option<OsString>); N]) -> Self {
+            let saved = updates
+                .iter()
+                .map(|(key, _)| (*key, std::env::var_os(key)))
+                .collect();
+
+            for (key, value) in updates {
+                unsafe {
+                    if let Some(value) = value {
+                        std::env::set_var(key, value);
+                    } else {
+                        std::env::remove_var(key);
+                    }
+                }
+            }
+
+            Self { saved }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in self.saved.drain(..) {
+                unsafe {
+                    if let Some(value) = value {
+                        std::env::set_var(key, value);
+                    } else {
+                        std::env::remove_var(key);
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn unique_temp_dir(prefix: &str) -> Result<PathBuf> {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", process::id()));
+        fs::create_dir_all(&path)?;
+        Ok(path)
     }
 
     #[tokio::test]
