@@ -338,6 +338,18 @@ impl ListingTableUrl {
         self.as_ref()
     }
 
+    /// Return the [`ObjectStoreUrl`] for this [`ListingTableUrl`]
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use `resolve()` instead, which returns the resolved object \
+                store and the store-relative path together; this method does \
+                not account for stores registered under a path prefix"
+    )]
+    pub fn object_store(&self) -> ObjectStoreUrl {
+        let url = &self.url[url::Position::BeforeScheme..url::Position::BeforePath];
+        ObjectStoreUrl::parse(url).unwrap()
+    }
+
     /// Resolves this url against the object store registry in `env`. See
     /// [`ResolvedTableUrl`].
     ///

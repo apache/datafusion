@@ -1104,6 +1104,38 @@ async fn multi_path_table_spanning_two_stores_is_rejected() {
     );
 }
 
+/// A single `ListingTable` whose paths all resolve to the *same* store under
+/// one registered path prefix must be accepted, each path correctly rebased
+/// to its store-relative prefix.
+#[tokio::test]
+async fn multi_path_table_spanning_one_prefixed_store_is_accepted() {
+    use datafusion::catalog::TableProvider;
+    use datafusion_catalog_listing::ListingTableConfig;
+    use object_store::prefix::PrefixStore;
+
+    let ctx = SessionContext::new();
+    ctx.runtime_env().register_object_store(
+        &Url::parse("mem://bucket/user/repo").unwrap(),
+        Arc::new(PrefixStore::new(InMemory::new(), "user/repo")) as Arc<dyn ObjectStore>,
+    );
+
+    let options = ListingOptions::new(Arc::new(CsvFormat::default()));
+    let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+        arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Int32, false),
+    ]));
+    let config = ListingTableConfig::new_with_multi_paths(vec![
+        ListingTableUrl::parse("mem://bucket/user/repo/a/").unwrap(),
+        ListingTableUrl::parse("mem://bucket/user/repo/b/").unwrap(),
+    ])
+    .with_listing_options(options)
+    .with_schema(schema);
+    let table = ListingTable::try_new(config).unwrap();
+
+    let state = ctx.state();
+    // Must not error with "multiple object stores": both paths share one store.
+    table.scan(&state, None, &[], None).await.unwrap();
+}
+
 /// Runs tests with a request counting object store
 struct Test {
     object_store: Arc<RequestCountingObjectStore>,
