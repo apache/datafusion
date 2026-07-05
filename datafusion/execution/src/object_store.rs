@@ -229,6 +229,13 @@ pub struct DefaultObjectStoreRegistry {
     /// The inner registry would otherwise lazily create a store from the
     /// environment for any known scheme; tracking registrations lets `resolve`
     /// reject unregistered URLs before that fallback runs.
+    ///
+    /// `has_registered_match` scans this set linearly on every `resolve`/
+    /// `get_store` call. That's intentional: registration counts are expected
+    /// to stay in the range of a handful to low hundreds of stores (one per
+    /// mounted bucket/prefix, not per query or per file), so a linear scan is
+    /// cheaper and simpler than a trie/prefix-map. Revisit only if profiling
+    /// shows registration cardinality growing past that range.
     registered: RwLock<HashSet<(String, Vec<String>)>>,
 }
 
