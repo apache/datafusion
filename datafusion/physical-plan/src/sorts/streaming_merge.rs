@@ -287,7 +287,7 @@ mod tests {
             false,
         )]));
 
-        let data_left = vec![
+        let data_left = [
             Int32Array::from(vec![1, 3, 5, 7, 9]),
             Int32Array::from(vec![11, 13, 15, 17, 19]),
             Int32Array::from(vec![21, 23, 25, 27, 29]),
@@ -295,7 +295,7 @@ mod tests {
             Int32Array::from(vec![41, 43, 45, 47, 49]),
         ];
 
-        let data_right = vec![
+        let data_right = [
             Int32Array::from(vec![0, 2, 4, 6, 8]),
             Int32Array::from(vec![9, 10, 11, 12, 13]),
         ];
