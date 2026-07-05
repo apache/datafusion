@@ -237,6 +237,9 @@ struct VectorizedOperationBuffers {
     /// The `vectorized_equal_to` group indices buffer
     equal_to_group_indices: Vec<usize>,
 
+    /// The `vectorized_equal_to` hash buffer for partitioned intern.
+    equal_to_hashes: Vec<u64>,
+
     /// The `vectorized_equal_to` result buffer (bitmask)
     equal_to_results: BooleanBufferBuilder,
 
@@ -244,6 +247,9 @@ struct VectorizedOperationBuffers {
     /// exist groups in `group_values` in `vectorized_equal_to`.
     /// We will perform `scalarized_intern` for such rows.
     remaining_row_indices: Vec<usize>,
+
+    /// The hash buffer for `remaining_row_indices` in partitioned intern.
+    remaining_hashes: Vec<u64>,
 }
 
 impl Default for VectorizedOperationBuffers {
@@ -252,8 +258,10 @@ impl Default for VectorizedOperationBuffers {
             append_row_indices: Vec::new(),
             equal_to_row_indices: Vec::new(),
             equal_to_group_indices: Vec::new(),
+            equal_to_hashes: Vec::new(),
             equal_to_results: BooleanBufferBuilder::new(0),
             remaining_row_indices: Vec::new(),
+            remaining_hashes: Vec::new(),
         }
     }
 }
@@ -263,7 +271,9 @@ impl VectorizedOperationBuffers {
         self.append_row_indices.clear();
         self.equal_to_row_indices.clear();
         self.equal_to_group_indices.clear();
+        self.equal_to_hashes.clear();
         self.remaining_row_indices.clear();
+        self.remaining_hashes.clear();
     }
 }
 
@@ -460,8 +470,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         groups.clear();
         groups.resize(n_rows, usize::MAX);
 
-        for &row in partition_indices {
-            let target_hash = batch_hashes[row];
+        for (hash_idx, &row) in partition_indices.iter().enumerate() {
+            let target_hash = batch_hashes[hash_idx];
             let entry = self
                 .map
                 .find_mut(target_hash, |(exist_hash, group_idx_view)| {
@@ -581,11 +591,11 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         self.vectorized_append(cols)?;
 
         // 3. Perform `vectorized_equal_to`
-        self.vectorized_equal_to(cols, groups);
+        self.vectorized_equal_to(cols, groups, false);
 
         // 4. Perform scalarized inter for remaining rows
         // (about remaining rows, can see comments for `remaining_row_indices`)
-        self.scalarized_intern_remaining(cols, &batch_hashes, groups)?;
+        self.scalarized_intern_remaining(cols, &batch_hashes, groups, false)?;
 
         self.hashes_buffer = batch_hashes;
 
@@ -610,8 +620,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             groups,
         );
         self.vectorized_append(cols)?;
-        self.vectorized_equal_to(cols, groups);
-        self.scalarized_intern_remaining(cols, batch_hashes, groups)?;
+        self.vectorized_equal_to(cols, groups, true);
+        self.scalarized_intern_remaining(cols, batch_hashes, groups, true)?;
 
         Ok(())
     }
@@ -642,6 +652,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         self.vectorized_operation_buffers
             .equal_to_group_indices
             .clear();
+        self.vectorized_operation_buffers.equal_to_hashes.clear();
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             if filter_array
@@ -721,9 +732,10 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         self.vectorized_operation_buffers
             .equal_to_group_indices
             .clear();
+        self.vectorized_operation_buffers.equal_to_hashes.clear();
 
-        for &row in partition_indices {
-            let target_hash = batch_hashes[row];
+        for (hash_idx, &row) in partition_indices.iter().enumerate() {
+            let target_hash = batch_hashes[hash_idx];
             let entry = self
                 .map
                 .find(target_hash, |(exist_hash, _)| target_hash == *exist_hash);
@@ -758,6 +770,9 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                 self.vectorized_operation_buffers
                     .equal_to_row_indices
                     .extend(std::iter::repeat_n(row, group_index_list.len()));
+                self.vectorized_operation_buffers
+                    .equal_to_hashes
+                    .extend(std::iter::repeat_n(target_hash, group_index_list.len()));
             } else {
                 let group_index = group_index_view.value() as usize;
                 self.vectorized_operation_buffers
@@ -766,6 +781,9 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                 self.vectorized_operation_buffers
                     .equal_to_group_indices
                     .push(group_index);
+                self.vectorized_operation_buffers
+                    .equal_to_hashes
+                    .push(target_hash);
             }
         }
     }
@@ -807,17 +825,29 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///    and perform `scalarized_intern` for them after.
     ///    Usually, such `rows` having same hash but different value with `exists rows`
     ///    are very few.
-    fn vectorized_equal_to(&mut self, cols: &[ArrayRef], groups: &mut [usize]) {
+    fn vectorized_equal_to(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut [usize],
+        has_partitioned_hashes: bool,
+    ) {
         assert_eq!(
             self.vectorized_operation_buffers
                 .equal_to_group_indices
                 .len(),
             self.vectorized_operation_buffers.equal_to_row_indices.len()
         );
+        if has_partitioned_hashes {
+            assert_eq!(
+                self.vectorized_operation_buffers.equal_to_hashes.len(),
+                self.vectorized_operation_buffers.equal_to_row_indices.len()
+            );
+        }
 
         self.vectorized_operation_buffers
             .remaining_row_indices
             .clear();
+        self.vectorized_operation_buffers.remaining_hashes.clear();
 
         if self
             .vectorized_operation_buffers
@@ -882,6 +912,11 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                     self.vectorized_operation_buffers
                         .remaining_row_indices
                         .push(row);
+                    if has_partitioned_hashes {
+                        self.vectorized_operation_buffers
+                            .remaining_hashes
+                            .push(self.vectorized_operation_buffers.equal_to_hashes[idx]);
+                    }
                 }
 
                 // Init the total result for checking next row
@@ -932,6 +967,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         cols: &[ArrayRef],
         batch_hashes: &[u64],
         groups: &mut [usize],
+        has_partitioned_hashes: bool,
     ) -> Result<()> {
         if self
             .vectorized_operation_buffers
@@ -943,8 +979,17 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
         let mut map = mem::take(&mut self.map);
 
-        for &row in &self.vectorized_operation_buffers.remaining_row_indices {
-            let target_hash = batch_hashes[row];
+        for (remaining_idx, &row) in self
+            .vectorized_operation_buffers
+            .remaining_row_indices
+            .iter()
+            .enumerate()
+        {
+            let target_hash = if has_partitioned_hashes {
+                self.vectorized_operation_buffers.remaining_hashes[remaining_idx]
+            } else {
+                batch_hashes[row]
+            };
             let entry = map.find_mut(target_hash, |(exist_hash, _)| {
                 // Somewhat surprisingly, this closure can be called even if the
                 // hash doesn't match, so check the hash first with an integer
@@ -1581,7 +1626,9 @@ mod tests {
         let mut groups = Vec::new();
         let mut hashes = Vec::new();
 
-        group_values.create_hashes(&cols, &mut hashes).unwrap();
+        group_values
+            .create_hashes_indices(&cols, &partition_indices, &mut hashes)
+            .unwrap();
         group_values
             .intern_partitioned(&cols, &hashes, &mut groups, &partition_indices)
             .unwrap();

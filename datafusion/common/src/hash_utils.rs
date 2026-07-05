@@ -311,40 +311,38 @@ fn hash_array_primitive_indices<T>(
 {
     assert_eq!(
         hashes_buffer.len(),
-        array.len(),
-        "hashes_buffer and array should be of equal length"
+        indices.len(),
+        "hashes_buffer and indices should be of equal length"
     );
 
     if array.null_count() == 0 {
         if rehash {
-            for &row in indices {
+            for (hash, &row) in hashes_buffer.iter_mut().zip(indices) {
                 let value = unsafe { array.value_unchecked(row) };
-                let mut hasher =
-                    random_state.seeded_state(hashes_buffer[row]).build_hasher();
+                let mut hasher = random_state.seeded_state(*hash).build_hasher();
                 value.hash_write(&mut hasher);
-                hashes_buffer[row] = hasher.finish();
+                *hash = hasher.finish();
             }
         } else {
-            for &row in indices {
+            for (hash, &row) in hashes_buffer.iter_mut().zip(indices) {
                 let value = unsafe { array.value_unchecked(row) };
-                hashes_buffer[row] = value.hash_one(random_state);
+                *hash = value.hash_one(random_state);
             }
         }
     } else if rehash {
-        for &row in indices {
+        for (hash, &row) in hashes_buffer.iter_mut().zip(indices) {
             if array.is_valid(row) {
                 let value = unsafe { array.value_unchecked(row) };
-                let mut hasher =
-                    random_state.seeded_state(hashes_buffer[row]).build_hasher();
+                let mut hasher = random_state.seeded_state(*hash).build_hasher();
                 value.hash_write(&mut hasher);
-                hashes_buffer[row] = hasher.finish();
+                *hash = hasher.finish();
             }
         }
     } else {
-        for &row in indices {
+        for (hash, &row) in hashes_buffer.iter_mut().zip(indices) {
             if array.is_valid(row) {
                 let value = unsafe { array.value_unchecked(row) };
-                hashes_buffer[row] = value.hash_one(random_state);
+                *hash = value.hash_one(random_state);
             }
         }
     }
@@ -408,36 +406,34 @@ fn hash_array_indices<T>(
 {
     assert_eq!(
         hashes_buffer.len(),
-        array.len(),
-        "hashes_buffer and array should be of equal length"
+        indices.len(),
+        "hashes_buffer and indices should be of equal length"
     );
 
     if array.null_count() == 0 {
         if rehash {
-            for &row in indices {
+            for (hash, &row) in hashes_buffer.iter_mut().zip(indices) {
                 let value = unsafe { array.value_unchecked(row) };
-                hashes_buffer[row] =
-                    combine_hashes(value.hash_one(random_state), hashes_buffer[row]);
+                *hash = combine_hashes(value.hash_one(random_state), *hash);
             }
         } else {
-            for &row in indices {
+            for (hash, &row) in hashes_buffer.iter_mut().zip(indices) {
                 let value = unsafe { array.value_unchecked(row) };
-                hashes_buffer[row] = value.hash_one(random_state);
+                *hash = value.hash_one(random_state);
             }
         }
     } else if rehash {
-        for &row in indices {
+        for (hash, &row) in hashes_buffer.iter_mut().zip(indices) {
             if array.is_valid(row) {
                 let value = unsafe { array.value_unchecked(row) };
-                hashes_buffer[row] =
-                    combine_hashes(value.hash_one(random_state), hashes_buffer[row]);
+                *hash = combine_hashes(value.hash_one(random_state), *hash);
             }
         }
     } else {
-        for &row in indices {
+        for (hash, &row) in hashes_buffer.iter_mut().zip(indices) {
             if array.is_valid(row) {
                 let value = unsafe { array.value_unchecked(row) };
-                hashes_buffer[row] = value.hash_one(random_state);
+                *hash = value.hash_one(random_state);
             }
         }
     }
@@ -581,8 +577,8 @@ fn hash_generic_byte_view_array_indices<T: ByteViewType>(
 ) {
     assert_eq!(
         hashes_buffer.len(),
-        array.len(),
-        "hashes_buffer and array should be of equal length"
+        indices.len(),
+        "hashes_buffer and indices should be of equal length"
     );
 
     let buffers = array.data_buffers();
@@ -597,7 +593,7 @@ fn hash_generic_byte_view_array_indices<T: ByteViewType>(
 
     let has_nulls = array.null_count() != 0;
     let has_buffers = !array.data_buffers().is_empty();
-    for &row in indices {
+    for (hash, &row) in hashes_buffer.iter_mut().zip(indices) {
         if has_nulls && array.is_null(row) {
             continue;
         }
@@ -606,23 +602,22 @@ fn hash_generic_byte_view_array_indices<T: ByteViewType>(
         let view_len = view as u32;
         if !has_buffers || view_len <= 12 {
             if rehash {
-                let mut hasher =
-                    random_state.seeded_state(hashes_buffer[row]).build_hasher();
+                let mut hasher = random_state.seeded_state(*hash).build_hasher();
                 view.hash_write(&mut hasher);
-                hashes_buffer[row] = hasher.finish();
+                *hash = hasher.finish();
             } else {
-                hashes_buffer[row] = view.hash_one(random_state);
+                *hash = view.hash_one(random_state);
             }
             continue;
         }
 
         let value = view_bytes(view_len, view);
         if rehash {
-            let mut hasher = random_state.seeded_state(hashes_buffer[row]).build_hasher();
+            let mut hasher = random_state.seeded_state(*hash).build_hasher();
             value.hash_write(&mut hasher);
-            hashes_buffer[row] = hasher.finish();
+            *hash = hasher.finish();
         } else {
-            hashes_buffer[row] = value.hash_one(random_state);
+            *hash = value.hash_one(random_state);
         }
     }
 }
@@ -1248,14 +1243,14 @@ fn hash_null_indices<S: HashState>(
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) {
+    debug_assert_eq!(hashes_buffer.len(), indices.len());
     if rehash {
-        for &row in indices {
-            hashes_buffer[row] =
-                combine_hashes(random_state.hash_one(1), hashes_buffer[row]);
+        for hash in hashes_buffer.iter_mut() {
+            *hash = combine_hashes(random_state.hash_one(1), *hash);
         }
     } else {
-        for &row in indices {
-            hashes_buffer[row] = random_state.hash_one(1);
+        for hash in hashes_buffer.iter_mut() {
+            *hash = random_state.hash_one(1);
         }
     }
 }
@@ -1271,16 +1266,10 @@ fn hash_single_array_indices_fallback(
     let take_indices =
         UInt64Array::from_iter_values(indices.iter().map(|&idx| idx as u64));
     let array = take(array, &take_indices, None)?;
-    let mut selected_hashes = if rehash {
-        indices.iter().map(|&idx| hashes_buffer[idx]).collect()
-    } else {
-        vec![0; indices.len()]
-    };
-
-    hash_single_array(array.as_ref(), random_state, &mut selected_hashes, rehash)?;
-    for (&row, hash) in indices.iter().zip(selected_hashes) {
-        hashes_buffer[row] = hash;
+    if !rehash {
+        hashes_buffer.fill(0);
     }
+    hash_single_array(array.as_ref(), random_state, hashes_buffer, rehash)?;
     Ok(())
 }
 
@@ -1333,9 +1322,8 @@ fn hash_single_array_indices(
     hashes_buffer: &mut [u64],
     _rehash: bool,
 ) -> Result<()> {
-    for &row in indices {
-        hashes_buffer[row] = 0;
-    }
+    debug_assert_eq!(hashes_buffer.len(), indices.len());
+    hashes_buffer.fill(0);
     Ok(())
 }
 
@@ -1399,8 +1387,8 @@ where
 
 /// Creates hash values for selected rows, based on the values in the columns.
 ///
-/// `hashes_buffer` must have the same length as the input arrays. Only rows in
-/// `indices` are updated. Values outside `indices` are left unchanged.
+/// `hashes_buffer` must have the same length as `indices`. Output hashes are
+/// dense: `hashes_buffer[pos]` contains the hash for row `indices[pos]`.
 pub fn create_hashes_indices<'a, I, T>(
     arrays: I,
     random_state: &impl HashState,
@@ -1413,16 +1401,18 @@ where
 {
     for (col_idx, array) in arrays.into_iter().enumerate() {
         let array = array.as_dyn_array();
+        debug_assert!(
+            indices.iter().all(|&idx| idx < array.len()),
+            "indices should be within array bounds"
+        );
         assert_eq!(
             hashes_buffer.len(),
-            array.len(),
-            "hashes_buffer and array should be of equal length"
+            indices.len(),
+            "hashes_buffer and indices should be of equal length"
         );
         let rehash = col_idx >= 1;
         if !rehash {
-            for &row in indices {
-                hashes_buffer[row] = 0;
-            }
+            hashes_buffer.fill(0);
         }
         hash_single_array_indices(array, random_state, indices, hashes_buffer, rehash)?;
     }
@@ -1502,13 +1492,11 @@ mod tests {
         let mut full_hashes = vec![0; arrays[0].len()];
         create_hashes(&arrays, &random_state, &mut full_hashes)?;
 
-        let mut selected_hashes = vec![u64::MAX; arrays[0].len()];
+        let mut selected_hashes = vec![u64::MAX; 2];
         create_hashes_indices(&arrays, &random_state, &[1, 3], &mut selected_hashes)?;
 
-        assert_eq!(selected_hashes[0], u64::MAX);
-        assert_eq!(selected_hashes[1], full_hashes[1]);
-        assert_eq!(selected_hashes[2], u64::MAX);
-        assert_eq!(selected_hashes[3], full_hashes[3]);
+        assert_eq!(selected_hashes[0], full_hashes[1]);
+        assert_eq!(selected_hashes[1], full_hashes[3]);
         Ok(())
     }
 

@@ -101,6 +101,9 @@ pub trait GroupValues: Send {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
     /// Calculates group ids for selected rows by row index.
+    ///
+    /// `hashes` is dense and aligned with `partition_indices`: `hashes[pos]`
+    /// contains the hash for row `partition_indices[pos]`.
     fn intern_partitioned(
         &mut self,
         _cols: &[ArrayRef],
@@ -128,9 +131,8 @@ pub trait GroupValues: Send {
         indices: &[usize],
         hashes: &mut Vec<u64>,
     ) -> Result<()> {
-        if hashes.len() != cols[0].len() {
-            hashes.resize(cols[0].len(), 0);
-        }
+        hashes.clear();
+        hashes.resize(indices.len(), 0);
         create_hashes_indices(
             cols,
             &crate::aggregates::AGGREGATION_HASH_SEED,
