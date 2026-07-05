@@ -1096,16 +1096,15 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
             }
         }
         DataType::FixedSizeList(ref child_field, list_size) => {
-            // Defense in depth against an invalid Arrow type that the
-            // allow-list might have missed: negative `list_size` would
-            // wrap when cast to `usize` and trigger panics / OOM in the
-            // builder. Reject explicitly here as well so direct callers
-            // of `make_group_column` fail safely.
-            if list_size < 0 {
-                return not_impl_err!(
-                    "FixedSizeList with negative size {list_size} not supported in GroupValuesColumn"
-                );
-            }
+            // `group_column_supported_type` already rejects negative
+            // `list_size`; this assert is a defensive belt-and-suspenders
+            // check so a direct caller of `make_group_column` that bypasses
+            // the allow-list can't wrap the `i32 as usize` cast in the
+            // builder into a huge value.
+            assert!(
+                list_size >= 0,
+                "FixedSizeList requires non-negative size, got {list_size}"
+            );
             // `group_column_supported_type` already restricts the child to
             // the primitive subset supported here. Any unsupported child
             // type returned `false` upstream and was routed to the
@@ -1430,9 +1429,8 @@ mod tests {
             DataType::Time64(arrow::datatypes::TimeUnit::Millisecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Nanosecond),
-            // FixedSizeList<non-primitive>: only primitive children are
-            // covered by this PR; nested children depend on the
-            // List / Struct builders that follow in the EPIC sequence.
+            // FixedSizeList<non-primitive>: primitive-only in this PR;
+            // nested children land later in EPIC #22715.
             DataType::FixedSizeList(
                 Arc::new(Field::new("item", DataType::Utf8, true)),
                 2,

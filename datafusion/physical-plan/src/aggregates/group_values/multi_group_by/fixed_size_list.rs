@@ -60,14 +60,9 @@ where
                 "FixedSizeListGroupValueBuilder built with non-FixedSizeList type {other:?}"
             ),
         };
-        // `group_column_supported_type` and `make_group_column` both reject
-        // negative `list_len` upstream so this branch should be unreachable
-        // for any schema that survives the allow-list. Assert defensively
-        // to fail fast (and with a clear message) if a direct caller ever
-        // bypasses the factory with an invalid Arrow type.
         assert!(
             list_len >= 0,
-            "FixedSizeListGroupValueBuilder requires non-negative list size, got {list_len}"
+            "FixedSizeListGroupValueBuilder requires non-negative list size (allow-list / dispatcher should have rejected earlier), got {list_len}"
         );
         let child = PrimitiveGroupValueBuilder::<T, true>::new(field.data_type().clone());
         Self {
@@ -79,12 +74,9 @@ where
         }
     }
 
-    /// Lossless widening to `usize`. The constructor asserts
-    /// `list_len >= 0`, so the conversion is well-defined. We still go
-    /// through `try_from` rather than `as usize` so any future
-    /// invariant break surfaces as a panic with a clear message rather
-    /// than a silent wrap.
     fn list_len_usize(&self) -> usize {
+        // `try_from` (vs `as usize`) so any future invariant break
+        // surfaces as a panic instead of a silent wrap.
         usize::try_from(self.list_len)
             .expect("list_len validated >= 0 in `new`; conversion to usize cannot fail")
     }
@@ -439,14 +431,11 @@ mod tests {
 
     /// `FixedSizeList` carries its size as `i32`; the enum lets callers
     /// construct a negative size programmatically even though Arrow
-    /// considers it invalid. Both the supported-type allow-list and the
-    /// dispatcher must reject such a type so the cast inside the
-    /// builder cannot wrap to a huge `usize` and trigger panics / OOM.
+    /// considers it invalid. The supported-type allow-list must reject
+    /// such a type so it never reaches the builder path.
     #[test]
-    fn negative_list_size_is_rejected_by_allow_list_and_dispatcher() {
-        use crate::aggregates::group_values::multi_group_by::{
-            group_column_supported_type, make_group_column,
-        };
+    fn negative_list_size_rejected_by_allow_list() {
+        use crate::aggregates::group_values::multi_group_by::group_column_supported_type;
         use arrow::datatypes::Field;
 
         let invalid = DataType::FixedSizeList(
@@ -458,18 +447,23 @@ mod tests {
             !group_column_supported_type(&invalid),
             "allow-list must reject FixedSizeList(_, -1)"
         );
+    }
 
-        let field = Field::new("col", invalid, true);
-        let result = make_group_column(&field);
-        let err = match result {
-            Ok(_) => panic!("dispatcher must reject FixedSizeList with negative size"),
-            Err(e) => e,
-        };
-        let msg = err.to_string();
-        assert!(
-            msg.contains("negative size") && msg.contains("-1"),
-            "error should mention the invalid negative size, got: {msg}"
+    /// The dispatcher is a belt-and-suspenders guard for direct callers
+    /// that bypass the allow-list. A negative `list_size` must panic
+    /// there rather than wrap in the builder.
+    #[test]
+    #[should_panic(expected = "FixedSizeList requires non-negative size")]
+    fn negative_list_size_panics_in_dispatcher() {
+        use crate::aggregates::group_values::multi_group_by::make_group_column;
+        use arrow::datatypes::Field;
+
+        let invalid = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            -1,
         );
+        let field = Field::new("col", invalid, true);
+        let _ = make_group_column(&field);
     }
 
     #[test]
