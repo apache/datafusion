@@ -1013,28 +1013,6 @@ impl FinalHashAggregateStream {
         Ok(())
     }
 
-    fn begin_partition_run_replay(
-        &mut self,
-        hash_table: AggregateHashTable<FinalMarker>,
-    ) -> Result<FinalHashAggregateState> {
-        self.load_next_partition_run(hash_table)
-    }
-
-    fn next_state_after_partition_output(
-        &mut self,
-        hash_table: AggregateHashTable<FinalMarker>,
-    ) -> Result<FinalHashAggregateState> {
-        if self
-            .partition_run_state
-            .as_ref()
-            .is_some_and(FinalPartitionRunState::has_buffered_runs)
-        {
-            self.load_next_partition_run(hash_table)
-        } else {
-            Ok(FinalHashAggregateState::Done)
-        }
-    }
-
     fn load_next_partition_run(
         &mut self,
         mut hash_table: AggregateHashTable<FinalMarker>,
@@ -1243,7 +1221,7 @@ impl FinalHashAggregateStream {
                 let timer = elapsed_compute.timer();
                 let result = match self.partition_run_state.as_ref() {
                     Some(state) if !state.run_batch_indices.is_empty() => {
-                        self.begin_partition_run_replay(original_state.into_hash_table())
+                        self.load_next_partition_run(original_state.into_hash_table())
                     }
                     _ => self
                         .start_output(original_state.hash_table_mut())
@@ -1288,16 +1266,24 @@ impl FinalHashAggregateStream {
                 let next_state = if original_state.hash_table().is_done()
                     || original_state.hash_table().is_building()
                 {
-                    match self.next_state_after_partition_output(
-                        original_state.into_hash_table(),
-                    ) {
-                        Ok(next_state) => next_state,
-                        Err(e) => {
-                            return ControlFlow::Break((
-                                Poll::Ready(Some(Err(e))),
-                                FinalHashAggregateState::Done,
-                            ));
+                    if self
+                        .partition_run_state
+                        .as_ref()
+                        .is_some_and(FinalPartitionRunState::has_buffered_runs)
+                    {
+                        match self
+                            .load_next_partition_run(original_state.into_hash_table())
+                        {
+                            Ok(next_state) => next_state,
+                            Err(e) => {
+                                return ControlFlow::Break((
+                                    Poll::Ready(Some(Err(e))),
+                                    FinalHashAggregateState::Done,
+                                ));
+                            }
                         }
+                    } else {
+                        FinalHashAggregateState::Done
                     }
                 } else {
                     let _ =
