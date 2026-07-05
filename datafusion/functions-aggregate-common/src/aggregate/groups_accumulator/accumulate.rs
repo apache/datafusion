@@ -509,29 +509,51 @@ fn selected_values_have_no_nulls(
     let Some(nulls) = nulls else {
         return true;
     };
-    if nulls.null_count() == 0 {
+    if nulls.null_count() == 0 || partition_indices.is_empty() {
         return true;
     }
+    debug_assert!(
+        partition_indices
+            .windows(2)
+            .all(|window| window[0] <= window[1])
+    );
 
-    let mut indices = partition_indices.iter().copied();
-    let Some(mut run_start) = indices.next() else {
-        return true;
-    };
-    let mut prev_idx = run_start;
+    let bit_chunks = nulls.inner().bit_chunks();
+    let mut selected_indices = partition_indices.iter().copied().peekable();
 
-    for row_idx in indices {
-        if row_idx != prev_idx + 1 {
-            let run_len = prev_idx - run_start + 1;
-            if nulls.slice(run_start, run_len).null_count() != 0 {
-                return false;
-            }
-            run_start = row_idx;
+    for (chunk_idx, validity_mask) in bit_chunks.iter().enumerate() {
+        let chunk_start = chunk_idx * 64;
+        let chunk_end = chunk_start + 64;
+        if selected_indices
+            .peek()
+            .is_none_or(|&row_idx| row_idx >= chunk_end)
+        {
+            continue;
         }
-        prev_idx = row_idx;
+
+        let mut selected_mask = 0_u64;
+        while let Some(&row_idx) = selected_indices.peek() {
+            if row_idx >= chunk_end {
+                break;
+            }
+            selected_mask |= 1_u64 << (row_idx - chunk_start);
+            selected_indices.next();
+        }
+
+        if validity_mask & selected_mask != selected_mask {
+            return false;
+        }
     }
 
-    let run_len = prev_idx - run_start + 1;
-    nulls.slice(run_start, run_len).null_count() == 0
+    let chunk_start = bit_chunks.chunk_len() * 64;
+    let mut selected_mask = 0_u64;
+    for row_idx in selected_indices {
+        debug_assert!(row_idx < nulls.len());
+        selected_mask |= 1_u64 << (row_idx - chunk_start);
+    }
+
+    let validity_mask = bit_chunks.remainder_bits();
+    validity_mask & selected_mask == selected_mask
 }
 
 pub fn accumulate_by_indices<T, F>(
@@ -1161,6 +1183,42 @@ mod test {
 
             if !is_all_seen {
                 assert_eq!(null_buffer, expected_null_buffer);
+            }
+        }
+    }
+
+    #[test]
+    fn accumulate_by_indices_uses_fast_path_across_bit_chunks() {
+        let mut null_state = NullState::new();
+        let group_indices = vec![0, 1, 2, 3];
+        let partition_indices = vec![1, 63, 64, 129];
+        let values = UInt32Array::from(
+            (0..130)
+                .map(|idx| {
+                    if partition_indices.contains(&idx) {
+                        Some(idx as u32)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>(),
+        );
+        let total_num_groups = 4;
+        let mut accumulated_values = vec![];
+
+        null_state.accumulate_by_indices(
+            &group_indices,
+            &values,
+            &partition_indices,
+            total_num_groups,
+            |group_index, value| accumulated_values.push((group_index, value)),
+        );
+
+        assert_eq!(accumulated_values, vec![(0, 1), (1, 63), (2, 64), (3, 129)]);
+        match null_state.seen_values {
+            SeenValues::All { num_values } => assert_eq!(num_values, total_num_groups),
+            SeenValues::Some { .. } => {
+                panic!("selected non-null rows should keep fast path")
             }
         }
     }
