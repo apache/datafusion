@@ -348,9 +348,12 @@ pub fn is_associative_with_adjacent_literals(
         }
     }
 
-    let (op, datatype) = match (expr, info.get_data_type(expr)) {
-        (Expr::BinaryExpr(expr), Ok(datatype)) => (expr.op, datatype),
+    let op = match expr {
+        Expr::BinaryExpr(binary) => binary.op,
         _ => return false,
+    };
+    let Ok(datatype) = info.get_data_type(expr) else {
+        return false;
     };
     if !is_associative(op, &datatype) {
         return false;
