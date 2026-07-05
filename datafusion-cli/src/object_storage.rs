@@ -814,6 +814,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn s3_credential_provider_refreshes_expired_credentials() -> Result<()> {
+        let initial =
+            sdk_credentials("initial", Some(SystemTime::now() - Duration::from_secs(1)));
+        let refreshed = sdk_credentials(
+            "refreshed",
+            Some(
+                SystemTime::now()
+                    + S3_CREDENTIAL_CACHE_EXPIRY_BUFFER
+                    + Duration::from_secs(60),
+            ),
+        );
+        let (shared_provider, counting_provider) =
+            shared_counting_provider(vec![refreshed]);
+        let provider = S3CredentialProvider::new(shared_provider, &initial);
+
+        let first = provider.get_credential().await?;
+        let second = provider.get_credential().await?;
+
+        assert_eq!(first.key_id, "refreshed");
+        assert_eq!(second.key_id, "refreshed");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(counting_provider.calls(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn s3_object_store_builder_default() -> Result<()> {
         if let Err(DataFusionError::Execution(e)) = check_aws_envs().await {
             // Skip test if AWS envs are not set
