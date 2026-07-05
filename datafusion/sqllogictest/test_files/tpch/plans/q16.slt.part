@@ -54,7 +54,7 @@ logical_plan
 02)--Projection: part.p_brand, part.p_type, part.p_size, count(alias1) AS supplier_cnt
 03)----Aggregate: groupBy=[[part.p_brand, part.p_type, part.p_size]], aggr=[[count(alias1)]]
 04)------Aggregate: groupBy=[[part.p_brand, part.p_type, part.p_size, partsupp.ps_suppkey AS alias1]], aggr=[[]]
-05)--------LeftAnti Join: partsupp.ps_suppkey = __correlated_sq_1.s_suppkey
+05)--------LeftAnti Join: partsupp.ps_suppkey = __correlated_sq_1.s_suppkey null_aware
 06)----------Projection: partsupp.ps_suppkey, part.p_brand, part.p_type, part.p_size
 07)------------Inner Join: partsupp.ps_partkey = part.p_partkey
 08)--------------TableScan: partsupp projection=[ps_partkey, ps_suppkey]
@@ -74,7 +74,7 @@ physical_plan
 07)------------AggregateExec: mode=FinalPartitioned, gby=[p_brand@0 as p_brand, p_type@1 as p_type, p_size@2 as p_size, alias1@3 as alias1], aggr=[]
 08)--------------RepartitionExec: partitioning=Hash([p_brand@0, p_type@1, p_size@2, alias1@3], 4), input_partitions=4
 09)----------------AggregateExec: mode=Partial, gby=[p_brand@1 as p_brand, p_type@2 as p_type, p_size@3 as p_size, ps_suppkey@0 as alias1], aggr=[]
-10)------------------HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(ps_suppkey@0, s_suppkey@0)]
+10)------------------HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(ps_suppkey@0, s_suppkey@0)], null_aware
 11)--------------------CoalescePartitionsExec
 12)----------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(ps_partkey@0, p_partkey@0)], projection=[ps_suppkey@1, p_brand@3, p_type@4, p_size@5]
 13)------------------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4

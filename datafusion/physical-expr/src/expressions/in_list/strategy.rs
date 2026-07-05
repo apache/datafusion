@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Int8Type, Int16Type, UInt8Type, UInt16Type};
 use datafusion_common::Result;
 
 use super::array_static_filter::ArrayStaticFilter;
@@ -37,13 +37,12 @@ pub(super) fn instantiate_static_filter(
         _ => in_array,
     };
     match in_array.data_type() {
-        // Integer primitive types
-        DataType::Int8 => Ok(Arc::new(Int8StaticFilter::try_new(&in_array)?)),
-        DataType::Int16 => Ok(Arc::new(Int16StaticFilter::try_new(&in_array)?)),
+        DataType::Int8 => Ok(Arc::new(BitmapFilter::<Int8Type>::try_new(&in_array)?)),
+        DataType::UInt8 => Ok(Arc::new(BitmapFilter::<UInt8Type>::try_new(&in_array)?)),
+        DataType::Int16 => Ok(Arc::new(BitmapFilter::<Int16Type>::try_new(&in_array)?)),
+        DataType::UInt16 => Ok(Arc::new(BitmapFilter::<UInt16Type>::try_new(&in_array)?)),
         DataType::Int32 => Ok(Arc::new(Int32StaticFilter::try_new(&in_array)?)),
         DataType::Int64 => Ok(Arc::new(Int64StaticFilter::try_new(&in_array)?)),
-        DataType::UInt8 => Ok(Arc::new(UInt8StaticFilter::try_new(&in_array)?)),
-        DataType::UInt16 => Ok(Arc::new(UInt16StaticFilter::try_new(&in_array)?)),
         DataType::UInt32 => Ok(Arc::new(UInt32StaticFilter::try_new(&in_array)?)),
         DataType::UInt64 => Ok(Arc::new(UInt64StaticFilter::try_new(&in_array)?)),
         // Float primitive types (use ordered wrappers for Hash/Eq)

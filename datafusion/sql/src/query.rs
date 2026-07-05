@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use crate::stack::StackGuard;
 use datafusion_common::{Constraints, DFSchema, Result, not_impl_err};
 use datafusion_expr::expr::{Sort, WildcardOptions};
 
@@ -81,11 +80,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // The functions called from `set_expr_to_plan()` need more than 128KB
                 // stack in debug builds as investigated in:
                 // https://github.com/apache/datafusion/pull/13310#discussion_r1836813902
-                let plan = {
-                    // scope for dropping _guard
-                    let _guard = StackGuard::new(256 * 1024);
+                let plan = crate::stack::maybe_grow(|| {
                     self.set_expr_to_plan(other, planner_context)
-                }?;
+                })?;
                 let oby_exprs = to_order_by_exprs(order_by)?;
                 let order_by_rex = self.order_by_to_sort_expr(
                     oby_exprs,
