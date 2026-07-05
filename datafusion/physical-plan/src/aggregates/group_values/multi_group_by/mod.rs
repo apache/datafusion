@@ -46,7 +46,7 @@ use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 
-use hashbrown::hash_table::{Entry, HashTable};
+use hashbrown::hash_table::HashTable;
 
 const NON_INLINED_FLAG: u64 = 0x8000000000000000;
 const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
@@ -303,13 +303,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             v.push(make_group_column(f.as_ref())?);
         }
         Ok(v)
-    }
-
-    fn account_map_capacity_growth(&mut self, previous_capacity: usize) {
-        let current_capacity = self.map.capacity();
-        if current_capacity > previous_capacity {
-            self.map_size = current_capacity * size_of::<(u64, GroupIndexView)>();
-        }
     }
 
     // ========================================================================
@@ -657,36 +650,35 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                 continue;
             }
 
-            let previous_capacity = self.map.capacity();
-            let group_index_view = match self.map.entry(
-                target_hash,
-                |(exist_hash, _)| target_hash == *exist_hash,
-                |(hash, _)| *hash,
-            ) {
-                Entry::Occupied(entry) => entry.get().1,
-                Entry::Vacant(entry) => {
-                    // 1. Bucket not found case
-                    // Build `new inlined group index view`
-                    let current_group_idx = self.num_groups
-                        + self.vectorized_operation_buffers.append_row_indices.len();
-                    let group_index_view =
-                        GroupIndexView::new_inlined(current_group_idx as u64);
+            let entry = self
+                .map
+                .find(target_hash, |(exist_hash, _)| target_hash == *exist_hash);
 
-                    // Insert the `group index view` and its hash into `map`
-                    // for hasher function, use precomputed hash value
-                    entry.insert((target_hash, group_index_view));
-                    self.account_map_capacity_growth(previous_capacity);
+            let Some((_, group_index_view)) = entry else {
+                // 1. Bucket not found case
+                // Build `new inlined group index view`
+                let current_group_idx = self.num_groups
+                    + self.vectorized_operation_buffers.append_row_indices.len();
+                let group_index_view =
+                    GroupIndexView::new_inlined(current_group_idx as u64);
 
-                    // Add row index to `vectorized_append_row_indices`
-                    self.vectorized_operation_buffers
-                        .append_row_indices
-                        .push(row);
+                // Insert the `group index view` and its hash into `map`
+                // for hasher function, use precomputed hash value
+                self.map.insert_accounted(
+                    (target_hash, group_index_view),
+                    |(hash, _)| *hash,
+                    &mut self.map_size,
+                );
 
-                    // Set group index to row in `groups`
-                    groups[row] = current_group_idx;
+                // Add row index to `vectorized_append_row_indices`
+                self.vectorized_operation_buffers
+                    .append_row_indices
+                    .push(row);
 
-                    continue;
-                }
+                // Set group index to row in `groups`
+                groups[row] = current_group_idx;
+
+                continue;
             };
 
             // 2. bucket found
@@ -732,29 +724,28 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
         for &row in partition_indices {
             let target_hash = batch_hashes[row];
-            let previous_capacity = self.map.capacity();
-            let group_index_view = match self.map.entry(
-                target_hash,
-                |(exist_hash, _)| target_hash == *exist_hash,
-                |(hash, _)| *hash,
-            ) {
-                Entry::Occupied(entry) => entry.get().1,
-                Entry::Vacant(entry) => {
-                    let current_group_idx = self.num_groups
-                        + self.vectorized_operation_buffers.append_row_indices.len();
-                    let group_index_view =
-                        GroupIndexView::new_inlined(current_group_idx as u64);
+            let entry = self
+                .map
+                .find(target_hash, |(exist_hash, _)| target_hash == *exist_hash);
 
-                    entry.insert((target_hash, group_index_view));
-                    self.account_map_capacity_growth(previous_capacity);
+            let Some((_, group_index_view)) = entry else {
+                let current_group_idx = self.num_groups
+                    + self.vectorized_operation_buffers.append_row_indices.len();
+                let group_index_view =
+                    GroupIndexView::new_inlined(current_group_idx as u64);
 
-                    self.vectorized_operation_buffers
-                        .append_row_indices
-                        .push(row);
-                    groups[row] = current_group_idx;
+                self.map.insert_accounted(
+                    (target_hash, group_index_view),
+                    |(hash, _)| *hash,
+                    &mut self.map_size,
+                );
 
-                    continue;
-                }
+                self.vectorized_operation_buffers
+                    .append_row_indices
+                    .push(row);
+                groups[row] = current_group_idx;
+
+                continue;
             };
 
             if group_index_view.is_non_inlined() {
