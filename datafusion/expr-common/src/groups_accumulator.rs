@@ -196,9 +196,9 @@ pub trait GroupsAccumulator: Send + std::any::Any {
 
     /// Merges selected intermediate state rows into this accumulator's current state.
     ///
-    /// `partition_indices` contains row indices into `values` and `group_indices`
-    /// that should be merged. This is used by final partition replay to avoid
-    /// materializing filtered state arrays.
+    /// `partition_indices` contains row indices into `values` that should be
+    /// merged. `group_indices` is dense and aligned with `partition_indices`:
+    /// `group_indices[pos]` is the group for `partition_indices[pos]`.
     fn merge_partitioned_batch(
         &mut self,
         _values: &[ArrayRef],

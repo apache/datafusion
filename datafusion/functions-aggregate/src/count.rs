@@ -700,8 +700,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         let partial_counts = partial_counts.values();
 
         self.counts.resize(total_num_groups, 0);
-        for &row_idx in partition_indices {
-            let group_index = group_indices[row_idx];
+        for (&group_index, &row_idx) in group_indices.iter().zip(partition_indices) {
             debug_assert_ne!(group_index, usize::MAX);
             self.counts[group_index] += partial_counts[row_idx];
         }

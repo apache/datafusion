@@ -511,21 +511,19 @@ pub fn accumulate_by_indices<T, F>(
     T: ArrowPrimitiveType + Send,
     F: FnMut(usize, T::Native) + Send,
 {
-    assert_eq!(values.len(), group_indices.len());
+    assert_eq!(group_indices.len(), partition_indices.len());
     let data = values.values();
 
     match values.nulls() {
         None => {
-            for &row_idx in partition_indices {
-                let group_index = group_indices[row_idx];
+            for (&group_index, &row_idx) in group_indices.iter().zip(partition_indices) {
                 debug_assert_ne!(group_index, usize::MAX);
                 value_fn(group_index, data[row_idx]);
             }
         }
         Some(nulls) => {
-            for &row_idx in partition_indices {
+            for (&group_index, &row_idx) in group_indices.iter().zip(partition_indices) {
                 if nulls.is_valid(row_idx) {
-                    let group_index = group_indices[row_idx];
                     debug_assert_ne!(group_index, usize::MAX);
                     value_fn(group_index, data[row_idx]);
                 }
