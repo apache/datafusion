@@ -24,6 +24,11 @@
 #   - rows with values are exploded element-by-element.
 # `explode(col)` is a Spark alias for plain SQL `unnest(col)` and drops
 # both NULL and empty input lists.
+#
+# Column types on the tables below are inferred from the VALUES rows —
+# DataFusion's parser does not accept the PostgreSQL `TYPE[]` array-column
+# syntax inside `CREATE TABLE ... AS VALUES`, so tables are declared as
+# CTAS over a `VALUES` subquery with aliased column names.
 #######################################################################
 
 ##############################
@@ -31,12 +36,14 @@
 ##############################
 
 statement ok
-CREATE TABLE int_lists (id INT, xs INT[]) AS VALUES
+CREATE TABLE int_lists AS
+SELECT column1 AS id, column2 AS xs FROM (VALUES
     (1, [10, 20, 30]),
-    (2, []),
-    (3, NULL),
     (4, [40]),
-    (5, [NULL, 50]);
+    (5, [NULL, 50]),
+    (2, arrow_cast(make_array(), 'List(Int64)')),
+    (3, NULL)
+);
 
 # Plain explode: drops both NULL and empty rows. Inner NULL elements survive.
 query II
@@ -67,11 +74,13 @@ SELECT id, explode_outer(xs) AS x FROM int_lists ORDER BY id, x;
 ##############################
 
 statement ok
-CREATE TABLE str_lists (id TEXT, tags TEXT[]) AS VALUES
+CREATE TABLE str_lists AS
+SELECT column1 AS id, column2 AS tags FROM (VALUES
     ('A', ['x', 'y']),
     ('B', ['p', NULL, 'q']),
-    ('C', []),
-    ('D', NULL);
+    ('C', arrow_cast(make_array(), 'List(Utf8)')),
+    ('D', NULL)
+);
 
 # Inner NULL elements must survive (they are not the same as "empty"),
 # while NULL and empty input lists become a single NULL output row.
@@ -91,11 +100,13 @@ D NULL
 ##############################
 
 statement ok
-CREATE TABLE varied_lists (id INT, xs INT[]) AS VALUES
+CREATE TABLE varied_lists AS
+SELECT column1 AS id, column2 AS xs FROM (VALUES
     (1, [1, 2, 3, 4]),
     (2, [5]),
-    (3, []),
-    (4, NULL);
+    (3, arrow_cast(make_array(), 'List(Int64)')),
+    (4, NULL)
+);
 
 query II
 SELECT id, explode_outer(xs) AS x FROM varied_lists ORDER BY id, x;
@@ -136,10 +147,12 @@ SELECT explode(xs), explode_outer(xs) FROM int_lists;
 ##############################
 
 statement ok
-CREATE TABLE nested_lists (id INT, xs INT[][]) AS VALUES
+CREATE TABLE nested_lists AS
+SELECT column1 AS id, column2 AS xs FROM (VALUES
     (100, [[1, 2, 3], NULL, [4, 5]]),
-    (200, [[7], []]),
-    (300, NULL);
+    (200, [[7], arrow_cast(make_array(), 'List(Int64)')]),
+    (300, NULL)
+);
 
 query II
 SELECT id, explode_outer(ys) AS y
@@ -163,10 +176,12 @@ DROP TABLE nested_lists;
 ##############################
 
 statement ok
-CREATE TABLE dense_lists (id INT, xs INT[]) AS VALUES
+CREATE TABLE dense_lists AS
+SELECT column1 AS id, column2 AS xs FROM (VALUES
     (1, [10, 20]),
     (2, [30]),
-    (3, [40, 50, 60]);
+    (3, [40, 50, 60])
+);
 
 query II
 SELECT id, explode(xs) AS x FROM dense_lists ORDER BY id, x;
