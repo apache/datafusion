@@ -228,6 +228,34 @@ async fn test_max_temp_directory_size_enforcement() {
 }
 
 #[tokio::test]
+async fn test_max_spill_merge_fan_in_runtime_config() {
+    let ctx = SessionContext::new();
+
+    ctx.sql("SET datafusion.runtime.max_spill_merge_fan_in = '8'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(ctx.runtime_env().disk_manager.max_spill_merge_fan_in(), 8);
+
+    ctx.sql("RESET datafusion.runtime.max_spill_merge_fan_in")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(ctx.runtime_env().disk_manager.max_spill_merge_fan_in(), 0);
+
+    let error = ctx
+        .sql("SET datafusion.runtime.max_spill_merge_fan_in = '-1'")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Failed to parse non-negative integer"));
+}
+
+#[tokio::test]
 async fn test_test_metadata_cache_limit() {
     let ctx = SessionContext::new();
 

@@ -2625,6 +2625,7 @@ dependencies = [
  "regex",
  "rstest",
  "sqlparser",
+ "stacker",
 ]
 
 [[package]]
