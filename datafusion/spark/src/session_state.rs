@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::execution::SessionStateBuilder;
-use datafusion::optimizer::analyzer::function_rewrite::ApplyFunctionRewrites;
 
 use crate::function::array::arrays_zip_rewrite::SparkArraysZipRewrite;
 use crate::planner::SparkFunctionPlanner;
@@ -85,9 +84,7 @@ impl SessionStateBuilderSpark for SessionStateBuilder {
 
         self.analyzer_rules()
             .get_or_insert_with(Vec::new)
-            .push(Arc::new(ApplyFunctionRewrites::new(vec![Arc::new(
-                SparkArraysZipRewrite,
-            )])));
+            .push(Arc::new(SparkArraysZipRewrite));
 
         self
     }

@@ -15,32 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, StringArray};
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::cast::as_list_array;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
-use datafusion_functions_nested::arrays_zip::ArraysZip;
+use datafusion_functions_nested::arrays_zip::{
+    arrays_zip_inner_with_names, arrays_zip_return_type,
+};
 use std::sync::Arc;
 
-use super::arrays_zip_rewrite::{ARRAYS_ZIP_NAMES_KEY, dedup_names};
-
-/// Spark-compatible `arrays_zip` — struct field names follow the original
-/// SQL arguments rather than positional ordinals.
+/// Spark-compatible `arrays_zip` — struct field names follow the Spark naming
+/// policy rather than the native [`ArraysZip`]'s 1-based ordinals.
 ///
-/// During SQL planning, names come from `arg_fields`. After
-/// [`SparkArraysZipRewrite`] runs, they ride in a `List<Utf8>` literal in
-/// `arg_fields[0]` (tagged with `datafusion.spark.arrays_zip.names`
-/// metadata) so optimizer renames can't drop them. Both paths dedup so the
-/// schemas agree across phases.
-///
-/// [`SparkArraysZipRewrite`]: super::arrays_zip_rewrite::SparkArraysZipRewrite
+/// Names reach the struct one of two ways, then go straight into the native
+/// [`arrays_zip_return_type`] / [`arrays_zip_inner_with_names`]:
+/// * [`SparkArraysZip::with_field_names`] — explicit names. For SQL, the
+///   [`SparkArraysZipRewrite`] analyzer rule derives them from the argument
+///   expressions (column / alias names, else 0-based ordinals) and pins them
+///   here before optimizer passes can rename `arg_fields`.
+/// * [`SparkArraysZip::new`] — nothing pinned; falls back to 0-based ordinals.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArraysZip {
     signature: Signature,
+    field_names: Option<Vec<String>>,
 }
 
 impl Default for SparkArraysZip {
@@ -53,6 +52,35 @@ impl SparkArraysZip {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            field_names: None,
+        }
+    }
+
+    pub fn with_field_names(field_names: Vec<String>) -> Self {
+        Self {
+            field_names: Some(field_names),
+            ..Self::new()
+        }
+    }
+
+    /// Used by the analyzer to rewrite and to read back the baked-in names.
+    pub(crate) fn field_names(&self) -> Option<&[String]> {
+        self.field_names.as_deref()
+    }
+
+    fn resolve_names(&self, arg_fields: &[FieldRef]) -> Result<Vec<String>> {
+        match &self.field_names {
+            Some(names) => {
+                if names.len() != arg_fields.len() {
+                    return exec_err!(
+                        "arrays_zip configured with {} field names but called with {} arguments",
+                        names.len(),
+                        arg_fields.len()
+                    );
+                }
+                Ok(names.clone())
+            }
+            None => Ok((0..arg_fields.len()).map(|i| i.to_string()).collect()),
         }
     }
 }
@@ -71,196 +99,69 @@ impl ScalarUDFImpl for SparkArraysZip {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let (names, array_arg_types): (Vec<String>, Vec<DataType>) =
-            if has_names_literal(args.arg_fields, args.scalar_arguments) {
-                let names =
-                    names_from_scalar(args.scalar_arguments[0].as_ref().unwrap())?;
-                let types = args
-                    .arg_fields
-                    .iter()
-                    .skip(1)
-                    .map(|f| f.data_type().clone())
-                    .collect();
-                (names, types)
-            } else {
-                let raw_names = args
-                    .arg_fields
-                    .iter()
-                    .enumerate()
-                    .map(|(i, f)| natural_name_or_ordinal(f.name(), i))
-                    .collect();
-                let names = dedup_names(raw_names);
-                let types = args
-                    .arg_fields
-                    .iter()
-                    .map(|f| f.data_type().clone())
-                    .collect();
-                (names, types)
-            };
-        let dt = ArraysZip::with_field_names(names).return_type(&array_arg_types)?;
+        if args.arg_fields.is_empty() {
+            return exec_err!("arrays_zip expects at least one array argument");
+        }
+        let names = self.resolve_names(args.arg_fields)?;
+        let arg_types: Vec<DataType> = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect();
+        let dt = arrays_zip_return_type(&arg_types, &names)?;
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs {
-            args: all_args,
-            arg_fields,
-            number_rows,
-            return_field,
-            config_options,
-        } = args;
-
-        if all_args.is_empty() {
+        if args.args.is_empty() {
             return exec_err!("arrays_zip expects at least one array argument");
         }
-
-        let has_marker = arg_fields
-            .first()
-            .is_some_and(|f| f.metadata().contains_key(ARRAYS_ZIP_NAMES_KEY));
-        let (names, inner_args_slice, inner_fields_slice): (
-            Vec<String>,
-            &[ColumnarValue],
-            &[FieldRef],
-        ) = if has_marker {
-            let names = match &all_args[0] {
-                ColumnarValue::Scalar(sv) => names_from_scalar(sv)?,
-                ColumnarValue::Array(arr) => names_from_array(arr.as_ref())?,
-            };
-            (names, &all_args[1..], &arg_fields[1..])
-        } else {
-            let raw_names = arg_fields
-                .iter()
-                .enumerate()
-                .map(|(i, f)| natural_name_or_ordinal(f.name(), i))
-                .collect();
-            let names = dedup_names(raw_names);
-            (names, all_args.as_slice(), arg_fields.as_slice())
-        };
-
-        let inner_args = ScalarFunctionArgs {
-            args: inner_args_slice.to_vec(),
-            arg_fields: inner_fields_slice.to_vec(),
-            number_rows,
-            return_field: Arc::clone(&return_field),
-            config_options,
-        };
-        ArraysZip::with_field_names(names).invoke_with_args(inner_args)
+        let names = self.resolve_names(&args.arg_fields)?;
+        let arrays = ColumnarValue::values_to_arrays(&args.args)?;
+        let result = arrays_zip_inner_with_names(&arrays, &names)?;
+        Ok(ColumnarValue::Array(result))
     }
-}
-
-/// True iff `arg_fields[0]` is a constant carrying our marker metadata.
-/// The metadata check (not just the value's type) prevents collision with a
-/// user-supplied `List<Utf8>` first argument.
-fn has_names_literal(
-    arg_fields: &[FieldRef],
-    scalar_arguments: &[Option<&ScalarValue>],
-) -> bool {
-    let Some(Some(_)) = scalar_arguments.first() else {
-        return false;
-    };
-    arg_fields
-        .first()
-        .is_some_and(|f| f.metadata().contains_key(ARRAYS_ZIP_NAMES_KEY))
-}
-
-/// Fallback field-name heuristic for paths the analyzer rewrite hasn't
-/// touched. Returns the trailing dotted segment of `field_name` if it looks
-/// like an unquoted identifier, otherwise the 0-based ordinal.
-///
-/// [`SparkArraysZipRewrite`]: super::arrays_zip_rewrite::SparkArraysZipRewrite
-fn natural_name_or_ordinal(field_name: &str, ordinal: usize) -> String {
-    let candidate = field_name.rsplit('.').next().unwrap_or(field_name);
-    if is_unquoted_identifier(candidate) {
-        candidate.to_string()
-    } else {
-        ordinal.to_string()
-    }
-}
-
-fn is_unquoted_identifier(s: &str) -> bool {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(c) if c.is_alphabetic() || c == '_' => {
-            chars.all(|c| c.is_alphanumeric() || c == '_')
-        }
-        _ => false,
-    }
-}
-
-fn names_from_scalar(sv: &ScalarValue) -> Result<Vec<String>> {
-    let ScalarValue::List(list) = sv else {
-        return exec_err!(
-            "arrays_zip names argument must be a List<Utf8>, got {}",
-            sv.data_type()
-        );
-    };
-    names_from_array(list.as_ref())
-}
-
-fn names_from_array(arr: &dyn Array) -> Result<Vec<String>> {
-    let list = as_list_array(arr)?;
-    if list.len() != 1 {
-        return exec_err!(
-            "arrays_zip names argument must contain a single row, got {}",
-            list.len()
-        );
-    }
-    let values = list.value(0);
-    let Some(strs) = values.as_any().downcast_ref::<StringArray>() else {
-        return exec_err!(
-            "arrays_zip names argument must be List<Utf8>, got element type {}",
-            values.data_type()
-        );
-    };
-    (0..strs.len())
-        .map(|i| {
-            if strs.is_null(i) {
-                exec_err!("arrays_zip names argument must not contain NULL")
-            } else {
-                Ok(strs.value(i).to_string())
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::ListArray;
-    use arrow::buffer::OffsetBuffer;
+    use datafusion_common::{DataFusionError, assert_contains};
 
-    #[test]
-    fn naming_strips_dotted_qualifier() {
-        assert_eq!(natural_name_or_ordinal("t.a", 0), "a");
-        assert_eq!(natural_name_or_ordinal("db.schema.col", 0), "col");
-        assert_eq!(natural_name_or_ordinal("a.b.c", 7), "c");
+    fn int_field(name: &str) -> FieldRef {
+        Arc::new(Field::new(name, DataType::Int64, true))
     }
 
     #[test]
-    fn naming_keeps_plain_identifier() {
-        assert_eq!(natural_name_or_ordinal("a", 9), "a");
-        assert_eq!(natural_name_or_ordinal("_foo", 0), "_foo");
-        assert_eq!(natural_name_or_ordinal("Bar123", 1), "Bar123");
+    fn resolve_names_some_used_when_length_matches() {
+        let udf = SparkArraysZip::with_field_names(vec!["a".into(), "b".into()]);
+        let names = udf.resolve_names(&[int_field("x"), int_field("y")]).unwrap();
+        assert_eq!(names, vec!["a", "b"]);
     }
 
     #[test]
-    fn naming_falls_back_to_ordinal_for_non_identifier() {
-        assert_eq!(natural_name_or_ordinal("a + 1", 0), "0");
-        assert_eq!(natural_name_or_ordinal("foo(x)", 3), "3");
-        assert_eq!(natural_name_or_ordinal("", 5), "5");
-        assert_eq!(natural_name_or_ordinal("123abc", 1), "1");
-        assert_eq!(natural_name_or_ordinal("t.", 4), "4");
-        assert_eq!(natural_name_or_ordinal("t.123", 2), "2");
+    fn resolve_names_some_length_mismatch_errors() {
+        let udf = SparkArraysZip::with_field_names(vec!["a".into(), "b".into()]);
+        let err = udf.resolve_names(&[int_field("x")]).unwrap_err();
+
+        assert!(
+            matches!(err, DataFusionError::Execution(_)),
+            "unexpected error kind: {err}"
+        );
+        assert_contains!(
+            err.to_string(),
+            "arrays_zip configured with 2 field names but called with 1 arguments"
+        );
     }
 
     #[test]
-    fn names_from_array_extracts_single_row_of_utf8() {
-        let strs = StringArray::from(vec![Some("x"), Some("y")]);
-        let offsets = OffsetBuffer::from_lengths([2]);
-        let field = Arc::new(Field::new_list_field(DataType::Utf8, true));
-        let list = ListArray::new(field, offsets, Arc::new(strs), None);
-
-        let names = names_from_array(&list).expect("valid input must succeed");
-        assert_eq!(names, vec!["x", "y"]);
+    fn resolve_names_none_uses_zero_based_ordinals() {
+        let udf = SparkArraysZip::new();
+        // Field names are ignored — positional ordinals stay stable under the
+        // optimizer renames that make `arg_fields`-based naming unsafe.
+        let names = udf
+            .resolve_names(&[int_field("t.a"), int_field("b"), int_field("c")])
+            .unwrap();
+        assert_eq!(names, vec!["0", "1", "2"]);
     }
 }
