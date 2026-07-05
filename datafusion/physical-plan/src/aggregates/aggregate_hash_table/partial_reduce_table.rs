@@ -15,19 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, internal_err};
-use datafusion_expr::EmitTo;
+use datafusion_common::Result;
 
 use crate::aggregates::AggregateExec;
 
-use super::common::{
-    AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
-    MaterializedAggregateOutput, PartialReduceMarker,
-};
+use super::common::{AggregateHashTable, PartialReduceMarker};
 
 /// Methods specific to the aggregate hash table used in the partial-reduce stage.
 impl AggregateHashTable<PartialReduceMarker> {
@@ -55,91 +49,24 @@ impl AggregateHashTable<PartialReduceMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        let output_schema = Arc::clone(&self.output_schema);
-        let batch_size = self.batch_size;
-        // Take ownership of the output state. Note `emit_next_materialized_batch`
-        // updates state after it emits a materialized slice.
-        match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
-            AggregateHashTableState::Outputting(state) => {
-                if state.group_values.is_empty() {
-                    return Ok(None);
-                }
-
-                let output =
-                    self.materialize_partial_reduce_output(state, output_schema)?;
-                Ok(self.emit_next_materialized_batch(output, batch_size))
-            }
-            AggregateHashTableState::OutputtingMaterialized(output) => {
-                Ok(self.emit_next_materialized_batch(output, batch_size))
-            }
-            AggregateHashTableState::Done => Ok(None),
-            AggregateHashTableState::Building(_) => {
-                internal_err!("next_output_batch must be called in the outputting state")
-            }
-        }
+        self.next_output_batch_inner(|acc, emit_to, output| {
+            output.extend(acc.state(emit_to)?);
+            Ok(())
+        })
     }
 
-    fn materialize_partial_reduce_output(
-        &self,
-        mut state: AggregateHashTableBuffer,
-        output_schema: SchemaRef,
-    ) -> Result<MaterializedAggregateOutput> {
-        // `state(EmitTo::All)` consumes accumulator state. Emit all groups once,
-        // then slice the materialized batch on subsequent polls.
-        let emit_to_all = EmitTo::All;
-        let timer = self.group_by_metrics.emitting_time.timer();
-        let mut output = state.group_values.emit(emit_to_all)?;
-
-        for acc in state.accumulators.iter_mut() {
-            output.extend(acc.state(emit_to_all)?);
-        }
-        drop(timer);
-
-        let batch = RecordBatch::try_new(output_schema, output)?;
-        debug_assert!(batch.num_rows() > 0);
-        Ok(MaterializedAggregateOutput::new(batch))
-    }
-
-    fn emit_next_materialized_batch(
-        &mut self,
-        mut output: MaterializedAggregateOutput,
-        batch_size: usize,
-    ) -> Option<RecordBatch> {
-        let batch = output.next_batch(batch_size);
-        if output.is_exhausted() {
-            self.state = AggregateHashTableState::Done;
-        } else {
-            self.state = AggregateHashTableState::OutputtingMaterialized(output);
-        }
-        batch
-    }
-
+    /// Partial-reduce aggregation consumes partial aggregate states and merges
+    /// them into the table's partial-state accumulators.
     pub(in crate::aggregates) fn aggregate_batch(
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
-        let evaluated_batch = self.evaluate_batch(batch)?;
-        let state = self.state.building_mut();
-
-        let timer = self.group_by_metrics.aggregation_time.timer();
-        for group_values in &evaluated_batch.grouping_set_args {
-            state
-                .group_values
-                .intern(group_values, &mut state.batch_group_indices)?;
-            let group_indices = &state.batch_group_indices;
-            let total_num_groups = state.group_values.len();
-
-            for (acc, values) in state
-                .accumulators
-                .iter_mut()
-                .zip(evaluated_batch.accumulator_args.iter())
-            {
-                acc.merge_batch(values, group_indices, total_num_groups)?;
-            }
-        }
-        drop(timer);
-
-        Ok(())
+        self.aggregate_batch_inner(
+            batch,
+            |acc, values, group_indices, total_num_groups| {
+                acc.merge_batch(values, group_indices, total_num_groups)
+            },
+        )
     }
 
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {
