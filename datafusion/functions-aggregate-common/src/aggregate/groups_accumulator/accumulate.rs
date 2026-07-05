@@ -203,7 +203,8 @@ impl NullState {
         F: FnMut(usize, T::Native) + Send,
     {
         if let SeenValues::All { num_values } = &mut self.seen_values
-            && values.null_count() == 0
+            && (values.null_count() == 0
+                || selected_values_have_no_nulls(values.nulls(), partition_indices))
         {
             accumulate_by_indices(group_indices, values, partition_indices, value_fn);
             *num_values = total_num_groups;
@@ -502,6 +503,17 @@ pub fn accumulate<T, F>(
 }
 
 /// Invokes `value_fn(group_index, value)` for each selected non null value.
+fn selected_values_have_no_nulls(
+    nulls: Option<&NullBuffer>,
+    partition_indices: &[usize],
+) -> bool {
+    nulls.is_none_or(|nulls| {
+        partition_indices
+            .iter()
+            .all(|&row_idx| nulls.is_valid(row_idx))
+    })
+}
+
 pub fn accumulate_by_indices<T, F>(
     group_indices: &[usize],
     values: &PrimitiveArray<T>,
@@ -1129,6 +1141,32 @@ mod test {
 
             if !is_all_seen {
                 assert_eq!(null_buffer, expected_null_buffer);
+            }
+        }
+    }
+
+    #[test]
+    fn accumulate_by_indices_uses_fast_path_when_unselected_rows_are_null() {
+        let mut null_state = NullState::new();
+        let group_indices = vec![0, 1];
+        let partition_indices = vec![1, 3];
+        let values = UInt32Array::from(vec![None, Some(10), None, Some(20)]);
+        let total_num_groups = 2;
+        let mut accumulated_values = vec![];
+
+        null_state.accumulate_by_indices(
+            &group_indices,
+            &values,
+            &partition_indices,
+            total_num_groups,
+            |group_index, value| accumulated_values.push((group_index, value)),
+        );
+
+        assert_eq!(accumulated_values, vec![(0, 10), (1, 20)]);
+        match null_state.seen_values {
+            SeenValues::All { num_values } => assert_eq!(num_values, total_num_groups),
+            SeenValues::Some { .. } => {
+                panic!("selected non-null rows should keep fast path")
             }
         }
     }
