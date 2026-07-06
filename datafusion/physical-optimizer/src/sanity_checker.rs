@@ -24,6 +24,7 @@
 use std::sync::Arc;
 
 use datafusion_common::Result;
+use datafusion_physical_expr::Distribution;
 use datafusion_physical_plan::ExecutionPlan;
 
 use datafusion_common::config::{ConfigOptions, OptimizerOptions};
@@ -35,6 +36,9 @@ use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::{ExecutionPlanProperties, get_plan_string};
 
 use crate::PhysicalOptimizerRule;
+use crate::utils::{
+    aggregate_can_reuse_range_partitioning, range_partitioning_satisfies_key_partitioning,
+};
 use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
 use itertools::izip;
 
@@ -136,6 +140,10 @@ fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
 
 /// Ensures that the plan is pipeline friendly and the order and
 /// distribution requirements from its children are satisfied.
+#[expect(
+    deprecated,
+    reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+)]
 pub fn check_plan_sanity(
     plan: &Arc<dyn ExecutionPlan>,
     optimizer_options: &OptimizerOptions,
@@ -162,11 +170,26 @@ pub fn check_plan_sanity(
             }
         }
 
-        if !child
+        let child_satisfies_distribution = child
             .output_partitioning()
             .satisfaction(&dist_req, child_eq_props, true)
-            .is_satisfied()
-        {
+            .is_satisfied();
+        let range_satisfies_aggregate_distribution =
+            aggregate_can_reuse_range_partitioning(plan)
+                && match &dist_req {
+                    Distribution::HashPartitioned(exprs)
+                    | Distribution::KeyPartitioned(exprs) => {
+                        range_partitioning_satisfies_key_partitioning(
+                            child.output_partitioning(),
+                            exprs,
+                            child_eq_props,
+                            true,
+                        )
+                    }
+                    _ => false,
+                };
+
+        if !(child_satisfies_distribution || range_satisfies_aggregate_distribution) {
             let plan_str = get_plan_string(plan);
             return plan_err!(
                 "Plan: {:?} does not satisfy distribution requirements: {}. Child-{} output partitioning: {}",

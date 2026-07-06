@@ -1521,9 +1521,8 @@ mod tests {
         Ok(())
     }
 
-    // TODO: migrate to PartialHashAggregateStream when it supports
-    // InputOrderMode::PartiallySorted; kept here for the legacy
-    // GroupedHashAggregateStream implementation.
+    // Migrated to OrderedPartialAggregateStream coverage in aggregates/mod.rs;
+    // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_emit_early_with_partially_sorted() -> Result<()> {
         // Reproducer for #20445: EmitEarly with PartiallySorted panics in

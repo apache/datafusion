@@ -25,7 +25,9 @@ use arrow::array::{
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type,
-    Decimal128Type, Decimal256Type, Field, FieldRef, Int32Type, Int64Type,
+    Decimal128Type, Decimal256Type, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Field, FieldRef, Int32Type, Int64Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt32Type, UInt64Type,
@@ -759,6 +761,15 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 Box::new(NumericHLLAccumulator::<TimestampNanosecondType>::new())
             }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                Box::new(NumericHLLAccumulator::<IntervalYearMonthType>::new())
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                Box::new(NumericHLLAccumulator::<IntervalDayTimeType>::new())
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                Box::new(NumericHLLAccumulator::<IntervalMonthDayNanoType>::new())
+            }
             DataType::Decimal32(_, _) => {
                 Box::new(NumericHLLAccumulator::<Decimal32Type>::new())
             }
@@ -770,6 +781,18 @@ impl AggregateUDFImpl for ApproxDistinct {
             }
             DataType::Decimal256(_, _) => {
                 Box::new(NumericHLLAccumulator::<Decimal256Type>::new())
+            }
+            DataType::Duration(TimeUnit::Second) => {
+                Box::new(NumericHLLAccumulator::<DurationSecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                Box::new(NumericHLLAccumulator::<DurationMillisecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                Box::new(NumericHLLAccumulator::<DurationMicrosecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                Box::new(NumericHLLAccumulator::<DurationNanosecondType>::new())
             }
             DataType::Utf8
             | DataType::LargeUtf8
@@ -831,10 +854,14 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
             | DataType::Timestamp(TimeUnit::Millisecond, _)
             | DataType::Timestamp(TimeUnit::Microsecond, _)
             | DataType::Timestamp(TimeUnit::Nanosecond, _)
+            | DataType::Interval(IntervalUnit::YearMonth)
+            | DataType::Interval(IntervalUnit::DayTime)
+            | DataType::Interval(IntervalUnit::MonthDayNano)
             | DataType::Decimal32(_, _)
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
+            | DataType::Duration(_)
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
@@ -853,9 +880,10 @@ mod tests {
         use super::*;
         use arrow::array::{
             AsArray, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-            Int64Array, StringViewArray,
+            Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+            IntervalYearMonthArray, StringViewArray,
         };
-        use arrow::datatypes::i256;
+        use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, i256};
         use std::sync::Arc;
         // A string longer than the 12-byte inline limit
         const LONG: &str = "this string is definitely longer than twelve bytes";
@@ -993,6 +1021,36 @@ mod tests {
                 .unwrap(),
             );
             assert_count_numerical_acc_and_group_acc::<Decimal256Type>(decimal_256, 6);
+        }
+
+        #[test]
+        fn interval_support_numerical_acc_and_group_acc() {
+            let year_month: ArrayRef =
+                Arc::new(IntervalYearMonthArray::from(vec![1, 2, 2, 3, 3, 3, 0, 0]));
+            assert_count_numerical_acc_and_group_acc::<IntervalYearMonthType>(
+                year_month, 4,
+            );
+
+            let day_time: ArrayRef = Arc::new(IntervalDayTimeArray::from(vec![
+                IntervalDayTime::new(1, 0),
+                IntervalDayTime::new(1, 0),
+                IntervalDayTime::new(1, 5),
+                IntervalDayTime::new(2, 0),
+            ]));
+            assert_count_numerical_acc_and_group_acc::<IntervalDayTimeType>(day_time, 3);
+
+            let month_day_nano: ArrayRef =
+                Arc::new(IntervalMonthDayNanoArray::from(vec![
+                    IntervalMonthDayNano::new(1, 0, 0),
+                    IntervalMonthDayNano::new(1, 0, 0),
+                    IntervalMonthDayNano::new(1, 0, 5),
+                    IntervalMonthDayNano::new(0, 2, 0),
+                    IntervalMonthDayNano::new(0, 0, 0),
+                ]));
+            assert_count_numerical_acc_and_group_acc::<IntervalMonthDayNanoType>(
+                month_day_nano,
+                4,
+            );
         }
 
         /// `approx_distinct(v) FILTER (WHERE nullable_bool)` — a NULL filter row
