@@ -87,13 +87,6 @@ struct BufferedPartitionBatch {
     runs: Vec<RowRun>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ReorderedRun {
-    batch_idx: usize,
-    start: usize,
-    end: usize,
-}
-
 struct FinalPartitionRunState {
     buffered_batches: Vec<BufferedPartitionBatch>,
     staged_batches: BTreeMap<usize, Vec<RecordBatch>>,
@@ -192,23 +185,64 @@ impl FinalPartitionRunState {
             return Ok(());
         }
 
-        let partition_runs =
-            build_reordered_runs_by_partition(&self.buffered_batches, &partition_lengths);
-        let source_columns =
-            collect_source_columns(&self.buffered_batches, schema.fields().len());
+        let partitions_with_rows = partition_lengths
+            .iter()
+            .enumerate()
+            .filter(|(_, len)| **len != 0)
+            .map(|(partition_id, _)| partition_id)
+            .collect::<Vec<_>>();
+        let num_columns = schema.fields().len();
+        let mut partition_columns = partition_lengths
+            .iter()
+            .map(|len| {
+                if *len == 0 {
+                    Vec::new()
+                } else {
+                    Vec::with_capacity(num_columns)
+                }
+            })
+            .collect::<Vec<Vec<ArrayRef>>>();
 
-        let mut materialized_rows = 0;
-        for (partition_id, runs) in partition_runs.iter().enumerate() {
-            if runs.is_empty() {
-                continue;
+        for column_idx in 0..num_columns {
+            let source_data = self
+                .buffered_batches
+                .iter()
+                .map(|batch| batch.batch.column(column_idx).to_data())
+                .collect::<Vec<_>>();
+            let source_refs = source_data.iter().collect::<Vec<&ArrayData>>();
+            let mut partition_mutables = partition_lengths
+                .iter()
+                .map(|len| {
+                    (*len != 0)
+                        .then(|| MutableArrayData::new(source_refs.clone(), false, *len))
+                })
+                .collect::<Vec<_>>();
+
+            for (batch_idx, batch) in self.buffered_batches.iter().enumerate() {
+                for run in &batch.runs {
+                    partition_mutables[run.relative_partition]
+                        .as_mut()
+                        .expect("non-empty partition must have mutable array data")
+                        .extend(batch_idx, run.start, run.start + run.len);
+                }
             }
 
-            let len = partition_lengths[partition_id];
-            materialized_rows += len;
-            let columns = source_columns
-                .iter()
-                .map(|source_data| materialize_reordered_column(source_data, runs, len))
-                .collect::<Vec<_>>();
+            for partition_id in &partitions_with_rows {
+                let mutable = partition_mutables[*partition_id]
+                    .take()
+                    .expect("non-empty partition must have mutable array data");
+                partition_columns[*partition_id].push(make_array(mutable.freeze()));
+            }
+        }
+
+        let materialized_rows = partitions_with_rows
+            .iter()
+            .map(|partition_id| partition_lengths[*partition_id])
+            .sum::<usize>();
+        debug_assert_eq!(materialized_rows, total_rows);
+
+        for partition_id in partitions_with_rows {
+            let columns = std::mem::take(&mut partition_columns[partition_id]);
             let batch = RecordBatch::try_new(Arc::clone(schema), columns)?;
             let batch_size = get_record_batch_memory_size(&batch);
 
@@ -219,7 +253,6 @@ impl FinalPartitionRunState {
             *self.staged_sizes.entry(partition_id).or_default() += batch_size;
             self.total_staged_size += batch_size;
         }
-        debug_assert_eq!(materialized_rows, total_rows);
 
         self.buffered_batches.clear();
         self.total_buffered_size = 0;
@@ -258,62 +291,6 @@ impl FinalPartitionRunState {
         self.replaying_partition_id = Some(partition_id);
         Ok(batches)
     }
-}
-
-fn collect_source_columns(
-    buffered_batches: &[BufferedPartitionBatch],
-    num_columns: usize,
-) -> Vec<Vec<ArrayData>> {
-    (0..num_columns)
-        .map(|column_idx| {
-            buffered_batches
-                .iter()
-                .map(|batch| batch.batch.column(column_idx).to_data())
-                .collect()
-        })
-        .collect()
-}
-
-fn materialize_reordered_column(
-    source_data: &[ArrayData],
-    reordered_runs: &[ReorderedRun],
-    num_rows: usize,
-) -> ArrayRef {
-    let source_refs = source_data.iter().collect::<Vec<&ArrayData>>();
-    let mut mutable = MutableArrayData::new(source_refs, false, num_rows);
-
-    for run in reordered_runs {
-        mutable.extend(run.batch_idx, run.start, run.end);
-    }
-
-    make_array(mutable.freeze())
-}
-
-fn build_reordered_runs_by_partition(
-    buffered_batches: &[BufferedPartitionBatch],
-    partition_lengths: &[usize],
-) -> Vec<Vec<ReorderedRun>> {
-    let mut run_counts = vec![0; partition_lengths.len()];
-    for run in buffered_batches.iter().flat_map(|batch| &batch.runs) {
-        run_counts[run.relative_partition] += 1;
-    }
-
-    let mut partition_runs = run_counts
-        .iter()
-        .map(|num_runs| Vec::with_capacity(*num_runs))
-        .collect::<Vec<_>>();
-
-    for (batch_idx, batch) in buffered_batches.iter().enumerate() {
-        for run in &batch.runs {
-            partition_runs[run.relative_partition].push(ReorderedRun {
-                batch_idx,
-                start: run.start,
-                end: run.start + run.len,
-            });
-        }
-    }
-
-    partition_runs
 }
 
 /// Hash aggregation is implemented in two stages: partial and final. This
