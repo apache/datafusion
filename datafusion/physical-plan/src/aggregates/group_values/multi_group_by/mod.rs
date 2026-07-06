@@ -215,7 +215,7 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// [`GroupValuesRows`]: crate::aggregates::group_values::GroupValuesRows
     group_values: Vec<Box<dyn GroupColumn>>,
 
-    /// Indices into `group_values` ordered cheapest → most expensive comparison
+    /// Indices into `group_values` ordered cheapest to most expensive comparison
     /// cost. Built once in `try_new` from the schema so that `vectorized_equal_to`
     /// eliminates rows with cheap columns before paying the cost of expensive ones.
     compare_order: Vec<usize>,
