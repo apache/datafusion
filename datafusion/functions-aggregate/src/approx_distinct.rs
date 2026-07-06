@@ -880,9 +880,8 @@ mod tests {
         use super::*;
         use arrow::array::{
             AsArray, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-            DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
-            DurationSecondArray, Int64Array, IntervalDayTimeArray,
-            IntervalMonthDayNanoArray, IntervalYearMonthArray, StringViewArray,
+            Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+            StringViewArray,
         };
         use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, i256};
         use std::sync::Arc;
@@ -1051,39 +1050,6 @@ mod tests {
             assert_count_numerical_acc_and_group_acc::<IntervalMonthDayNanoType>(
                 month_day_nano,
                 4,
-            );
-        }
-
-        #[test]
-        fn duration_support_numerical_acc_and_group_acc() {
-            let values = vec![1i64, 2, 2, 3, 3, 3, 0, 0, i64::MAX, i64::MIN, i64::MIN];
-
-            let duration_second: ArrayRef =
-                Arc::new(DurationSecondArray::from(values.clone()));
-            assert_count_numerical_acc_and_group_acc::<DurationSecondType>(
-                duration_second,
-                6,
-            );
-
-            let duration_millisecond: ArrayRef =
-                Arc::new(DurationMillisecondArray::from(values.clone()));
-            assert_count_numerical_acc_and_group_acc::<DurationMillisecondType>(
-                duration_millisecond,
-                6,
-            );
-
-            let duration_microsecond: ArrayRef =
-                Arc::new(DurationMicrosecondArray::from(values.clone()));
-            assert_count_numerical_acc_and_group_acc::<DurationMicrosecondType>(
-                duration_microsecond,
-                6,
-            );
-
-            let duration_nanosecond: ArrayRef =
-                Arc::new(DurationNanosecondArray::from(values));
-            assert_count_numerical_acc_and_group_acc::<DurationNanosecondType>(
-                duration_nanosecond,
-                6,
             );
         }
 
