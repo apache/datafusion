@@ -27,7 +27,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::datasource::source::DataSourceExec;
+use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -43,6 +43,7 @@ use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{self, col};
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
@@ -230,6 +231,16 @@ pub fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
     MemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
 }
 
+pub fn inexact_memory_exec(
+    partitions: &[Vec<RecordBatch>],
+    schema: SchemaRef,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let source = InexactMemorySource {
+        inner: MemorySourceConfig::try_new(partitions, schema, None)?,
+    };
+    Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+}
+
 pub fn hash_join_exec(
     left: Arc<dyn ExecutionPlan>,
     right: Arc<dyn ExecutionPlan>,
@@ -371,6 +382,18 @@ pub fn sort_exec_with_preserve_partitioning(
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
     Arc::new(SortExec::new(ordering, input).with_preserve_partitioning(true))
+}
+
+pub fn sort_exec_with_fetch_and_preserve_partitioning(
+    ordering: LexOrdering,
+    fetch: Option<usize>,
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(
+        SortExec::new(ordering, input)
+            .with_fetch(fetch)
+            .with_preserve_partitioning(true),
+    )
 }
 
 pub fn sort_exec_with_fetch(
@@ -893,6 +916,18 @@ impl TestScan {
         self.supports_fetch = supports;
         self
     }
+
+    /// Set the number of output partitions reported by this scan.
+    pub fn with_partition_count(mut self, partition_count: usize) -> Self {
+        let eq_properties = self.plan_properties.equivalence_properties().clone();
+        self.plan_properties = Arc::new(PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(partition_count),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ));
+        self
+    }
 }
 
 impl DisplayAs for TestScan {
@@ -1027,4 +1062,61 @@ pub fn test_scan_with_ordering(
     ordering: LexOrdering,
 ) -> Arc<dyn ExecutionPlan> {
     Arc::new(TestScan::with_ordering(schema, ordering))
+}
+
+#[derive(Debug, Clone)]
+struct InexactMemorySource {
+    inner: MemorySourceConfig,
+}
+
+impl DataSource for InexactMemorySource {
+    fn open(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.inner.open(partition, context)
+    }
+
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        self.inner.fmt_as(t, f)
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        self.inner.output_partitioning()
+    }
+
+    fn eq_properties(&self) -> EquivalenceProperties {
+        self.inner.eq_properties()
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        self.inner.partition_statistics(partition)
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
+        let mut new_source = self.clone();
+        new_source.inner = new_source.inner.with_limit(limit);
+        Some(Arc::new(new_source))
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.inner.fetch()
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        _projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        Ok(None)
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
+        Ok(SortOrderPushdownResult::Inexact {
+            inner: Arc::new(self.clone()),
+        })
+    }
 }

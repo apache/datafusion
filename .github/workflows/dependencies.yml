@@ -25,6 +25,7 @@ on:
   push:
     branches-ignore:
       - 'gh-readonly-queue/**'
+      - 'dependabot/**'
   pull_request:
   merge_group:
   # manual trigger
