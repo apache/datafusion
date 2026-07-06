@@ -880,8 +880,8 @@ mod tests {
         use super::*;
         use arrow::array::{
             AsArray, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-            Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
-            StringViewArray,
+            Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+            IntervalYearMonthArray, StringViewArray,
         };
         use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, i256};
         use std::sync::Arc;
