@@ -61,6 +61,7 @@ use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partitioned_topk::{
     PartitionedTopKExec, WindowFnKind,
 };
@@ -140,24 +141,25 @@ impl WindowTopN {
         // Step 2: Extract limit from predicate (rn <= K, rn < K, etc.)
         let (col_idx, limit_n) = extract_window_limit(filter.predicate())?;
 
-        // Step 3: Walk through optional ProjectionExec to find BoundedWindowAggExec
+        // Step 3: Walk through optional ProjectionExec and RepartitionExec to find BoundedWindowAggExec
         let child = filter.input();
-        let (window_exec, proj_between) = find_window_below(child)?;
+        let (window_exec, intermediates) = find_window_below(child)?;
 
         // Step 4: Verify col_idx references a supported window function output column
-        let input_field_count = window_exec.input().schema().fields().len();
+        let window_exec_typed = window_exec.downcast_ref::<BoundedWindowAggExec>()?;
+        let sort_exec = window_exec_typed.input().downcast_ref::<SortExec>()?;
+        let input_field_count = window_exec_typed.input().schema().fields().len();
         if col_idx < input_field_count {
             return None; // Filter is on an input column, not a window column
         }
         let window_expr_idx = col_idx - input_field_count;
-        let window_exprs = window_exec.window_expr();
+        let window_exprs = window_exec_typed.window_expr();
         if window_expr_idx >= window_exprs.len() {
             return None;
         }
         let fn_kind = supported_window_fn(&window_exprs[window_expr_idx])?;
 
-        // Step 5: Verify child of window is SortExec
-        let sort_exec = window_exec.input().downcast_ref::<SortExec>()?;
+        // Step 5: child of window is SortExec (verified above)
         let sort_child = sort_exec.input();
 
         // Step 6: Determine partition_prefix_len from the window expression
@@ -190,26 +192,17 @@ impl WindowTopN {
         .ok()?;
 
         // Step 8: Rebuild window with new child
-        let new_window = Arc::clone(&child_as_arc(window_exec))
+        let mut result = window_exec
             .with_new_children(vec![Arc::new(partitioned_topk)])
             .ok()?;
 
-        // Step 9: If ProjectionExec was between Filter and Window, rebuild it
-        let result = match proj_between {
-            Some(proj) => Arc::clone(&child_as_arc(proj))
-                .with_new_children(vec![new_window])
-                .ok()?,
-            None => new_window,
-        };
+        // Step 9: Rebuild intermediate nodes (ProjectionExec/RepartitionExec)
+        for node in intermediates.into_iter().rev() {
+            result = node.with_new_children(vec![result]).ok()?;
+        }
 
         Some(result)
     }
-}
-
-/// Helper to get an `Arc<dyn ExecutionPlan>` from a reference.
-/// We need this because `with_new_children` takes `Arc<Self>`.
-fn child_as_arc<T: ExecutionPlan + Clone + 'static>(plan: &T) -> Arc<dyn ExecutionPlan> {
-    Arc::new(plan.clone())
 }
 
 impl PhysicalOptimizerRule for WindowTopN {
@@ -338,27 +331,27 @@ fn supported_window_fn(
 
 /// Walk below a plan node looking for a [`BoundedWindowAggExec`].
 ///
-/// Handles two cases:
-/// - Direct child: `FilterExec → BoundedWindowAggExec`
-/// - With projection: `FilterExec → ProjectionExec → BoundedWindowAggExec`
+/// Handles sequences of `ProjectionExec` and `RepartitionExec`.
 ///
-/// Returns the window exec and an optional `ProjectionExec` in between,
-/// or `None` if no `BoundedWindowAggExec` is found within one or two levels.
+/// Returns the window exec and a list of intermediate nodes to rebuild,
+/// or `None` if no `BoundedWindowAggExec` is found.
 fn find_window_below(
     plan: &Arc<dyn ExecutionPlan>,
-) -> Option<(&BoundedWindowAggExec, Option<&ProjectionExec>)> {
-    // Direct child is BoundedWindowAggExec
-    if let Some(window) = plan.downcast_ref::<BoundedWindowAggExec>() {
-        return Some((window, None));
-    }
+) -> Option<(Arc<dyn ExecutionPlan>, Vec<Arc<dyn ExecutionPlan>>)> {
+    let mut current = Arc::clone(plan);
+    let mut intermediates = Vec::new();
 
-    // Child is ProjectionExec with BoundedWindowAggExec below
-    if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
-        let proj_child = proj.input();
-        if let Some(window) = proj_child.downcast_ref::<BoundedWindowAggExec>() {
-            return Some((window, Some(proj)));
+    loop {
+        if current.downcast_ref::<BoundedWindowAggExec>().is_some() {
+            return Some((current, intermediates));
+        } else if current.downcast_ref::<ProjectionExec>().is_some()
+            || current.downcast_ref::<RepartitionExec>().is_some()
+        {
+            let next = Arc::clone(current.children().first()?);
+            intermediates.push(current);
+            current = next;
+        } else {
+            return None;
         }
     }
-
-    None
 }
