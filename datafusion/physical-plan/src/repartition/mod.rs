@@ -2118,10 +2118,10 @@ mod tests {
         {collect, expressions::col},
     };
 
-    use arrow::array::{ArrayRef, StringArray, UInt32Array};
+    use arrow::array::{ArrayRef, Int32Array, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
-    use datafusion_common::cast::{as_string_array, as_uint32_array};
+    use datafusion_common::cast::{as_int32_array, as_string_array, as_uint32_array};
     use datafusion_common::exec_err;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_common_runtime::JoinSet;
@@ -2325,6 +2325,110 @@ mod tests {
         assert_eq!(300, partition_row_count(&output_partitions[0]));
         assert_eq!(450, partition_row_count(&output_partitions[1]));
         assert_eq!(450, partition_row_count(&output_partitions[2]));
+        assert_partition_contains_only_u32_values(&output_partitions[0], &[1, 2]);
+        assert_partition_contains_only_u32_values(&output_partitions[1], &[3, 4, 5]);
+        assert_partition_contains_only_u32_values(&output_partitions[2], &[6, 7, 8]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn range_repartition_routes_compound_keys() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![5, 10, 10, 10, 10, 15])),
+                Arc::new(Int32Array::from(vec![1, 1, 3, 5, 7, 0])),
+            ],
+        )?;
+        let partitioning = two_column_range_partitioning(
+            &schema,
+            [SortOptions::default(), SortOptions::default()],
+            vec![(10, 1), (10, 5)],
+        )?;
+
+        let output_partitions =
+            repartition(&schema, vec![vec![batch]], partitioning).await?;
+
+        assert_eq!(3, output_partitions.len());
+        assert_eq!(
+            vec![(5, 1)],
+            collect_partition_i32_pairs(&output_partitions[0])
+        );
+        assert_eq!(
+            vec![(10, 1), (10, 3)],
+            collect_partition_i32_pairs(&output_partitions[1])
+        );
+        assert_eq!(
+            vec![(10, 5), (10, 7), (15, 0)],
+            collect_partition_i32_pairs(&output_partitions[2])
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn range_repartition_routes_nulls_asc_nulls_last() -> Result<()> {
+        let schema = nullable_u32_schema();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![
+                None, Some(5), Some(10), Some(15),
+            ]))],
+        )?;
+        let partitioning = u32_range_partitioning(
+            &schema,
+            SortOptions::default(),
+            vec![10],
+        )?;
+
+        let output_partitions =
+            repartition(&schema, vec![vec![batch]], partitioning).await?;
+
+        assert_eq!(2, output_partitions.len());
+        assert_eq!(
+            vec![Some(5)],
+            collect_partition_u32_values_with_nulls(&output_partitions[0])
+        );
+        assert_eq!(
+            vec![None, Some(10), Some(15)],
+            collect_partition_u32_values_with_nulls(&output_partitions[1])
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn range_repartition_routes_nulls_asc_nulls_first() -> Result<()> {
+        let schema = nullable_u32_schema();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![
+                None, Some(5), Some(10), Some(15),
+            ]))],
+        )?;
+        let partitioning = u32_range_partitioning(
+            &schema,
+            SortOptions::new(false, true),
+            vec![10],
+        )?;
+
+        let output_partitions =
+            repartition(&schema, vec![vec![batch]], partitioning).await?;
+
+        assert_eq!(2, output_partitions.len());
+        assert_eq!(
+            vec![None, Some(5)],
+            collect_partition_u32_values_with_nulls(&output_partitions[0])
+        );
+        assert_eq!(
+            vec![Some(10), Some(15)],
+            collect_partition_u32_values_with_nulls(&output_partitions[1])
+        );
 
         Ok(())
     }
@@ -2361,7 +2465,7 @@ mod tests {
         let schema = test_schema();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(UInt32Array::from(vec![5, 15, 25]))],
+            vec![Arc::new(UInt32Array::from(vec![5, 10, 15, 20, 25]))],
         )?;
         let partitioning =
             u32_range_partitioning(&schema, SortOptions::new(true, false), vec![20, 10])?;
@@ -2375,10 +2479,13 @@ mod tests {
             collect_partition_u32_values(&output_partitions[0])
         );
         assert_eq!(
-            vec![15],
+            vec![15, 20],
             collect_partition_u32_values(&output_partitions[1])
         );
-        assert_eq!(vec![5], collect_partition_u32_values(&output_partitions[2]));
+        assert_eq!(
+            vec![5, 10],
+            collect_partition_u32_values(&output_partitions[2])
+        );
 
         Ok(())
     }
@@ -2413,6 +2520,10 @@ mod tests {
         Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
     }
 
+    fn nullable_u32_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, true)]))
+    }
+
     fn u32_range_partitioning(
         schema: &SchemaRef,
         sort_options: SortOptions,
@@ -2428,8 +2539,43 @@ mod tests {
         )?))
     }
 
+    fn two_column_range_partitioning(
+        schema: &SchemaRef,
+        sort_options: [SortOptions; 2],
+        split_points: Vec<(i32, i32)>,
+    ) -> Result<Partitioning> {
+        let ordering = [
+            PhysicalSortExpr::new(col("a", schema)?, sort_options[0]),
+            PhysicalSortExpr::new(col("b", schema)?, sort_options[1]),
+        ]
+        .into();
+        Ok(Partitioning::Range(RangePartitioning::try_new(
+            ordering,
+            split_points
+                .into_iter()
+                .map(|(a, b)| {
+                    SplitPoint::new(vec![
+                        ScalarValue::Int32(Some(a)),
+                        ScalarValue::Int32(Some(b)),
+                    ])
+                })
+                .collect(),
+        )?))
+    }
+
     fn partition_row_count(batches: &[RecordBatch]) -> usize {
         batches.iter().map(|batch| batch.num_rows()).sum()
+    }
+
+    fn assert_partition_contains_only_u32_values(
+        batches: &[RecordBatch],
+        allowed: &[u32],
+    ) {
+        let values = collect_partition_u32_values(batches);
+        assert!(
+            values.iter().all(|value| allowed.contains(value)),
+            "partition contains unexpected values: {values:?}, allowed: {allowed:?}"
+        );
     }
 
     fn collect_partition_u32_values(batches: &[RecordBatch]) -> Vec<u32> {
@@ -2440,6 +2586,40 @@ mod tests {
                     as_uint32_array(batch.column(0)).expect("expected UInt32 column");
                 (0..array.len())
                     .map(|idx| array.value(idx))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn collect_partition_u32_values_with_nulls(
+        batches: &[RecordBatch],
+    ) -> Vec<Option<u32>> {
+        batches
+            .iter()
+            .flat_map(|batch| {
+                let array =
+                    as_uint32_array(batch.column(0)).expect("expected UInt32 column");
+                (0..array.len())
+                    .map(|idx| {
+                        if array.is_null(idx) {
+                            None
+                        } else {
+                            Some(array.value(idx))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn collect_partition_i32_pairs(batches: &[RecordBatch]) -> Vec<(i32, i32)> {
+        batches
+            .iter()
+            .flat_map(|batch| {
+                let a = as_int32_array(batch.column(0)).expect("expected Int32 column");
+                let b = as_int32_array(batch.column(1)).expect("expected Int32 column");
+                (0..a.len())
+                    .map(|idx| (a.value(idx), b.value(idx)))
                     .collect::<Vec<_>>()
             })
             .collect()
