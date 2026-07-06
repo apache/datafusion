@@ -87,8 +87,7 @@ impl GroupValues for GroupValuesBytesView {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
-        // Reset the map to default, and convert it into a single array
-        let map_contents = self.map.take().into_state();
+        let map_contents = self.map.take_state();
 
         let group_values = match emit_to {
             EmitTo::All => {
@@ -123,8 +122,6 @@ impl GroupValues for GroupValuesBytesView {
     }
 
     fn clear_shrink(&mut self, _num_rows: usize) {
-        // in theory we could potentially avoid this reallocation and clear the
-        // contents of the maps, but for now we just reset the map from the beginning
-        self.map.take();
+        self.map.clear();
     }
 }

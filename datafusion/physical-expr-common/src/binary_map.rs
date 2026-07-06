@@ -264,6 +264,17 @@ where
         new_self
     }
 
+    /// Clears this map while keeping the hash table allocation for reuse.
+    pub fn clear(&mut self) {
+        self.map.clear();
+        self.map_size = self.map.capacity() * size_of::<Entry<O, V>>();
+        self.buffer.truncate(0);
+        self.offsets.clear();
+        self.offsets.push(O::default());
+        self.hashes_buffer.clear();
+        self.null = None;
+    }
+
     /// Inserts each value from `values` into the map, invoking `payload_fn` for
     /// each value if *not* already present, deferring the allocation of the
     /// payload until it is needed.
@@ -522,6 +533,35 @@ where
                     GenericStringArray::new_unchecked(offsets, values, nulls)
                 })
             }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        }
+    }
+
+    /// Converts this map into an array and clears the map for reuse.
+    pub fn take_state(&mut self) -> ArrayRef {
+        let output_type = self.output_type;
+        let offsets = std::mem::take(&mut self.offsets);
+        self.offsets.push(O::default());
+        let values = self.buffer.finish();
+        let null = self.null.take();
+
+        self.map.clear();
+        self.map_size = self.map.capacity() * size_of::<Entry<O, V>>();
+        self.hashes_buffer.clear();
+
+        let nulls = null.map(|(_payload, null_index)| {
+            let num_values = offsets.len() - 1;
+            single_null_buffer(num_values, null_index)
+        });
+        let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
+
+        match output_type {
+            OutputType::Binary => Arc::new(unsafe {
+                GenericBinaryArray::new_unchecked(offsets, values, nulls)
+            }),
+            OutputType::Utf8 => Arc::new(unsafe {
+                GenericStringArray::new_unchecked(offsets, values, nulls)
+            }),
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
     }

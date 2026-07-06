@@ -243,7 +243,6 @@ where
         self.values.clear();
         self.values.shrink_to(num_rows);
         self.map.clear();
-        self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
     }
 }
 

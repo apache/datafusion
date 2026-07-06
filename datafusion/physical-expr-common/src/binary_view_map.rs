@@ -177,6 +177,18 @@ where
         new_self
     }
 
+    /// Clears this map while keeping the hash table allocation for reuse.
+    pub fn clear(&mut self) {
+        self.map.clear();
+        self.map_size = self.map.capacity() * size_of::<Entry<V>>();
+        self.views.clear();
+        self.in_progress.clear();
+        self.completed.clear();
+        self.nulls.truncate(0);
+        self.hashes_buffer.clear();
+        self.null = None;
+    }
+
     /// Inserts each value from `values` into the map, invoking `payload_fn` for
     /// each value if *not* already present, deferring the allocation of the
     /// payload until it is needed.
@@ -399,6 +411,36 @@ where
             OutputType::BinaryView => Arc::new(array),
             OutputType::Utf8View => {
                 // SAFETY: all input was valid utf8
+                let array = unsafe { array.to_string_view_unchecked() };
+                Arc::new(array)
+            }
+            _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
+        }
+    }
+
+    /// Converts this map into an array and clears the map for reuse.
+    pub fn take_state(&mut self) -> ArrayRef {
+        if !self.in_progress.is_empty() {
+            let flushed = std::mem::take(&mut self.in_progress);
+            self.completed.push(Buffer::from_vec(flushed));
+        }
+
+        let output_type = self.output_type;
+        let null_buffer = self.nulls.finish();
+        let views = ScalarBuffer::from(std::mem::take(&mut self.views));
+        let completed = std::mem::take(&mut self.completed);
+
+        self.map.clear();
+        self.map_size = self.map.capacity() * size_of::<Entry<V>>();
+        self.hashes_buffer.clear();
+        self.null = None;
+
+        let array =
+            unsafe { BinaryViewArray::new_unchecked(views, completed, null_buffer) };
+
+        match output_type {
+            OutputType::BinaryView => Arc::new(array),
+            OutputType::Utf8View => {
                 let array = unsafe { array.to_string_view_unchecked() };
                 Arc::new(array)
             }
