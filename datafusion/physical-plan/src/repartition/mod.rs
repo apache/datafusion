@@ -2377,14 +2377,14 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![Arc::new(UInt32Array::from(vec![
-                None, Some(5), Some(10), Some(15),
+                None,
+                Some(5),
+                Some(10),
+                Some(15),
             ]))],
         )?;
-        let partitioning = u32_range_partitioning(
-            &schema,
-            SortOptions::default(),
-            vec![10],
-        )?;
+        let partitioning =
+            u32_range_partitioning(&schema, SortOptions::new(false, false), vec![10])?;
 
         let output_partitions =
             repartition(&schema, vec![vec![batch]], partitioning).await?;
@@ -2408,14 +2408,14 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![Arc::new(UInt32Array::from(vec![
-                None, Some(5), Some(10), Some(15),
+                None,
+                Some(5),
+                Some(10),
+                Some(15),
             ]))],
         )?;
-        let partitioning = u32_range_partitioning(
-            &schema,
-            SortOptions::new(false, true),
-            vec![10],
-        )?;
+        let partitioning =
+            u32_range_partitioning(&schema, SortOptions::new(false, true), vec![10])?;
 
         let output_partitions =
             repartition(&schema, vec![vec![batch]], partitioning).await?;
