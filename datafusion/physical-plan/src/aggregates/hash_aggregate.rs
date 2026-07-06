@@ -44,10 +44,7 @@ use super::aggregate_hash_table::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialSkipMarker,
 };
 use super::skip_partial::SkipAggregationProbe;
-use super::{
-    AggregateExec, partition_runs, strip_partition_runs_metadata,
-    strip_subpartition_column, subpartition_column_index,
-};
+use super::{AggregateExec, strip_subpartition_column, subpartition_column_index};
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
@@ -936,81 +933,57 @@ impl FinalHashAggregateStream {
     }
 
     fn stage_partition_runs(&mut self, batch: &RecordBatch) -> Result<Option<usize>> {
-        if let Some(subpartition_idx) = subpartition_column_index(batch.schema_ref()) {
-            let subpartitions = as_uint32_array(batch.column(subpartition_idx).as_ref())?;
-            if subpartitions.null_count() != 0 {
-                return internal_err!(
-                    "Hash aggregate subpartition column must not contain nulls"
-                );
-            }
-
-            let output_batch = strip_subpartition_column(batch, subpartition_idx)?;
-            let mut runs = Vec::new();
-            let mut values = subpartitions.values().iter().copied().enumerate();
-            if let Some((run_start, first_partition)) = values.next() {
-                let mut current_partition = first_partition as usize;
-                let mut current_start = run_start;
-                let mut current_len = 1;
-                for (row_idx, relative_partition) in values {
-                    let relative_partition = relative_partition as usize;
-                    if relative_partition == current_partition {
-                        current_len += 1;
-                    } else {
-                        runs.push((current_partition, current_start, current_len));
-                        current_partition = relative_partition;
-                        current_start = row_idx;
-                        current_len = 1;
-                    }
-                }
-                runs.push((current_partition, current_start, current_len));
-            }
-
-            let mut staged_memory = 0;
-            for (relative_partition, offset, len) in runs {
-                staged_memory += self
-                    .partition_run_state
-                    .as_mut()
-                    .map(|state| {
-                        state.stage_batch(
-                            output_batch.slice(offset, len),
-                            relative_partition,
-                        )
-                    })
-                    .transpose()?
-                    .unwrap_or(0);
-            }
-            return Ok(Some(staged_memory));
-        }
-
-        let Some(runs) = partition_runs(batch.schema_ref())? else {
+        let Some(subpartition_idx) = subpartition_column_index(batch.schema_ref()) else {
             if self
                 .partition_run_state
                 .as_ref()
                 .is_some_and(|state| state.has_buffered_partitions())
             {
                 return internal_err!(
-                    "missing partition run metadata for final partitioned aggregation after buffered runs have started"
+                    "missing hash aggregate subpartition column after buffered runs have started"
                 );
             }
             return Ok(None);
         };
 
-        let output_batch = strip_partition_runs_metadata(batch)?;
-        let mut offset = 0;
+        let subpartitions = as_uint32_array(batch.column(subpartition_idx).as_ref())?;
+        if subpartitions.null_count() != 0 {
+            return internal_err!(
+                "Hash aggregate subpartition column must not contain nulls"
+            );
+        }
+
+        let output_batch = strip_subpartition_column(batch, subpartition_idx)?;
+        let mut runs = Vec::new();
+        let mut values = subpartitions.values().iter().copied().enumerate();
+        if let Some((run_start, first_partition)) = values.next() {
+            let mut current_partition = first_partition as usize;
+            let mut current_start = run_start;
+            let mut current_len = 1;
+            for (row_idx, relative_partition) in values {
+                let relative_partition = relative_partition as usize;
+                if relative_partition == current_partition {
+                    current_len += 1;
+                } else {
+                    runs.push((current_partition, current_start, current_len));
+                    current_partition = relative_partition;
+                    current_start = row_idx;
+                    current_len = 1;
+                }
+            }
+            runs.push((current_partition, current_start, current_len));
+        }
+
         let mut staged_memory = 0;
-        for run in runs {
+        for (relative_partition, offset, len) in runs {
             staged_memory += self
                 .partition_run_state
                 .as_mut()
                 .map(|state| {
-                    state.stage_batch(
-                        output_batch.slice(offset, run.len),
-                        run.relative_partition,
-                    )
+                    state.stage_batch(output_batch.slice(offset, len), relative_partition)
                 })
                 .transpose()?
                 .unwrap_or(0);
-            offset += run.len;
         }
         Ok(Some(staged_memory))
     }
@@ -1140,14 +1113,13 @@ impl FinalHashAggregateStream {
         hash_table.start_output()
     }
 
-    // FinalPartitioned inputs may arrive as coalesced batches with partition run
-    // metadata. The rows are already grouped by relative aggregate partition inside
-    // each batch, but multiple relative partitions can share the same output stream.
+    // FinalPartitioned inputs arrive with an internal subpartition column. The
+    // rows can contain multiple relative partitions in one output stream.
     //
     // Original input stream:
     //
-    //   batch A rows: [ p0 ][ p1 ]       metadata: [(p0, len), (p1, len)]
-    //   batch B rows: [ p0 ][ p1 ]       metadata: [(p0, len), (p1, len)]
+    //   batch A rows: [ p0 ][ p1 ]       hidden column: [p0, ..., p1, ...]
+    //   batch B rows: [ p0 ][ p1 ]       hidden column: [p0, ..., p1, ...]
     //
     // Copy rows into one coalescer per relative aggregate partition while
     // reading the original stream:
@@ -1170,8 +1142,8 @@ impl FinalHashAggregateStream {
     // State transitions:
     //
     //   Reading original input
-    //     + metadata    -> buffer slices, keep ReadingInput
-    //     + no metadata -> normal aggregate_batch path
+    //     + hidden column    -> buffer rows, keep ReadingInput
+    //     + no hidden column -> normal aggregate_batch path
     //     + input done  -> begin_partition_run_replay(...)
     //
     //   Reading CoalescedPartitionStream(pN)
@@ -1447,7 +1419,8 @@ mod tests {
 
     use super::*;
     use crate::aggregates::{
-        AggregateMode, PartitionRun, PhysicalGroupBy, set_partition_runs_metadata,
+        AggregateMode, PartitionRun, PhysicalGroupBy, append_subpartition_column,
+        subpartition_schema,
     };
     use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
@@ -1483,18 +1456,18 @@ mod tests {
         };
 
         let input_batches = vec![
-            set_partition_runs_metadata(
-                make_batch(vec![1, 2, 1], vec![2, 5, 11])?,
+            append_subpartition_column(
+                &make_batch(vec![1, 2, 1], vec![2, 5, 11])?,
                 &[PartitionRun::new(0, 2)?, PartitionRun::new(1, 1)?],
             )?,
-            set_partition_runs_metadata(
-                make_batch(vec![1, 3, 1, 3], vec![3, 7, 1, 9])?,
+            append_subpartition_column(
+                &make_batch(vec![1, 3, 1, 3], vec![3, 7, 1, 9])?,
                 &[PartitionRun::new(0, 2)?, PartitionRun::new(1, 2)?],
             )?,
         ];
 
-        let input =
-            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
+        let input_schema = subpartition_schema(&schema);
+        let input = TestMemoryExec::try_new_exec(&[input_batches], input_schema, None)?;
         let input =
             Arc::new(TestMemoryExec::update_cache(&input)) as Arc<dyn ExecutionPlan>;
 
