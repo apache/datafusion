@@ -329,15 +329,15 @@ fn supported_window_fn(
     }
 }
 
+type PlanAndIntermediates = (Arc<dyn ExecutionPlan>, Vec<Arc<dyn ExecutionPlan>>);
+
 /// Walk below a plan node looking for a [`BoundedWindowAggExec`].
 ///
 /// Handles sequences of `ProjectionExec` and `RepartitionExec`.
 ///
 /// Returns the window exec and a list of intermediate nodes to rebuild,
 /// or `None` if no `BoundedWindowAggExec` is found.
-fn find_window_below(
-    plan: &Arc<dyn ExecutionPlan>,
-) -> Option<(Arc<dyn ExecutionPlan>, Vec<Arc<dyn ExecutionPlan>>)> {
+fn find_window_below(plan: &Arc<dyn ExecutionPlan>) -> Option<PlanAndIntermediates> {
     let mut current = Arc::clone(plan);
     let mut intermediates = Vec::new();
 
