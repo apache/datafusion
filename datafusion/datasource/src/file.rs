@@ -22,6 +22,7 @@ use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use crate::file_compression_type::FileCompressionType;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
@@ -32,6 +33,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
+use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_plan::DisplayFormatType;
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
@@ -43,6 +45,66 @@ use object_store::ObjectStore;
 /// Helper function to convert any type implementing [`FileSource`] to `Arc<dyn FileSource>`
 pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource> {
     Arc::new(source)
+}
+
+/// Arguments a [`DataSource`] passes to its [`FileSource`] when creating an
+/// opener or morselizer.
+///
+/// [`DataSource`]: crate::source::DataSource
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct FileSourceArgs {
+    /// Store to read file bytes from.
+    pub object_store: Arc<dyn ObjectStore>,
+    /// Target number of rows per output batch.
+    pub batch_size: usize,
+    /// Optional row limit for the scan.
+    pub limit: Option<usize>,
+    /// Whether file/row order must be preserved.
+    pub preserve_order: bool,
+    /// Compression of the files being read.
+    pub file_compression_type: FileCompressionType,
+    /// Adapter factory for rewriting expressions to the physical file schema.
+    pub expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+}
+
+impl FileSourceArgs {
+    pub fn new(object_store: Arc<dyn ObjectStore>, batch_size: usize) -> Self {
+        Self {
+            object_store,
+            batch_size,
+            limit: None,
+            preserve_order: false,
+            file_compression_type: FileCompressionType::UNCOMPRESSED,
+            expr_adapter_factory: None,
+        }
+    }
+
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.limit = limit;
+        self
+    }
+
+    pub fn with_preserve_order(mut self, preserve_order: bool) -> Self {
+        self.preserve_order = preserve_order;
+        self
+    }
+
+    pub fn with_file_compression_type(
+        mut self,
+        file_compression_type: FileCompressionType,
+    ) -> Self {
+        self.file_compression_type = file_compression_type;
+        self
+    }
+
+    pub fn with_expr_adapter_factory(
+        mut self,
+        expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    ) -> Self {
+        self.expr_adapter_factory = expr_adapter_factory;
+        self
+    }
 }
 
 /// File format specific behaviors for [`DataSource`]
@@ -69,8 +131,7 @@ pub trait FileSource: Any + Send + Sync {
     /// error from this method and implementing [`Self::create_morselizer`] instead.
     fn create_file_opener(
         &self,
-        object_store: Arc<dyn ObjectStore>,
-        base_config: &FileScanConfig,
+        args: &FileSourceArgs,
         partition: usize,
     ) -> Result<Arc<dyn FileOpener>>;
 
@@ -83,11 +144,10 @@ pub trait FileSource: Any + Send + Sync {
     /// implementing this method.
     fn create_morselizer(
         &self,
-        object_store: Arc<dyn ObjectStore>,
-        base_config: &FileScanConfig,
+        args: &FileSourceArgs,
         partition: usize,
     ) -> Result<Box<dyn Morselizer>> {
-        let opener = self.create_file_opener(object_store, base_config, partition)?;
+        let opener = self.create_file_opener(args, partition)?;
         Ok(Box::new(FileOpenerMorselizer::new(opener)))
     }
 
@@ -102,9 +162,6 @@ pub trait FileSource: Any + Send + Sync {
     /// Use [`ProjectionExprs::project_schema`] to get the projected schema
     /// after applying the projection.
     fn table_schema(&self) -> &crate::table_schema::TableSchema;
-
-    /// Initialize new type with batch size configuration
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource>;
 
     /// Returns the filter expression that will be applied *during* the file scan.
     ///

@@ -23,21 +23,17 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow_avro::reader::{Reader, ReaderBuilder};
 use datafusion_common::error::Result;
 use datafusion_datasource::TableSchema;
-use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file::{FileSource, FileSourceArgs};
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_physical_expr_adapter::BatchAdapterFactory;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::ProjectionExprs;
 
-use object_store::ObjectStore;
-
 /// AvroSource holds the extra configuration that is necessary for opening avro files
 #[derive(Clone)]
 pub struct AvroSource {
     table_schema: TableSchema,
-    batch_size: Option<usize>,
     projection: SplitProjection,
     metrics: ExecutionPlanMetricsSet,
 }
@@ -49,7 +45,6 @@ impl AvroSource {
         Self {
             projection: SplitProjection::unprojected(&table_schema),
             table_schema,
-            batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
@@ -58,9 +53,9 @@ impl AvroSource {
         &self,
         reader: R,
         projection: Option<Vec<usize>>,
+        batch_size: usize,
     ) -> Result<Reader<R>> {
-        let mut builder = ReaderBuilder::new()
-            .with_batch_size(self.batch_size.expect("Batch size must set before open"));
+        let mut builder = ReaderBuilder::new().with_batch_size(batch_size);
         if let Some(projection) = projection {
             builder = builder.with_projection(projection);
         }
@@ -114,13 +109,13 @@ impl AvroSource {
 impl FileSource for AvroSource {
     fn create_file_opener(
         &self,
-        object_store: Arc<dyn ObjectStore>,
-        _base_config: &FileScanConfig,
+        args: &FileSourceArgs,
         _partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {
         let mut opener = Arc::new(private::AvroOpener {
             config: Arc::new(self.clone()),
-            object_store,
+            object_store: Arc::clone(&args.object_store),
+            batch_size: args.batch_size,
         }) as Arc<dyn FileOpener>;
         opener = ProjectionOpener::try_new(
             self.projection.clone(),
@@ -132,12 +127,6 @@ impl FileSource for AvroSource {
 
     fn table_schema(&self) -> &TableSchema {
         &self.table_schema
-    }
-
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.batch_size = Some(batch_size);
-        Arc::new(conf)
     }
 
     fn try_pushdown_projection(
@@ -183,12 +172,14 @@ mod private {
     pub struct AvroOpener {
         pub config: Arc<AvroSource>,
         pub object_store: Arc<dyn ObjectStore>,
+        pub batch_size: usize,
     }
 
     impl FileOpener for AvroOpener {
         fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
             let object_store = Arc::clone(&self.object_store);
             let config = Arc::clone(&self.config);
+            let batch_size = self.batch_size;
             let projected_file_schema = config.projected_file_schema();
 
             Ok(Box::pin(async move {
@@ -199,15 +190,21 @@ mod private {
                     GetResultPayload::File(mut file, _) => {
                         // Probe the writer schema first so logical projected columns can be
                         // translated to the writer-schema ordinals expected by `arrow-avro`.
-                        let probe_reader =
-                            config.open(BufReader::new(file.try_clone()?), None)?;
+                        let probe_reader = config.open(
+                            BufReader::new(file.try_clone()?),
+                            None,
+                            batch_size,
+                        )?;
                         let writer_projection = config.writer_projection_for_schema(
                             probe_reader.schema().as_ref(),
                             projected_file_schema.as_ref(),
                         );
                         file.rewind()?;
-                        let reader =
-                            config.open(BufReader::new(file), writer_projection)?;
+                        let reader = config.open(
+                            BufReader::new(file),
+                            writer_projection,
+                            batch_size,
+                        )?;
                         let batch_adapter =
                             BatchAdapterFactory::new(Arc::clone(&projected_file_schema))
                                 .make_adapter(&reader.schema())?;
@@ -222,14 +219,20 @@ mod private {
                         let bytes = r.bytes().await?;
                         // As above, inspect the writer schema before constructing the real
                         // reader so `with_projection` can use writer-schema ordinals.
-                        let probe_reader =
-                            config.open(BufReader::new(bytes.clone().reader()), None)?;
+                        let probe_reader = config.open(
+                            BufReader::new(bytes.clone().reader()),
+                            None,
+                            batch_size,
+                        )?;
                         let writer_projection = config.writer_projection_for_schema(
                             probe_reader.schema().as_ref(),
                             projected_file_schema.as_ref(),
                         );
-                        let reader = config
-                            .open(BufReader::new(bytes.reader()), writer_projection)?;
+                        let reader = config.open(
+                            BufReader::new(bytes.reader()),
+                            writer_projection,
+                            batch_size,
+                        )?;
                         let batch_adapter =
                             BatchAdapterFactory::new(Arc::clone(&projected_file_schema))
                                 .make_adapter(&reader.schema())?;

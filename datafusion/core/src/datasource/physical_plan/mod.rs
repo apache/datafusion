@@ -39,7 +39,7 @@ pub use json::{JsonOpener, JsonSource};
 
 pub use arrow::{ArrowOpener, ArrowSource};
 pub use csv::{CsvOpener, CsvSource};
-pub use datafusion_datasource::file::FileSource;
+pub use datafusion_datasource::file::{FileSource, FileSourceArgs};
 pub use datafusion_datasource::file_groups::FileGroup;
 pub use datafusion_datasource::file_groups::FileGroupPartitioner;
 pub use datafusion_datasource::file_scan_config::{
