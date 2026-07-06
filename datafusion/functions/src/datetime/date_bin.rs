@@ -438,8 +438,23 @@ fn checked_scale_to_nanos(x: i64, scale: i64) -> Result<i64> {
     }
 }
 
+// Per-row failures map to NULL, so use Option in the hot path.
+#[inline]
+fn scale_and_bin_to_nanos(
+    value: i64,
+    scale: i64,
+    origin: i64,
+    stride: i64,
+    stride_fn: BinFunction,
+) -> Option<i64> {
+    value
+        .checked_mul(scale)
+        .and_then(|scaled| stride_fn(stride, scaled, origin).ok())
+}
+
 // Per-row timestamp binning shared by scalar and array paths.
 // Source-value failures become None, which callers map to NULL.
+#[inline]
 fn date_bin_timestamp_value<T: ArrowTimestampType>(
     value: i64,
     origin: i64,
@@ -447,14 +462,13 @@ fn date_bin_timestamp_value<T: ArrowTimestampType>(
     stride_fn: BinFunction,
 ) -> Option<i64> {
     let scale = timestamp_scale::<T>();
-    checked_scale_to_nanos(value, scale)
-        .and_then(|scaled| stride_fn(stride, scaled, origin))
+    scale_and_bin_to_nanos(value, scale, origin, stride, stride_fn)
         .map(|binned| binned / scale)
-        .ok()
 }
 
 // Per-row TIME binning shared by scalar and array paths.
 // The modulo keeps the result within a single day before unscaling.
+#[inline]
 fn date_bin_time_value(
     value: i64,
     scale: i64,
@@ -462,10 +476,8 @@ fn date_bin_time_value(
     stride: i64,
     stride_fn: BinFunction,
 ) -> Option<i64> {
-    checked_scale_to_nanos(value, scale)
-        .and_then(|scaled| stride_fn(stride, scaled, origin))
+    scale_and_bin_to_nanos(value, scale, origin, stride, stride_fn)
         .map(|binned| (binned % NANOSECONDS_IN_DAY) / scale)
-        .ok()
 }
 
 fn validate_time_stride(stride: &Interval) -> Result<()> {
