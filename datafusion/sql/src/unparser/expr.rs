@@ -31,7 +31,6 @@ use std::vec;
 
 use super::Unparser;
 use super::dialect::{DistinctFromStyle, IntervalStyle};
-use crate::stack::StackGuard;
 use arrow::array::{
     ArrayRef, Date32Array, Date64Array, PrimitiveArray,
     types::{
@@ -100,26 +99,25 @@ impl Unparser<'_> {
         // default `recursive` red zone, so without raising the minimum stack
         // size the stack-growing trampoline engages too late and the OS stack
         // overflows on deeply nested expressions (issue #23056). The size
-        // mirrors the planner's `StackGuard` usage in `query.rs`.
-        let _guard = StackGuard::new(256 * 1024);
-        self.expr_to_sql_with_nesting(expr)
+        // mirrors the planner's stack-growth usage in `query.rs`.
+        crate::stack::maybe_grow(|| self.expr_to_sql_with_nesting(expr))
     }
 
     /// Recursive entry point shared by the public [`Self::expr_to_sql`] and the
     /// internal recursion sites (scalar-function arguments, arrays, maps, and
     /// dialect scalar-function overrides).
     ///
-    /// This carries the `recursive` annotation so every nesting level becomes a
-    /// stack-growth checkpoint. Internal recursion must call this rather than
-    /// the public [`Self::expr_to_sql`]: the public entry point is not
-    /// annotated and would re-install the [`StackGuard`] on every level.
-    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    /// This is a stack-growth checkpoint. Internal recursion must call this
+    /// rather than the public [`Self::expr_to_sql`]: the public entry point
+    /// would re-enter the public stack-growth boundary on every level.
     pub(crate) fn expr_to_sql_with_nesting(&self, expr: &Expr) -> Result<ast::Expr> {
-        let mut root_expr = self.expr_to_sql_inner(expr)?;
-        if self.pretty {
-            root_expr = self.remove_unnecessary_nesting(root_expr, LOWEST, LOWEST);
-        }
-        Ok(root_expr)
+        crate::stack::maybe_grow(|| {
+            let mut root_expr = self.expr_to_sql_inner(expr)?;
+            if self.pretty {
+                root_expr = self.remove_unnecessary_nesting(root_expr, LOWEST, LOWEST);
+            }
+            Ok(root_expr)
+        })
     }
 
     fn distinct_from_to_sql(
@@ -155,9 +153,8 @@ impl Unparser<'_> {
         }
     }
 
-    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn expr_to_sql_inner(&self, expr: &Expr) -> Result<ast::Expr> {
-        match expr {
+        crate::stack::maybe_grow(|| match expr {
             Expr::InList(InList {
                 expr,
                 list,
@@ -658,7 +655,7 @@ impl Unparser<'_> {
             Expr::LambdaVariable(l) => Ok(ast::Expr::Identifier(
                 self.new_ident_quoted_if_needs(l.name.clone()),
             )),
-        }
+        })
     }
 
     pub fn scalar_function_to_sql(
@@ -1016,14 +1013,13 @@ impl Unparser<'_> {
     ///
     /// Also note that when fetching the precedence of a nested expression, we ignore other nested
     /// expressions, so precedence of expr `(a * (b + c))` equals `*` and not `+`.
-    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn remove_unnecessary_nesting(
         &self,
         expr: ast::Expr,
         left_op: &BinaryOperator,
         right_op: &BinaryOperator,
     ) -> ast::Expr {
-        match expr {
+        crate::stack::maybe_grow(|| match expr {
             ast::Expr::Nested(nested) => {
                 let surrounding_precedence = self
                     .sql_op_precedence(left_op)
@@ -1076,7 +1072,7 @@ impl Unparser<'_> {
                 self.remove_unnecessary_nesting(*expr, left_op, IS),
             )),
             _ => expr,
-        }
+        })
     }
 
     fn inner_precedence(&self, expr: &ast::Expr) -> u8 {
@@ -3399,6 +3395,44 @@ mod tests {
         // If the unparser overflows, the process aborts and this join is never
         // reached; otherwise the spawned thread returns cleanly.
         handle.join().expect("unparsing thread should not panic");
+    }
+
+    #[cfg(feature = "recursive_protection")]
+    #[test]
+    fn test_expr_to_sql_does_not_mutate_recursive_minimum_stack_size() -> Result<()> {
+        const DEFAULT_RECURSIVE_RED_ZONE: usize = 128 * 1024;
+
+        let previous_minimum = recursive::get_minimum_stack_size();
+        recursive::set_minimum_stack_size(DEFAULT_RECURSIVE_RED_ZONE);
+
+        let observed_minimum = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+        let dialect = DuckDBDialect::new().with_custom_scalar_overrides(vec![(
+            "dummy_udf",
+            Box::new({
+                let observed_minimum = Arc::clone(&observed_minimum);
+                move |unparser: &Unparser, args: &[Expr]| {
+                    observed_minimum.store(
+                        recursive::get_minimum_stack_size(),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    unparser.scalar_function_to_sql("dummy_udf", args).map(Some)
+                }
+            }) as ScalarFnToSqlHandler,
+        )]);
+        let expr = ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a")]);
+
+        let result = Unparser::new(&dialect).expr_to_sql(&expr);
+        let final_minimum = recursive::get_minimum_stack_size();
+        recursive::set_minimum_stack_size(previous_minimum);
+
+        result?;
+        assert_eq!(
+            observed_minimum.load(std::sync::atomic::Ordering::Relaxed),
+            DEFAULT_RECURSIVE_RED_ZONE
+        );
+        assert_eq!(final_minimum, DEFAULT_RECURSIVE_RED_ZONE);
+
+        Ok(())
     }
 
     #[test]
