@@ -42,7 +42,7 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, PhysicalSortExpr, PhysicalSortRequirement, OrderingRequirements
 };
-use datafusion_physical_expr::{Distribution, Partitioning};
+use datafusion_physical_expr::{Distribution, Partitioning, PhysicalExpr};
 use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, NotExpr};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -52,6 +52,7 @@ use datafusion_physical_plan::{displayable, get_plan_string, ExecutionPlan};
 use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion_physical_optimizer::enforce_sorting::{PlanWithCorrespondingCoalescePartitions, PlanWithCorrespondingSort, parallelize_sorts, ensure_sorting};
+use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown, assign_initial_requirements, pushdown_sorts};
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
@@ -2842,6 +2843,134 @@ async fn test_sort_with_streaming_table() -> Result<()> {
     assert_eq!(results[0].num_columns(), 1);
     let expected = create_array!(Int32, vec![1, 2, 3]) as ArrayRef;
     assert_eq!(results[0].column(0), &expected);
+
+    Ok(())
+}
+
+/// Regression: `parallelize_sorts` must not relocate a per-partition `SortExec`
+/// below an order-preserving `ProjectionExec` that *reorders* columns without
+/// remapping the sort-key column indices.
+///
+/// Builds the minimal physical plan that reproduces the bug (as it looks after
+/// distribution enforcement, before sorting enforcement):
+///
+/// ```text
+/// SortExec(fetch=4) [score@1 DESC, a@0 ASC]      (global, single-partition)
+///   CoalescePartitionsExec
+///     ProjectionExec [a@0, score@2 as score, b@1 as value]   <- reorder: score 2 -> 1
+///       ProjectionExec [a@0, b@1, c+d as score]              <- computes score at index 2
+///         SortExec(fetch=1000) [c+d DESC] preserve_partitioning=[true]   <- inner ordering
+///           RepartitionExec(RoundRobinBatch)                 <- multi-partition
+///             DataSourceExec
+/// ```
+///
+/// `parallelize_sorts` turns the `CoalescePartitionsExec` + global `SortExec`
+/// into a `SortPreservingMergeExec` + per-partition `SortExec`, sinking the
+/// per-partition sort *below* the reordering projection. The sort key
+/// `score@1` is valid in the projection's output schema, but in the child
+/// schema `[a, b, score]` index 1 is `b` and `score` is at index 2. If the
+/// index is not remapped, the relocated `SortExec` references the wrong column
+/// and `SanityCheckPlan` rejects the plan with
+/// "does not satisfy order requirements ... Child-0 order: []".
+fn reorder_projection_physical_plan() -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = create_test_schema3()?; // [a, b, c, d, e]
+    let source = parquet_exec(schema.clone());
+    let repartitioned = repartition_exec(source); // RoundRobinBatch -> multi-partition
+
+    // The score-source expression `c + d`. The inner sort below orders by this
+    // expression, and the lower projection aliases the *same* expression to
+    // `score`, so the projection output is already ordered by `score`. This
+    // existing ordering is what drives sort enforcement to relocate the outer
+    // sort below the reorder projection.
+    let score_expr = Arc::new(BinaryExpr::new(
+        col("c", &schema)?,
+        Operator::Plus,
+        col("d", &schema)?,
+    )) as Arc<dyn PhysicalExpr>;
+
+    // Inner per-partition, fetch-bearing sort on `c + d`.
+    let inner_ordering: LexOrdering = [PhysicalSortExpr::new(
+        Arc::clone(&score_expr),
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let inner_sort = Arc::new(
+        SortExec::new(inner_ordering, repartitioned)
+            .with_fetch(Some(1000))
+            .with_preserve_partitioning(true),
+    );
+
+    // Lower projection: compute `score` (= c + d) as the last column. Output
+    // schema: [a, b, score]; output is ordered by `score`.
+    let lower = projection_exec(
+        vec![
+            (col("a", &schema)?, "a".to_string()),
+            (col("b", &schema)?, "b".to_string()),
+            (Arc::clone(&score_expr), "score".to_string()),
+        ],
+        inner_sort,
+    )?;
+
+    // Upper projection: reorder so `score` moves from input index 2 to output
+    // index 1, and rename `b` to `value`. Output schema: [a, score, value].
+    let lower_schema = lower.schema();
+    let upper = projection_exec(
+        vec![
+            (col("a", &lower_schema)?, "a".to_string()),
+            (col("score", &lower_schema)?, "score".to_string()),
+            (col("b", &lower_schema)?, "value".to_string()),
+        ],
+        lower,
+    )?;
+
+    // Global, fetch-bearing sort on the renamed column + a tiebreaker, expressed
+    // in the upper projection's output schema (score@1 DESC NULLS LAST, a@0 ASC).
+    let upper_schema = upper.schema();
+    let ordering: LexOrdering = [
+        sort_expr_options(
+            "score",
+            &upper_schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ),
+        sort_expr("a", &upper_schema),
+    ]
+    .into();
+    let coalesced = coalesce_partitions_exec(upper);
+    Ok(sort_exec_with_fetch(ordering, Some(4), coalesced))
+}
+
+#[tokio::test]
+async fn test_parallelize_sorts_remaps_index_through_reordering_projection() -> Result<()>
+{
+    let physical_plan = reorder_projection_physical_plan()?;
+
+    // `EnsureRequirements` (with sort repartitioning enabled) runs the sort
+    // enforcement pass, including `parallelize_sorts`.
+    let mut config = ConfigOptions::new();
+    config.optimizer.repartition_sorts = true;
+    let optimized = EnsureRequirements::new().optimize(physical_plan, &config)?;
+
+    // The optimized plan must be physically valid. Before the fix this fails:
+    // the per-partition `SortExec` was relocated below the reordering projection
+    // but kept the key `score@1` (valid only in the projection output), while its
+    // child schema `[a, b, score]` has `score` at index 2 — so `SanityCheckPlan`
+    // reports `does not satisfy order requirements: [...]. Child-0 order: []`.
+    SanityCheckPlan::new()
+        .optimize(Arc::clone(&optimized), &ConfigOptions::default())
+        .unwrap_or_else(|e| {
+            panic!(
+                "Sort enforcement produced a plan that fails SanityCheckPlan \
+                 (stale sort-key index after relocating the SortExec below a \
+                 reordering ProjectionExec): {e}\n\nPlan:\n{}",
+                displayable(optimized.as_ref()).indent(true)
+            )
+        });
 
     Ok(())
 }

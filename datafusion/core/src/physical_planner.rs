@@ -4770,16 +4770,21 @@ digraph {
             .unwrap_err();
         assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed. Schema mismatch. Expected original schema"));
 
+        // The recursive `check_invariants` walk only runs under `debug_assertions`
+        // (see `OptimizationInvariantChecker::check`). In release builds the walk is
+        // skipped, so the checker returns `Ok` rather than surfacing the node's error.
+
         // Test: should fail when extension node fails it's own invariant check
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
-        let expected_err = OptimizationInvariantChecker::new(&rule)
-            .check(&failing_node, &ok_plan.schema())
-            .unwrap_err();
-        assert!(
-            expected_err.to_string().contains(
+        let result = OptimizationInvariantChecker::new(&rule)
+            .check(&failing_node, &ok_plan.schema());
+        if cfg!(debug_assertions) {
+            assert!(result.unwrap_err().to_string().contains(
                 "extension node failed it's user-defined always-invariant check"
-            )
-        );
+            ));
+        } else {
+            assert!(result.is_ok());
+        }
 
         // Test: should fail when descendent extension node fails
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
@@ -4787,14 +4792,15 @@ digraph {
             Arc::clone(&child).with_new_children(vec![Arc::clone(&failing_node)])?,
             Arc::clone(&child),
         ])?;
-        let expected_err = OptimizationInvariantChecker::new(&rule)
-            .check(&invalid_plan, &ok_plan.schema())
-            .unwrap_err();
-        assert!(
-            expected_err.to_string().contains(
+        let result = OptimizationInvariantChecker::new(&rule)
+            .check(&invalid_plan, &ok_plan.schema());
+        if cfg!(debug_assertions) {
+            assert!(result.unwrap_err().to_string().contains(
                 "extension node failed it's user-defined always-invariant check"
-            )
-        );
+            ));
+        } else {
+            assert!(result.is_ok());
+        }
 
         Ok(())
     }
