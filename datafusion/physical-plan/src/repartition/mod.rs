@@ -911,9 +911,8 @@ impl BatchPartitioner {
         Ok(it)
     }
 
-    /// This function takes the `arrays` associated with the evaluated expressions for the ordering, split points and sort options, and indices array
-    /// Then for every row, creates the "row key" based on the given ordering for the range, and binary searches through the split points to find the appropriate partition index
-    /// That partition index is associated with the array in `indices`, which is given the row index, meaning that the row is sent to the partition at that index
+    /// Groups input row indices by range partition - after this returns, `indices[p]` contains the row indices from `arrays`
+    /// that belong in output partition `p`, according to `split_points` and `sort_options`.
     fn partition_range_indices(
         arrays: &[Arc<dyn Array>],
         split_points: &[SplitPoint],
