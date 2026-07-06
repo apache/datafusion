@@ -279,65 +279,88 @@ mod tests {
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use std::sync::Arc;
 
-    /// Merge the given streams (each a list of batches of `sort_key` values)
-    /// and return the merged values.
+    /// Merge the given streams (each a list of batches of nullable `sort_key`
+    /// values, nulls sorted first) and return the merged values.
+    async fn merge_nullable_i32_streams(
+        inputs: Vec<Vec<Vec<Option<i32>>>>,
+        batch_size: usize,
+        fetch: Option<usize>,
+    ) -> Vec<Vec<Option<i32>>> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "sort_key",
+            DataType::Int32,
+            true,
+        )]));
+
+        let streams = inputs
+            .into_iter()
+            .map(|batches| {
+                let batches = batches
+                    .into_iter()
+                    .map(|values| {
+                        RecordBatch::try_new(
+                            Arc::clone(&schema),
+                            vec![Arc::new(Int32Array::from(values))],
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                Box::pin(
+                    MemoryStream::try_new(batches, Arc::clone(&schema), None).unwrap(),
+                ) as SendableRecordBatchStream
+            })
+            .collect::<Vec<_>>();
+
+        let merged = StreamingMergeBuilder::new()
+            .with_streams(streams)
+            .with_batch_size(batch_size)
+            .with_schema(Arc::clone(&schema))
+            .with_reservation({
+                let mem_pool: Arc<dyn MemoryPool> =
+                    Arc::new(UnboundedMemoryPool::default());
+                MemoryConsumer::new("merge stream mock memory").register(&mem_pool)
+            })
+            .with_expressions(
+                &([
+                    PhysicalSortExpr::new_default(col("sort_key", &schema).unwrap())
+                        .asc(),
+                ]
+                .into()),
+            )
+            .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+            .with_fetch(fetch)
+            .build()
+            .unwrap();
+
+        let output = collect(merged).await.unwrap();
+
+        output
+            .iter()
+            .map(|b| b.column(0).as_primitive::<Int32Type>().iter().collect())
+            .collect()
+    }
+
+    /// Same as [`merge_nullable_i32_streams`] for non-nullable values.
     async fn merge_i32_streams(
         inputs: Vec<Vec<Vec<i32>>>,
         batch_size: usize,
         fetch: Option<usize>,
     ) -> Vec<Vec<i32>> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "sort_key",
-            DataType::Int32,
-            false,
-        )]));
+        let inputs = inputs
+            .into_iter()
+            .map(|stream| {
+                stream
+                    .into_iter()
+                    .map(|batch| batch.into_iter().map(Some).collect())
+                    .collect()
+            })
+            .collect();
 
-        let streams = inputs
-          .into_iter()
-          .map(|batches| {
-              let batches = batches
-                .into_iter()
-                .map(|values| {
-                    RecordBatch::try_new(
-                        Arc::clone(&schema),
-                        vec![Arc::new(Int32Array::from(values))],
-                    )
-                      .unwrap()
-                })
-                .collect::<Vec<_>>();
-              Box::pin(
-                  MemoryStream::try_new(batches, Arc::clone(&schema), None).unwrap(),
-              ) as SendableRecordBatchStream
-          })
-          .collect::<Vec<_>>();
-
-        let merged = StreamingMergeBuilder::new()
-          .with_streams(streams)
-          .with_batch_size(batch_size)
-          .with_schema(Arc::clone(&schema))
-          .with_reservation({
-              let mem_pool: Arc<dyn MemoryPool> =
-                Arc::new(UnboundedMemoryPool::default());
-              MemoryConsumer::new("merge stream mock memory").register(&mem_pool)
-          })
-          .with_expressions(
-              &([
-                  PhysicalSortExpr::new_default(col("sort_key", &schema).unwrap())
-                    .asc(),
-              ]
-                .into()),
-          )
-          .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
-          .with_fetch(fetch)
-          .build()
-          .unwrap();
-
-        let output = collect(merged).await.unwrap();
-
-        output
-          .iter()
-          .map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
-          .collect()
+        merge_nullable_i32_streams(inputs, batch_size, fetch)
+            .await
+            .into_iter()
+            .map(|batch| batch.into_iter().map(|v| v.unwrap()).collect())
+            .collect()
     }
 
     fn flatten_vec<T>(input: Vec<Vec<T>>) -> Vec<T> {
@@ -419,6 +442,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_merge_with_nulls() {
+        // nulls sort first; stream 0's first batch is all nulls, so its last
+        // row (null) ties with the null heads of the other streams, and nulls
+        // also compare against non-null values on every batch boundary
+        let streams = vec![
+            vec![vec![None, None], vec![Some(1), Some(2)]],
+            vec![vec![None, Some(3)], vec![Some(4), Some(5)]],
+            vec![vec![None, Some(6)], vec![Some(7), Some(8)]],
+        ];
+
+        let output = merge_nullable_i32_streams(streams, 4, None).await;
+
+        assert_eq!(
+            flatten_vec(output),
+            vec![
+                None,
+                None,
+                None,
+                None,
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                Some(6),
+                Some(7),
+                Some(8)
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn test_merge_streams_of_different_lengths() {
         // stream 1 ends first, then stream 2, stream 0 finishes alone
         let streams = vec![
@@ -492,5 +547,4 @@ mod tests {
 
         assert_eq!(flatten_vec(output), (1..=12).collect::<Vec<_>>());
     }
-
 }
