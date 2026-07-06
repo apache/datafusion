@@ -21,16 +21,25 @@ use arrow::{
 };
 use arrow_schema::{SchemaRef, SortOptions};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use datafusion_execution::SendableRecordBatchStream;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, expressions::col};
 use datafusion_physical_plan::test::TestMemoryExec;
-use datafusion_physical_plan::{
-    collect, sorts::sort_preserving_merge::SortPreservingMergeExec,
-};
+use datafusion_physical_plan::{collect, execute_stream, sorts::sort_preserving_merge::SortPreservingMergeExec};
+use futures::StreamExt;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+use std::hint::black_box;
 use std::sync::Arc;
+
+/// Consume the stream batch by batch, dropping each batch as it arrives
+/// instead of holding the whole result in memory like `collect` would
+async fn drain(mut stream: SendableRecordBatchStream) {
+    while let Some(batch) = stream.next().await {
+        black_box(batch.unwrap());
+    }
+}
 
 const BENCH_ROWS: usize = 1_000_000; // 1 million rows
 
@@ -334,9 +343,9 @@ fn bench_spm_data_patterns(c: &mut Criterion) {
                                 sort_order.clone(),
                                 exec,
                             ));
-                            rt.block_on(async {
-                                collect(merge, Arc::clone(&task_ctx)).await.unwrap()
-                            })
+                            rt.block_on(drain(
+                                execute_stream(merge, Arc::clone(&task_ctx)).unwrap(),
+                            ))
                         })
                     },
                 );
