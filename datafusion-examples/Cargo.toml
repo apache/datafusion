@@ -53,7 +53,7 @@ dashmap = { workspace = true }
 base64 = "0.22.1"
 datafusion-expr = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
-datafusion-proto = { workspace = true }
+datafusion-proto = { workspace = true, features = ["parquet"] }
 datafusion-sql = { workspace = true }
 env_logger = { workspace = true }
 futures = { workspace = true }
