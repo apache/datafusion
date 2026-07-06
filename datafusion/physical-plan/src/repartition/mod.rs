@@ -19,10 +19,11 @@
 //! partitions to M output partitions based on a partitioning scheme, optionally
 //! maintaining the order of the input rows in the output.
 
+use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::task::{Context, Poll};
 use std::vec;
 
@@ -258,7 +259,7 @@ impl SharedCoalescer {
     /// sender, finalize the coalescer and return its residual batches; if
     /// other senders are still active, return `Ok(None)`.
     fn finalize(&self) -> Result<Vec<RecordBatch>> {
-        let was_last = self.active_senders.fetch_sub(1, Ordering::AcqRel) == 1;
+        let was_last = self.active_senders.fetch_sub(1, AtomicOrdering::AcqRel) == 1;
         if !was_last {
             return Ok(vec![]);
         }
@@ -920,7 +921,6 @@ impl BatchPartitioner {
         row_key_buffer: &mut Vec<ScalarValue>,
         indices: &mut [Vec<u32>],
     ) -> Result<()> {
-        use std::cmp::Ordering;
         let num_rows = arrays.first().map(|a| a.len()).unwrap_or(0);
         for row_idx in 0..num_rows {
             // Note that `extract_row_at_idx_to_buf` clears the `row_key_buffer` on each invocation, creating a new row key for comparison for each row
