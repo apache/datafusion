@@ -281,11 +281,23 @@ impl<K: DFHeapSize, V: DFHeapSize> DFHeapSize for HashMap<K, V> {
     }
 }
 
+fn count_allocation_once(ptr: usize, ctx: &mut DFHeapSizeCtx) -> bool {
+    ctx.seen.insert(ptr)
+}
+
+fn arc_ptr<T>(arc: &Arc<T>) -> usize {
+    Arc::as_ptr(arc) as usize
+}
+
+fn arc_unsized_ptr<T: ?Sized>(arc: &Arc<T>) -> usize {
+    Arc::as_ptr(arc) as *const i32 as usize
+}
+
 impl<T: DFHeapSize> DFHeapSize for Arc<T> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        let ptr = Arc::as_ptr(self) as usize;
+        let ptr = arc_ptr(self);
 
-        if !ctx.seen.insert(ptr) {
+        if !count_allocation_once(ptr, ctx) {
             return 0;
         }
 
@@ -296,9 +308,9 @@ impl<T: DFHeapSize> DFHeapSize for Arc<T> {
 
 impl DFHeapSize for Arc<str> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        let ptr = Arc::as_ptr(self) as *const i32 as usize;
+        let ptr = arc_unsized_ptr(self);
 
-        if !ctx.seen.insert(ptr) {
+        if !count_allocation_once(ptr, ctx) {
             return 0;
         }
 
@@ -309,9 +321,9 @@ impl DFHeapSize for Arc<str> {
 
 impl DFHeapSize for Arc<dyn DFHeapSize> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        let ptr = Arc::as_ptr(self) as *const i32 as usize;
+        let ptr = arc_unsized_ptr(self);
 
-        if !ctx.seen.insert(ptr) {
+        if !count_allocation_once(ptr, ctx) {
             return 0;
         }
 
