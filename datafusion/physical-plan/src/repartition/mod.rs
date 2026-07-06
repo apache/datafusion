@@ -877,29 +877,33 @@ impl BatchPartitioner {
                 } => {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
+                    if split_points.is_empty() {
+                        timer.done();
+                        Box::new(std::iter::once(Ok((0, batch))))
+                    } else {
+                        let arrays = evaluate_expressions_to_arrays(
+                            ordering.iter().map(|e| &e.expr),
+                            &batch,
+                        )?;
 
-                    let arrays = evaluate_expressions_to_arrays(
-                        ordering.iter().map(|e| &e.expr),
-                        &batch,
-                    )?;
+                        indices.iter_mut().for_each(|v| v.clear());
 
-                    indices.iter_mut().for_each(|v| v.clear());
+                        Self::partition_range_indices(
+                            &arrays,
+                            split_points,
+                            sort_options,
+                            partition_buffer,
+                            indices,
+                        )?;
 
-                    Self::partition_range_indices(
-                        &arrays,
-                        split_points,
-                        sort_options,
-                        partition_buffer,
-                        indices,
-                    )?;
+                        // Finished building index-arrays for output partitions
+                        timer.done();
 
-                    // Finished building index-arrays for output partitions
-                    timer.done();
+                        let partitioned_batches =
+                            Self::partition_grouped_take(&batch, indices, &self.timer)?;
 
-                    let partitioned_batches =
-                        Self::partition_grouped_take(&batch, indices, &self.timer)?;
-
-                    Box::new(partitioned_batches.into_iter())
+                        Box::new(partitioned_batches.into_iter())
+                    }
                 }
             };
 
