@@ -172,17 +172,6 @@ impl UnionExec {
             boundedness_from_children(inputs),
         ))
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            inputs: children,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for UnionExec {
@@ -257,6 +246,17 @@ impl ExecutionPlan for UnionExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         check_if_same_properties!(self, children);
         UnionExec::try_new(children)
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            inputs: children,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -527,17 +527,6 @@ impl InterleaveExec {
             boundedness_from_children(inputs),
         ))
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            inputs: children,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for InterleaveExec {
@@ -584,6 +573,17 @@ impl ExecutionPlan for InterleaveExec {
         );
         check_if_same_properties!(self, children);
         Ok(Arc::new(InterleaveExec::try_new(children)?))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            inputs: children,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
