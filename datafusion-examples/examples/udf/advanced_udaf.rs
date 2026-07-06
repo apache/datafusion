@@ -18,7 +18,7 @@
 //! See `main.rs` for how to run it.
 
 use arrow::datatypes::{Field, Schema};
-use datafusion::physical_expr::NullState;
+use datafusion::physical_expr::FlatNullState;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use std::sync::Arc;
 
@@ -215,7 +215,7 @@ struct GeometricMeanGroupsAccumulator {
     prods: Vec<f64>,
 
     /// Track nulls in the input / filters
-    null_state: NullState,
+    null_state: FlatNullState,
 }
 
 impl GeometricMeanGroupsAccumulator {
@@ -225,7 +225,7 @@ impl GeometricMeanGroupsAccumulator {
             return_data_type: DataType::Float64,
             counts: vec![],
             prods: vec![],
-            null_state: NullState::new(),
+            null_state: FlatNullState::new(),
         }
     }
 }
@@ -246,13 +246,17 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         // increment counts, update sums
         self.counts.resize(total_num_groups, 0);
         self.prods.resize(total_num_groups, 1.0);
-        // Use the `NullState` structure to generate specialized code for null / non null input elements
+        // Use the `NullState` structure to generate specialized code for null / non null input elements.
+        // `block_id` is ignored in `value_fn`, because `AvgGroupsAccumulator`
+        // still not support blocked groups.
+        // More details can see `GroupsAccumulator::supports_blocked_groups`.
         self.null_state.accumulate(
             group_indices,
             values,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
+            |_, group_index, new_value| {
+                let group_index = group_index as usize;
                 let prod = &mut self.prods[group_index];
                 *prod = prod.mul_wrapping(new_value);
 
@@ -276,13 +280,16 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         let partial_counts = values[1].as_primitive::<UInt32Type>();
         // update counts with partial counts
         self.counts.resize(total_num_groups, 0);
+        // `block_id` is ignored in `value_fn`, because `AvgGroupsAccumulator`
+        // still not support blocked groups.
+        // More details can see `GroupsAccumulator::supports_blocked_groups`.
         self.null_state.accumulate(
             group_indices,
             partial_counts,
             None,
             total_num_groups,
-            |group_index, partial_count| {
-                self.counts[group_index] += partial_count;
+            |_, group_index, partial_count| {
+                self.counts[group_index as usize] += partial_count;
             },
         );
 
@@ -293,8 +300,8 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
             partial_prods,
             None,
             total_num_groups,
-            |group_index, new_value: <Float64Type as ArrowPrimitiveType>::Native| {
-                let prod = &mut self.prods[group_index];
+            |_, group_index, new_value: <Float64Type as ArrowPrimitiveType>::Native| {
+                let prod = &mut self.prods[group_index as usize];
                 *prod = prod.mul_wrapping(new_value);
             },
         );

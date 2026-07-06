@@ -43,7 +43,8 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::aggregate::avg_distinct::{
     DecimalDistinctAvgAccumulator, Float64DistinctAvgAccumulator,
 };
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::FlatNullState;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
 };
@@ -784,7 +785,7 @@ where
     sums: Vec<T::Native>,
 
     /// Track nulls in the input / filters
-    null_state: NullState,
+    null_state: FlatNullState,
 
     /// Function that computes the final average (value / count)
     avg_fn: F,
@@ -806,7 +807,7 @@ where
             sum_data_type: sum_data_type.clone(),
             counts: vec![],
             sums: vec![],
-            null_state: NullState::new(),
+            null_state: FlatNullState::new(),
             avg_fn,
         }
     }
@@ -830,12 +831,17 @@ where
         // increment counts, update sums
         self.counts.resize(total_num_groups, 0);
         self.sums.resize(total_num_groups, T::default_value());
+
+        // `block_id` is ignored in `value_fn`, because `AvgGroupsAccumulator`
+        // still not support blocked groups.
+        // More details can see `GroupsAccumulator::supports_blocked_groups`.
         self.null_state.accumulate(
             group_indices,
             values,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
+            |_, group_index, new_value| {
+                let group_index = group_index as usize;
                 // SAFETY: group_index is guaranteed to be in bounds
                 let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
                 *sum = sum.add_wrapping(new_value);
@@ -916,28 +922,36 @@ where
         let partial_sums = values[1].as_primitive::<T>();
         // update counts with partial counts
         self.counts.resize(total_num_groups, 0);
+
+        // `block_id` is ignored in `value_fn`, because `AvgGroupsAccumulator`
+        // still not support blocked groups.
+        // More details can see `GroupsAccumulator::supports_blocked_groups`.
         self.null_state.accumulate(
             group_indices,
             partial_counts,
             None,
             total_num_groups,
-            |group_index, partial_count| {
+            |_, group_index, partial_count| {
                 // SAFETY: group_index is guaranteed to be in bounds
-                let count = unsafe { self.counts.get_unchecked_mut(group_index) };
+                let count =
+                    unsafe { self.counts.get_unchecked_mut(group_index as usize) };
                 *count += partial_count;
             },
         );
 
         // update sums
         self.sums.resize(total_num_groups, T::default_value());
+        // `block_id` is ignored in `value_fn`, because `AvgGroupsAccumulator`
+        // still not support blocked groups.
+        // More details can see `GroupsAccumulator::supports_blocked_groups`.
         self.null_state.accumulate(
             group_indices,
             partial_sums,
             None,
             total_num_groups,
-            |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
+            |_, group_index, new_value: <T as ArrowPrimitiveType>::Native| {
                 // SAFETY: group_index is guaranteed to be in bounds
-                let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
+                let sum = unsafe { self.sums.get_unchecked_mut(group_index as usize) };
                 *sum = sum.add_wrapping(new_value);
             },
         );

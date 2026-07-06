@@ -20,7 +20,7 @@ use std::mem::size_of;
 use crate::aggregates::group_values::GroupValues;
 
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
 
@@ -114,6 +114,11 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
                 assert_eq!(0, group_indexes[0]);
 
                 emit_group_values
+            }
+            EmitTo::NextBlock => {
+                return internal_err!(
+                    "group_values_bytes does not support blocked groups"
+                );
             }
         };
 

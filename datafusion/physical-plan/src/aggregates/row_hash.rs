@@ -46,7 +46,7 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryLimit, MemoryReservation};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::expressions::Column;
@@ -67,6 +67,11 @@ pub(crate) enum ExecutionState {
     /// When producing output, the remaining rows to output are stored
     /// here and are sliced off as needed in batch_size chunks
     ProducingOutput(RecordBatch),
+    /// Producing output block by block.
+    ///
+    /// It is the blocked version `ProducingOutput` and will be used
+    /// when blocked optimization is enabled.
+    ProducingBlocks,
     /// Produce intermediate aggregate state for each input row without
     /// aggregation.
     ///
@@ -272,6 +277,35 @@ enum OutOfMemoryMode {
 /// │ 2 │ 2     │ 3.0 │    │ 2 │ 2     │ 3.0 │                   └────────────┘
 /// └─────────────────┘    └─────────────────┘
 /// ```
+///
+/// # Blocked approach for intermediate results
+///
+/// An important optimization for [`group_values`] and [`accumulators`]
+/// is to manage such intermediate results using the blocked approach.
+///
+/// In the original method, intermediate results are managed within a single large block
+/// (can think of it as a Vec).  As this block grows, it often triggers numerous
+/// copies, resulting in poor performance.
+///
+/// In contrast, the blocked approach allocates capacity for the block
+/// based on a predefined block size firstly.
+/// And when the block reaches its limit, we allocate a new block
+/// (also with the same predefined block size based capacity)
+/// instead of expanding the current one and copying the data.
+/// This method eliminates unnecessary copies and significantly improves performance.
+///
+/// You can find some implementation details(like how to locate data in such two approaches)
+/// in [`GroupsAccumulator::supports_blocked_groups`] and [`GroupValues::supports_blocked_groups`].
+///
+/// And for a really detailed introduction to the design of blocked approach, maybe you can see [#7065].
+///
+/// The conditions that trigger the blocked groups optimization can be found in
+/// [`can_enable_blocked_groups`].
+///  
+/// [`group_values`]: Self::group_values
+/// [`accumulators`]: Self::accumulators
+/// [#7065]: <https://github.com/apache/datafusion/issues/7065>
+///
 pub(crate) struct GroupedHashAggregateStream {
     // ========================================================================
     // PROPERTIES:
@@ -357,6 +391,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// current stream.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
+    /// Have we enabled the blocked optimization for group values and accumulators
+    enable_blocked_groups: bool,
+
     // ========================================================================
     // EXECUTION RESOURCES:
     // Fields related to managing execution resources and monitoring performance.
@@ -418,7 +455,7 @@ impl GroupedHashAggregateStream {
         };
 
         // Instantiate the accumulators
-        let accumulators: Vec<_> = aggregate_exprs
+        let mut accumulators: Vec<_> = aggregate_exprs
             .iter()
             .map(create_group_accumulator)
             .collect::<Result<_>>()?;
@@ -490,13 +527,15 @@ impl GroupedHashAggregateStream {
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
         let group_ordering = GroupOrdering::try_new(&agg.input_order_mode)?;
-        let oom_mode = match (agg.mode, &group_ordering) {
+        let no_memory_limit =
+            matches!(context.memory_pool().memory_limit(), MemoryLimit::Infinite);
+        let oom_mode = match (agg.mode, &group_ordering, no_memory_limit) {
             // In partial aggregation mode, always prefer to emit incomplete results early.
-            (AggregateMode::Partial, _) => OutOfMemoryMode::EmitEarly,
+            (AggregateMode::Partial, _, false) => OutOfMemoryMode::EmitEarly,
             // For non-partial aggregation modes, emitting incomplete results is not an option.
             // Instead, use disk spilling to store sorted, incomplete results, and merge them
             // afterwards.
-            (_, GroupOrdering::None | GroupOrdering::Partial(_))
+            (_, GroupOrdering::None | GroupOrdering::Partial(_), false)
                 if context.runtime_env().disk_manager.tmp_files_enabled() =>
             {
                 OutOfMemoryMode::Spill
@@ -508,10 +547,11 @@ impl GroupedHashAggregateStream {
             // Therefore, we fall back to simply reporting the error immediately.
             // This mode will also be used if the `DiskManager` is not configured to allow spilling
             // to disk.
+            // Also if no memory limit in memory pool, but oom happens, it should be an error.
             _ => OutOfMemoryMode::ReportError,
         };
 
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        let mut group_values = new_group_values(group_schema, &group_ordering)?;
         let reservation = MemoryConsumer::new(name)
             // We interpret 'can spill' as 'can handle memory back pressure'.
             // This value needs to be set to true for the default memory pool implementations
@@ -578,6 +618,29 @@ impl GroupedHashAggregateStream {
             None
         };
 
+        // Check if we can enable the blocked optimization for `GroupValues` and `GroupsAccumulator`s.
+        let can_enable_blocked_groups = can_enable_blocked_groups(
+            &group_ordering,
+            &oom_mode,
+            &group_values,
+            &accumulators,
+        );
+
+        let enable_blocked_groups = context
+            .session_config()
+            .options()
+            .execution
+            .enable_aggregation_blocked_groups
+            && can_enable_blocked_groups;
+
+        if enable_blocked_groups {
+            group_values.alter_block_size(Some(batch_size))?;
+            accumulators
+                .iter_mut()
+                .try_for_each(|acc| acc.alter_block_size(Some(batch_size)))?;
+        }
+
+        // Metrics for aggregation stats
         let reduction_factor = if agg.mode == AggregateMode::Partial {
             Some(
                 MetricBuilder::new(&agg.metrics)
@@ -610,6 +673,7 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             skip_aggregation_probe,
+            enable_blocked_groups,
             reduction_factor,
         })
     }
@@ -633,6 +697,35 @@ pub(crate) fn create_group_accumulator(
         let factory = move || agg_expr_captured.create_accumulator();
         Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
     }
+}
+
+/// Check if we can enable the blocked optimization for `GroupValues` and `GroupsAccumulator`s.
+/// The blocked optimization can be enabled when:
+///   - It is not streaming aggregation(because blocked mode can't support Emit::first(exact n))
+///   - The spilling is disabled(still need to consider more to support it efficiently)
+///   - [`GroupValues::supports_blocked_groups`] and all [`GroupsAccumulator::supports_blocked_groups`] are true
+///
+/// [`GroupValues::supports_blocked_groups`]: crate::aggregates::group_values::GroupValues::supports_blocked_groups
+/// [`GroupsAccumulator::supports_blocked_groups`]: datafusion_expr::GroupsAccumulator::supports_blocked_groups
+///
+// TODO: support blocked optimization in streaming, spilling, and maybe empty accumulators case?
+#[expect(clippy::borrowed_box)]
+fn can_enable_blocked_groups(
+    group_ordering: &GroupOrdering,
+    oom_mode: &OutOfMemoryMode,
+    group_values: &Box<dyn GroupValues>,
+    accumulators: &[Box<dyn GroupsAccumulator>],
+) -> bool {
+    if !matches!(group_ordering, GroupOrdering::None)
+        || !matches!(oom_mode, OutOfMemoryMode::ReportError)
+    {
+        return false;
+    }
+
+    let group_values_supports_blocked = group_values.supports_blocked_groups();
+    let accumulators_support_blocked =
+        accumulators.iter().all(|acc| acc.supports_blocked_groups());
+    group_values_supports_blocked && accumulators_support_blocked
 }
 
 impl Stream for GroupedHashAggregateStream {
@@ -811,6 +904,33 @@ impl Stream for GroupedHashAggregateStream {
                     debug_assert!(output_batch.num_rows() > 0);
                     return Poll::Ready(Some(Ok(
                         output_batch.record_output(&self.baseline_metrics)
+                    )));
+                }
+
+                ExecutionState::ProducingBlocks => {
+                    // Try to emit and then:
+                    //   - If found `Err`, throw it, end this stream abnormally
+                    //   - If found `None`, it means all blocks are polled, end this stream normally
+                    //   - If found `Some`, return it and wait next polling
+                    let emit_result = self.emit(EmitTo::NextBlock, false);
+                    let Ok(batch_opt) = emit_result else {
+                        return Poll::Ready(Some(Err(emit_result.unwrap_err())));
+                    };
+
+                    let Some(batch) = batch_opt else {
+                        self.exec_state = if self.input_done {
+                            ExecutionState::Done
+                        } else if self.should_skip_aggregation() {
+                            ExecutionState::SkippingAggregation
+                        } else {
+                            ExecutionState::ReadingInput
+                        };
+                        continue;
+                    };
+
+                    debug_assert!(batch.num_rows() > 0);
+                    return Poll::Ready(Some(Ok(
+                        batch.record_output(&self.baseline_metrics)
                     )));
                 }
 
@@ -1271,12 +1391,21 @@ impl GroupedHashAggregateStream {
         self.exec_state = if self.spill_state.spills.is_empty() {
             // Input has been entirely processed without spilling to disk.
             self.init_empty_grouping_sets()?;
+            if !self.enable_blocked_groups {
+                // Flush any remaining group values.
+                let batch = self.emit(EmitTo::All, false)?;
 
-            // Flush any remaining group values.
-            let batch = self.emit(EmitTo::All, false)?;
-
-            // If there are none, we're done; otherwise switch to emitting them
-            batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
+                // If there are none, we're done; otherwise switch to emitting them
+                batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
+            } else {
+                assert!(can_enable_blocked_groups(
+                    &self.group_ordering,
+                    &self.oom_mode,
+                    &self.group_values,
+                    &self.accumulators
+                ));
+                ExecutionState::ProducingBlocks
+            }
         } else {
             // Spill any remaining data to disk. There is some performance overhead in
             // writing out this last chunk of data and reading it back. The benefit of
@@ -1353,10 +1482,21 @@ impl GroupedHashAggregateStream {
     fn switch_to_skip_aggregation(&mut self) -> Result<Option<ExecutionState>> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut()
             && probe.should_skip()
-            && let Some(batch) = self.emit(EmitTo::All, false)?
         {
-            return Ok(Some(ExecutionState::ProducingOutput(batch)));
-        };
+            if !self.enable_blocked_groups {
+                if let Some(batch) = self.emit(EmitTo::All, false)? {
+                    return Ok(Some(ExecutionState::ProducingOutput(batch)));
+                };
+            } else {
+                assert!(can_enable_blocked_groups(
+                    &self.group_ordering,
+                    &self.oom_mode,
+                    &self.group_values,
+                    &self.accumulators
+                ));
+                return Ok(Some(ExecutionState::ProducingBlocks));
+            }
+        }
 
         Ok(None)
     }

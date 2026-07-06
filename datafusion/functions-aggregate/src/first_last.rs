@@ -437,18 +437,21 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         })
     }
 
-    fn take_orderings(&mut self, emit_to: EmitTo) -> Vec<Vec<ScalarValue>> {
+    fn take_orderings(&mut self, emit_to: EmitTo) -> Result<Vec<Vec<ScalarValue>>> {
         let result = emit_to.take_needed(&mut self.orderings);
 
         match emit_to {
             EmitTo::All => self.size_of_orderings = 0,
             EmitTo::First(_) => {
                 self.size_of_orderings -=
-                    result.iter().map(ScalarValue::size_of_vec).sum::<usize>()
+                    result.iter().map(ScalarValue::size_of_vec).sum::<usize>();
+            }
+            EmitTo::NextBlock => {
+                return internal_err!("first_last does not support blocked groups");
             }
         }
 
-        result
+        Ok(result)
     }
 
     fn resize_states(&mut self, new_size: usize) {
@@ -505,7 +508,7 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
 
         Ok((
             self.state.take(emit_to)?,
-            self.take_orderings(emit_to),
+            self.take_orderings(emit_to)?,
             state::take_need(&mut self.is_sets, emit_to),
         ))
     }

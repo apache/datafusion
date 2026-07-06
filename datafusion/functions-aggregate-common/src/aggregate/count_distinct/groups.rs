@@ -20,8 +20,8 @@ use arrow::array::{
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ArrowPrimitiveType, Field};
-use datafusion_common::HashSet;
 use datafusion_common::hash_utils::RandomState;
+use datafusion_common::{HashSet, internal_err};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 use std::hash::Hash;
 use std::mem::size_of;
@@ -97,6 +97,11 @@ where
                 }
                 self.seen = remaining;
             }
+            EmitTo::NextBlock => {
+                return internal_err!(
+                    "count distinct primitive does not support blocked groups"
+                );
+            }
         }
 
         Ok(Arc::new(Int64Array::from(counts)))
@@ -106,6 +111,11 @@ where
         let num_emitted = match emit_to {
             EmitTo::All => self.counts.len(),
             EmitTo::First(n) => n,
+            EmitTo::NextBlock => {
+                return internal_err!(
+                    "count distinct primitive does not support blocked groups"
+                );
+            }
         };
 
         // Prefix-sum counts[..num_emitted] into offsets

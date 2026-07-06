@@ -305,6 +305,9 @@ pub(crate) fn take_need(
             bool_buf_builder.append_buffer(&bool_buf.slice(n, bool_buf.len() - n));
             first_n
         }
+        EmitTo::NextBlock => {
+            unreachable!("first_last does not support blocked groups")
+        }
     }
 }
 

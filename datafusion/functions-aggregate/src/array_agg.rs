@@ -656,6 +656,9 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         let emit_groups = match emit_to {
             EmitTo::All => self.num_groups,
             EmitTo::First(n) => n,
+            EmitTo::NextBlock => {
+                return internal_err!("array_agg does not support blocked groups");
+            }
         };
 
         // Step 1: Count entries per group. For EmitTo::First(n), only groups
@@ -715,6 +718,9 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         match emit_to {
             EmitTo::All => self.clear_state(),
             EmitTo::First(_) => self.compact_retained_state(emit_groups)?,
+            EmitTo::NextBlock => {
+                return internal_err!("array_agg does not support blocked groups");
+            }
         }
 
         let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
