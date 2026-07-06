@@ -20,13 +20,11 @@ use std::sync::Arc;
 
 use arrow::array::{
     ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-    DurationNanosecondArray, Int8Array, Int16Array, Int64Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, StringArray, StringViewArray,
-    UInt8Array, UInt16Array,
+    Int8Array, Int16Array, Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+    IntervalYearMonthArray, StringArray, StringViewArray, UInt8Array, UInt16Array,
 };
-use arrow::datatypes::{DataType, Field, TimeUnit};
 use arrow::datatypes::{
-    IntervalDayTime, IntervalMonthDayNano, IntervalUnit, Schema, i256,
+    DataType, Field, IntervalDayTime, IntervalMonthDayNano, IntervalUnit, Schema, i256,
 };
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr::function::AccumulatorArgs;
@@ -120,14 +118,6 @@ fn create_decimal256_array(n_distinct: usize) -> Decimal256Array {
 
 /// Creates an Int64Array where values are drawn from `0..n_distinct`.
 fn create_i64_array(n_distinct: usize) -> Int64Array {
-    let mut rng = StdRng::seed_from_u64(42);
-    (0..BATCH_SIZE)
-        .map(|_| Some(rng.random_range(0..n_distinct as i64)))
-        .collect()
-}
-
-/// Creates a `DurationNanosecondArray` where values are drawn from `0..n_distinct`.
-fn create_duration_array(n_distinct: usize) -> DurationNanosecondArray {
     let mut rng = StdRng::seed_from_u64(42);
     (0..BATCH_SIZE)
         .map(|_| Some(rng.random_range(0..n_distinct as i64)))
@@ -235,18 +225,6 @@ fn approx_distinct_benchmark(c: &mut Criterion) {
         c.bench_function(&format!("approx_distinct i64 {pct}% distinct"), |b| {
             b.iter(|| {
                 let mut accumulator = prepare_accumulator(DataType::Int64);
-                accumulator
-                    .update_batch(std::slice::from_ref(&values))
-                    .unwrap()
-            })
-        });
-
-        // --- Duration benchmarks ---
-        let values = Arc::new(create_duration_array(n_distinct)) as ArrayRef;
-        c.bench_function(&format!("approx_distinct duration {pct}% distinct"), |b| {
-            b.iter(|| {
-                let mut accumulator =
-                    prepare_accumulator(DataType::Duration(TimeUnit::Nanosecond));
                 accumulator
                     .update_batch(std::slice::from_ref(&values))
                     .unwrap()
@@ -494,11 +472,6 @@ fn build_grouped_batches(data_type: &DataType) -> Vec<(ArrayRef, Vec<usize>)> {
                         .map(|_| Some(rng.random::<i64>()))
                         .collect::<Int64Array>(),
                 ),
-                DataType::Duration(TimeUnit::Nanosecond) => Arc::new(
-                    (0..BATCH_SIZE)
-                        .map(|_| Some(rng.random::<i64>()))
-                        .collect::<DurationNanosecondArray>(),
-                ),
                 DataType::Utf8 => Arc::new(
                     (0..BATCH_SIZE)
                         .map(|_| Some(pool[rng.random_range(0..pool.len())].as_str()))
@@ -578,7 +551,6 @@ fn approx_distinct_grouped_benchmark(c: &mut Criterion) {
 
     for data_type in [
         DataType::Int64,
-        DataType::Duration(TimeUnit::Nanosecond),
         DataType::Utf8,
         DataType::Utf8View,
         DataType::Decimal32(DECIMAL32_PRECISION, DECIMAL_SCALE),
