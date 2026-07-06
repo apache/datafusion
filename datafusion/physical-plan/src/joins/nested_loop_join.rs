@@ -42,6 +42,7 @@ use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join,
 };
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream,
@@ -60,14 +61,13 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    JoinSide, Result, ScalarValue, Statistics, arrow_err, assert_eq_or_internal_err,
-    internal_datafusion_err, internal_err, project_schema, unwrap_or_internal_err,
+    JoinSide, NullEquality, Result, ScalarValue, Statistics, arrow_err,
+    assert_eq_or_internal_err, internal_datafusion_err, internal_err, project_schema,
+    unwrap_or_internal_err,
 };
-use datafusion_execution::TaskContext;
-use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::{SpillFile, TaskContext};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
@@ -580,17 +580,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
         vec![&self.left, &self.right]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to join filter expressions if present
-        if let Some(filter) = &self.filter {
-            f(filter.expression().as_ref())?;
-        }
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -701,7 +690,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         // NestedLoopJoinExec is designed for joins without equijoin keys in the
         // ON clause (e.g., `t1 JOIN t2 ON (t1.v1 + t2.v1) % 2 = 0`). Any join
         // predicates are stored in `self.filter`, but `estimate_join_statistics`
@@ -711,20 +700,19 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // unknown row counts.
         let join_columns = Vec::new();
 
-        // Left side is always a single partition (Distribution::SinglePartition),
-        // so we always request overall stats with `None`. Right side can have
-        // multiple partitions, so we forward the partition parameter to get
-        // partition-specific statistics when requested.
-        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
-        let right_stats = Arc::unwrap_or_clone(match partition {
-            Some(partition) => self.right.partition_statistics(Some(partition))?,
-            None => self.right.partition_statistics(None)?,
-        });
+        // Left side is always broadcast, so it always needs overall stats
+        let left_stats =
+            Arc::unwrap_or_clone(args.compute_child_statistics(&self.left, None)?);
+        // Right side is partitioned, so it needs per-partition stats
+        let right_stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.right, args.partition())?,
+        );
 
         let stats = estimate_join_statistics(
             left_stats,
             right_stats,
             &join_columns,
+            NullEquality::NullEqualsNothing,
             &self.join_type,
             &self.join_schema,
         )?;
@@ -744,20 +732,23 @@ impl ExecutionPlan for NestedLoopJoinExec {
             return Ok(None);
         }
 
+        // TODO: split by `col`/`JoinSide` instead so mark joins can also push down to children.
         let schema = self.schema();
-        if let Some(JoinData {
-            projected_left_child,
-            projected_right_child,
-            join_filter,
-            ..
-        }) = try_pushdown_through_join(
-            projection,
-            self.left(),
-            self.right(),
-            &[],
-            &schema,
-            self.filter(),
-        )? {
+        if !matches!(self.join_type(), JoinType::LeftMark | JoinType::RightMark)
+            && let Some(JoinData {
+                projected_left_child,
+                projected_right_child,
+                join_filter,
+                ..
+            }) = try_pushdown_through_join(
+                projection,
+                self.left(),
+                self.right(),
+                &[],
+                &schema,
+                self.filter(),
+            )?
+        {
             Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
                 Arc::new(projected_left_child),
                 Arc::new(projected_right_child),
@@ -884,6 +875,16 @@ enum NLJState {
     FetchingRight,
     ProbeRight,
     EmitRightUnmatched,
+    /// Entered exactly once per left chunk, when the probe (right) side is
+    /// exhausted and probing for the current chunk is finished. This state
+    /// owns the single [`JoinLeftData::report_probe_completed`] call that
+    /// decrements the shared probe-threads counter, and records in
+    /// `is_unmatched_left_emitter` whether this stream is the one responsible
+    /// for emitting unmatched-left rows. Splitting this decision out of
+    /// `EmitLeftUnmatched` makes "decrement exactly once" a structural
+    /// property of the state graph, so the (re-enterable) emit state no longer
+    /// has to guard against decrementing twice.
+    ProbeEnd,
     EmitLeftUnmatched,
     /// Emit unmatched right rows using the global bitmap accumulated across
     /// all left chunks. Only used in memory-limited mode for join types that
@@ -901,7 +902,7 @@ pub(crate) struct LeftSpillData {
     /// SpillManager used to read the spill file (has the left schema)
     spill_manager: SpillManager,
     /// The spill file containing all left-side batches
-    spill_file: RefCountedTempFile,
+    spill_file: Arc<dyn SpillFile>,
     /// Left-side schema
     schema: SchemaRef,
 }
@@ -1074,6 +1075,18 @@ pub(crate) struct NestedLoopJoinStream {
 
     /// Memory-limited spill fallback state. See [`SpillState`] for details.
     spill_state: SpillState,
+
+    /// Whether this stream is the one responsible for emitting unmatched-left
+    /// rows for the current left chunk. Set in the [`NLJState::ProbeEnd`] state,
+    /// which is entered exactly once per chunk and owns the single
+    /// [`JoinLeftData::report_probe_completed`] call: the stream that drives the
+    /// shared probe-threads counter to zero (the last to finish probing) becomes
+    /// the emitter. Because the decrement happens once in `ProbeEnd` rather than
+    /// in the re-enterable `EmitLeftUnmatched` state, the counter can never be
+    /// decremented twice, so it cannot reach zero before all partitions finish
+    /// probing (which would otherwise let a partition emit spurious NULL-padded
+    /// unmatched-left rows early).
+    is_unmatched_left_emitter: bool,
 }
 
 pub(crate) struct NestedLoopJoinMetrics {
@@ -1117,13 +1130,16 @@ impl Stream for NestedLoopJoinStream {
     /// BufferingLeft → FetchingRight
     ///
     /// FetchingRight → ProbeRight (if right batch available)
-    /// FetchingRight → EmitLeftUnmatched (if right exhausted)
+    /// FetchingRight → ProbeEnd (if right exhausted)
     ///
     /// ProbeRight → ProbeRight (next left row or after yielding output)
     /// ProbeRight → EmitRightUnmatched (for special join types like right join)
     /// ProbeRight → FetchingRight (done with the current right batch)
     ///
     /// EmitRightUnmatched → FetchingRight
+    ///
+    /// ProbeEnd → EmitLeftUnmatched (records whether this stream is the
+    /// unmatched-left emitter, then always continues to EmitLeftUnmatched)
     ///
     /// EmitLeftUnmatched → EmitLeftUnmatched (only process 1 chunk for each
     /// iteration)
@@ -1160,8 +1176,8 @@ impl Stream for NestedLoopJoinStream {
                 // 1. --> ProbeRight
                 //    Start processing the join for the newly fetched right
                 //    batch.
-                // 2. --> EmitLeftUnmatched: When the right side input is exhausted, (maybe) emit
-                //    unmatched left side rows.
+                // 2. --> ProbeEnd: When the right side input is exhausted,
+                //    probing for the current left chunk is finished.
                 //
                 // After fetching a new batch from the right side, it will
                 // process all rows from the buffered left data:
@@ -1175,9 +1191,10 @@ impl Stream for NestedLoopJoinStream {
                 // at once in memory.
                 //
                 // So after the right side input is exhausted, the join phase
-                // for the current buffered left data is finished. We can go to
-                // the next `EmitLeftUnmatched` phase to check if there is any
-                // special handling (e.g., in cases like left join).
+                // for the current buffered left data is finished. We go to the
+                // `ProbeEnd` state, which records probe completion before the
+                // `EmitLeftUnmatched` phase checks if there is any special
+                // handling (e.g., in cases like left join).
                 NLJState::FetchingRight => {
                     debug!("[NLJState] Entering: {:?}", self.state);
                     // stop on drop
@@ -1233,6 +1250,28 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_emit_right_unmatched() {
+                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Break(poll) => {
+                            return self.metrics.join_metrics.baseline.record_poll(poll);
+                        }
+                    }
+                }
+
+                // NLJState transitions:
+                // 1. --> EmitLeftUnmatched
+                //    Probing for the current left chunk is finished. Report
+                //    probe completion exactly once (decrementing the shared
+                //    probe-threads counter) and record whether this stream is
+                //    the unmatched-left emitter, then always advance to
+                //    `EmitLeftUnmatched`.
+                NLJState::ProbeEnd => {
+                    debug!("[NLJState] Entering: {:?}", self.state);
+
+                    // stop on drop
+                    let join_metric = self.metrics.join_metrics.join_time.clone();
+                    let _join_timer = join_metric.timer();
+
+                    match self.handle_probe_end() {
                         ControlFlow::Continue(()) => continue,
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
@@ -1347,6 +1386,7 @@ impl NestedLoopJoinStream {
             handled_empty_output: false,
             should_track_unmatched_right: need_produce_right_in_final(join_type),
             spill_state,
+            is_unmatched_left_emitter: false,
         }
     }
 
@@ -1540,7 +1580,7 @@ impl NestedLoopJoinStream {
                 Poll::Ready(Ok(spill_data)) => {
                     match spill_data
                         .spill_manager
-                        .read_spill_as_stream(spill_data.spill_file.clone(), None)
+                        .read_spill_as_stream(Arc::clone(&spill_data.spill_file), None)
                     {
                         Ok(stream) => {
                             active.left_schema = Some(Arc::clone(&spill_data.schema));
@@ -1722,7 +1762,10 @@ impl NestedLoopJoinStream {
                 }
                 Some(Err(e)) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
                 None => {
-                    self.state = NLJState::EmitLeftUnmatched;
+                    // Right side exhausted: probing for the current left chunk
+                    // is finished. `ProbeEnd` reports probe completion before
+                    // emitting unmatched-left rows.
+                    self.state = NLJState::ProbeEnd;
                     ControlFlow::Continue(())
                 }
             },
@@ -1835,6 +1878,34 @@ impl NestedLoopJoinStream {
         }
     }
 
+    /// Handle ProbeEnd state - record probe completion for the current chunk.
+    ///
+    /// Entered exactly once per left chunk, when the right side is exhausted.
+    /// This is the single place that decrements the shared probe-threads counter
+    /// via [`JoinLeftData::report_probe_completed`]: the stream that drives the
+    /// counter to zero (the last to finish probing) is the one responsible for
+    /// emitting unmatched-left rows, recorded in `is_unmatched_left_emitter`.
+    ///
+    /// Owning the decrement here — rather than in the re-enterable
+    /// `EmitLeftUnmatched` state — makes "decrement exactly once per stream" a
+    /// structural property of the state graph, so the counter cannot reach zero
+    /// before all partitions finish probing (which would let a partition emit
+    /// spurious NULL-padded unmatched-left rows early).
+    ///
+    /// Always transitions to `EmitLeftUnmatched`.
+    fn handle_probe_end(&mut self) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
+        // Decrement the shared counter exactly once for this stream/chunk. The
+        // last stream to finish probing (the one that drives the counter to
+        // zero) becomes the unmatched-left emitter.
+        let is_emitter = match self.get_left_data() {
+            Ok(left_data) => left_data.report_probe_completed(),
+            Err(e) => return ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+        };
+        self.is_unmatched_left_emitter = is_emitter;
+        self.state = NLJState::EmitLeftUnmatched;
+        ControlFlow::Continue(())
+    }
+
     /// Handle EmitLeftUnmatched state - emit unmatched left rows.
     ///
     /// In memory-limited mode, after processing all unmatched rows for the
@@ -1873,6 +1944,10 @@ impl NestedLoopJoinStream {
                         self.buffered_left_data = None;
                         self.left_probe_idx = 0;
                         self.left_emit_idx = 0;
+                        // Each memory-limited chunk gets a fresh per-chunk
+                        // `JoinLeftData`/counter; `is_unmatched_left_emitter` is
+                        // recomputed when `ProbeEnd` is re-entered for the next
+                        // chunk, so it does not need to be reset here.
                         self.state = NLJState::BufferingLeft;
                     } else if self.is_memory_limited()
                         && self.should_track_unmatched_right
@@ -2360,13 +2435,14 @@ impl NestedLoopJoinStream {
 
         // Early return if join type can't have unmatched rows
         let join_type_no_produce_left = !need_produce_result_in_final(self.join_type);
-        // Early return if another thread is already processing unmatched rows
-        let handled_by_other_partition =
-            self.left_emit_idx == 0 && !left_data.report_probe_completed();
         // Stop processing unmatched rows, the caller will go to the next state
         let finished = self.left_emit_idx >= left_batch.num_rows();
 
-        if join_type_no_produce_left || handled_by_other_partition || finished {
+        // `ProbeEnd` already recorded whether this stream emits unmatched-left
+        // rows. Every probe partition passes through this state, but only the
+        // one that finished probing last is the emitter, so this flag is false
+        // for the others.
+        if join_type_no_produce_left || !self.is_unmatched_left_emitter || finished {
             return Ok(false);
         }
 
@@ -2986,6 +3062,7 @@ fn build_unmatched_batch(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::statistics::StatisticsArgs;
     use crate::test::{TestMemoryExec, assert_join_metrics};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
@@ -3365,7 +3442,7 @@ pub(crate) mod tests {
             &JoinType::Left,
             Some(vec![1, 2]),
         )?;
-        let stats = nested_loop_join.partition_statistics(None)?;
+        let stats = nested_loop_join.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(
             nested_loop_join.schema().fields().len(),
             stats.column_statistics.len(),

@@ -294,9 +294,17 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             // Adjust the loser tree if necessary, returning control if needed
             if !self.loser_tree_adjusted {
                 let winner = self.loser_tree[0];
-                if let Err(e) = ready!(self.maybe_poll_stream(cx, winner)) {
-                    self.done = true;
-                    return Poll::Ready(Some(Err(e)));
+                // Fast path: skip the `maybe_poll_stream` call (and its `Poll`
+                // plumbing) unless the winner's cursor is exhausted and needs a
+                // fresh batch — it is live for almost every row.
+                if self.cursors[winner].is_none() {
+                    match ready!(self.maybe_poll_stream(cx, winner)) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            self.done = true;
+                            return Poll::Ready(Some(Err(e)));
+                        }
+                    }
                 }
                 self.update_loser_tree();
             }
@@ -512,22 +520,33 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         let mut cmp_node = self.lt_leaf_node_index(winner);
 
         // Traverse up the tree to adjust comparisons until reaching the root.
-        while cmp_node != 0 {
+        while cmp_node > 1 {
             let challenger = self.loser_tree[cmp_node];
+            if self.is_gt(winner, challenger) {
+                self.update_winner(cmp_node, &mut winner, challenger);
+            }
+            cmp_node = self.lt_parent_node_index(cmp_node);
+        }
+
+        if cmp_node == 1 {
+            let challenger = self.loser_tree[1];
             // If round-robin tie-breaker is enabled and we're at the final comparison (cmp_node == 1)
-            if self.enable_round_robin_tie_breaker && cmp_node == 1 {
+            if self.enable_round_robin_tie_breaker {
                 match (&self.cursors[winner], &self.cursors[challenger]) {
-                    (Some(ac), Some(bc)) => {
-                        if ac == bc {
+                    (Some(ac), Some(bc)) => match ac.cmp(bc) {
+                        std::cmp::Ordering::Equal => {
                             self.handle_tie(cmp_node, &mut winner, challenger);
-                        } else {
+                        }
+                        std::cmp::Ordering::Greater => {
                             // Ends of tie breaker
                             self.round_robin_tie_breaker_mode = false;
-                            if ac > bc {
-                                self.update_winner(cmp_node, &mut winner, challenger);
-                            }
+                            self.update_winner(cmp_node, &mut winner, challenger);
                         }
-                    }
+                        std::cmp::Ordering::Less => {
+                            // Ends of tie breaker
+                            self.round_robin_tie_breaker_mode = false;
+                        }
+                    },
                     (None, _) => {
                         // Challenger wins, update winner
                         // Ends of tie breaker
@@ -543,8 +562,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             } else if self.is_gt(winner, challenger) {
                 self.update_winner(cmp_node, &mut winner, challenger);
             }
-            cmp_node = self.lt_parent_node_index(cmp_node);
         }
+
         self.loser_tree[0] = winner;
         self.loser_tree_adjusted = true;
     }

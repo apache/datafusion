@@ -192,8 +192,8 @@ logical_plan
 03)----Projection: CAST(CAST(hits_raw.EventDate AS Int32) AS Date32) AS EventDate
 04)------TableScan: hits_raw projection=[EventDate]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[min(hits.EventDate), max(hits.EventDate)]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CAST(CAST(EventDate@5 AS Int32) AS Date32) as EventDate], file_type=parquet
+01)ProjectionExec: expr=[2013-07-15 as min(hits.EventDate), 2013-07-15 as max(hits.EventDate)]
+02)--PlaceholderRowExec
 
 query DD
 SELECT MIN("EventDate"), MAX("EventDate") FROM hits;
@@ -593,8 +593,8 @@ logical_plan
 02)--Projection: hits.SearchPhrase, min(hits.URL), count(Int64(1)) AS count(*) AS c
 03)----Aggregate: groupBy=[[hits.SearchPhrase]], aggr=[[min(hits.URL), count(Int64(1))]]
 04)------SubqueryAlias: hits
-05)--------Filter: hits_raw.URL LIKE Utf8View("%google%") AND hits_raw.SearchPhrase != Utf8View("")
-06)----------TableScan: hits_raw projection=[URL, SearchPhrase], partial_filters=[hits_raw.URL LIKE Utf8View("%google%"), hits_raw.SearchPhrase != Utf8View("")]
+05)--------Filter: hits_raw.SearchPhrase != Utf8View("") AND hits_raw.URL LIKE Utf8View("%google%")
+06)----------TableScan: hits_raw projection=[URL, SearchPhrase], partial_filters=[hits_raw.SearchPhrase != Utf8View(""), hits_raw.URL LIKE Utf8View("%google%")]
 physical_plan
 01)SortPreservingMergeExec: [c@2 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[c@2 DESC], preserve_partitioning=[true]
@@ -602,9 +602,9 @@ physical_plan
 04)------AggregateExec: mode=FinalPartitioned, gby=[SearchPhrase@0 as SearchPhrase], aggr=[min(hits.URL), count(Int64(1))]
 05)--------RepartitionExec: partitioning=Hash([SearchPhrase@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[SearchPhrase@1 as SearchPhrase], aggr=[min(hits.URL), count(Int64(1))]
-07)------------FilterExec: URL@0 LIKE %google% AND SearchPhrase@1 != 
+07)------------FilterExec: SearchPhrase@1 !=  AND URL@0 LIKE %google%
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[URL, SearchPhrase], file_type=parquet, predicate=URL@13 LIKE %google% AND SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@4 != row_count@5 AND (SearchPhrase_min@2 !=  OR  != SearchPhrase_max@3), required_guarantees=[SearchPhrase not in ()]
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[URL, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND URL@13 LIKE %google%, pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query TTI
 SELECT "SearchPhrase", MIN("URL"), COUNT(*) AS c FROM hits WHERE "URL" LIKE '%google%' AND "SearchPhrase" <> '' GROUP BY "SearchPhrase" ORDER BY c DESC LIMIT 10;
@@ -619,8 +619,8 @@ logical_plan
 02)--Projection: hits.SearchPhrase, min(hits.URL), min(hits.Title), count(Int64(1)) AS count(*) AS c, count(DISTINCT hits.UserID)
 03)----Aggregate: groupBy=[[hits.SearchPhrase]], aggr=[[min(hits.URL), min(hits.Title), count(Int64(1)), count(DISTINCT hits.UserID)]]
 04)------SubqueryAlias: hits
-05)--------Filter: hits_raw.Title LIKE Utf8View("%Google%") AND hits_raw.URL NOT LIKE Utf8View("%.google.%") AND hits_raw.SearchPhrase != Utf8View("")
-06)----------TableScan: hits_raw projection=[Title, UserID, URL, SearchPhrase], partial_filters=[hits_raw.Title LIKE Utf8View("%Google%"), hits_raw.URL NOT LIKE Utf8View("%.google.%"), hits_raw.SearchPhrase != Utf8View("")]
+05)--------Filter: hits_raw.SearchPhrase != Utf8View("") AND hits_raw.Title LIKE Utf8View("%Google%") AND hits_raw.URL NOT LIKE Utf8View("%.google.%")
+06)----------TableScan: hits_raw projection=[Title, UserID, URL, SearchPhrase], partial_filters=[hits_raw.SearchPhrase != Utf8View(""), hits_raw.Title LIKE Utf8View("%Google%"), hits_raw.URL NOT LIKE Utf8View("%.google.%")]
 physical_plan
 01)SortPreservingMergeExec: [c@3 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[c@3 DESC], preserve_partitioning=[true]
@@ -628,9 +628,9 @@ physical_plan
 04)------AggregateExec: mode=FinalPartitioned, gby=[SearchPhrase@0 as SearchPhrase], aggr=[min(hits.URL), min(hits.Title), count(Int64(1)), count(DISTINCT hits.UserID)]
 05)--------RepartitionExec: partitioning=Hash([SearchPhrase@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[SearchPhrase@3 as SearchPhrase], aggr=[min(hits.URL), min(hits.Title), count(Int64(1)), count(DISTINCT hits.UserID)]
-07)------------FilterExec: Title@0 LIKE %Google% AND URL@2 NOT LIKE %.google.% AND SearchPhrase@3 != 
+07)------------FilterExec: SearchPhrase@3 !=  AND Title@0 LIKE %Google% AND URL@2 NOT LIKE %.google.%
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[Title, UserID, URL, SearchPhrase], file_type=parquet, predicate=Title@2 LIKE %Google% AND URL@13 NOT LIKE %.google.% AND SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@6 != row_count@7 AND (SearchPhrase_min@4 !=  OR  != SearchPhrase_max@5), required_guarantees=[SearchPhrase not in ()]
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[Title, UserID, URL, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND Title@2 LIKE %Google% AND URL@13 NOT LIKE %.google.%, pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query TTTII
 SELECT "SearchPhrase", MIN("URL"), MIN("Title"), COUNT(*) AS c, COUNT(DISTINCT "UserID") FROM hits WHERE "Title" LIKE '%Google%' AND "URL" NOT LIKE '%.google.%' AND "SearchPhrase" <> '' GROUP BY "SearchPhrase" ORDER BY c DESC LIMIT 10;
@@ -652,7 +652,7 @@ physical_plan
 03)----ProjectionExec: expr=[WatchID@0 as WatchID, JavaEnable@1 as JavaEnable, Title@2 as Title, GoodEvent@3 as GoodEvent, EventTime@4 as EventTime, CounterID@6 as CounterID, ClientIP@7 as ClientIP, RegionID@8 as RegionID, UserID@9 as UserID, CounterClass@10 as CounterClass, OS@11 as OS, UserAgent@12 as UserAgent, URL@13 as URL, Referer@14 as Referer, IsRefresh@15 as IsRefresh, RefererCategoryID@16 as RefererCategoryID, RefererRegionID@17 as RefererRegionID, URLCategoryID@18 as URLCategoryID, URLRegionID@19 as URLRegionID, ResolutionWidth@20 as ResolutionWidth, ResolutionHeight@21 as ResolutionHeight, ResolutionDepth@22 as ResolutionDepth, FlashMajor@23 as FlashMajor, FlashMinor@24 as FlashMinor, FlashMinor2@25 as FlashMinor2, NetMajor@26 as NetMajor, NetMinor@27 as NetMinor, UserAgentMajor@28 as UserAgentMajor, UserAgentMinor@29 as UserAgentMinor, CookieEnable@30 as CookieEnable, JavascriptEnable@31 as JavascriptEnable, IsMobile@32 as IsMobile, MobilePhone@33 as MobilePhone, MobilePhoneModel@34 as MobilePhoneModel, Params@35 as Params, IPNetworkID@36 as IPNetworkID, TraficSourceID@37 as TraficSourceID, SearchEngineID@38 as SearchEngineID, SearchPhrase@39 as SearchPhrase, AdvEngineID@40 as AdvEngineID, IsArtifical@41 as IsArtifical, WindowClientWidth@42 as WindowClientWidth, WindowClientHeight@43 as WindowClientHeight, ClientTimeZone@44 as ClientTimeZone, ClientEventTime@45 as ClientEventTime, SilverlightVersion1@46 as SilverlightVersion1, SilverlightVersion2@47 as SilverlightVersion2, SilverlightVersion3@48 as SilverlightVersion3, SilverlightVersion4@49 as SilverlightVersion4, PageCharset@50 as PageCharset, CodeVersion@51 as CodeVersion, IsLink@52 as IsLink, IsDownload@53 as IsDownload, IsNotBounce@54 as IsNotBounce, FUniqID@55 as FUniqID, OriginalURL@56 as OriginalURL, HID@57 as HID, IsOldCounter@58 as IsOldCounter, IsEvent@59 as IsEvent, IsParameter@60 as IsParameter, DontCountHits@61 as DontCountHits, WithHash@62 as WithHash, HitColor@63 as HitColor, LocalEventTime@64 as LocalEventTime, Age@65 as Age, Sex@66 as Sex, Income@67 as Income, Interests@68 as Interests, Robotness@69 as Robotness, RemoteIP@70 as RemoteIP, WindowName@71 as WindowName, OpenerName@72 as OpenerName, HistoryLength@73 as HistoryLength, BrowserLanguage@74 as BrowserLanguage, BrowserCountry@75 as BrowserCountry, SocialNetwork@76 as SocialNetwork, SocialAction@77 as SocialAction, HTTPError@78 as HTTPError, SendTiming@79 as SendTiming, DNSTiming@80 as DNSTiming, ConnectTiming@81 as ConnectTiming, ResponseStartTiming@82 as ResponseStartTiming, ResponseEndTiming@83 as ResponseEndTiming, FetchTiming@84 as FetchTiming, SocialSourceNetworkID@85 as SocialSourceNetworkID, SocialSourcePage@86 as SocialSourcePage, ParamPrice@87 as ParamPrice, ParamOrderID@88 as ParamOrderID, ParamCurrency@89 as ParamCurrency, ParamCurrencyID@90 as ParamCurrencyID, OpenstatServiceName@91 as OpenstatServiceName, OpenstatCampaignID@92 as OpenstatCampaignID, OpenstatAdID@93 as OpenstatAdID, OpenstatSourceID@94 as OpenstatSourceID, UTMSource@95 as UTMSource, UTMMedium@96 as UTMMedium, UTMCampaign@97 as UTMCampaign, UTMContent@98 as UTMContent, UTMTerm@99 as UTMTerm, FromTag@100 as FromTag, HasGCLID@101 as HasGCLID, RefererHash@102 as RefererHash, URLHash@103 as URLHash, CLID@104 as CLID, CAST(CAST(EventDate@5 AS Int32) AS Date32) as EventDate]
 04)------FilterExec: URL@13 LIKE %google%
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[WatchID, JavaEnable, Title, GoodEvent, EventTime, EventDate, CounterID, ClientIP, RegionID, UserID, CounterClass, OS, UserAgent, URL, Referer, IsRefresh, RefererCategoryID, RefererRegionID, URLCategoryID, URLRegionID, ResolutionWidth, ResolutionHeight, ResolutionDepth, FlashMajor, FlashMinor, FlashMinor2, NetMajor, NetMinor, UserAgentMajor, UserAgentMinor, CookieEnable, JavascriptEnable, IsMobile, MobilePhone, MobilePhoneModel, Params, IPNetworkID, TraficSourceID, SearchEngineID, SearchPhrase, AdvEngineID, IsArtifical, WindowClientWidth, WindowClientHeight, ClientTimeZone, ClientEventTime, SilverlightVersion1, SilverlightVersion2, SilverlightVersion3, SilverlightVersion4, PageCharset, CodeVersion, IsLink, IsDownload, IsNotBounce, FUniqID, OriginalURL, HID, IsOldCounter, IsEvent, IsParameter, DontCountHits, WithHash, HitColor, LocalEventTime, Age, Sex, Income, Interests, Robotness, RemoteIP, WindowName, OpenerName, HistoryLength, BrowserLanguage, BrowserCountry, SocialNetwork, SocialAction, HTTPError, SendTiming, DNSTiming, ConnectTiming, ResponseStartTiming, ResponseEndTiming, FetchTiming, SocialSourceNetworkID, SocialSourcePage, ParamPrice, ParamOrderID, ParamCurrency, ParamCurrencyID, OpenstatServiceName, OpenstatCampaignID, OpenstatAdID, OpenstatSourceID, UTMSource, UTMMedium, UTMCampaign, UTMContent, UTMTerm, FromTag, HasGCLID, RefererHash, URLHash, CLID], file_type=parquet, predicate=URL@13 LIKE %google% AND DynamicFilter [ empty ]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[WatchID, JavaEnable, Title, GoodEvent, EventTime, EventDate, CounterID, ClientIP, RegionID, UserID, CounterClass, OS, UserAgent, URL, Referer, IsRefresh, RefererCategoryID, RefererRegionID, URLCategoryID, URLRegionID, ResolutionWidth, ResolutionHeight, ResolutionDepth, FlashMajor, FlashMinor, FlashMinor2, NetMajor, NetMinor, UserAgentMajor, UserAgentMinor, CookieEnable, JavascriptEnable, IsMobile, MobilePhone, MobilePhoneModel, Params, IPNetworkID, TraficSourceID, SearchEngineID, SearchPhrase, AdvEngineID, IsArtifical, WindowClientWidth, WindowClientHeight, ClientTimeZone, ClientEventTime, SilverlightVersion1, SilverlightVersion2, SilverlightVersion3, SilverlightVersion4, PageCharset, CodeVersion, IsLink, IsDownload, IsNotBounce, FUniqID, OriginalURL, HID, IsOldCounter, IsEvent, IsParameter, DontCountHits, WithHash, HitColor, LocalEventTime, Age, Sex, Income, Interests, Robotness, RemoteIP, WindowName, OpenerName, HistoryLength, BrowserLanguage, BrowserCountry, SocialNetwork, SocialAction, HTTPError, SendTiming, DNSTiming, ConnectTiming, ResponseStartTiming, ResponseEndTiming, FetchTiming, SocialSourceNetworkID, SocialSourcePage, ParamPrice, ParamOrderID, ParamCurrency, ParamCurrencyID, OpenstatServiceName, OpenstatCampaignID, OpenstatAdID, OpenstatSourceID, UTMSource, UTMMedium, UTMCampaign, UTMContent, UTMTerm, FromTag, HasGCLID, RefererHash, URLHash, CLID], file_type=parquet, predicate=URL@13 LIKE %google% AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
 query IITIIIIIIIIITTIIIIIIIIIITIIITIIIITTIIITIIIIIIIIIITIIIIITIIIIIITIIIIIIIIIITTTTIIIIIIIITITTITTTTTTTTTTIIIID
 SELECT * FROM hits WHERE "URL" LIKE '%google%' ORDER BY "EventTime" LIMIT 10;
@@ -675,7 +675,7 @@ physical_plan
 03)----SortExec: TopK(fetch=10), expr=[EventTime@1 ASC NULLS LAST], preserve_partitioning=[true]
 04)------FilterExec: SearchPhrase@1 != , projection=[SearchPhrase@1, EventTime@0]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventTime, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventTime, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query T
 SELECT "SearchPhrase" FROM hits WHERE "SearchPhrase" <> '' ORDER BY "EventTime" LIMIT 10;
@@ -695,7 +695,7 @@ physical_plan
 02)--SortExec: TopK(fetch=10), expr=[SearchPhrase@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----FilterExec: SearchPhrase@0 != 
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query T
 SELECT "SearchPhrase" FROM hits WHERE "SearchPhrase" <> '' ORDER BY "SearchPhrase" LIMIT 10;
@@ -718,7 +718,7 @@ physical_plan
 03)----SortExec: TopK(fetch=10), expr=[EventTime@1 ASC NULLS LAST, SearchPhrase@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------FilterExec: SearchPhrase@1 != , projection=[SearchPhrase@1, EventTime@0]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventTime, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventTime, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query T
 SELECT "SearchPhrase" FROM hits WHERE "SearchPhrase" <> '' ORDER BY "EventTime", "SearchPhrase" LIMIT 10;

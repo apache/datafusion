@@ -61,6 +61,7 @@ const DATAFUSION_TESTING_TEST_DIRECTORY: &str = "../../datafusion-testing/data/"
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 const TPCH_PREFIX: &str = "tpch";
 const SQLITE_PREFIX: &str = "sqlite";
+const ENCRYPTED_PARQUET_FILE: &str = "encrypted_parquet.slt";
 const ERRS_PER_FILE_LIMIT: usize = 10;
 const TIMING_DEBUG_SLOW_FILES_ENV: &str = "SLT_TIMING_DEBUG_SLOW_FILES";
 
@@ -805,6 +806,10 @@ fn read_test_files(options: &Options) -> Result<Vec<TestFile>> {
         .filter(|f| f.is_slt_file())
         .filter(|f| !f.relative_path_starts_with(TPCH_PREFIX) || options.include_tpch)
         .filter(|f| !f.relative_path_starts_with(SQLITE_PREFIX) || options.include_sqlite)
+        .filter(|f| {
+            !f.relative_path_starts_with(ENCRYPTED_PARQUET_FILE)
+                || cfg!(feature = "parquet_encryption")
+        })
         .filter(|f| options.check_pg_compat_file(f.path.as_path()))
         .collect::<Vec<_>>();
 

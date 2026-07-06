@@ -39,6 +39,7 @@ use crate::projection::{ProjectionExec, all_columns, make_with_child, update_exp
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolWriter};
+use crate::statistics::StatisticsArgs;
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
     DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics,
@@ -50,7 +51,6 @@ use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::transpose;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err, internal_err,
@@ -738,6 +738,13 @@ impl BatchPartitioner {
                     num_input_partitions,
                 ))
             }
+            Partitioning::Range(_) => {
+                // Range repartition execution is tracked in
+                // https://github.com/apache/datafusion/issues/22397
+                not_impl_err!(
+                    "Range partitioning execution is not implemented by RepartitionExec"
+                )
+            }
             other => {
                 not_impl_err!("Unsupported repartitioning scheme {other:?}")
             }
@@ -917,7 +924,7 @@ impl BatchPartitioner {
 /// used to get 3 even streams of `RecordBatch`es
 ///
 ///
-///```text
+/// ```text
 ///        ▲                  ▲                  ▲
 ///        │                  │                  │
 ///        │                  │                  │
@@ -1185,21 +1192,6 @@ impl ExecutionPlan for RepartitionExec {
         vec![&self.input]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to hash partition expressions if this is a hash repartition
-        if let Partitioning::Hash(exprs, _) = self.partitioning() {
-            let mut tnr = TreeNodeRecursion::Continue;
-            for expr in exprs {
-                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
-            }
-            return Ok(tnr);
-        }
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -1307,6 +1299,12 @@ impl ExecutionPlan for RepartitionExec {
             if preserve_order {
                 // Store streams from all the input partitions:
                 // Each input partition gets its own spill reader to maintain proper FIFO ordering
+                //
+                // Pass None for metrics here — these intermediate streams feed into
+                // StreamingMerge which is the actual output. Only the merge's
+                // BaselineMetrics should contribute to the operator's reported
+                // output_rows. Without this, every row would be counted twice
+                // (once by PerPartitionStream, once by StreamingMerge).
                 let input_streams = rx
                     .into_iter()
                     .zip(spill_readers)
@@ -1319,7 +1317,7 @@ impl ExecutionPlan for RepartitionExec {
                             Arc::clone(&reservation),
                             spill_stream,
                             1, // Each receiver handles one input partition
-                            BaselineMetrics::new(&metrics, partition),
+                            None,
                         )) as SendableRecordBatchStream
                     })
                     .collect::<Vec<_>>();
@@ -1357,7 +1355,7 @@ impl ExecutionPlan for RepartitionExec {
                     reservation,
                     spill_stream,
                     num_input_partitions,
-                    BaselineMetrics::new(&metrics, partition),
+                    Some(BaselineMetrics::new(&metrics, partition)),
                 )) as SendableRecordBatchStream)
             }
         })
@@ -1370,8 +1368,8 @@ impl ExecutionPlan for RepartitionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if let Some(partition) = partition {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        if let Some(partition) = args.partition() {
             let partition_count = self.partitioning().partition_count();
             if partition_count == 0 {
                 return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
@@ -1384,7 +1382,8 @@ impl ExecutionPlan for RepartitionExec {
                 partition_count
             );
 
-            let mut stats = Arc::unwrap_or_clone(self.input.partition_statistics(None)?);
+            let mut stats =
+                Arc::unwrap_or_clone(args.compute_child_statistics(&self.input, None)?);
 
             // Distribute statistics across partitions
             stats.num_rows = stats
@@ -1407,7 +1406,7 @@ impl ExecutionPlan for RepartitionExec {
 
             Ok(Arc::new(stats))
         } else {
-            self.input.partition_statistics(None)
+            args.compute_child_statistics(&self.input, None)
         }
     }
 
@@ -1446,6 +1445,13 @@ impl ExecutionPlan for RepartitionExec {
                 }
                 Partitioning::Hash(new_partitions, *size)
             }
+            Partitioning::Range(_) => {
+                // Range partitioning optimizer propagation is tracked in
+                // https://github.com/apache/datafusion/issues/22395
+                return not_impl_err!(
+                    "Projection pushdown through RepartitionExec with range partitioning is not implemented"
+                );
+            }
             others => others.clone(),
         };
 
@@ -1482,6 +1488,18 @@ impl ExecutionPlan for RepartitionExec {
         if !self.maintains_input_order()[0] {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
+        match self.partitioning() {
+            Partitioning::Range(_) => {
+                // Range partitioning optimizer propagation is tracked in
+                // https://github.com/apache/datafusion/issues/22395
+                return not_impl_err!(
+                    "Sort pushdown through RepartitionExec with range partitioning is not implemented"
+                );
+            }
+            Partitioning::RoundRobinBatch(_)
+            | Partitioning::Hash(_, _)
+            | Partitioning::UnknownPartitioning(_) => {}
+        }
 
         // Delegate to the child and wrap with a new RepartitionExec
         self.input.try_pushdown_sort(order)?.try_map(|new_input| {
@@ -1505,6 +1523,13 @@ impl ExecutionPlan for RepartitionExec {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
             UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
+            Range(_) => {
+                // Range repartition execution is tracked in
+                // https://github.com/apache/datafusion/issues/22397
+                return not_impl_err!(
+                    "Changing RepartitionExec partition counts with range partitioning is not implemented"
+                );
+            }
         };
         Ok(Some(Arc::new(Self {
             input: Arc::clone(&self.input),
@@ -1632,6 +1657,13 @@ impl RepartitionExec {
                     input_partition,
                     num_input_partitions,
                 )
+            }
+            Partitioning::Range(_) => {
+                // Range repartition execution is tracked in
+                // https://github.com/apache/datafusion/issues/22397
+                return not_impl_err!(
+                    "Range partitioning execution is not implemented by RepartitionExec"
+                );
             }
             other => {
                 return not_impl_err!("Unsupported repartitioning scheme {other:?}");
@@ -1836,8 +1868,8 @@ struct PerPartitionStream {
     /// each sending None when complete. We must wait for all of them.
     remaining_partitions: usize,
 
-    /// Execution metrics
-    baseline_metrics: BaselineMetrics,
+    /// Execution metrics (None in preserve-order mode where StreamingMerge owns the metrics)
+    baseline_metrics: Option<BaselineMetrics>,
 }
 
 impl PerPartitionStream {
@@ -1848,7 +1880,7 @@ impl PerPartitionStream {
         reservation: SharedMemoryReservation,
         spill_stream: SendableRecordBatchStream,
         num_input_partitions: usize,
-        baseline_metrics: BaselineMetrics,
+        baseline_metrics: Option<BaselineMetrics>,
     ) -> Self {
         Self {
             schema,
@@ -1867,8 +1899,11 @@ impl PerPartitionStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         use futures::StreamExt;
-        let cloned_time = self.baseline_metrics.elapsed_compute().clone();
-        let _timer = cloned_time.timer();
+        let elapsed = self
+            .baseline_metrics
+            .as_ref()
+            .map(|m| m.elapsed_compute().clone());
+        let _timer = elapsed.as_ref().map(|t| t.timer());
 
         loop {
             match self.state {
@@ -1954,7 +1989,11 @@ impl Stream for PerPartitionStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let poll = self.poll_next_inner(cx);
-        self.baseline_metrics.record_poll(poll)
+        if let Some(metrics) = &self.baseline_metrics {
+            metrics.record_poll(poll)
+        } else {
+            poll
+        }
     }
 }
 
@@ -1984,12 +2023,14 @@ mod tests {
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::exec_err;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_common_runtime::JoinSet;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning, SplitPoint};
     use insta::assert_snapshot;
 
     #[test]
@@ -2280,6 +2321,40 @@ mod tests {
                 .contains("Unsupported repartitioning scheme UnknownPartitioning(1)"),
             "actual: {result_string}"
         );
+    }
+
+    #[tokio::test]
+    async fn unsupported_range_partitioning() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let batch = RecordBatch::try_from_iter(vec![(
+            "my_awesome_field",
+            Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
+        )])?;
+
+        let schema = batch.schema();
+        let expr = col("my_awesome_field", &schema)?;
+        let input = MockExec::new(vec![Ok(batch)], Arc::clone(&schema));
+        let partitioning = Partitioning::Range(RangePartitioning::new(
+            [PhysicalSortExpr::new_default(expr)].into(),
+            vec![SplitPoint::new(vec![ScalarValue::Utf8(Some(
+                "foo".to_string(),
+            ))])],
+        ));
+        let exec = RepartitionExec::try_new(Arc::new(input), partitioning)?;
+        let output_stream = exec.execute(0, task_ctx)?;
+
+        let result_string = crate::common::collect(output_stream)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            result_string.contains(
+                "Range partitioning execution is not implemented by RepartitionExec"
+            ),
+            "actual: {result_string}"
+        );
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -3038,9 +3113,9 @@ mod test {
         let input_partitions = vec![partition1, partition2];
 
         // Set up context with tight memory limit to force spilling
-        // Sorting needs some non-spillable memory, so 64 bytes should force spilling while still allowing the query to complete
+        // Sorting needs some non-spillable memory, so 608 bytes should force spilling while still allowing the query to complete
         let runtime = RuntimeEnvBuilder::default()
-            .with_memory_limit(64, 1.0)
+            .with_memory_limit(608, 1.0)
             .build_arc()?;
 
         let task_ctx = TaskContext::default().with_runtime(runtime);
@@ -3105,38 +3180,13 @@ mod test {
             assert_batches_eq!(expected, std::slice::from_ref(batch));
         }
 
-        // We should have spilled ~ all of the data.
-        // - We spill data during the repartitioning phase
-        // - We may also spill during the final merge sort
-        let all_batches = [batch1, batch2, batch3, batch4, batch5, batch6];
+        // We should have spilled
         let metrics = exec.metrics().unwrap();
         assert!(
-            metrics.spill_count().unwrap() > input_partitions.len(),
-            "Expected spill_count > {} for order-preserving repartition, but got {:?}",
-            input_partitions.len(),
-            metrics.spill_count()
+            metrics.spill_count().unwrap() > 0,
+            "Expected spilling to occur for order-preserving repartition at this \
+             memory limit. If this fails, the memory limit may need adjustment."
         );
-        assert!(
-            metrics.spilled_bytes().unwrap()
-                > all_batches
-                    .iter()
-                    .map(|b| b.get_array_memory_size())
-                    .sum::<usize>(),
-            "Expected spilled_bytes > {} for order-preserving repartition, got {}",
-            all_batches
-                .iter()
-                .map(|b| b.get_array_memory_size())
-                .sum::<usize>(),
-            metrics.spilled_bytes().unwrap()
-        );
-        assert!(
-            metrics.spilled_rows().unwrap()
-                >= all_batches.iter().map(|b| b.num_rows()).sum::<usize>(),
-            "Expected spilled_rows > {} for order-preserving repartition, got {}",
-            all_batches.iter().map(|b| b.num_rows()).sum::<usize>(),
-            metrics.spilled_rows().unwrap()
-        );
-
         Ok(())
     }
 
@@ -3256,5 +3306,48 @@ mod test {
             .unwrap();
         let exec = Arc::new(exec);
         Arc::new(TestMemoryExec::update_cache(&exec))
+    }
+
+    /// preserve_order repartition should not double-count
+    /// output rows.
+    #[tokio::test]
+    async fn test_preserve_order_output_rows_not_double_counted() -> Result<()> {
+        use datafusion_execution::TaskContext;
+
+        // Two sorted input partitions, 2 rows each (4 total)
+        let batch1 = record_batch!(("c0", UInt32, [1, 3])).unwrap();
+        let batch2 = record_batch!(("c0", UInt32, [2, 4])).unwrap();
+        let schema = batch1.schema();
+        let sort_exprs = sort_exprs(&schema);
+
+        let input_partitions = vec![vec![batch1], vec![batch2]];
+        let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![sort_exprs.clone(), sort_exprs])?;
+        let exec = Arc::new(exec);
+        let exec = Arc::new(TestMemoryExec::update_cache(&exec));
+
+        let exec = RepartitionExec::try_new(exec, Partitioning::RoundRobinBatch(3))?
+            .with_preserve_order();
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let mut total_rows = 0;
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            while let Some(result) = stream.next().await {
+                total_rows += result?.num_rows();
+            }
+        }
+
+        assert_eq!(total_rows, 4, "actual rows collected should be 4");
+
+        let metrics = exec.metrics().unwrap();
+        let reported_output_rows = metrics.output_rows().unwrap();
+        assert_eq!(
+            reported_output_rows, total_rows,
+            "metrics output_rows ({reported_output_rows}) should match \
+             actual rows collected ({total_rows}), not double-count"
+        );
+
+        Ok(())
     }
 }

@@ -37,7 +37,6 @@ use datafusion_common::{
     internal_datafusion_err, not_impl_err,
 };
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
-use datafusion_datasource::TableSchema;
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -45,6 +44,7 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::{
     ObjectWriterBuilder, SharedBuffer, get_writer_schema,
 };
+use datafusion_datasource::{TableSchema, TableSchemaBuilder};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -197,10 +197,9 @@ impl FileFormat for ArrowFormat {
             .object_meta
             .location;
 
-        let table_schema = TableSchema::new(
-            Arc::clone(conf.file_schema()),
-            conf.table_partition_cols().clone(),
-        );
+        let table_schema = TableSchemaBuilder::from(conf.file_schema())
+            .with_table_partition_cols(conf.table_partition_cols().clone())
+            .build();
 
         let mut source: Arc<dyn FileSource> =
             match is_object_in_arrow_ipc_file_format(object_store, object_location).await
@@ -594,7 +593,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
+        fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
             unimplemented!()
         }
 

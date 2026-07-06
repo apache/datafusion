@@ -43,7 +43,7 @@ pub use crate::joins::{JoinOn, JoinOnRef};
 use arrow::array::{
     Array, ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray,
     RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder, UInt64Array,
-    builder::UInt64Builder, downcast_array, new_null_array,
+    builder::UInt64Builder, downcast_array, make_array, new_null_array,
 };
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
@@ -65,6 +65,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
+use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
     not_impl_err, plan_err,
@@ -143,6 +144,13 @@ pub fn adjust_right_output_partitioning(
                 .map(|expr| add_offset_to_expr(Arc::clone(expr), left_columns_len as _))
                 .collect::<Result<_>>()?;
             Partitioning::Hash(new_exprs, *size)
+        }
+        Partitioning::Range(_) => {
+            // Range partitioning optimizer propagation is tracked in
+            // https://github.com/apache/datafusion/issues/22395
+            return not_impl_err!(
+                "Join output partitioning with range partitioning is not implemented"
+            );
         }
         result => result.clone(),
     };
@@ -410,6 +418,7 @@ impl<T> Clone for OnceFut<T> {
 #[derive(Clone, Debug, Default)]
 struct PartialJoinStatistics {
     pub num_rows: usize,
+    pub total_byte_size: Precision<usize>,
     pub column_statistics: Vec<ColumnStatistics>,
 }
 
@@ -423,9 +432,11 @@ struct PartialJoinStatistics {
 ///   column-level statistics (distinct counts, min/max values) of the join keys.
 /// - **Column statistics**: Combines column statistics from both inputs. For join types
 ///   that preserve all columns (Inner, Left, Right, Full), statistics from both sides
-///   are concatenated. For semi/anti joins, only the relevant side's statistics are kept.
-/// - **Byte size**: Always returns `Precision::Absent` as join output size is difficult
-///   to estimate without knowing the actual data.
+///   are concatenated. For semi/anti joins, the preserved side's statistics are
+///   normalized as subset estimates.
+/// - **Byte size**: For semi/anti joins, sums normalized column byte-size estimates
+///   when every output column has one. Other join types return `Precision::Absent`
+///   because join output size is difficult to estimate without knowing the actual data.
 ///
 /// # The `on` Parameter
 ///
@@ -439,24 +450,34 @@ struct PartialJoinStatistics {
 /// - Does not account for selectivity of arbitrary join filter expressions
 ///   (e.g., `(t1.v1 + t2.v1) % 2 = 0`). Such filters, common in NestedLoopJoinExec,
 ///   are not factored into the cardinality estimation.
-/// - Column statistics for the output are simply combined from inputs without
-///   adjusting for join selectivity (acknowledged in the code as needing
-///   "filter selectivity analysis").
+/// - Column statistics for inner/outer joins are simply combined from inputs
+///   without adjusting for join selectivity (acknowledged in the code as
+///   needing "filter selectivity analysis").
 pub(crate) fn estimate_join_statistics(
     left_stats: Statistics,
     right_stats: Statistics,
     on: &JoinOn,
+    null_equality: NullEquality,
     join_type: &JoinType,
     schema: &Schema,
 ) -> Result<Statistics> {
-    let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, on);
-    let (num_rows, column_statistics) = match join_stats {
-        Some(stats) => (Precision::Inexact(stats.num_rows), stats.column_statistics),
-        None => (Precision::Absent, Statistics::unknown_column(schema)),
+    let join_stats =
+        estimate_join_cardinality(join_type, left_stats, right_stats, on, null_equality);
+    let (num_rows, total_byte_size, column_statistics) = match join_stats {
+        Some(stats) => (
+            Precision::Inexact(stats.num_rows),
+            stats.total_byte_size,
+            stats.column_statistics,
+        ),
+        None => (
+            Precision::Absent,
+            Precision::Absent,
+            Statistics::unknown_column(schema),
+        ),
     };
     Ok(Statistics {
         num_rows,
-        total_byte_size: Precision::Absent,
+        total_byte_size,
         column_statistics,
     })
 }
@@ -467,23 +488,24 @@ fn estimate_join_cardinality(
     left_stats: Statistics,
     right_stats: Statistics,
     on: &JoinOn,
+    null_equality: NullEquality,
 ) -> Option<PartialJoinStatistics> {
-    let (left_col_stats, right_col_stats) = on
+    let on_column_indices = on
         .iter()
-        .map(|(left, right)| {
-            match (
-                left.downcast_ref::<Column>(),
-                right.downcast_ref::<Column>(),
-            ) {
-                (Some(left), Some(right)) => (
-                    left_stats.column_statistics[left.index()].clone(),
-                    right_stats.column_statistics[right.index()].clone(),
-                ),
-                _ => (
-                    ColumnStatistics::new_unknown(),
-                    ColumnStatistics::new_unknown(),
-                ),
-            }
+        .map(|(left, right)| equijoin_column_indices(left, right))
+        .collect::<Vec<_>>();
+
+    let (left_key_stats, right_key_stats) = on_column_indices
+        .iter()
+        .map(|indices| match indices {
+            Some((left_index, right_index)) => (
+                left_stats.column_statistics[*left_index].clone(),
+                right_stats.column_statistics[*right_index].clone(),
+            ),
+            None => (
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ),
         })
         .unzip::<_, _, Vec<_>, Vec<_>>();
 
@@ -493,12 +515,12 @@ fn estimate_join_cardinality(
                 Statistics {
                     num_rows: left_stats.num_rows,
                     total_byte_size: Precision::Absent,
-                    column_statistics: left_col_stats,
+                    column_statistics: left_key_stats,
                 },
                 Statistics {
                     num_rows: right_stats.num_rows,
                     total_byte_size: Precision::Absent,
-                    column_statistics: right_col_stats,
+                    column_statistics: right_key_stats,
                 },
             )?;
 
@@ -519,6 +541,7 @@ fn estimate_join_cardinality(
 
             Some(PartialJoinStatistics {
                 num_rows: *cardinality.get_value()?,
+                total_byte_size: Precision::Absent,
                 // We don't do anything specific here, just combine the existing
                 // statistics which might yield subpar results (although it is
                 // true, esp regarding min/max). For a better estimation, we need
@@ -538,42 +561,81 @@ fn estimate_join_cardinality(
             let is_left = matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti);
             let is_anti = matches!(join_type, JoinType::LeftAnti | JoinType::RightAnti);
 
-            let ((outer_stats, inner_stats), (outer_col_stats, inner_col_stats)) =
-                if is_left {
-                    (
-                        (&left_stats, &right_stats),
-                        (&left_col_stats, &right_col_stats),
-                    )
-                } else {
-                    (
-                        (&right_stats, &left_stats),
-                        (&right_col_stats, &left_col_stats),
-                    )
-                };
+            let (outer_stats, inner_stats, outer_key_stats, inner_key_stats) = if is_left
+            {
+                (left_stats, right_stats, left_key_stats, right_key_stats)
+            } else {
+                (right_stats, left_stats, right_key_stats, left_key_stats)
+            };
 
             let outer_rows = *outer_stats.num_rows.get_value()?;
 
-            let cardinality =
-                if estimate_disjoint_inputs(outer_stats, inner_stats).is_some() {
-                    // Disjoint inputs: semi produces 0, anti keeps all rows.
-                    if is_anti { outer_rows } else { 0 }
+            let outer_join_key_stats = Statistics {
+                num_rows: outer_stats.num_rows,
+                total_byte_size: Precision::Absent,
+                column_statistics: outer_key_stats.clone(),
+            };
+            let inner_join_key_stats = Statistics {
+                num_rows: inner_stats.num_rows,
+                total_byte_size: Precision::Absent,
+                column_statistics: inner_key_stats.clone(),
+            };
+
+            let semi_cardinality =
+                if estimate_disjoint_inputs(&outer_join_key_stats, &inner_join_key_stats)
+                    .is_some()
+                {
+                    // If join keys are disjoint, no rows will match
+                    Some(0)
                 } else {
-                    match estimate_semi_join_cardinality(
+                    estimate_semi_join_cardinality(
                         &outer_stats.num_rows,
                         &inner_stats.num_rows,
-                        outer_col_stats,
-                        inner_col_stats,
-                    ) {
-                        Some(semi) if is_anti => outer_rows.saturating_sub(semi),
-                        Some(semi) => semi,
-                        None => outer_rows,
-                    }
+                        &outer_key_stats,
+                        &inner_key_stats,
+                        null_equality,
+                    )
                 };
 
-            let outer_stats = if is_left { left_stats } else { right_stats };
+            // Semi joins keep the matching rows; anti joins keep the rest. When no
+            // estimate is available, conservatively assume all outer rows pass.
+            let cardinality = match (semi_cardinality, is_anti) {
+                (Some(semi), true) => outer_rows.saturating_sub(semi),
+                (Some(semi), false) => semi,
+                (None, _) => outer_rows,
+            };
+
+            // The outer side is the one whose columns a semi/anti join emits, so
+            // its statistics are the ones to normalize into the subset estimate.
+            let Statistics {
+                num_rows: preserved_num_rows,
+                column_statistics: preserved_column_statistics,
+                ..
+            } = outer_stats;
+            let preserved_join_key_indices = on_column_indices
+                .iter()
+                .filter_map(|&indices| {
+                    indices.map(
+                        |(left_index, right_index)| {
+                            if is_left { left_index } else { right_index }
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            let column_statistics = normalize_semi_anti_join_column_statistics(
+                preserved_column_statistics,
+                &preserved_num_rows,
+                cardinality,
+                &preserved_join_key_indices,
+                is_anti,
+                null_equality,
+            );
+            let total_byte_size =
+                total_byte_size_from_column_statistics(&column_statistics);
             Some(PartialJoinStatistics {
                 num_rows: cardinality,
-                column_statistics: outer_stats.column_statistics,
+                total_byte_size,
+                column_statistics,
             })
         }
 
@@ -583,6 +645,7 @@ fn estimate_join_cardinality(
             column_statistics.push(ColumnStatistics::new_unknown());
             Some(PartialJoinStatistics {
                 num_rows,
+                total_byte_size: Precision::Absent,
                 column_statistics,
             })
         }
@@ -592,10 +655,130 @@ fn estimate_join_cardinality(
             column_statistics.push(ColumnStatistics::new_unknown());
             Some(PartialJoinStatistics {
                 num_rows,
+                total_byte_size: Precision::Absent,
                 column_statistics,
             })
         }
     }
+}
+
+fn equijoin_column_indices(
+    left: &PhysicalExprRef,
+    right: &PhysicalExprRef,
+) -> Option<(usize, usize)> {
+    Some((
+        left.downcast_ref::<Column>()?.index(),
+        right.downcast_ref::<Column>()?.index(),
+    ))
+}
+
+/// Adjusts the preserved input's column statistics to describe the subset of
+/// rows a semi or anti join emits. Most values become estimates (marked
+/// inexact) bounded by the smaller output row count:
+///
+/// - `null_count` and `byte_size` are scaled by the output/input row ratio.
+/// - `distinct_count` is capped at the number of non-null output rows.
+/// - `sum_value` is dropped, since the input sum does not apply to the subset.
+///
+/// Join-key columns are the exception for `null_count`: under regular SQL
+/// equality, null keys never match, so a semi join keeps none of those rows and
+/// an anti join keeps all of them. Under null-equal joins, null keys can match
+/// and are treated like the rest of the subset.
+fn normalize_semi_anti_join_column_statistics(
+    column_statistics: Vec<ColumnStatistics>,
+    input_num_rows: &Precision<usize>,
+    output_num_rows: usize,
+    join_key_indices: &[usize],
+    is_anti: bool,
+    null_equality: NullEquality,
+) -> Vec<ColumnStatistics> {
+    let input_num_rows = input_num_rows.get_value().copied().unwrap_or(0);
+
+    column_statistics
+        .into_iter()
+        .enumerate()
+        .map(|(idx, stats)| {
+            let mut stats = stats.to_inexact();
+            stats.null_count = if join_key_indices.contains(&idx) {
+                normalize_semi_anti_join_key_null_count(
+                    stats.null_count,
+                    input_num_rows,
+                    output_num_rows,
+                    is_anti,
+                    null_equality,
+                )
+            } else {
+                scale_subset_count(stats.null_count, input_num_rows, output_num_rows)
+                    .min(&Precision::Inexact(output_num_rows))
+            };
+            let max_distinct_count = stats
+                .null_count
+                .get_value()
+                .map(|null_count| output_num_rows.saturating_sub(*null_count))
+                .unwrap_or(output_num_rows);
+            stats.distinct_count = stats
+                .distinct_count
+                .min(&Precision::Inexact(max_distinct_count));
+            stats.byte_size =
+                scale_subset_count(stats.byte_size, input_num_rows, output_num_rows);
+            stats.sum_value = Precision::Absent;
+            stats
+        })
+        .collect()
+}
+
+fn normalize_semi_anti_join_key_null_count(
+    null_count: Precision<usize>,
+    input_num_rows: usize,
+    output_num_rows: usize,
+    is_anti: bool,
+    null_equality: NullEquality,
+) -> Precision<usize> {
+    match (is_anti, null_equality) {
+        (false, NullEquality::NullEqualsNothing) => Precision::Exact(0),
+        (true, NullEquality::NullEqualsNothing) => null_count
+            .to_inexact()
+            .min(&Precision::Inexact(output_num_rows)),
+        (_, NullEquality::NullEqualsNull) => {
+            scale_subset_count(null_count, input_num_rows, output_num_rows)
+                .min(&Precision::Inexact(output_num_rows))
+        }
+    }
+}
+
+// Scale a column-level count to an estimated row subset. Rounding up keeps a
+// small non-zero count from disappearing solely because the subset is small.
+fn scale_subset_count(
+    count: Precision<usize>,
+    input_num_rows: usize,
+    output_num_rows: usize,
+) -> Precision<usize> {
+    let scaled = match count {
+        Precision::Exact(count) | Precision::Inexact(count) => {
+            if input_num_rows == 0 {
+                0
+            } else {
+                (count as u128 * output_num_rows as u128).div_ceil(input_num_rows as u128)
+                    as usize
+            }
+        }
+        Precision::Absent => return Precision::Absent,
+    };
+
+    Precision::Inexact(scaled)
+}
+
+fn total_byte_size_from_column_statistics(
+    column_statistics: &[ColumnStatistics],
+) -> Precision<usize> {
+    column_statistics
+        .iter()
+        .map(|stats| stats.byte_size.get_value().copied())
+        .try_fold(0usize, |acc, byte_size| {
+            byte_size.map(|byte_size| acc.saturating_add(byte_size))
+        })
+        .map(Precision::Inexact)
+        .unwrap_or(Precision::Absent)
 }
 
 /// Estimate the inner join cardinality by using the basic building blocks of
@@ -622,8 +805,15 @@ fn estimate_inner_join_cardinality(
         ..
     } = right_stats;
 
-    // The algorithm here is partly based on the non-histogram selectivity estimation
-    // from Spark's Catalyst optimizer.
+    if left_num_rows == Precision::Exact(0) || right_num_rows == Precision::Exact(0) {
+        return Some(Precision::Exact(0));
+    }
+    if left_num_rows == Precision::Inexact(0) || right_num_rows == Precision::Inexact(0) {
+        return Some(Precision::Inexact(0));
+    }
+
+    // Follow Spark Catalyst's conservative NDV join estimate: for multi-key
+    // joins, use the most selective key instead of multiplying all key denominators.
     let mut join_selectivity = Precision::Absent;
     for (left_stat, right_stat) in left_column_statistics
         .iter()
@@ -636,7 +826,11 @@ fn estimate_inner_join_cardinality(
             // Seems like there are a few implementations of this algorithm that implement
             // exponential decay for the selectivity (like Hive's Optiq Optimizer). Needs
             // further exploration.
-            join_selectivity = max_distinct;
+            join_selectivity = if join_selectivity.get_value().is_some() {
+                join_selectivity.max(&max_distinct)
+            } else {
+                max_distinct
+            };
         }
     }
 
@@ -721,8 +915,8 @@ fn estimate_disjoint_inputs(
 /// Under the uniformity assumption (each distinct value contributes
 /// equally to row counts), the surviving fraction of outer rows is:
 ///
-/// Null rows cannot match, so each column's selectivity is further
-/// reduced by the outer null fraction:
+/// Under regular SQL equality, null rows cannot match, so each column's
+/// selectivity is further reduced by the outer null fraction:
 ///
 /// ```text
 /// null_frac_i = outer_null_count_i / outer_rows
@@ -739,7 +933,7 @@ fn estimate_disjoint_inputs(
 /// Anti join cardinality is derived as the complement:
 /// `outer_rows - semi_cardinality`.
 ///
-/// Boundary cases:
+/// With `NullEqualsNothing`, boundary cases are:
 /// * `inner_ndv >= outer_ndv` → selectivity = `1.0 - null_frac`
 /// * `null_frac = 1.0` → selectivity = 0.0 (no non-null rows can match)
 /// * Missing NDV statistics → returns `None` (fallback to `outer_rows`)
@@ -752,8 +946,9 @@ fn estimate_disjoint_inputs(
 fn estimate_semi_join_cardinality(
     outer_num_rows: &Precision<usize>,
     inner_num_rows: &Precision<usize>,
-    outer_col_stats: &[ColumnStatistics],
-    inner_col_stats: &[ColumnStatistics],
+    outer_key_stats: &[ColumnStatistics],
+    inner_key_stats: &[ColumnStatistics],
+    null_equality: NullEquality,
 ) -> Option<usize> {
     let outer_rows = *outer_num_rows.get_value()?;
     if outer_rows == 0 {
@@ -767,7 +962,7 @@ fn estimate_semi_join_cardinality(
     let mut selectivity = 1.0_f64;
     let mut has_selectivity_estimate = false;
 
-    for (outer_stat, inner_stat) in outer_col_stats.iter().zip(inner_col_stats.iter()) {
+    for (outer_stat, inner_stat) in outer_key_stats.iter().zip(inner_key_stats.iter()) {
         let outer_has_stats = outer_stat.distinct_count.get_value().is_some()
             || (outer_stat.min_value.get_value().is_some()
                 && outer_stat.max_value.get_value().is_some());
@@ -784,11 +979,21 @@ fn estimate_semi_join_cardinality(
         if let (Some(&o), Some(&i)) = (outer_ndv.get_value(), inner_ndv.get_value())
             && o > 0
         {
-            let null_frac = outer_stat
-                .null_count
-                .get_value()
-                .map(|&nc| nc as f64 / outer_rows as f64)
-                .unwrap_or(0.0);
+            let null_frac = if null_equality == NullEquality::NullEqualsNothing {
+                outer_stat
+                    .null_count
+                    .get_value()
+                    .map(|&nc| {
+                        if nc > outer_rows {
+                            0.0
+                        } else {
+                            nc as f64 / outer_rows as f64
+                        }
+                    })
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
             selectivity *= (o.min(i) as f64) / (o as f64) * (1.0 - null_frac);
             has_selectivity_estimate = true;
         }
@@ -1168,7 +1373,9 @@ pub(crate) fn build_batch_from_indices(
     Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
 }
 
-/// Returns a new [RecordBatch] resulting of a join where the build/left side is empty.
+/// Returns a new [RecordBatch] for a probe batch when no probe row can find a
+/// match: the build-side map is empty, either because the build side has no
+/// rows or because none of its rows has a matchable (non-NULL) join key.
 /// The resulting batch has [Schema] `schema`.
 pub(crate) fn build_batch_empty_build_side(
     schema: &Schema,
@@ -1351,7 +1558,9 @@ pub(crate) fn append_right_indices(
     }
 }
 
-/// Returns `range` indices which are not present in `input_indices`
+/// Returns `range` indices which are not present in `input_indices`.
+///
+/// `input_indices` must be sorted ascending and contain no nulls.
 pub(crate) fn get_anti_indices<T: ArrowPrimitiveType>(
     range: Range<usize>,
     input_indices: &PrimitiveArray<T>,
@@ -1359,18 +1568,51 @@ pub(crate) fn get_anti_indices<T: ArrowPrimitiveType>(
 where
     NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
 {
-    let bitmap = build_range_bitmap(&range, input_indices);
-    let offset = range.start;
+    debug_assert_eq!(
+        input_indices.null_count(),
+        0,
+        "get_anti_indices requires non-null input_indices"
+    );
+    debug_assert!(
+        input_indices
+            .values()
+            .windows(2)
+            .all(|w| w[0].as_usize() <= w[1].as_usize()),
+        "get_anti_indices requires ascending input_indices"
+    );
 
-    // get the anti index
-    (range)
-        .filter_map(|idx| {
-            (!bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
-        })
-        .collect()
+    let mut next_unmatched_idx = range.start;
+    let mut output: Vec<T::Native> = Vec::with_capacity(range.len());
+
+    for &v in input_indices.values() {
+        let idx = v.as_usize();
+
+        if idx < range.start {
+            continue;
+        }
+        if idx >= range.end {
+            break;
+        }
+
+        if next_unmatched_idx < idx {
+            output.extend((next_unmatched_idx..idx).map(|idx| {
+                T::Native::from_usize(idx).expect("join index exceeds output index type")
+            }));
+        }
+        next_unmatched_idx = idx + 1;
+    }
+
+    if next_unmatched_idx < range.end {
+        output.extend((next_unmatched_idx..range.end).map(|idx| {
+            T::Native::from_usize(idx).expect("join index exceeds output index type")
+        }));
+    }
+    PrimitiveArray::<T>::new(output.into(), None)
 }
 
-/// Returns intersection of `range` and `input_indices` omitting duplicates
+/// Returns the intersection of `range` and `input_indices`, omitting duplicates.
+///
+/// `input_indices` must be sorted ascending and contain no nulls.
 pub(crate) fn get_semi_indices<T: ArrowPrimitiveType>(
     range: Range<usize>,
     input_indices: &PrimitiveArray<T>,
@@ -1378,14 +1620,38 @@ pub(crate) fn get_semi_indices<T: ArrowPrimitiveType>(
 where
     NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
 {
-    let bitmap = build_range_bitmap(&range, input_indices);
-    let offset = range.start;
-    // get the semi index
-    (range)
-        .filter_map(|idx| {
-            (bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
-        })
-        .collect()
+    debug_assert_eq!(
+        input_indices.null_count(),
+        0,
+        "get_semi_indices requires non-null input_indices"
+    );
+    debug_assert!(
+        input_indices
+            .values()
+            .windows(2)
+            .all(|w| w[0].as_usize() <= w[1].as_usize()),
+        "get_semi_indices requires ascending input_indices"
+    );
+
+    let mut prev_idx: Option<usize> = None;
+    let mut output = Vec::with_capacity(input_indices.len().min(range.len()));
+
+    for &v in input_indices.values() {
+        let idx = v.as_usize();
+
+        if idx < range.start {
+            continue;
+        }
+        if idx >= range.end {
+            break;
+        }
+
+        if prev_idx.replace(idx) != Some(idx) {
+            output.push(v);
+        }
+    }
+
+    PrimitiveArray::<T>::new(output.into(), None)
 }
 
 pub(crate) fn get_mark_indices<T: ArrowPrimitiveType>(
@@ -1532,9 +1798,8 @@ impl BuildProbeJoinMetrics {
             .with_category(MetricCategory::Rows)
             .counter("build_input_rows", partition);
 
-        let build_mem_used = MetricBuilder::new(metrics)
-            .with_category(MetricCategory::Bytes)
-            .gauge("build_mem_used", partition);
+        let build_mem_used =
+            MetricBuilder::new(metrics).peak_memory_usage("build_mem_used", partition);
 
         let input_batches = MetricBuilder::new(metrics)
             .with_category(MetricCategory::Rows)
@@ -1840,6 +2105,9 @@ pub fn swap_join_projection(
 /// `fifo_hashmap` sets the order of iteration over `batch` rows while updating hashmap,
 /// which allows to keep either first (if set to true) or last (if set to false) row index
 /// as a chain head for rows with equal hash values.
+///
+/// Under [`NullEquality::NullEqualsNothing`], rows with a NULL in any key
+/// column can never match a probe row, so they are not inserted into the map.
 #[expect(clippy::too_many_arguments)]
 pub fn update_hash(
     on: &[PhysicalExprRef],
@@ -1850,6 +2118,7 @@ pub fn update_hash(
     hashes_buffer: &mut [u64],
     deleted_offset: usize,
     fifo_hashmap: bool,
+    null_equality: NullEquality,
 ) -> Result<()> {
     // evaluate the keys
     let keys_values = evaluate_expressions_to_arrays(on, batch)?;
@@ -1860,10 +2129,14 @@ pub fn update_hash(
     // For usual JoinHashmap, the implementation is void.
     hash_map.extend_zero(batch.num_rows());
 
+    // Unmatchable NULL-key rows are filtered out below.
+    let valid_keys = matchable_join_keys(&keys_values, null_equality);
+
     // Updating JoinHashMap from hash values iterator
     let hash_values_iter = hash_values
         .iter()
         .enumerate()
+        .filter(|(i, _)| valid_keys.as_ref().is_none_or(|nulls| nulls.is_valid(*i)))
         .map(|(i, val)| (i + offset, val));
 
     if fifo_hashmap {
@@ -1873,6 +2146,31 @@ pub fn update_hash(
     }
 
     Ok(())
+}
+
+/// Returns the combined validity of the join key columns `join_key_arrays`: a row
+/// is valid only if every key column is non-NULL at that row.
+///
+/// Returns `None` when no rows need to be filtered: either every row has
+/// fully non-NULL keys, or `null_equality` is
+/// [`NullEquality::NullEqualsNull`], where NULL keys are matchable.
+pub(crate) fn matchable_join_keys(
+    join_key_arrays: &[ArrayRef],
+    null_equality: NullEquality,
+) -> Option<NullBuffer> {
+    match null_equality {
+        NullEquality::NullEqualsNothing => {
+            let logical_nulls: Vec<_> = join_key_arrays
+                .iter()
+                .map(|values| values.logical_nulls())
+                .collect();
+            NullBuffer::union_many(logical_nulls.iter().map(Option::as_ref))
+                // An all-valid array can still have a validity buffer; return
+                // `None` in that case, since there is nothing to filter.
+                .filter(|nulls| nulls.null_count() > 0)
+        }
+        NullEquality::NullEqualsNull => None,
+    }
 }
 
 pub(super) fn equal_rows_arr(
@@ -1931,6 +2229,25 @@ fn eq_dyn_null(
         };
         return Ok(compare_op_for_nested(op, &left, &right)?);
     }
+    // Arrow's `eq` / `not_distinct` use IEEE 754 totalOrder semantics for
+    // floats, so `-0.0` and `+0.0` would compare unequal. Normalize float
+    // operands first; non-float types dispatch directly to avoid the
+    // `make_array(to_data())` round-trip.
+    if !matches!(
+        left.data_type(),
+        DataType::Float16 | DataType::Float32 | DataType::Float64
+    ) {
+        return match null_equality {
+            NullEquality::NullEqualsNothing => eq(&left, &right),
+            NullEquality::NullEqualsNull => not_distinct(&left, &right),
+        };
+    }
+    let left_arr: ArrayRef = make_array(left.to_data());
+    let right_arr: ArrayRef = make_array(right.to_data());
+    let left_norm = normalize_float_zero(&left_arr);
+    let right_norm = normalize_float_zero(&right_arr);
+    let left = left_norm.as_ref();
+    let right = right_norm.as_ref();
     match null_equality {
         NullEquality::NullEqualsNothing => eq(&left, &right),
         NullEquality::NullEqualsNull => not_distinct(&left, &right),
@@ -1979,7 +2296,16 @@ impl JoinKeyComparator {
             .zip(right_arrays.iter())
             .zip(sort_options.iter())
             .map(|((l, r), opts)| {
-                let inner = make_comparator(l.as_ref(), r.as_ref(), *opts)?;
+                // `make_comparator` uses IEEE 754 totalOrder for floats and
+                // treats `-0.0` / `+0.0` as distinct. Normalize float arrays
+                // so SMJ / piecewise-merge equi-keys honor SQL equality;
+                // no-op (Arc::clone) for non-floats and for float arrays
+                // that contain no `-0.0`. `normalize_float_zero` preserves
+                // null positions, so the original null masks below remain
+                // valid.
+                let l_norm = normalize_float_zero(l);
+                let r_norm = normalize_float_zero(r);
+                let inner = make_comparator(l_norm.as_ref(), r_norm.as_ref(), *opts)?;
                 if null_equality == NullEquality::NullEqualsNothing {
                     let ln = l.logical_nulls().filter(|n| n.null_count() > 0);
                     let rn = r.logical_nulls().filter(|n| n.null_count() > 0);
@@ -2148,6 +2474,159 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use rstest::rstest;
+
+    fn assert_u32_values(array: &UInt32Array, expected: &[u32]) {
+        assert_eq!(array.values().as_ref(), expected);
+    }
+
+    #[test]
+    fn get_anti_indices_returns_unmatched_range_indices() {
+        let input = UInt32Array::from(vec![3, 5, 5]);
+
+        let result = get_anti_indices(2..8, &input);
+
+        assert_u32_values(&result, &[2, 4, 6, 7]);
+    }
+
+    #[test]
+    fn get_anti_indices_ignores_out_of_range_indices() {
+        let input = UInt32Array::from(vec![0, 1, 3, 5, 8, 12]);
+
+        let result = get_anti_indices(2..8, &input);
+
+        assert_u32_values(&result, &[2, 4, 6, 7]);
+    }
+
+    #[test]
+    fn update_hash_skips_null_keys_for_null_equals_nothing() -> Result<()> {
+        use crate::joins::join_hash_map::JoinHashMapU32;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![
+                Some(1),
+                None,
+                Some(2),
+                None,
+                Some(1),
+            ]))],
+        )?;
+        let on: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("a", 0))];
+        let random_state = RandomState::with_seed(42);
+        let mut hashes_buffer = vec![0; batch.num_rows()];
+        create_hashes([batch.column(0)], &random_state, &mut hashes_buffer)?;
+
+        let matched_build_indices =
+            |map: &JoinHashMapU32, hashes_buffer: &[u64]| -> Vec<u64> {
+                let mut input_indices = vec![];
+                let mut match_indices = vec![];
+                map.get_matched_indices_with_limit_offset(
+                    hashes_buffer,
+                    None,
+                    8192,
+                    (0, None),
+                    &mut input_indices,
+                    &mut match_indices,
+                );
+                match_indices.sort_unstable();
+                match_indices.dedup();
+                match_indices
+            };
+
+        let mut map = JoinHashMapU32::with_capacity(batch.num_rows());
+        update_hash(
+            &on,
+            &batch,
+            &mut map,
+            0,
+            &random_state,
+            &mut hashes_buffer,
+            0,
+            true,
+            NullEquality::NullEqualsNothing,
+        )?;
+        // NULL keys can never match under NullEqualsNothing, so they must not
+        // be inserted into the map. Assert row indices rather than map length:
+        // with forced hash collisions, multiple logical keys can share one
+        // hash table entry.
+        assert_eq!(matched_build_indices(&map, &hashes_buffer), vec![0, 2, 4]);
+
+        let mut map = JoinHashMapU32::with_capacity(batch.num_rows());
+        update_hash(
+            &on,
+            &batch,
+            &mut map,
+            0,
+            &random_state,
+            &mut hashes_buffer,
+            0,
+            true,
+            NullEquality::NullEqualsNull,
+        )?;
+        // Under NullEqualsNull, NULL keys can match, so the build-side NULL
+        // rows must be present in the map.
+        assert_eq!(
+            matched_build_indices(&map, &hashes_buffer),
+            vec![0, 1, 2, 3, 4]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_anti_indices_handles_dense_matches() {
+        let input = UInt32Array::from(vec![2, 3, 4, 5]);
+
+        let result = get_anti_indices(2..6, &input);
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn get_anti_indices_handles_sparse_matches() {
+        let input = UInt32Array::from(vec![0, 8]);
+
+        let result = get_anti_indices(2..6, &input);
+
+        assert_u32_values(&result, &[2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn get_semi_indices_returns_distinct_matches_in_range() {
+        let input = UInt32Array::from(vec![1, 3, 3, 3, 5, 8]);
+
+        let result = get_semi_indices(2..7, &input);
+
+        assert_u32_values(&result, &[3, 5]);
+    }
+
+    #[test]
+    fn get_semi_indices_ignores_out_of_range_indices() {
+        let input = UInt32Array::from(vec![0, 1, 3, 5, 8, 12]);
+
+        let result = get_semi_indices(2..8, &input);
+
+        assert_u32_values(&result, &[3, 5]);
+    }
+
+    #[test]
+    fn get_semi_indices_handles_dense_matches() {
+        let input = UInt32Array::from(vec![2, 3, 4, 5]);
+
+        let result = get_semi_indices(2..6, &input);
+
+        assert_u32_values(&result, &[2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn get_semi_indices_handles_empty_input() {
+        let input = UInt32Array::from(Vec::<u32>::new());
+
+        let result = get_semi_indices(2..6, &input);
+
+        assert!(result.is_empty());
+    }
 
     fn check(
         left: &[Column],
@@ -2568,6 +3047,7 @@ mod tests {
                 create_stats(Some(left_num_rows), left_col_stats.clone(), false),
                 create_stats(Some(right_num_rows), right_col_stats.clone(), false),
                 &join_on,
+                NullEquality::NullEqualsNothing,
             );
 
             assert_eq!(
@@ -2700,6 +3180,7 @@ mod tests {
                 create_stats(Some(1000), left_col_stats.clone(), false),
                 create_stats(Some(2000), right_col_stats.clone(), false),
                 &join_on,
+                NullEquality::NullEqualsNothing,
             )
             .unwrap();
             assert_eq!(partial_join_stats.num_rows, expected_num_rows);
@@ -2708,6 +3189,70 @@ mod tests {
                 [left_col_stats.clone(), right_col_stats.clone()].concat()
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_cardinality_key_order() -> Result<()> {
+        // Reversing join key order should not change estimated cardinality
+        let left_col_stats = vec![
+            create_column_stats(Inexact(0), Inexact(100), Inexact(100), Absent),
+            create_column_stats(Inexact(0), Inexact(500), Inexact(500), Absent),
+            create_column_stats(Inexact(1000), Inexact(10000), Absent, Absent),
+        ];
+
+        let right_col_stats = vec![
+            create_column_stats(Inexact(0), Inexact(100), Inexact(50), Absent),
+            create_column_stats(Inexact(0), Inexact(2000), Inexact(2500), Absent),
+            create_column_stats(Inexact(0), Inexact(100), Absent, Absent),
+        ];
+
+        let join_on_ab = vec![
+            (
+                Arc::new(Column::new("a", 0)) as _,
+                Arc::new(Column::new("c", 0)) as _,
+            ),
+            (
+                Arc::new(Column::new("b", 1)) as _,
+                Arc::new(Column::new("d", 1)) as _,
+            ),
+        ];
+        let join_on_ba = vec![
+            (
+                Arc::new(Column::new("b", 1)) as _,
+                Arc::new(Column::new("d", 1)) as _,
+            ),
+            (
+                Arc::new(Column::new("a", 0)) as _,
+                Arc::new(Column::new("c", 0)) as _,
+            ),
+        ];
+
+        let stats_ab = estimate_join_cardinality(
+            &JoinType::Inner,
+            create_stats(Some(1000), left_col_stats.clone(), false),
+            create_stats(Some(2000), right_col_stats.clone(), false),
+            &join_on_ab,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+        let stats_ba = estimate_join_cardinality(
+            &JoinType::Inner,
+            create_stats(Some(1000), left_col_stats.clone(), false),
+            create_stats(Some(2000), right_col_stats.clone(), false),
+            &join_on_ba,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+
+        assert_eq!(stats_ab.num_rows, 1000);
+        assert_eq!(stats_ba.num_rows, stats_ab.num_rows);
+        assert_eq!(stats_ba.column_statistics, stats_ab.column_statistics);
+        assert_eq!(
+            stats_ab.column_statistics,
+            [left_col_stats, right_col_stats].concat()
+        );
 
         Ok(())
     }
@@ -2771,6 +3316,7 @@ mod tests {
                 create_stats(Some(1000), left_col_stats.clone(), true),
                 create_stats(Some(2000), right_col_stats.clone(), true),
                 &join_on,
+                NullEquality::NullEqualsNothing,
             )
             .unwrap();
             assert_eq!(partial_join_stats.num_rows, expected_num_rows);
@@ -3006,6 +3552,7 @@ mod tests {
                     column_statistics: inner_col_stats,
                 },
                 &join_on,
+                NullEquality::NullEqualsNothing,
             )
             .map(|cardinality| cardinality.num_rows);
 
@@ -3040,6 +3587,7 @@ mod tests {
                 column_statistics: dummy_column_stats.clone(),
             },
             &join_on,
+            NullEquality::NullEqualsNothing,
         );
         assert!(
             absent_outer_estimation.is_none(),
@@ -3059,6 +3607,7 @@ mod tests {
                 column_statistics: dummy_column_stats.clone(),
             },
             &join_on,
+            NullEquality::NullEqualsNothing,
         ).expect("Expected non-empty PartialJoinStatistics for SemiJoin with absent inner num_rows");
 
         assert_eq!(
@@ -3079,6 +3628,7 @@ mod tests {
                 column_statistics: dummy_column_stats,
             },
             &join_on,
+            NullEquality::NullEqualsNothing,
         );
         assert!(
             absent_inner_estimation.is_none(),
@@ -3125,6 +3675,7 @@ mod tests {
                 ],
             },
             &join_on,
+            NullEquality::NullEqualsNothing,
         )
         .map(|c| c.num_rows);
         assert_eq!(result, Some(13), "multi-column semi join");
@@ -3149,6 +3700,7 @@ mod tests {
                 ],
             },
             &join_on,
+            NullEquality::NullEqualsNothing,
         )
         .map(|c| c.num_rows);
         assert_eq!(result, Some(87), "multi-column anti join");
@@ -3176,6 +3728,7 @@ mod tests {
                 ],
             },
             &join_on,
+            NullEquality::NullEqualsNothing,
         )
         .map(|c| c.num_rows);
         assert_eq!(result, Some(50), "mixed stats: col1 skipped");
@@ -3200,6 +3753,7 @@ mod tests {
                 ],
             },
             &join_on,
+            NullEquality::NullEqualsNothing,
         )
         .map(|c| c.num_rows);
         assert_eq!(result, Some(100), "no column has stats on both sides");
@@ -3228,6 +3782,7 @@ mod tests {
                 ],
             },
             &join_on,
+            NullEquality::NullEqualsNothing,
         )
         .map(|c| c.num_rows);
         assert_eq!(
@@ -3237,6 +3792,345 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_semi_anti_join_disjoint_check_uses_only_join_keys() {
+        let join_on = vec![(
+            Arc::new(Column::new("l_key", 0)) as _,
+            Arc::new(Column::new("r_key", 0)) as _,
+        )];
+
+        // Ranges for the join key overlap; ranges for the other column are disjoint
+        let left_stats = Statistics {
+            num_rows: Inexact(50),
+            total_byte_size: Absent,
+            column_statistics: vec![
+                create_column_stats(Inexact(1), Inexact(10), Absent, Absent),
+                create_column_stats(Inexact(100), Inexact(200), Absent, Absent),
+            ],
+        };
+        let right_stats = Statistics {
+            num_rows: Inexact(10),
+            total_byte_size: Absent,
+            column_statistics: vec![
+                create_column_stats(Inexact(1), Inexact(10), Absent, Absent),
+                create_column_stats(Inexact(1000), Inexact(2000), Absent, Absent),
+            ],
+        };
+
+        let left_semi = estimate_join_cardinality(
+            &JoinType::LeftSemi,
+            left_stats.clone(),
+            right_stats.clone(),
+            &join_on,
+            NullEquality::NullEqualsNothing,
+        )
+        .map(|c| c.num_rows);
+        assert_eq!(left_semi, Some(50));
+
+        let left_anti = estimate_join_cardinality(
+            &JoinType::LeftAnti,
+            left_stats,
+            right_stats,
+            &join_on,
+            NullEquality::NullEqualsNothing,
+        )
+        .map(|c| c.num_rows);
+        assert_eq!(left_anti, Some(0));
+    }
+
+    #[test]
+    fn test_semi_join_scales_preserved_column_statistics() {
+        let join_on = vec![(
+            Arc::new(Column::new("l_key", 0)) as _,
+            Arc::new(Column::new("r_key", 0)) as _,
+        )];
+
+        let result = estimate_join_cardinality(
+            &JoinType::LeftSemi,
+            Statistics {
+                num_rows: Inexact(432_187),
+                total_byte_size: Absent,
+                column_statistics: vec![
+                    ColumnStatistics {
+                        null_count: Exact(7_196),
+                        min_value: Exact(ScalarValue::from(1_i64)),
+                        max_value: Exact(ScalarValue::from(432_187_i64)),
+                        sum_value: Absent,
+                        distinct_count: Absent,
+                        byte_size: Exact(3_457_496),
+                    },
+                    ColumnStatistics {
+                        null_count: Exact(7_196),
+                        min_value: Exact(ScalarValue::from(1_i64)),
+                        max_value: Exact(ScalarValue::from(432_187_i64)),
+                        sum_value: Exact(ScalarValue::from(1_000_000_i64)),
+                        distinct_count: Exact(500_000),
+                        byte_size: Exact(3_457_496),
+                    },
+                ],
+            },
+            Statistics {
+                num_rows: Inexact(32),
+                total_byte_size: Absent,
+                column_statistics: vec![create_column_stats(
+                    Inexact(1),
+                    Inexact(32),
+                    Absent,
+                    Absent,
+                )],
+            },
+            &join_on,
+            NullEquality::NullEqualsNothing,
+        )
+        .expect("semi join cardinality should be estimated");
+
+        assert_eq!(result.num_rows, 32);
+        assert_eq!(result.total_byte_size, Inexact(512));
+        assert_eq!(result.column_statistics[0].null_count, Exact(0));
+        assert_eq!(result.column_statistics[0].distinct_count, Absent);
+        assert_eq!(
+            result.column_statistics[0].min_value,
+            Inexact(ScalarValue::from(1_i64))
+        );
+        assert_eq!(
+            result.column_statistics[0].max_value,
+            Inexact(ScalarValue::from(432_187_i64))
+        );
+        assert_eq!(result.column_statistics[0].byte_size, Inexact(256));
+        assert_eq!(result.column_statistics[1].null_count, Inexact(1));
+        // distinct_count is capped at the non-null output rows (32 - 1).
+        assert_eq!(result.column_statistics[1].distinct_count, Inexact(31));
+        assert_eq!(result.column_statistics[1].sum_value, Absent);
+        assert_eq!(result.column_statistics[1].byte_size, Inexact(256));
+    }
+
+    #[test]
+    fn test_semi_join_null_equals_null_scales_join_key_nulls() {
+        let join_on = vec![(
+            Arc::new(Column::new("l_key", 0)) as _,
+            Arc::new(Column::new("r_key", 0)) as _,
+        )];
+
+        let result = estimate_join_cardinality(
+            &JoinType::LeftSemi,
+            Statistics {
+                num_rows: Inexact(100),
+                total_byte_size: Absent,
+                column_statistics: vec![create_column_stats(
+                    Absent,
+                    Absent,
+                    Inexact(100),
+                    Exact(20),
+                )],
+            },
+            Statistics {
+                num_rows: Inexact(10),
+                total_byte_size: Absent,
+                column_statistics: vec![create_column_stats(
+                    Absent,
+                    Absent,
+                    Inexact(10),
+                    Absent,
+                )],
+            },
+            &join_on,
+            NullEquality::NullEqualsNull,
+        )
+        .expect("semi join cardinality should be estimated");
+
+        assert_eq!(result.num_rows, 10);
+        assert_eq!(result.column_statistics[0].null_count, Inexact(2));
+        assert_eq!(result.column_statistics[0].distinct_count, Inexact(8));
+    }
+
+    #[test]
+    fn test_semi_join_total_byte_size_absent_if_any_column_byte_size_absent() {
+        let join_on = vec![(
+            Arc::new(Column::new("l_key", 0)) as _,
+            Arc::new(Column::new("r_key", 0)) as _,
+        )];
+
+        let result = estimate_join_cardinality(
+            &JoinType::LeftSemi,
+            Statistics {
+                num_rows: Inexact(100),
+                total_byte_size: Absent,
+                column_statistics: vec![
+                    ColumnStatistics {
+                        null_count: Exact(0),
+                        min_value: Exact(ScalarValue::from(1_i64)),
+                        max_value: Exact(ScalarValue::from(100_i64)),
+                        sum_value: Absent,
+                        distinct_count: Absent,
+                        byte_size: Exact(800),
+                    },
+                    ColumnStatistics {
+                        null_count: Exact(0),
+                        min_value: Absent,
+                        max_value: Absent,
+                        sum_value: Absent,
+                        distinct_count: Absent,
+                        byte_size: Absent,
+                    },
+                ],
+            },
+            Statistics {
+                num_rows: Inexact(10),
+                total_byte_size: Absent,
+                column_statistics: vec![create_column_stats(
+                    Inexact(1),
+                    Inexact(10),
+                    Absent,
+                    Absent,
+                )],
+            },
+            &join_on,
+            NullEquality::NullEqualsNothing,
+        )
+        .expect("semi join cardinality should be estimated");
+
+        assert_eq!(result.num_rows, 10);
+        assert_eq!(result.total_byte_size, Absent);
+    }
+
+    #[test]
+    fn test_anti_join_preserves_join_key_nulls() {
+        let join_on = vec![(
+            Arc::new(Column::new("l_key", 0)) as _,
+            Arc::new(Column::new("r_key", 0)) as _,
+        )];
+
+        let result = estimate_join_cardinality(
+            &JoinType::LeftAnti,
+            Statistics {
+                num_rows: Inexact(1_000_000),
+                total_byte_size: Absent,
+                column_statistics: vec![create_column_stats(
+                    Absent,
+                    Absent,
+                    Inexact(900_000),
+                    Exact(100_000),
+                )],
+            },
+            Statistics {
+                num_rows: Inexact(900_000),
+                total_byte_size: Absent,
+                column_statistics: vec![create_column_stats(
+                    Absent,
+                    Absent,
+                    Inexact(900_000),
+                    Absent,
+                )],
+            },
+            &join_on,
+            NullEquality::NullEqualsNothing,
+        )
+        .expect("anti join cardinality should be estimated");
+
+        assert_eq!(result.num_rows, 100_000);
+        assert_eq!(result.column_statistics[0].null_count, Inexact(100_000));
+        assert_eq!(result.column_statistics[0].distinct_count, Inexact(0));
+    }
+
+    #[test]
+    fn test_anti_join_null_equals_null_scales_join_key_nulls() {
+        let join_on = vec![(
+            Arc::new(Column::new("l_key", 0)) as _,
+            Arc::new(Column::new("r_key", 0)) as _,
+        )];
+
+        let result = estimate_join_cardinality(
+            &JoinType::LeftAnti,
+            Statistics {
+                num_rows: Inexact(100),
+                total_byte_size: Absent,
+                column_statistics: vec![create_column_stats(
+                    Absent,
+                    Absent,
+                    Inexact(100),
+                    Exact(20),
+                )],
+            },
+            Statistics {
+                num_rows: Inexact(10),
+                total_byte_size: Absent,
+                column_statistics: vec![create_column_stats(
+                    Absent,
+                    Absent,
+                    Inexact(10),
+                    Absent,
+                )],
+            },
+            &join_on,
+            NullEquality::NullEqualsNull,
+        )
+        .expect("anti join cardinality should be estimated");
+
+        assert_eq!(result.num_rows, 90);
+        assert_eq!(result.column_statistics[0].null_count, Inexact(18));
+        assert_eq!(result.column_statistics[0].distinct_count, Inexact(72));
+    }
+
+    #[test]
+    fn test_right_semi_join_scales_preserved_column_statistics() {
+        let join_on = vec![(
+            Arc::new(Column::new("l_key", 0)) as _,
+            Arc::new(Column::new("r_key", 0)) as _,
+        )];
+
+        // For a right semi join the right input is preserved, so its column
+        // statistics (and right join-key index) are the ones normalized.
+        let result = estimate_join_cardinality(
+            &JoinType::RightSemi,
+            Statistics {
+                num_rows: Inexact(32),
+                total_byte_size: Absent,
+                column_statistics: vec![create_column_stats(
+                    Inexact(1),
+                    Inexact(32),
+                    Absent,
+                    Absent,
+                )],
+            },
+            Statistics {
+                num_rows: Inexact(432_187),
+                total_byte_size: Absent,
+                column_statistics: vec![
+                    ColumnStatistics {
+                        null_count: Exact(7_196),
+                        min_value: Exact(ScalarValue::from(1_i64)),
+                        max_value: Exact(ScalarValue::from(432_187_i64)),
+                        sum_value: Absent,
+                        distinct_count: Absent,
+                        byte_size: Exact(3_457_496),
+                    },
+                    ColumnStatistics {
+                        null_count: Exact(7_196),
+                        min_value: Exact(ScalarValue::from(1_i64)),
+                        max_value: Exact(ScalarValue::from(432_187_i64)),
+                        sum_value: Exact(ScalarValue::from(1_000_000_i64)),
+                        distinct_count: Exact(500_000),
+                        byte_size: Exact(3_457_496),
+                    },
+                ],
+            },
+            &join_on,
+            NullEquality::NullEqualsNothing,
+        )
+        .expect("right semi join cardinality should be estimated");
+
+        assert_eq!(result.num_rows, 32);
+        // Join-key column: null counts collapse to exact zero (null keys never match).
+        assert_eq!(result.column_statistics[0].null_count, Exact(0));
+        assert_eq!(result.column_statistics[0].byte_size, Inexact(256));
+        // Non-key column: counts scaled to the subset, sum dropped, distinct
+        // capped at the non-null output rows (32 - 1).
+        assert_eq!(result.column_statistics[1].null_count, Inexact(1));
+        assert_eq!(result.column_statistics[1].distinct_count, Inexact(31));
+        assert_eq!(result.column_statistics[1].sum_value, Absent);
+        assert_eq!(result.column_statistics[1].byte_size, Inexact(256));
     }
 
     #[test]

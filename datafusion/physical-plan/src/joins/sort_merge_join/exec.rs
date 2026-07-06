@@ -38,6 +38,7 @@ use crate::projection::{
     physical_to_column_exprs, update_join_on,
 };
 use crate::spill::spill_manager::SpillManager;
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, SendableRecordBatchStream, Statistics, check_if_same_properties,
@@ -45,7 +46,6 @@ use crate::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err, internal_err,
     plan_err,
@@ -430,8 +430,8 @@ impl ExecutionPlan for SortMergeJoinExec {
             .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
             .unzip();
         vec![
-            Distribution::HashPartitioned(left_expr),
-            Distribution::HashPartitioned(right_expr),
+            Distribution::KeyPartitioned(left_expr),
+            Distribution::KeyPartitioned(right_expr),
         ]
     }
 
@@ -448,23 +448,6 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to join keys from both sides
-        let mut tnr = TreeNodeRecursion::Continue;
-        for (left, right) in &self.on {
-            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
-            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
-        }
-        // Apply to join filter expressions if present
-        if let Some(filter) = &self.filter {
-            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
-        }
-        Ok(tnr)
     }
 
     fn with_new_children(
@@ -581,25 +564,25 @@ impl ExecutionPlan for SortMergeJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         // SortMergeJoinExec uses symmetric hash partitioning where both left and right
         // inputs are hash-partitioned on the join keys. This means partition `i` of the
         // left input is joined with partition `i` of the right input.
         //
-        // Therefore, partition-specific statistics can be computed by getting the
-        // partition-specific statistics from both children and combining them via
-        // `estimate_join_statistics`.
-        //
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(partition)?);
-        let right_stats =
-            Arc::unwrap_or_clone(self.right.partition_statistics(partition)?);
+        let left_stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.left, args.partition())?,
+        );
+        let right_stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.right, args.partition())?,
+        );
         Ok(Arc::new(estimate_join_statistics(
             left_stats,
             right_stats,
             &self.on,
+            self.null_equality,
             &self.join_type,
             &self.schema,
         )?))

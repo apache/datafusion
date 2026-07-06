@@ -1,0 +1,317 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# The sqllogictest harness registers range_partitioned(range_key, non_range_key, value)
+# as a CSV ListingTable with four declared range-partitioned file groups:
+#
+# partition 0: range_key in [..., 10), rows (1, 1, 10), (5, 2, 50)
+# partition 1: range_key in [10, 20), rows (10, 1, 100), (15, 2, 150)
+# partition 2: range_key in [20, 30), rows (20, 1, 200), (25, 2, 250)
+# partition 3: range_key in [30, ...), rows (30, 1, 300), (35, 2, 350)
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+##########
+# TEST 1: Aggregate on Range Partition Column
+# With subset threshold met and preserve-file disabled, Range([range_key])
+# satisfies the aggregate key and avoids repartitioning.
+##########
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 4;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 0;
+
+query TT
+EXPLAIN SELECT range_key, SUM(value) FROM range_partitioned GROUP BY range_key;
+----
+physical_plan
+01)AggregateExec: mode=SinglePartitioned, gby=[range_key@0 as range_key], aggr=[sum(range_partitioned.value)]
+02)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT range_key, SUM(value) FROM range_partitioned GROUP BY range_key ORDER BY range_key;
+----
+1 10
+5 50
+10 100
+15 150
+20 200
+25 250
+30 300
+35 350
+
+
+##########
+# TEST 2: Aggregate on Non-Range Column
+# With subset threshold met and preserve-file disabled, grouping on a non-range
+# key cannot reuse Range([range_key]) and requires hash repartitioning.
+##########
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 4;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 0;
+
+query TT
+EXPLAIN SELECT non_range_key, SUM(value) FROM range_partitioned GROUP BY non_range_key;
+----
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[non_range_key@0 as non_range_key], aggr=[sum(range_partitioned.value)]
+02)--RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[non_range_key@0 as non_range_key], aggr=[sum(range_partitioned.value)]
+04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[non_range_key, value], output_partitioning=UnknownPartitioning(4), file_type=csv, has_header=false
+
+query II
+SELECT non_range_key, SUM(value) FROM range_partitioned GROUP BY non_range_key ORDER BY non_range_key;
+----
+1 610
+2 800
+
+
+##########
+# TEST 3: Aggregate Reuses Range Subset Partitioning
+# With subset threshold met and preserve-file disabled, Range([range_key])
+# satisfies grouping by (range_key, non_range_key).
+##########
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 4;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 0;
+
+query TT
+EXPLAIN SELECT range_key, non_range_key, SUM(value) FROM range_partitioned GROUP BY range_key, non_range_key;
+----
+physical_plan
+01)AggregateExec: mode=SinglePartitioned, gby=[range_key@0 as range_key, non_range_key@1 as non_range_key], aggr=[sum(range_partitioned.value)]
+02)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query III
+SELECT range_key, non_range_key, SUM(value) FROM range_partitioned GROUP BY range_key, non_range_key ORDER BY range_key, non_range_key;
+----
+1 1 10
+5 2 50
+10 1 100
+15 2 150
+20 1 200
+25 2 250
+30 1 300
+35 2 350
+
+
+##########
+# TEST 4: Exact Range Aggregate Below Subset Threshold
+# Even when subset satisfaction is disabled, exact Range([range_key])
+# satisfies GROUP BY range_key when repartitioning would not increase
+# partition count.
+##########
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 5;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 0;
+
+query TT
+EXPLAIN SELECT range_key, SUM(value) FROM range_partitioned GROUP BY range_key;
+----
+physical_plan
+01)AggregateExec: mode=SinglePartitioned, gby=[range_key@0 as range_key], aggr=[sum(range_partitioned.value)]
+02)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+
+##########
+# TEST 5: Range Subset Aggregate Rehashes Below Subset Threshold
+# Range([range_key]) is only a subset of GROUP BY (range_key, non_range_key),
+# so it should not satisfy the aggregate key when subset satisfaction is
+# disabled.
+##########
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 5;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 0;
+
+query TT
+EXPLAIN SELECT range_key, non_range_key, SUM(value) FROM range_partitioned GROUP BY range_key, non_range_key;
+----
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[range_key@0 as range_key, non_range_key@1 as non_range_key], aggr=[sum(range_partitioned.value)]
+02)--RepartitionExec: partitioning=Hash([range_key@0, non_range_key@1], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[range_key@0 as range_key, non_range_key@1 as non_range_key], aggr=[sum(range_partitioned.value)]
+04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+
+##########
+# TEST 6: Aggregate Rehashes Below Subset Threshold
+# With subset threshold 5 and only 4 input partitions, planning repartitions
+# to increase parallelism instead of reusing Range partitioning.
+##########
+
+statement ok
+set datafusion.execution.target_partitions = 5;
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 5;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 0;
+
+query TT
+EXPLAIN SELECT range_key, SUM(value) FROM range_partitioned GROUP BY range_key;
+----
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[range_key@0 as range_key], aggr=[sum(range_partitioned.value)]
+02)--RepartitionExec: partitioning=Hash([range_key@0], 5), input_partitions=5
+03)----AggregateExec: mode=Partial, gby=[range_key@0 as range_key], aggr=[sum(range_partitioned.value)]
+04)------RepartitionExec: partitioning=RoundRobinBatch(5), input_partitions=4
+05)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.optimizer.subset_repartition_threshold;
+
+
+##########
+# TEST 7: Aggregate Preserves Range When Preserve File Threshold Met
+# With preserve-file threshold 1 and 4 input partitions, Range is preserved
+# even though target_partitions is 5.
+##########
+
+statement ok
+set datafusion.execution.target_partitions = 5;
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 4;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 1;
+
+query TT
+EXPLAIN SELECT range_key, SUM(value) FROM range_partitioned GROUP BY range_key;
+----
+physical_plan
+01)AggregateExec: mode=SinglePartitioned, gby=[range_key@0 as range_key], aggr=[sum(range_partitioned.value)]
+02)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.optimizer.preserve_file_partitions;
+
+
+##########
+# TEST 8: Aggregate Rehashes When Preserve File Threshold Not Met
+# With preserve-file threshold 5 and only 4 input partitions, planning can
+# repartition to increase parallelism.
+##########
+
+statement ok
+set datafusion.execution.target_partitions = 5;
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 4;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 5;
+
+query TT
+EXPLAIN SELECT range_key, SUM(value) FROM range_partitioned GROUP BY range_key;
+----
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[range_key@0 as range_key], aggr=[sum(range_partitioned.value)]
+02)--RepartitionExec: partitioning=Hash([range_key@0], 5), input_partitions=5
+03)----AggregateExec: mode=Partial, gby=[range_key@0 as range_key], aggr=[sum(range_partitioned.value)]
+04)------RepartitionExec: partitioning=RoundRobinBatch(5), input_partitions=4
+05)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.optimizer.preserve_file_partitions;
+
+
+##########
+# TEST 9: Join on Range Partition Column
+# Both inputs expose Range partitioning on range_key. Join planning currently
+# reaches the unsupported Range output-partitioning path; later optimizer PRs
+# can replace this baseline with a successful plan and result test.
+##########
+
+query error This feature is not implemented: Join output partitioning with range partitioning is not implemented
+SELECT l.range_key, l.value, r.value
+FROM range_partitioned l
+JOIN range_partitioned r ON l.range_key = r.range_key;
+
+##########
+# TEST 10: Union of Range Partitioned Inputs
+# Each input exposes Range partitioning on range_key. This records current
+# UNION ALL behavior before later PRs decide whether compatible range inputs can
+# preserve Range partitioning across the union.
+##########
+
+query TT
+EXPLAIN SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned;
+----
+physical_plan
+01)UnionExec
+02)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+03)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned
+ORDER BY range_key, value;
+----
+1 10
+1 10
+5 50
+5 50
+10 100
+10 100
+15 150
+15 150
+20 200
+20 200
+25 250
+25 250
+30 300
+30 300
+35 350
+35 350
+
+statement ok
+reset datafusion.explain.physical_plan_only;

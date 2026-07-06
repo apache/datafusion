@@ -137,6 +137,12 @@ select array_compact(arrow_cast([NULL, NULL, NULL], 'List(Int64)'));
 ----
 []
 
+# all nulls with untyped NULLs (List(Null) inner values are a NullArray)
+query ?
+select array_compact(make_array(NULL, NULL, NULL));
+----
+[]
+
 # empty array
 query ?
 select array_compact([]);
@@ -166,6 +172,17 @@ query ?
 select array_compact([make_array(1, 2), NULL, make_array(3, 4)]);
 ----
 [[1, 2], [3, 4]]
+
+# nested array of all-null inner lists: outer elements are non-null, kept as-is
+query ?
+select array_compact(make_array(make_array(NULL, NULL, NULL), make_array(NULL, NULL)));
+----
+[[NULL, NULL, NULL], [NULL, NULL]]
+
+query ?
+select array_compact(make_array(make_array(NULL, NULL, NULL), make_array(NULL, NULL, NULL)));
+----
+[[NULL, NULL, NULL], [NULL, NULL, NULL]]
 
 # LargeList
 query ?
@@ -209,6 +226,48 @@ query ?
 select array_compact(arrow_cast(make_array(NULL, NULL, NULL), 'FixedSizeList(3, Int64)'));
 ----
 []
+
+# Negative zero (-0.0) and positive zero (+0.0) compare equal under
+# IEEE 754, but their bit patterns differ. array_distinct must normalize
+# the sign so the canonical representative (+0.0) is used; otherwise
+# group-by / dedup hashing on the raw bits keeps both as distinct
+# elements. PostgreSQL / IEEE 754 expected output below.
+
+# array_distinct collapses +0.0 and -0.0 into a single element.
+query ?
+select array_distinct([0.0, -0.0]);
+----
+[0.0]
+
+# General case with extra elements.
+query ?
+select array_distinct([0.0, -0.0, 0.0, 1.0, -0.0]);
+----
+[0.0, 1.0]
+
+# array_length(array_distinct(...)) for {+0.0, -0.0, +0.0} must be 1.
+query I
+select array_length(array_distinct([0.0, -0.0, 0.0]));
+----
+1
+
+# Float32 list.
+query ?
+select array_distinct(arrow_cast([0.0, -0.0], 'List(Float32)'));
+----
+[0.0]
+
+# LargeList(Float64).
+query ?
+select array_distinct(arrow_cast([0.0, -0.0], 'LargeList(Float64)'));
+----
+[0.0]
+
+# FixedSizeList(Float64).
+query ?
+select array_distinct(arrow_cast([0.0, -0.0], 'FixedSizeList(2, Float64)'));
+----
+[0.0]
 
 
 include ./cleanup.slt.part

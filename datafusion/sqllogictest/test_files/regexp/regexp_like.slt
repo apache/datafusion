@@ -168,6 +168,16 @@ SELECT 'foo\nbar\nbaz' ~ 'bar';
 ----
 true
 
+query B
+SELECT regexp_like(E'a\nb', '^b', 'm');
+----
+true
+
+query B
+SELECT regexp_like(E'a\nb', '^b');
+----
+false
+
 statement error
 Error during planning: Cannot infer common argument type for regex operation List(Field { name: "item", data_type: Int64, nullable: true, metadata: {} }) ~ List(Field { name: "item", data_type: Int64, nullable: true, metadata: {} })
 select [1,2] ~ [3];

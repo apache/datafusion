@@ -56,8 +56,7 @@ fn init() {
 
 #[test]
 fn recursive_cte_with_nested_subquery() -> Result<()> {
-    // Covers bailout path in `plan_contains_other_subqueries`, ensuring nested subqueries
-    // within recursive CTE branches prevent projection pushdown.
+    // projection optimization is applied to recursive CTEs even with nested subqueries
     let sql = r#"
         WITH RECURSIVE numbers(id, level) AS (
             SELECT sub.id, sub.level FROM (
@@ -75,21 +74,20 @@ fn recursive_cte_with_nested_subquery() -> Result<()> {
 
     assert_snapshot!(
         format!("{plan}"),
-        @r"
+        @"
     SubqueryAlias: numbers
-      Projection: sub.id AS id, sub.level AS level
-        RecursiveQuery: is_distinct=false
-          Projection: sub.id, sub.level
-            SubqueryAlias: sub
-              Projection: test.col_int32 AS id, Int64(1) AS level
-                TableScan: test
-          Projection: t.col_int32, numbers.level + Int64(1)
-            Inner Join: CAST(t.col_int32 AS Int64) = CAST(numbers.id AS Int64) + Int64(1)
-              SubqueryAlias: t
-                Filter: CAST(test.col_int32 AS Int64) IS NOT NULL
-                  TableScan: test
-              Filter: CAST(numbers.id AS Int64) + Int64(1) IS NOT NULL
-                TableScan: numbers
+      RecursiveQuery: is_distinct=false
+        Projection: sub.id AS id, sub.level AS level
+          SubqueryAlias: sub
+            Projection: test.col_int32 AS id, Int64(1) AS level
+              TableScan: test projection=[col_int32]
+        Projection: t.col_int32, numbers.level + Int64(1)
+          Inner Join: CAST(t.col_int32 AS Int64) = CAST(numbers.id AS Int64) + Int64(1)
+            SubqueryAlias: t
+              Filter: CAST(test.col_int32 AS Int64) IS NOT NULL
+                TableScan: test projection=[col_int32]
+            Filter: CAST(numbers.id AS Int64) + Int64(1) IS NOT NULL
+              TableScan: numbers projection=[id, level]
     "
     );
 
@@ -527,12 +525,10 @@ fn select_correlated_predicate_subquery_with_uppercase_ident() {
     "
     );
 }
-
 #[test]
-fn recursive_cte_projection_pushdown() -> Result<()> {
-    // Test that projection pushdown works with recursive CTEs by ensuring
-    // only the required columns are projected from the base table, even when
-    // the CTE definition includes unused columns
+fn recursive_cte_outer_projection_pushdown() -> Result<()> {
+    // projection optimization of a recursive CTE based on the outer query's projected columns is
+    // not done as this can lead to bugs (see: https://github.com/apache/datafusion/issues/22249).
     let sql = "WITH RECURSIVE nodes AS (\
         SELECT col_int32 AS id, col_utf8 AS name, col_uint32 AS extra FROM test \
         UNION ALL \
@@ -540,18 +536,19 @@ fn recursive_cte_projection_pushdown() -> Result<()> {
     ) SELECT id FROM nodes";
     let plan = test_sql(sql)?;
 
-    // The optimizer successfully performs projection pushdown by only selecting the needed
-    // columns from the base table and recursive table, eliminating unused columns
+    // col_int32, col_utf8, and col_uint32 and projected from test since they are used in the
+    // recursive CTE, even though the outer query only requires col_int32
     assert_snapshot!(
         format!("{plan}"),
         @r"
     SubqueryAlias: nodes
-      RecursiveQuery: is_distinct=false
-        Projection: test.col_int32 AS id
-          TableScan: test projection=[col_int32]
-        Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32)
-          Filter: nodes.id < Int32(3)
-            TableScan: nodes projection=[id]
+      Projection: id
+        RecursiveQuery: is_distinct=false
+          Projection: test.col_int32 AS id, test.col_utf8 AS name, test.col_uint32 AS extra
+            TableScan: test projection=[col_int32, col_uint32, col_utf8]
+          Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32), nodes.name, nodes.extra
+            Filter: nodes.id < Int32(3)
+              TableScan: nodes projection=[id, name, extra]
     "
     );
     Ok(())
@@ -570,43 +567,15 @@ fn recursive_cte_with_aliased_self_reference() -> Result<()> {
         format!("{plan}"),
         @r"
     SubqueryAlias: nodes
-      RecursiveQuery: is_distinct=false
-        Projection: test.col_int32 AS id
-          TableScan: test projection=[col_int32]
-        Projection: CAST(CAST(child.id AS Int64) + Int64(1) AS Int32)
-          SubqueryAlias: child
-            Filter: nodes.id < Int32(3)
-              TableScan: nodes projection=[id]
+      Projection: id
+        RecursiveQuery: is_distinct=false
+          Projection: test.col_int32 AS id, test.col_utf8 AS name
+            TableScan: test projection=[col_int32, col_utf8]
+          Projection: CAST(CAST(child.id AS Int64) + Int64(1) AS Int32), child.name
+            SubqueryAlias: child
+              Filter: nodes.id < Int32(3)
+                TableScan: nodes projection=[id, name]
     ",
-    );
-    Ok(())
-}
-
-#[test]
-fn recursive_cte_with_unused_columns() -> Result<()> {
-    // Test projection pushdown with a recursive CTE where the base case
-    // includes columns that are never used in the recursive part or final result
-    let sql = "WITH RECURSIVE series AS (\
-        SELECT 1 AS n, col_utf8, col_uint32, col_date32 FROM test WHERE col_int32 = 1 \
-        UNION ALL \
-        SELECT n + 1, col_utf8, col_uint32, col_date32 FROM series WHERE n < 3\
-    ) SELECT n FROM series";
-    let plan = test_sql(sql)?;
-
-    // The optimizer successfully performs projection pushdown by eliminating unused columns
-    // even when they're defined in the CTE but not actually needed
-    assert_snapshot!(
-        format!("{plan}"),
-        @r"
-    SubqueryAlias: series
-      RecursiveQuery: is_distinct=false
-        Projection: Int64(1) AS n
-          Filter: test.col_int32 = Int32(1)
-            TableScan: test projection=[col_int32]
-        Projection: series.n + Int64(1)
-          Filter: series.n < Int64(3)
-            TableScan: series projection=[n]
-    "
     );
     Ok(())
 }
@@ -824,10 +793,9 @@ fn extension_node_does_not_block_projection_pruning() -> Result<()> {
     OpaqueRequirementsExtension
       Sort: t.a ASC NULLS FIRST, t.ts ASC NULLS FIRST
         Projection: t.a, CAST(t.ts AS Timestamp(ms, "UTC")) AS ts
-          Projection: t.a, t.ts
-            Filter: __common_expr_3 > TimestampMillisecond(1000, Some("UTC")) AND __common_expr_3 < TimestampMillisecond(2000, Some("UTC"))
-              Projection: CAST(t.ts AS Timestamp(ms, "UTC")) AS __common_expr_3, t.a, t.ts
-                TableScan: t projection=[a, ts], partial_filters=[t.ts > TimestampNanosecond(1000000000, None), t.ts < TimestampNanosecond(2000000000, None), CAST(t.ts AS Timestamp(ms, "UTC")) > TimestampMillisecond(1000, Some("UTC")), CAST(t.ts AS Timestamp(ms, "UTC")) < TimestampMillisecond(2000, Some("UTC"))]
+          Filter: __common_expr_3 > TimestampMillisecond(1000, Some("UTC")) AND __common_expr_3 < TimestampMillisecond(2000, Some("UTC"))
+            Projection: CAST(t.ts AS Timestamp(ms, "UTC")) AS __common_expr_3, t.a, t.ts
+              TableScan: t projection=[a, ts], partial_filters=[CAST(t.ts AS Timestamp(ms, "UTC")) > TimestampMillisecond(1000, Some("UTC")), CAST(t.ts AS Timestamp(ms, "UTC")) < TimestampMillisecond(2000, Some("UTC"))]
     "#,
     );
 
@@ -882,7 +850,7 @@ impl ContextProvider for MyContextProvider {
     fn get_higher_order_meta(
         &self,
         _name: &str,
-    ) -> Option<Arc<dyn datafusion_expr::HigherOrderUDF>> {
+    ) -> Option<Arc<datafusion_expr::HigherOrderUDF>> {
         None
     }
 

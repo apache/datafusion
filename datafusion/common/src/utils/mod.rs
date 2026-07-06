@@ -395,6 +395,137 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     count
 }
 
+/// Splits `vec` at index `n`, returning the first `n` elements and leaving the
+/// remaining `vec.len() - n` elements in `vec`.
+///
+/// Allocates for whichever side is smaller, so the new allocation is
+/// `min(n, vec.len() - n)` rather than always `n` (as `vec.drain(0..n).collect()`
+/// would). This matters when the split emits a prefix under memory pressure,
+/// where `n` can be close to `vec.len()`.
+pub fn split_vec_min_alloc<T>(vec: &mut Vec<T>, n: usize) -> Vec<T> {
+    if n * 2 <= vec.len() {
+        vec.drain(0..n).collect()
+    } else {
+        let remaining = vec.split_off(n);
+        std::mem::replace(vec, remaining)
+    }
+}
+
+#[cfg(test)]
+mod split_vec_min_alloc_tests {
+    use super::split_vec_min_alloc;
+
+    #[test]
+    fn drain_branch() {
+        // n * 2 <= len  ->  drain+collect branch (allocates n elements)
+        let mut v = vec![1, 2, 3, 4, 5, 6];
+        let first = split_vec_min_alloc(&mut v, 2);
+        assert_eq!(first, vec![1, 2]);
+        assert_eq!(v, vec![3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn split_off_branch() {
+        // remaining < n  ->  split_off+replace branch (allocates remaining elements)
+        let mut v = vec![1, 2, 3, 4, 5, 6];
+        let first = split_vec_min_alloc(&mut v, 4);
+        assert_eq!(first, vec![1, 2, 3, 4]);
+        assert_eq!(v, vec![5, 6]);
+    }
+
+    #[test]
+    fn exactly_half() {
+        // n * 2 == len  ->  drain branch (boundary)
+        let mut v = vec![1, 2, 3, 4];
+        let first = split_vec_min_alloc(&mut v, 2);
+        assert_eq!(first, vec![1, 2]);
+        assert_eq!(v, vec![3, 4]);
+    }
+
+    #[test]
+    fn take_all() {
+        let mut v = vec![1, 2, 3];
+        let first = split_vec_min_alloc(&mut v, 3);
+        assert_eq!(first, vec![1, 2, 3]);
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn take_none() {
+        let mut v = vec![1, 2, 3];
+        let first = split_vec_min_alloc(&mut v, 0);
+        assert!(first.is_empty());
+        assert_eq!(v, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn emitted_prefix_does_not_realloc_on_push() {
+        // Demonstrates *why* the split-off branch must NOT call `shrink_to_fit`.
+        //
+        // Downstream callers (e.g. `multi_group_by/bytes.rs`, which does
+        // `first_n_offsets.push(offset_n)` right after the split) push onto the
+        // emitted prefix immediately. The split-off branch hands the original
+        // backing allocation to that prefix, so the prefix already has spare
+        // capacity for the very next push.
+        //
+        // If we shrank the prefix to fit, that next push would have to
+        // reallocate, and Vec's growth strategy would land it at a *larger*
+        // capacity than the original allocation we started with -- the opposite
+        // of the memory saving `shrink_to_fit` was meant to deliver.
+
+        // A Vec with a known, deliberately large capacity. n*2 > len, so this
+        // takes the split-off branch.
+        let mut v: Vec<u32> = Vec::with_capacity(64);
+        v.extend(0..10);
+        let original_capacity = v.capacity();
+        assert!(original_capacity >= 64);
+
+        // Emit a prefix that is most of the Vec (n = 8, remaining = 2).
+        let mut prefix = split_vec_min_alloc(&mut v, 8);
+        assert_eq!(prefix, vec![0, 1, 2, 3, 4, 5, 6, 7]);
+
+        // The split-off branch moved the original backing store into `prefix`,
+        // so it keeps the original (large) capacity -- no shrink happened.
+        assert_eq!(
+            prefix.capacity(),
+            original_capacity,
+            "split-off branch must hand the original allocation to the prefix"
+        );
+
+        // The caller's very next operation: push one element onto the prefix.
+        prefix.push(99);
+
+        // Because the capacity was preserved, the push reused the existing
+        // allocation: post-push capacity is unchanged and still <= original.
+        // This is the realloc that `shrink_to_fit` would have forced.
+        assert_eq!(
+            prefix.capacity(),
+            original_capacity,
+            "push must reuse the preserved allocation (no realloc)"
+        );
+        assert!(prefix.capacity() <= original_capacity);
+
+        // Counter-demonstration: had we shrunk the prefix to fit (capacity 8),
+        // the same push would have reallocated. Vec doubles on growth, so the
+        // post-push capacity (16) ends up LARGER than where a length-8 prefix
+        // started -- and we paid a realloc for it.
+        let mut shrunk: Vec<u32> = prefix[..8].to_vec();
+        shrunk.shrink_to_fit();
+        let shrunk_capacity = shrink_then_push_capacity(&mut shrunk);
+        assert!(
+            shrunk_capacity > 8,
+            "shrink-to-fit then push reallocates to a larger capacity"
+        );
+    }
+
+    /// Helper for the counter-demonstration above: push one element and report
+    /// the resulting capacity.
+    fn shrink_then_push_capacity(v: &mut Vec<u32>) -> usize {
+        v.push(99);
+        v.capacity()
+    }
+}
+
 /// Creates single element [`ListArray`], [`LargeListArray`] and
 /// [`FixedSizeListArray`] from other arrays
 ///
@@ -1255,6 +1386,95 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
     Ok(PrimitiveArray::new(rows_number.into(), None))
 }
 
+/// Replace `-0.0` with `+0.0` in any `Float16`, `Float32`, or `Float64` array.
+/// For non-float arrays returns the input unchanged. NaN payloads are
+/// preserved.
+///
+/// Arrow's comparison kernels (`arrow::compute::kernels::cmp::eq` etc.) and
+/// row-encoding (`arrow::row::RowConverter`) use IEEE 754 totalOrder
+/// semantics, which treats `-0.0` and `+0.0` as distinct. SQL semantics
+/// (PostgreSQL / IEEE 754 equality) require them to compare equal, so
+/// callers normalize before invoking those kernels.
+///
+/// The common case - no `-0.0` present - is allocation-free: a single
+/// read-only scan of the underlying buffer (auto-vectorizable to an
+/// OR-reduction) decides whether to fall through to the rewriting path.
+/// Only arrays that actually contain `-0.0` pay for a new buffer.
+pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
+    use arrow::array::{Float16Array, Float32Array, Float64Array};
+    use arrow::datatypes::{Float16Type, Float32Type, Float64Type};
+    // -0.0 has only the sign bit set; no other finite or NaN value shares
+    // this bit pattern, so a strict-equality scan reliably gates the rewrite.
+    const NEG_ZERO_F16_BITS: u16 = half::f16::NEG_ZERO.to_bits();
+    const NEG_ZERO_F32_BITS: u32 = (-0.0_f32).to_bits();
+    const NEG_ZERO_F64_BITS: u64 = (-0.0_f64).to_bits();
+    match array.data_type() {
+        DataType::Float32 => {
+            let arr: &Float32Array = array.as_primitive::<Float32Type>();
+            if !arr
+                .values()
+                .iter()
+                .any(|v| v.to_bits() == NEG_ZERO_F32_BITS)
+            {
+                return Arc::clone(array);
+            }
+            let normalized: Float32Array =
+                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f32 } else { v });
+            Arc::new(normalized)
+        }
+        DataType::Float64 => {
+            let arr: &Float64Array = array.as_primitive::<Float64Type>();
+            if !arr
+                .values()
+                .iter()
+                .any(|v| v.to_bits() == NEG_ZERO_F64_BITS)
+            {
+                return Arc::clone(array);
+            }
+            let normalized: Float64Array =
+                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f64 } else { v });
+            Arc::new(normalized)
+        }
+        DataType::Float16 => {
+            let arr: &Float16Array = array.as_primitive::<Float16Type>();
+            if !arr
+                .values()
+                .iter()
+                .any(|v| v.to_bits() == NEG_ZERO_F16_BITS)
+            {
+                return Arc::clone(array);
+            }
+            let normalized: Float16Array = arr.unary(|v| {
+                if v.to_bits() << 1 == 0 {
+                    half::f16::from_bits(0)
+                } else {
+                    v
+                }
+            });
+            Arc::new(normalized)
+        }
+        _ => Arc::clone(array),
+    }
+}
+
+/// Replace `-0.0` with `+0.0` in `Float16`, `Float32`, or `Float64` scalar
+/// values. Other variants are returned unchanged. See [`normalize_float_zero`]
+/// for context.
+pub fn normalize_float_zero_scalar(scalar: ScalarValue) -> ScalarValue {
+    match scalar {
+        ScalarValue::Float32(Some(v)) if v.to_bits() << 1 == 0 => {
+            ScalarValue::Float32(Some(0.0))
+        }
+        ScalarValue::Float64(Some(v)) if v.to_bits() << 1 == 0 => {
+            ScalarValue::Float64(Some(0.0))
+        }
+        ScalarValue::Float16(Some(v)) if v.to_bits() << 1 == 0 => {
+            ScalarValue::Float16(Some(half::f16::from_bits(0)))
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1266,6 +1486,7 @@ mod tests {
         buffer::NullBuffer,
         datatypes::Int32Type,
     };
+    #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
 
     #[test]

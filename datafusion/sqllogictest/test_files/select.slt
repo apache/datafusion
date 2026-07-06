@@ -960,6 +960,12 @@ physical_plan
 01)ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN Int64(2) AND Int64(3)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+# regression test: full i64 BETWEEN bounds should not overflow
+query I
+SELECT * FROM (VALUES (1)) AS t(x)
+WHERE x BETWEEN -9223372036854775808 AND 9223372036854775807
+----
+1
 
 # TODO: query_get_indexed_field
 
@@ -1181,7 +1187,7 @@ SELECT * FROM empty_table
 statement ok
 CREATE TABLE case_sensitive_table("INT32" int) AS VALUES (1), (2), (3), (4), (5);
 
-statement error DataFusion error: Schema error: No field named int32\. Valid fields are case_sensitive_table\."INT32"\.
+statement error DataFusion error: Schema error: No field named int32\. Did you mean 'case_sensitive_table\."INT32"'\?\nColumn names are case sensitive\. You can use double quotes to refer to the case_sensitive_table\."INT32" column or disable the datafusion\.sql_parser\.enable_ident_normalization configuration\.\nValid fields are case_sensitive_table\."INT32"\.
 select "int32" from case_sensitive_table
 
 query I
@@ -1585,15 +1591,14 @@ WHERE CAST(ROUND(b) as INT) = a
 ORDER BY CAST(ROUND(b) as INT);
 ----
 logical_plan
-01)Sort: CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) ASC NULLS LAST
-02)--Filter: CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) = annotated_data_finite2.a
-03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) = annotated_data_finite2.a]
+01)Sort: CAST(round(annotated_data_finite2.b) AS Int32) ASC NULLS LAST
+02)--Filter: CAST(round(annotated_data_finite2.b) AS Int32) = annotated_data_finite2.a
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[CAST(round(annotated_data_finite2.b) AS Int32) = annotated_data_finite2.a]
 physical_plan
-01)SortPreservingMergeExec: [CAST(round(CAST(b@2 AS Float64)) AS Int32) ASC NULLS LAST]
-02)--FilterExec: CAST(round(CAST(b@2 AS Float64)) AS Int32) = a@1
+01)SortPreservingMergeExec: [round(b@2) ASC NULLS LAST]
+02)--FilterExec: round(b@2) = a@1
 03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
-
 
 statement ok
 drop table annotated_data_finite2;
@@ -1823,7 +1828,7 @@ select a + b from (select 1 as a, 2 as b, 1 as "a + b");
 3
 
 # Can't reference an output column by expression over projection.
-query error DataFusion error: Schema error: No field named a\. Valid fields are "a \+ Int64\(1\)"\.
+query error DataFusion error: Schema error: No field named a\.\nValid fields are "a \+ Int64\(1\)"\.
 select a + 1 from (select a+1 from (select 1 as a));
 
 query I
@@ -1861,7 +1866,7 @@ statement ok
 DROP TABLE test;
 
 # Can't reference an unqualified column by a qualified name
-query error DataFusion error: Schema error: No field named t1\.v1\. Column names are case sensitive\. You can use double quotes to refer to the "t1\.v1" column or set the datafusion\.sql_parser\.enable_ident_normalization configuration\. Valid fields are "t1\.v1"\.
+query error DataFusion error: Schema error: No field named t1\.v1\. Did you mean '"t1\.v1"'\?\nValid fields are "t1\.v1"\.
 SELECT t1.v1 FROM (SELECT 1 AS "t1.v1");
 
 # Test issue: https://github.com/apache/datafusion/issues/14124

@@ -910,10 +910,16 @@ impl Interval {
         if data_type.is_integer()
             || matches!(
                 data_type,
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+                DataType::Date32
+                    | DataType::Date64
+                    | DataType::Timestamp(_, _)
+                    | DataType::Decimal32(_, _)
+                    | DataType::Decimal64(_, _)
+                    | DataType::Decimal128(_, _)
+                    | DataType::Decimal256(_, _)
             )
         {
-            self.upper.distance(&self.lower).map(|diff| diff as u64)
+            self.upper.distance_u64(&self.lower)
         } else if data_type.is_floating() {
             // Negative numbers are sorted in the reverse order. To
             // always have a positive difference after the subtraction,
@@ -944,7 +950,7 @@ impl Interval {
             // Cardinality calculations are not implemented for this data type yet:
             None
         }
-        .map(|result| result + 1)
+        .and_then(|result| result.checked_add(1))
     }
 
     /// Reflects an [`Interval`] around the point zero.
@@ -4158,6 +4164,28 @@ mod tests {
         )?;
         assert_eq!(interval.cardinality().unwrap(), 1_000_000_001);
 
+        // Decimal types
+        let interval = Interval::try_new(
+            ScalarValue::Decimal128(Some(100), 10, 2),
+            ScalarValue::Decimal128(Some(110), 10, 2),
+        )?;
+        assert_eq!(interval.cardinality().unwrap(), 11);
+        Ok(())
+    }
+
+    #[test]
+    fn test_cardinality_full_integer_range_does_not_overflow() -> Result<()> {
+        let interval = Interval::try_new(
+            ScalarValue::Int64(Some(i64::MIN)),
+            ScalarValue::Int64(Some(i64::MAX)),
+        )?;
+        assert_eq!(interval.cardinality(), None);
+
+        let interval = Interval::try_new(
+            ScalarValue::UInt64(Some(0)),
+            ScalarValue::UInt64(Some(u64::MAX)),
+        )?;
+        assert_eq!(interval.cardinality(), None);
         Ok(())
     }
 

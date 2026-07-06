@@ -370,18 +370,18 @@ fn case_conversion(
                 if let Some(ref n) = nulls {
                     for i in 0..item_len {
                         if n.is_null(i) {
-                            builder.append_placeholder();
+                            builder.try_append_placeholder()?;
                         } else {
                             // SAFETY: `n.is_null(i)` was false in the branch above.
                             let s = unsafe { string_array.value_unchecked(i) };
-                            builder.append_value(&unicode_case(s, lower));
+                            builder.try_append_value(&unicode_case(s, lower))?;
                         }
                     }
                 } else {
                     for i in 0..item_len {
                         // SAFETY: no null buffer means every index is valid.
                         let s = unsafe { string_array.value_unchecked(i) };
-                        builder.append_value(&unicode_case(s, lower));
+                        builder.try_append_value(&unicode_case(s, lower))?;
                     }
                 }
 
@@ -431,18 +431,18 @@ fn case_conversion_array<O: OffsetSizeTrait>(
     if let Some(ref n) = nulls {
         for i in 0..item_len {
             if n.is_null(i) {
-                builder.append_placeholder();
+                builder.try_append_placeholder()?;
             } else {
                 // SAFETY: `n.is_null(i)` was false in the branch above.
                 let s = unsafe { string_array.value_unchecked(i) };
-                builder.append_value(&unicode_case(s, lower));
+                builder.try_append_value(&unicode_case(s, lower))?;
             }
         }
     } else {
         for i in 0..item_len {
             // SAFETY: no null buffer means every index is valid.
             let s = unsafe { string_array.value_unchecked(i) };
-            builder.append_value(&unicode_case(s, lower));
+            builder.try_append_value(&unicode_case(s, lower))?;
         }
     }
     Ok(Arc::new(builder.finish(nulls)?))
@@ -520,6 +520,10 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
                     block_size = block_size.saturating_mul(2);
                 }
                 let to_reserve = len.max(block_size as usize);
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "StringView's block size bounds growth, so reserve cannot overflow capacity arithmetically. This hot loop intentionally avoids the extra `try_reserve` checks. It remains subject to allocator failure/OOM, which must be managed externally."
+                )]
                 in_progress.reserve(to_reserve);
             }
 
