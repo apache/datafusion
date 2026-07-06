@@ -87,6 +87,13 @@ struct BufferedPartitionBatch {
     runs: Vec<RowRun>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ReorderedRun {
+    batch_idx: usize,
+    start: usize,
+    end: usize,
+}
+
 struct FinalPartitionRunState {
     buffered_batches: Vec<BufferedPartitionBatch>,
     staged_batches: BTreeMap<usize, Vec<RecordBatch>>,
@@ -185,11 +192,14 @@ impl FinalPartitionRunState {
             return Ok(());
         }
 
+        let reordered_runs =
+            build_reordered_runs(&self.buffered_batches, &partition_lengths);
+
         let columns = (0..schema.fields().len())
             .map(|column_idx| {
                 materialize_reordered_column(
                     &self.buffered_batches,
-                    &partition_lengths,
+                    &reordered_runs,
                     column_idx,
                     total_rows,
                 )
@@ -274,7 +284,7 @@ impl FinalPartitionRunState {
 
 fn materialize_reordered_column(
     buffered_batches: &[BufferedPartitionBatch],
-    partition_lengths: &[usize],
+    reordered_runs: &[ReorderedRun],
     column_idx: usize,
     num_rows: usize,
 ) -> ArrayRef {
@@ -285,23 +295,42 @@ fn materialize_reordered_column(
     let source_refs = source_data.iter().collect::<Vec<&ArrayData>>();
     let mut mutable = MutableArrayData::new(source_refs, false, num_rows);
 
+    for run in reordered_runs {
+        mutable.extend(run.batch_idx, run.start, run.end);
+    }
+
+    make_array(mutable.freeze())
+}
+
+fn build_reordered_runs(
+    buffered_batches: &[BufferedPartitionBatch],
+    partition_lengths: &[usize],
+) -> Vec<ReorderedRun> {
+    let num_runs = buffered_batches
+        .iter()
+        .map(|batch| batch.runs.len())
+        .sum::<usize>();
+    let mut reordered_runs = Vec::with_capacity(num_runs);
+
     for (partition_id, partition_len) in partition_lengths.iter().copied().enumerate() {
         if partition_len == 0 {
             continue;
         }
 
         for (batch_idx, batch) in buffered_batches.iter().enumerate() {
-            for run in batch
-                .runs
-                .iter()
-                .filter(|run| run.relative_partition == partition_id)
-            {
-                mutable.extend(batch_idx, run.start, run.start + run.len);
+            for run in &batch.runs {
+                if run.relative_partition == partition_id {
+                    reordered_runs.push(ReorderedRun {
+                        batch_idx,
+                        start: run.start,
+                        end: run.start + run.len,
+                    });
+                }
             }
         }
     }
 
-    make_array(mutable.freeze())
+    reordered_runs
 }
 
 /// Hash aggregation is implemented in two stages: partial and final. This
