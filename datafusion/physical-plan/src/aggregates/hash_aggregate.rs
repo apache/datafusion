@@ -122,9 +122,13 @@ impl FinalPartitionRunState {
         }
     }
 
-    fn stage_batch(&mut self, batch: RecordBatch, partition_id: usize) -> Result<usize> {
+    fn stage_batch(
+        &mut self,
+        batch: RecordBatch,
+        partition_id: usize,
+        batch_size: usize,
+    ) -> Result<()> {
         self.output_schema(batch.schema())?;
-        let batch_size = get_record_batch_memory_size(&batch);
         let coalescer = self.coalescers.entry(partition_id).or_insert_with(|| {
             LimitedBatchCoalescer::new(batch.schema(), self.target_batch_size, None)
                 .with_biggest_coalesce_batch_size(None)
@@ -133,7 +137,7 @@ impl FinalPartitionRunState {
         debug_assert_eq!(push_status, PushBatchStatus::Continue);
         *self.coalescer_sizes.entry(partition_id).or_default() += batch_size;
         self.total_coalescer_size += batch_size;
-        Ok(batch_size)
+        Ok(())
     }
 
     fn begin_replay(&mut self) -> Result<()> {
@@ -954,6 +958,9 @@ impl FinalHashAggregateStream {
         }
 
         let output_batch = strip_subpartition_column(batch, subpartition_idx)?;
+        let input_batch_size = get_record_batch_memory_size(&output_batch);
+        let num_rows = output_batch.num_rows();
+        let mut accounted_memory = 0;
         let mut runs = Vec::new();
         let mut values = subpartitions.values().iter().copied().enumerate();
         if let Some((run_start, first_partition)) = values.next() {
@@ -974,18 +981,27 @@ impl FinalHashAggregateStream {
             runs.push((current_partition, current_start, current_len));
         }
 
-        let mut staged_memory = 0;
-        for (relative_partition, offset, len) in runs {
-            staged_memory += self
-                .partition_run_state
-                .as_mut()
-                .map(|state| {
-                    state.stage_batch(output_batch.slice(offset, len), relative_partition)
-                })
-                .transpose()?
-                .unwrap_or(0);
+        for (run_idx, (relative_partition, offset, len)) in
+            runs.iter().copied().enumerate()
+        {
+            let run_size = if run_idx + 1 == runs.len() {
+                input_batch_size - accounted_memory
+            } else {
+                input_batch_size
+                    .saturating_mul(len)
+                    .checked_div(num_rows)
+                    .unwrap_or(0)
+            };
+            accounted_memory += run_size;
+            if let Some(state) = self.partition_run_state.as_mut() {
+                state.stage_batch(
+                    output_batch.slice(offset, len),
+                    relative_partition,
+                    run_size,
+                )?;
+            }
         }
-        Ok(Some(staged_memory))
+        Ok(Some(input_batch_size))
     }
 
     fn reserve_staged_partition_runs(
