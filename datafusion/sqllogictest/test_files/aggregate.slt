@@ -1936,6 +1936,23 @@ SELECT g, approx_distinct(arrow_cast(s, 'Utf8View')) FROM approx_distinct_group_
 3 0
 4 1
 
+# BinaryView non-grouped
+query I
+SELECT approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'BinaryView')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+
+# BinaryView grouped
+query II
+SELECT g, approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'BinaryView')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+
 # Integers (Int32): group 1 -> {10,20}=2, group 2 -> {30,40}=2, group 3 -> 0, group 4 -> {50}=1
 query II
 SELECT g, approx_distinct(i) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
