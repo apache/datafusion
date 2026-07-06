@@ -31,6 +31,12 @@ SELECT arrow_cast('22:00', 'Time32(Second)') + interval '3 hours'
 ----
 01:00:00
 
+# Regardless of the input time unit, the result is normalized to Time64(ns).
+query T
+SELECT arrow_typeof(arrow_cast('22:00', 'Time32(Second)') + interval '3 hours')
+----
+Time64(ns)
+
 query D
 SELECT arrow_cast('22:00', 'Time32(Millisecond)') + interval '3 hours'
 ----
@@ -73,3 +79,24 @@ query D
 SELECT '02:00'::time - interval '3 hours'
 ----
 23:00:00
+
+# Array inputs (not only scalars) exercise the columnar path, including nulls.
+statement ok
+CREATE TABLE time_vals(id INT, t TIME) AS VALUES (1, '01:00'::time), (2, '22:00'::time), (3, NULL);
+
+query D
+SELECT t + interval '3 hours' FROM time_vals ORDER BY id
+----
+04:00:00
+01:00:00
+NULL
+
+query D
+SELECT t - interval '2 hours' FROM time_vals ORDER BY id
+----
+23:00:00
+20:00:00
+NULL
+
+statement ok
+DROP TABLE time_vals

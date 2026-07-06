@@ -300,59 +300,101 @@ fn is_time_minus_interval(lhs: &DataType, rhs: &DataType) -> bool {
 }
 
 /// Evaluates `time + interval`, `interval + time`, or `time - interval`, returning
-/// a `time` wrapped within the 24-hour clock to match PostgreSQL and DuckDB
-/// (e.g. `time '23:30' + interval '2 hours'` is `01:30:00`). arrow's arithmetic
-/// kernels do not implement time-of-day arithmetic, so it is handled here.
+/// a `Time64(Nanosecond)` wrapped within the 24-hour clock to match PostgreSQL and
+/// DuckDB (e.g. `time '23:30' + interval '2 hours'` is `01:30:00`). arrow's
+/// arithmetic kernels do not implement time-of-day arithmetic, so it is handled here.
 ///
-/// Only the sub-day portion of the interval (its `nanoseconds`) affects a
-/// time-of-day; whole months and days are ignored, matching PostgreSQL.
+/// The type coercion layer normalizes the operands to `Time64(Nanosecond)` and
+/// `Interval(MonthDayNano)`, so no casting is needed here. Only the sub-day portion
+/// of the interval (its `nanoseconds`) affects a time-of-day; whole months and days
+/// are ignored, matching PostgreSQL.
 fn apply_time_interval(
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
     subtract: bool,
-    num_rows: usize,
 ) -> Result<ColumnarValue> {
     /// Nanoseconds in a 24-hour day.
-    const DAY_NANOS: i128 = 86_400_000_000_000;
+    const DAY_NANOS: i64 = 86_400_000_000_000;
 
-    let left = lhs.to_array(num_rows)?;
-    let right = rhs.to_array(num_rows)?;
+    /// Wraps `time_ns ± interval.nanoseconds` into `[0, DAY_NANOS)`. The interval is
+    /// reduced modulo a day first so the addition stays within `i64`, and
+    /// `rem_euclid` keeps the result non-negative even when subtracting.
+    fn wrap(time_ns: i64, interval: IntervalMonthDayNano, subtract: bool) -> i64 {
+        let delta = interval.nanoseconds % DAY_NANOS;
+        let delta = if subtract { -delta } else { delta };
+        (time_ns + delta).rem_euclid(DAY_NANOS)
+    }
 
-    // The `time` operand determines the result type; the other is the interval.
-    let left_is_time =
-        matches!(left.data_type(), DataType::Time32(_) | DataType::Time64(_));
-    let (time_array, interval_array) = if left_is_time {
-        (&left, &right)
+    /// Extracts a `Time64(Nanosecond)` scalar as nanoseconds since midnight.
+    fn time_scalar_ns(scalar: &ScalarValue) -> Result<Option<i64>> {
+        match scalar {
+            ScalarValue::Time64Nanosecond(value) => Ok(*value),
+            other => {
+                internal_err!(
+                    "Time64(Nanosecond) scalar expected, got: {}",
+                    other.data_type()
+                )
+            }
+        }
+    }
+
+    /// Extracts an `Interval(MonthDayNano)` scalar.
+    fn interval_scalar(scalar: &ScalarValue) -> Result<Option<IntervalMonthDayNano>> {
+        match scalar {
+            ScalarValue::IntervalMonthDayNano(value) => Ok(*value),
+            other => {
+                internal_err!(
+                    "Interval(MonthDayNano) scalar expected, got: {}",
+                    other.data_type()
+                )
+            }
+        }
+    }
+
+    // The `time` operand determines the result; the other is the interval.
+    let (time, interval) = if matches!(lhs.data_type(), DataType::Interval(_)) {
+        (rhs, lhs)
     } else {
-        (&right, &left)
+        (lhs, rhs)
     };
-    let time_type = time_array.data_type().clone();
 
-    // Normalize to a single representation: time as Time64(ns), interval as MonthDayNano.
-    let time_ns_arr = cast(time_array, &DataType::Time64(TimeUnit::Nanosecond))?;
-    let time_ns = time_ns_arr.as_primitive::<Time64NanosecondType>();
-    let interval_arr = cast(
-        interval_array,
-        &DataType::Interval(IntervalUnit::MonthDayNano),
-    )?;
-    let interval = interval_arr.as_primitive::<IntervalMonthDayNanoType>();
-
-    let wrapped: Time64NanosecondArray =
-        arrow::compute::binary(time_ns, interval, |t, iv| {
-            let delta = iv.nanoseconds as i128;
-            let total = if subtract {
-                t as i128 - delta
-            } else {
-                t as i128 + delta
-            };
-            // Rust's `%` keeps the sign of the dividend, so add a day before the
-            // final modulo to always land in `[0, DAY_NANOS)`.
-            (((total % DAY_NANOS) + DAY_NANOS) % DAY_NANOS) as i64
-        })?;
-
-    // Restore the original time unit (e.g. Time32(Second)).
-    let result = cast(&(Arc::new(wrapped) as ArrayRef), &time_type)?;
-    Ok(ColumnarValue::Array(result))
+    match (time, interval) {
+        (ColumnarValue::Array(time), ColumnarValue::Array(interval)) => {
+            let time = time.as_primitive::<Time64NanosecondType>();
+            let interval = interval.as_primitive::<IntervalMonthDayNanoType>();
+            let result: Time64NanosecondArray =
+                arrow::compute::binary(time, interval, |t, iv| wrap(t, iv, subtract))?;
+            Ok(ColumnarValue::Array(Arc::new(result)))
+        }
+        (ColumnarValue::Array(time), ColumnarValue::Scalar(interval)) => {
+            let time = time.as_primitive::<Time64NanosecondType>();
+            match interval_scalar(interval)? {
+                Some(iv) => {
+                    let result: Time64NanosecondArray =
+                        time.unary(|t| wrap(t, iv, subtract));
+                    Ok(ColumnarValue::Array(Arc::new(result)))
+                }
+                None => Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(None))),
+            }
+        }
+        (ColumnarValue::Scalar(time), ColumnarValue::Array(interval)) => {
+            let interval = interval.as_primitive::<IntervalMonthDayNanoType>();
+            match time_scalar_ns(time)? {
+                Some(t) => {
+                    let result: Time64NanosecondArray =
+                        interval.unary(|iv| wrap(t, iv, subtract));
+                    Ok(ColumnarValue::Array(Arc::new(result)))
+                }
+                None => Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(None))),
+            }
+        }
+        (ColumnarValue::Scalar(time), ColumnarValue::Scalar(interval)) => {
+            let result = time_scalar_ns(time)?
+                .zip(interval_scalar(interval)?)
+                .map(|(t, iv)| wrap(t, iv, subtract));
+            Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(result)))
+        }
+    }
 }
 
 impl PhysicalExpr for BinaryExpr {
@@ -442,12 +484,12 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Plus
                 if is_time_plus_interval(&left_data_type, &right_data_type) =>
             {
-                return apply_time_interval(&lhs, &rhs, false, batch.num_rows());
+                return apply_time_interval(&lhs, &rhs, false);
             }
             Operator::Minus
                 if is_time_minus_interval(&left_data_type, &right_data_type) =>
             {
-                return apply_time_interval(&lhs, &rhs, true, batch.num_rows());
+                return apply_time_interval(&lhs, &rhs, true);
             }
             Operator::Plus if self.fail_on_overflow => return apply(&lhs, &rhs, add),
             Operator::Plus => return apply(&lhs, &rhs, add_wrapping),
