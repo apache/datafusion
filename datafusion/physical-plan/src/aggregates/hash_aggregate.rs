@@ -30,7 +30,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::Array;
+use arrow::array::{Array, ArrayData, ArrayRef, MutableArrayData, make_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_uint32_array;
@@ -45,66 +45,81 @@ use super::aggregate_hash_table::{
 };
 use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, strip_subpartition_column, subpartition_column_index};
-use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metrics};
 
-struct CoalescedPartitionStream {
+const PARTITION_MATERIALIZE_WINDOW_SIZE: usize = 16;
+
+struct BucketStream {
     schema: SchemaRef,
-    coalescer: LimitedBatchCoalescer,
+    iter: std::vec::IntoIter<RecordBatch>,
 }
 
-impl Stream for CoalescedPartitionStream {
+impl Stream for BucketStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
         _cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        Poll::Ready(self.get_mut().coalescer.next_completed_batch().map(Ok))
+        Poll::Ready(self.get_mut().iter.next().map(Ok))
     }
 }
 
-impl RecordBatchStream for CoalescedPartitionStream {
+impl RecordBatchStream for BucketStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RowRun {
+    relative_partition: usize,
+    start: usize,
+    len: usize,
+}
+
+struct BufferedPartitionBatch {
+    batch: RecordBatch,
+    runs: Vec<RowRun>,
+}
+
 struct FinalPartitionRunState {
-    coalescers: BTreeMap<usize, LimitedBatchCoalescer>,
-    coalescer_sizes: BTreeMap<usize, usize>,
-    total_coalescer_size: usize,
-    replaying_coalescer_size: usize,
+    buffered_batches: Vec<BufferedPartitionBatch>,
+    staged_batches: BTreeMap<usize, Vec<RecordBatch>>,
+    staged_sizes: BTreeMap<usize, usize>,
+    total_staged_size: usize,
+    total_buffered_size: usize,
+    replaying_size: usize,
     replaying_partition_id: Option<usize>,
     is_draining: bool,
     schema: Option<SchemaRef>,
-    target_batch_size: usize,
 }
 
 impl FinalPartitionRunState {
-    fn new(target_batch_size: usize) -> Self {
+    fn new() -> Self {
         Self {
-            coalescers: BTreeMap::new(),
-            coalescer_sizes: BTreeMap::new(),
-            total_coalescer_size: 0,
-            replaying_coalescer_size: 0,
+            buffered_batches: Vec::with_capacity(PARTITION_MATERIALIZE_WINDOW_SIZE),
+            staged_batches: BTreeMap::new(),
+            staged_sizes: BTreeMap::new(),
+            total_staged_size: 0,
+            total_buffered_size: 0,
+            replaying_size: 0,
             replaying_partition_id: None,
             is_draining: false,
             schema: None,
-            target_batch_size,
         }
     }
 
     fn total_size(&self) -> usize {
-        self.total_coalescer_size + self.replaying_coalescer_size
+        self.total_staged_size + self.total_buffered_size + self.replaying_size
     }
 
     fn has_buffered_partitions(&self) -> bool {
-        !self.coalescers.is_empty()
+        !self.staged_batches.is_empty() || !self.buffered_batches.is_empty()
     }
 
     fn output_schema(&mut self, schema: SchemaRef) -> Result<()> {
@@ -122,60 +137,136 @@ impl FinalPartitionRunState {
         }
     }
 
-    fn stage_batch(
-        &mut self,
-        batch: RecordBatch,
-        partition_id: usize,
-        batch_size: usize,
-    ) -> Result<()> {
+    fn stage_batch(&mut self, batch: RecordBatch, runs: Vec<RowRun>) -> Result<usize> {
         self.output_schema(batch.schema())?;
-        let coalescer = self.coalescers.entry(partition_id).or_insert_with(|| {
-            LimitedBatchCoalescer::new(batch.schema(), self.target_batch_size, None)
-                .with_biggest_coalesce_batch_size(None)
-        });
-        let push_status = coalescer.push_batch(batch)?;
-        debug_assert_eq!(push_status, PushBatchStatus::Continue);
-        *self.coalescer_sizes.entry(partition_id).or_default() += batch_size;
-        self.total_coalescer_size += batch_size;
+        let batch_size = get_record_batch_memory_size(&batch);
+        self.total_buffered_size += batch_size;
+        self.buffered_batches
+            .push(BufferedPartitionBatch { batch, runs });
+
+        if self.buffered_batches.len() >= PARTITION_MATERIALIZE_WINDOW_SIZE {
+            self.flush_buffered_batches()?;
+        }
+
+        Ok(batch_size)
+    }
+
+    fn flush_buffered_batches(&mut self) -> Result<()> {
+        if self.buffered_batches.is_empty() {
+            return Ok(());
+        }
+
+        let schema = self.schema.as_ref().ok_or_else(|| {
+            DataFusionError::Internal(
+                "missing final partitioned aggregation schema while flushing runs"
+                    .to_string(),
+            )
+        })?;
+        let num_columns = schema.fields().len();
+        let max_partition = self
+            .buffered_batches
+            .iter()
+            .flat_map(|batch| batch.runs.iter().map(|run| run.relative_partition))
+            .max();
+
+        if let Some(max_partition) = max_partition {
+            for partition_id in 0..=max_partition {
+                let num_rows = self
+                    .buffered_batches
+                    .iter()
+                    .flat_map(|batch| &batch.runs)
+                    .filter(|run| run.relative_partition == partition_id)
+                    .map(|run| run.len)
+                    .sum::<usize>();
+
+                if num_rows == 0 {
+                    continue;
+                }
+
+                let columns = (0..num_columns)
+                    .map(|column_idx| {
+                        materialize_partition_column(
+                            &self.buffered_batches,
+                            partition_id,
+                            column_idx,
+                            num_rows,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let batch = RecordBatch::try_new(Arc::clone(schema), columns)?;
+                let batch_size = get_record_batch_memory_size(&batch);
+                self.staged_batches
+                    .entry(partition_id)
+                    .or_default()
+                    .push(batch);
+                *self.staged_sizes.entry(partition_id).or_default() += batch_size;
+                self.total_staged_size += batch_size;
+            }
+        }
+
+        self.buffered_batches.clear();
+        self.total_buffered_size = 0;
         Ok(())
     }
 
     fn begin_replay(&mut self) -> Result<()> {
         self.is_draining = true;
-        for coalescer in self.coalescers.values_mut() {
-            coalescer.finish()?;
-        }
-        Ok(())
+        self.flush_buffered_batches()
     }
 
     fn finish_replaying_run(&mut self) {
-        self.replaying_coalescer_size = 0;
+        self.replaying_size = 0;
         self.replaying_partition_id = None;
     }
 
     fn next_partition_id(&self) -> Option<usize> {
-        self.coalescers
+        self.staged_batches
             .first_key_value()
             .map(|(partition_id, _)| *partition_id)
     }
 
-    fn take_run(&mut self, partition_id: usize) -> Result<LimitedBatchCoalescer> {
-        let coalescer = self.coalescers.remove(&partition_id).ok_or_else(|| {
+    fn take_run(&mut self, partition_id: usize) -> Result<Vec<RecordBatch>> {
+        let batches = self.staged_batches.remove(&partition_id).ok_or_else(|| {
             DataFusionError::Internal(format!(
-                "Missing coalescer for final aggregate partition {partition_id}"
+                "Missing staged batches for final aggregate partition {partition_id}"
             ))
         })?;
-        let coalescer_size =
-            self.coalescer_sizes.remove(&partition_id).ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "Missing coalescer size for final aggregate partition {partition_id}"
-                ))
-            })?;
-        self.total_coalescer_size -= coalescer_size;
-        self.replaying_coalescer_size = coalescer_size;
+        let staged_size = self.staged_sizes.remove(&partition_id).ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Missing staged size for final aggregate partition {partition_id}"
+            ))
+        })?;
+        self.total_staged_size -= staged_size;
+        self.replaying_size = staged_size;
         self.replaying_partition_id = Some(partition_id);
-        Ok(coalescer)
+        Ok(batches)
     }
+}
+
+fn materialize_partition_column(
+    buffered_batches: &[BufferedPartitionBatch],
+    partition_id: usize,
+    column_idx: usize,
+    num_rows: usize,
+) -> ArrayRef {
+    let source_data = buffered_batches
+        .iter()
+        .map(|batch| batch.batch.column(column_idx).to_data())
+        .collect::<Vec<_>>();
+    let source_refs = source_data.iter().collect::<Vec<&ArrayData>>();
+    let mut mutable = MutableArrayData::new(source_refs, false, num_rows);
+
+    for (batch_idx, batch) in buffered_batches.iter().enumerate() {
+        for run in batch
+            .runs
+            .iter()
+            .filter(|run| run.relative_partition == partition_id)
+        {
+            mutable.extend(batch_idx, run.start, run.start + run.len);
+        }
+    }
+
+    make_array(mutable.freeze())
 }
 
 /// Hash aggregation is implemented in two stages: partial and final. This
@@ -909,8 +1000,7 @@ impl FinalHashAggregateStream {
             input,
             baseline_metrics,
             reservation,
-            partition_run_state: uses_partition_runs
-                .then(|| FinalPartitionRunState::new(batch_size)),
+            partition_run_state: uses_partition_runs.then(FinalPartitionRunState::new),
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             state: Some(FinalHashAggregateState::ReadingInput { hash_table }),
         })
@@ -958,9 +1048,6 @@ impl FinalHashAggregateStream {
         }
 
         let output_batch = strip_subpartition_column(batch, subpartition_idx)?;
-        let input_batch_size = get_record_batch_memory_size(&output_batch);
-        let num_rows = output_batch.num_rows();
-        let mut accounted_memory = 0;
         let mut runs = Vec::new();
         let mut values = subpartitions.values().iter().copied().enumerate();
         if let Some((run_start, first_partition)) = values.next() {
@@ -972,36 +1059,30 @@ impl FinalHashAggregateStream {
                 if relative_partition == current_partition {
                     current_len += 1;
                 } else {
-                    runs.push((current_partition, current_start, current_len));
+                    runs.push(RowRun {
+                        relative_partition: current_partition,
+                        start: current_start,
+                        len: current_len,
+                    });
                     current_partition = relative_partition;
                     current_start = row_idx;
                     current_len = 1;
                 }
             }
-            runs.push((current_partition, current_start, current_len));
+            runs.push(RowRun {
+                relative_partition: current_partition,
+                start: current_start,
+                len: current_len,
+            });
         }
 
-        for (run_idx, (relative_partition, offset, len)) in
-            runs.iter().copied().enumerate()
-        {
-            let run_size = if run_idx + 1 == runs.len() {
-                input_batch_size - accounted_memory
-            } else {
-                input_batch_size
-                    .saturating_mul(len)
-                    .checked_div(num_rows)
-                    .unwrap_or(0)
-            };
-            accounted_memory += run_size;
-            if let Some(state) = self.partition_run_state.as_mut() {
-                state.stage_batch(
-                    output_batch.slice(offset, len),
-                    relative_partition,
-                    run_size,
-                )?;
-            }
-        }
-        Ok(Some(input_batch_size))
+        let staged_memory = self
+            .partition_run_state
+            .as_mut()
+            .map(|state| state.stage_batch(output_batch, runs))
+            .transpose()?
+            .unwrap_or(0);
+        Ok(Some(staged_memory))
     }
 
     fn reserve_staged_partition_runs(
@@ -1077,7 +1158,7 @@ impl FinalHashAggregateStream {
             .and_then(FinalPartitionRunState::next_partition_id);
 
         if let Some(partition_id) = next_partition_id {
-            let coalescer = self
+            let batches = self
                 .partition_run_state
                 .as_mut()
                 .ok_or_else(|| {
@@ -1087,8 +1168,15 @@ impl FinalHashAggregateStream {
                     )
                 })?
                 .take_run(partition_id)?;
-            let schema = coalescer.schema();
-            self.input = Box::pin(CoalescedPartitionStream { schema, coalescer });
+            let schema = batches.first().map(|batch| batch.schema()).ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "Staged batches for final aggregate partition {partition_id} were unexpectedly empty"
+                ))
+            })?;
+            self.input = Box::pin(BucketStream {
+                schema,
+                iter: batches.into_iter(),
+            });
             self.update_memory_reservation(Some(&hash_table))?;
             Ok(FinalHashAggregateState::ReadingInput { hash_table })
         } else {
@@ -1162,7 +1250,7 @@ impl FinalHashAggregateStream {
     //     + no hidden column -> normal aggregate_batch path
     //     + input done  -> begin_partition_run_replay(...)
     //
-    //   Reading CoalescedPartitionStream(pN)
+    //   Reading BucketStream(pN)
     //     + input done  -> finish_partition_run_replay(...) -> ProducingOutput(pN)
     //
     //   ProducingOutput(pN)

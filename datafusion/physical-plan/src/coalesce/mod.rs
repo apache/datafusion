@@ -73,15 +73,6 @@ impl LimitedBatchCoalescer {
         self.inner.schema()
     }
 
-    /// Configure when large input batches bypass coalescing.
-    pub(crate) fn with_biggest_coalesce_batch_size(
-        mut self,
-        limit: Option<usize>,
-    ) -> Self {
-        self.inner.set_biggest_coalesce_batch_size(limit);
-        self
-    }
-
     /// Pushes the next [`RecordBatch`] into the coalescer and returns its status.
     ///
     /// # Arguments
