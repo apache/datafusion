@@ -2005,6 +2005,33 @@ FROM approx_distinct_decimal_test GROUP BY g ORDER BY g;
 statement ok
 DROP TABLE approx_distinct_decimal_test;
 
+# This test runs approx_distinct over all four Duration units for the scalar and the grouped path.
+statement ok
+CREATE TABLE approx_distinct_duration_test AS VALUES
+  (1, arrow_cast(1, 'Duration(Second)'),  arrow_cast(1, 'Duration(Millisecond)'),  arrow_cast(1, 'Duration(Microsecond)'),  arrow_cast(1, 'Duration(Nanosecond)')),
+  (1, arrow_cast(2, 'Duration(Second)'),  arrow_cast(2, 'Duration(Millisecond)'),  arrow_cast(2, 'Duration(Microsecond)'),  arrow_cast(2, 'Duration(Nanosecond)')),
+  (1, arrow_cast(2, 'Duration(Second)'),  arrow_cast(2, 'Duration(Millisecond)'),  arrow_cast(2, 'Duration(Microsecond)'),  arrow_cast(2, 'Duration(Nanosecond)')),
+  (2, arrow_cast(3, 'Duration(Second)'),  arrow_cast(3, 'Duration(Millisecond)'),  arrow_cast(3, 'Duration(Microsecond)'),  arrow_cast(3, 'Duration(Nanosecond)')),
+  (2, arrow_cast(0, 'Duration(Second)'),  arrow_cast(0, 'Duration(Millisecond)'),  arrow_cast(0, 'Duration(Microsecond)'),  arrow_cast(0, 'Duration(Nanosecond)')),
+  (2, arrow_cast(0, 'Duration(Second)'),  arrow_cast(0, 'Duration(Millisecond)'),  arrow_cast(0, 'Duration(Microsecond)'),  arrow_cast(0, 'Duration(Nanosecond)'));
+
+# Scalar path
+query IIII
+SELECT approx_distinct(column2), approx_distinct(column3), approx_distinct(column4), approx_distinct(column5) FROM approx_distinct_duration_test;
+----
+4 4 4 4
+
+# Grouped path
+query IIIII
+SELECT column1, approx_distinct(column2), approx_distinct(column3), approx_distinct(column4), approx_distinct(column5)
+FROM approx_distinct_duration_test GROUP BY column1 ORDER BY column1;
+----
+1 2 2 2 2
+2 2 2 2 2
+
+statement ok
+DROP TABLE approx_distinct_duration_test;
+
 
 # This test runs approx_distinct over the intervals YearMonth,
 # DayTime, MonthDayNano for the scalar and the grouped path.
