@@ -83,6 +83,9 @@ where
 
         for (i, (&lhs_row, &rhs_row)) in lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
         {
+            if !equal_to_results.get_bit(i) {
+                continue;
+            }
             let left = if cfg!(debug_assertions) {
                 self.group_values[lhs_row]
             } else {
