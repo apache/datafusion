@@ -24,6 +24,9 @@ use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
     hash_aggregate::{FinalHashAggregateStream, PartialHashAggregateStream},
     no_grouping::AggregateStream,
+    ordered_final_stream::OrderedFinalAggregateStream,
+    ordered_partial_stream::OrderedPartialAggregateStream,
+    partial_reduce_stream::PartialReduceHashAggregateStream,
     row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
@@ -72,11 +75,14 @@ use itertools::Itertools;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
+mod aggregate_hash_table;
 pub mod group_values;
 mod hash_aggregate;
-mod hash_table;
 mod no_grouping;
 pub mod order;
+mod ordered_final_stream;
+mod ordered_partial_stream;
+mod partial_reduce_stream;
 mod row_hash;
 mod skip_partial;
 mod topk;
@@ -527,13 +533,22 @@ enum StreamType {
     /// Partial stage of the hash aggregation
     /// Input output scheme: initial input -> partial state
     PartialHash(PartialHashAggregateStream),
+    /// Partial-reduce stage of the hash aggregation
+    /// Input output scheme: partial state -> partial state
+    PartialReduceHash(PartialReduceHashAggregateStream),
     /// Final stage of the hash aggregation
     /// Input output scheme: partial state -> final result
     FinalHash(FinalHashAggregateStream),
+    /// Partial stage of aggregation for ordered input.
+    OrderedPartialAggregate(OrderedPartialAggregateStream),
+    /// Final stage of aggregation for ordered input.
+    OrderedFinalAggregate(OrderedFinalAggregateStream),
     /// Hash aggregation reused for multiple stages
     ///
     /// Note this is being incrementally migrated to dedicated streams like
-    /// [`StreamType::PartialHash`] and [`StreamType::FinalHash`]
+    /// [`StreamType::PartialHash`], [`StreamType::FinalHash`],
+    /// [`StreamType::OrderedPartialAggregate`], and
+    /// [`StreamType::OrderedFinalAggregate`]
     ///
     /// See issue for details: <https://github.com/apache/datafusion/issues/22710>
     GroupedHash(GroupedHashAggregateStream),
@@ -550,7 +565,10 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::PartialHash(stream) => Box::pin(stream),
+            StreamType::PartialReduceHash(stream) => Box::pin(stream),
             StreamType::FinalHash(stream) => Box::pin(stream),
+            StreamType::OrderedPartialAggregate(stream) => Box::pin(stream),
+            StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }
@@ -989,6 +1007,8 @@ impl AggregateExec {
         Arc::clone(&self.input_schema)
     }
 
+    /// Aggregation has multiple specialized implementations optimized for
+    /// different workloads. This function picks the best available path.
     fn execute_typed(
         &self,
         partition: usize,
@@ -1009,16 +1029,41 @@ impl AggregateExec {
             ));
         }
 
+        // `GroupedHashAggregateStream` is being incrementally refactored. See the
+        // tracking issue for details.
+        //
+        // New features and improvements should go directly into the new implementation.
+        // Please coordinate through the tracking issue.
+        //
+        // Issue: <https://github.com/apache/datafusion/issues/22710>
         if context
             .session_config()
             .options()
             .execution
             .enable_migration_aggregate
         {
+            if self.should_use_ordered_partial_aggregate_stream(context) {
+                return Ok(StreamType::OrderedPartialAggregate(
+                    OrderedPartialAggregateStream::new(self, context, partition)?,
+                ));
+            }
+
             if self.should_use_partial_hash_stream(context) {
                 return Ok(StreamType::PartialHash(PartialHashAggregateStream::new(
                     self, context, partition,
                 )?));
+            }
+
+            if self.should_use_partial_reduce_hash_stream(context) {
+                return Ok(StreamType::PartialReduceHash(
+                    PartialReduceHashAggregateStream::new(self, context, partition)?,
+                ));
+            }
+
+            if self.should_use_ordered_final_aggregate_stream(context) {
+                return Ok(StreamType::OrderedFinalAggregate(
+                    OrderedFinalAggregateStream::new(self, context, partition)?,
+                ));
             }
 
             if self.should_use_final_hash_stream(context) {
@@ -1028,7 +1073,7 @@ impl AggregateExec {
             }
         }
 
-        // grouping by something else and we need to just materialize all results
+        // Execution paths that have not been migrated use the fallback implementation
         Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
             self, context, partition,
         )?))
@@ -1047,6 +1092,19 @@ impl AggregateExec {
             && self.limit_options_supported_by_hash_stream()
     }
 
+    fn should_use_ordered_partial_aggregate_stream(&self, context: &TaskContext) -> bool {
+        // TODO: implement memory-limited path and remove this limitation
+        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
+            return false;
+        }
+
+        self.mode == AggregateMode::Partial
+            && self.input_order_mode != InputOrderMode::Linear
+            && !self.group_by.is_true_no_grouping()
+            && self.group_by.is_single()
+            && self.limit_options_supported_by_hash_stream()
+    }
+
     fn should_use_final_hash_stream(&self, context: &TaskContext) -> bool {
         // TODO: implement memory-limited path and remove this limitation
         if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
@@ -1058,6 +1116,34 @@ impl AggregateExec {
             AggregateMode::Final | AggregateMode::FinalPartitioned
         ) && self.limit_options_supported_by_hash_stream()
             && self.input_order_mode == InputOrderMode::Linear
+            && !self.group_by.is_true_no_grouping()
+            && self.group_by.is_single()
+    }
+
+    fn should_use_partial_reduce_hash_stream(&self, context: &TaskContext) -> bool {
+        // TODO: implement memory-limited path and remove this limitation
+        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
+            return false;
+        }
+
+        self.mode == AggregateMode::PartialReduce
+            && self.limit_options.is_none()
+            && self.input_order_mode == InputOrderMode::Linear
+            && !self.group_by.is_true_no_grouping()
+            && self.group_by.is_single()
+    }
+
+    fn should_use_ordered_final_aggregate_stream(&self, context: &TaskContext) -> bool {
+        // TODO: implement memory-limited path and remove this limitation
+        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
+            return false;
+        }
+
+        matches!(
+            self.mode,
+            AggregateMode::Final | AggregateMode::FinalPartitioned
+        ) && self.limit_options_supported_by_hash_stream()
+            && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
     }
@@ -1702,7 +1788,7 @@ impl ExecutionPlan for AggregateExec {
                 vec![Distribution::UnspecifiedDistribution]
             }
             AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned => {
-                vec![Distribution::HashPartitioned(self.group_by.input_exprs())]
+                vec![Distribution::KeyPartitioned(self.group_by.input_exprs())]
             }
             AggregateMode::Final | AggregateMode::Single => {
                 vec![Distribution::SinglePartition]
@@ -2427,8 +2513,8 @@ mod tests {
     };
 
     use arrow::array::{
-        DictionaryArray, Float32Array, Float64Array, Int32Array, Int64Array, StructArray,
-        UInt32Array, UInt64Array,
+        BooleanArray, DictionaryArray, Float32Array, Float64Array, Int32Array,
+        Int64Array, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::Int32Type;
@@ -2438,7 +2524,10 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-    use datafusion_expr::{AggregateUDF, AggregateUDFImpl, Signature, Volatility};
+    use datafusion_expr::{
+        Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator,
+        Signature, Volatility,
+    };
     use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
@@ -2454,7 +2543,7 @@ mod tests {
 
     use crate::projection::ProjectionExec;
     use datafusion_physical_expr::projection::ProjectionExpr;
-    use futures::{FutureExt, Stream};
+    use futures::{FutureExt, Stream, StreamExt};
     use insta::{allow_duplicates, assert_snapshot};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -2562,6 +2651,34 @@ mod tests {
             .with_session_config(session_config)
             .with_runtime(runtime);
         Arc::new(task_ctx)
+    }
+
+    fn migrated_hash_session_config(batch_size: usize) -> SessionConfig {
+        SessionConfig::new()
+            .with_batch_size(batch_size)
+            .set_bool("datafusion.execution.enable_migration_aggregate", true)
+    }
+
+    fn new_migrated_hash_ctx(batch_size: usize) -> Arc<TaskContext> {
+        Arc::new(
+            TaskContext::default()
+                .with_session_config(migrated_hash_session_config(batch_size)),
+        )
+    }
+
+    fn new_finite_memory_migrated_hash_ctx(
+        batch_size: usize,
+        max_memory: usize,
+    ) -> Result<Arc<TaskContext>> {
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(max_memory, 1.0)
+            .build_arc()?;
+
+        Ok(Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(migrated_hash_session_config(batch_size)),
+        ))
     }
 
     async fn check_grouping_sets(
@@ -3223,6 +3340,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn partial_grouped_aggregate_materializes_before_slicing() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+        let input_batches = vec![RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+            ],
+        )?];
+        let input =
+            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let udaf = Arc::new(AggregateUDF::from(NoFirstEmitUdaf::new()));
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(udaf, vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("no_first_emit(value)")
+                .build()?,
+        )];
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggregates,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(2)
+                    .set_bool("datafusion.execution.enable_migration_aggregate", true)
+                    .set(
+                        "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                        &ScalarValue::Float64(Some(2.0)),
+                    ),
+            ),
+        );
+
+        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::PartialHash(_)));
+
+        let stream: SendableRecordBatchStream = stream.into();
+        let batches = collect(stream).await?;
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +-----+-----------------------------+
+        | key | no_first_emit(value)[count] |
+        +-----+-----------------------------+
+        | 1   | 1                           |
+        | 2   | 1                           |
+        | 3   | 1                           |
+        +-----+-----------------------------+
+        ");
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn limited_distinct_aggregate_uses_migrated_hash_streams() -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, false)]));
@@ -3315,6 +3502,339 @@ mod tests {
 | 2 |
 +---+
 ");
+
+        Ok(())
+    }
+
+    fn partial_reduce_test_aggregate() -> Result<AggregateExec> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(b)")
+                .build()?,
+        )];
+
+        let empty_input =
+            TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggregates.clone(),
+            vec![None],
+            empty_input,
+            Arc::clone(&schema),
+        )?;
+        let partial_schema = partial.schema();
+        let partial_state_batch = RecordBatch::try_new(
+            Arc::clone(&partial_schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 1, 3])),
+                Arc::new(Float64Array::from(vec![10.0, 20.0, 40.0, 30.0])),
+            ],
+        )?;
+        let partial_reduce_input = TestMemoryExec::try_new_exec(
+            &[vec![partial_state_batch]],
+            Arc::clone(&partial_schema),
+            None,
+        )?;
+
+        AggregateExec::try_new(
+            AggregateMode::PartialReduce,
+            group_by,
+            aggregates,
+            vec![None],
+            partial_reduce_input,
+            partial_schema,
+        )
+    }
+
+    /// For partial-reduce aggregation, ensures `PartialReduceHashAggregateStream`
+    /// is used when enabled by migration config.
+    #[tokio::test]
+    async fn partial_reduce_aggregate_planning() -> Result<()> {
+        let partial_reduce = partial_reduce_test_aggregate()?;
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
+            ),
+        );
+
+        let stream = partial_reduce.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::PartialReduceHash(_)));
+        let stream: SendableRecordBatchStream = stream.into();
+        let output = collect(stream).await?;
+        assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+
+        Ok(())
+    }
+
+    /// Spilling behavior is not implemented for partial-reduce stream yet, so fall
+    /// back to the existing `GroupedHashAggregateStream`
+    #[tokio::test]
+    async fn partial_reduce_aggregate_with_memory_limit_planning() -> Result<()> {
+        let partial_reduce = partial_reduce_test_aggregate()?;
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(1, 1.0)
+            .build_arc()?;
+        let task_ctx =
+            Arc::new(
+                TaskContext::default()
+                    .with_session_config(SessionConfig::new().set_bool(
+                        "datafusion.execution.enable_migration_aggregate",
+                        true,
+                    ))
+                    .with_runtime(runtime),
+            );
+
+        let stream = partial_reduce.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::GroupedHash(_)));
+
+        Ok(())
+    }
+
+    /// Ensures for ordered input, `OrderedPartialAggregateStream` is used.
+    #[tokio::test]
+    async fn ordered_partial_aggregate_planning() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("sort_col", DataType::Int32, false),
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+
+        let input_batches = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 1, 1])),
+                    Arc::new(Int32Array::from(vec![10, 11, 10])),
+                    Arc::new(Int64Array::from(vec![1, 1, 1])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![2, 2])),
+                    Arc::new(Int32Array::from(vec![20, 21])),
+                    Arc::new(Int64Array::from(vec![1, 1])),
+                ],
+            )?,
+        ];
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("sort_col", 0),
+        ))])
+        .unwrap();
+        let input = TestMemoryExec::try_new(&[input_batches], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+
+        let group_by = PhysicalGroupBy::new_single(vec![
+            (col("sort_col", &schema)?, "sort_col".to_string()),
+            (col("group_col", &schema)?, "group_col".to_string()),
+        ]);
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("COUNT(value_col)")
+                .build()?,
+        )];
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggr_expr,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+        assert!(matches!(
+            aggregate.input_order_mode(),
+            InputOrderMode::PartiallySorted(_)
+        ));
+
+        let task_ctx = new_migrated_hash_ctx(2);
+        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::OrderedPartialAggregate(_)));
+
+        let stream: SendableRecordBatchStream = stream.into();
+        let output = collect(stream).await?;
+        assert_snapshot!(batches_to_sort_string(&output), @r"
++----------+-----------+-------------------------+
+| sort_col | group_col | COUNT(value_col)[count] |
++----------+-----------+-------------------------+
+| 1        | 10        | 2                       |
+| 1        | 11        | 1                       |
+| 2        | 20        | 1                       |
+| 2        | 21        | 1                       |
++----------+-----------+-------------------------+
+");
+
+        // Ordered streams don't implement memory limits yet.
+        let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
+        let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
+        assert!(matches!(stream, StreamType::GroupedHash(_)));
+
+        Ok(())
+    }
+
+    /// Ensures for ordered input, `OrderedFinalAggregateStream` is used.
+    #[tokio::test]
+    async fn ordered_final_aggregate_planning() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("COUNT(value)")
+                .build()?,
+        )];
+
+        let empty_input =
+            TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let partial_aggregate = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggr_expr.clone(),
+            vec![None],
+            empty_input,
+            Arc::clone(&schema),
+        )?;
+        let partial_schema = partial_aggregate.schema();
+        let partial_state_batch = RecordBatch::try_new(
+            Arc::clone(&partial_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 1, 2, 3])),
+                Arc::new(Int64Array::from(vec![2, 3, 5, 7])),
+            ],
+        )?;
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("key", 0),
+        ))])
+        .unwrap();
+        let final_input =
+            TestMemoryExec::try_new(&[vec![partial_state_batch]], partial_schema, None)?
+                .try_with_sort_information(vec![ordering])?;
+        let final_input = Arc::new(TestMemoryExec::update_cache(&Arc::new(final_input)));
+
+        let final_aggregate = AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by.as_final(),
+            aggr_expr,
+            vec![None],
+            final_input,
+            Arc::clone(&schema),
+        )?;
+        assert_eq!(final_aggregate.input_order_mode(), &InputOrderMode::Sorted);
+
+        let task_ctx = new_migrated_hash_ctx(2);
+        let stream = final_aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::OrderedFinalAggregate(_)));
+
+        let stream: SendableRecordBatchStream = stream.into();
+        let output = collect(stream).await?;
+        assert_snapshot!(batches_to_sort_string(&output), @r"
++-----+--------------+
+| key | COUNT(value) |
++-----+--------------+
+| 1   | 5            |
+| 2   | 5            |
+| 3   | 7            |
++-----+--------------+
+");
+
+        // Ordered streams don't implement memory limits yet.
+        let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
+        let stream = final_aggregate.execute_typed(0, &finite_memory_task_ctx)?;
+        assert!(matches!(stream, StreamType::GroupedHash(_)));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ordered_partial_aggregate_partially_sorted_no_emit_panic() -> Result<()> {
+        // Reproducer for #20445: emitting from PartiallySorted input must not
+        // drain more groups than the completed sort boundary allows.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("sort_col", DataType::Int32, false),
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+
+        // All rows share sort_col=1, so there is no completed sort boundary
+        // inside this batch even though there are many distinct groups.
+        let n = 256;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1; n])),
+                Arc::new(Int32Array::from((0..n as i32).collect::<Vec<_>>())),
+                Arc::new(Int64Array::from(vec![1; n])),
+            ],
+        )?;
+
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("sort_col", 0),
+        ))])
+        .unwrap();
+        let input = TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![
+                (col("sort_col", &schema)?, "sort_col".to_string()),
+                (col("group_col", &schema)?, "group_col".to_string()),
+            ]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("count_value")
+                    .build()?,
+            )],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+        assert!(matches!(
+            aggregate.input_order_mode(),
+            InputOrderMode::PartiallySorted(_)
+        ));
+
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(4096, 1.0)
+            .build_arc()?;
+        let session_config = SessionConfig::new().with_batch_size(128).set(
+            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+            &ScalarValue::UInt64(Some(u64::MAX)),
+        );
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(session_config),
+        );
+
+        let mut stream: SendableRecordBatchStream = Box::pin(
+            OrderedPartialAggregateStream::new(&aggregate, &task_ctx, 0)?,
+        );
+
+        while let Some(result) = stream.next().await {
+            if let Err(e) = result {
+                if e.to_string().contains("Resources exhausted") {
+                    break;
+                }
+                return Err(e);
+            }
+        }
 
         Ok(())
     }
@@ -6246,6 +6766,140 @@ mod tests {
             let actual: Vec<DataType> =
                 states.iter().map(|a| a.data_type().clone()).collect();
             assert_data_types("merge_batch(states)", &self.state_types, &actual)
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct NoFirstEmitUdaf {
+        signature: Signature,
+    }
+
+    impl NoFirstEmitUdaf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![DataType::Int32], Volatility::Immutable),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for NoFirstEmitUdaf {
+        fn name(&self) -> &str {
+            "no_first_emit"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+            Ok(vec![Arc::new(Field::new(
+                format!("{}[count]", args.name),
+                DataType::Int64,
+                false,
+            ))])
+        }
+
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            Ok(Box::new(NoFirstEmitAccumulator))
+        }
+
+        fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
+            true
+        }
+
+        fn create_groups_accumulator(
+            &self,
+            _args: AccumulatorArgs,
+        ) -> Result<Box<dyn GroupsAccumulator>> {
+            Ok(Box::new(NoFirstEmitGroupsAccumulator { counts: vec![] }))
+        }
+    }
+
+    #[derive(Debug)]
+    struct NoFirstEmitAccumulator;
+
+    impl Accumulator for NoFirstEmitAccumulator {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(Some(0)))
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self)
+        }
+
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            Ok(vec![ScalarValue::Int64(Some(0))])
+        }
+
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct NoFirstEmitGroupsAccumulator {
+        counts: Vec<i64>,
+    }
+
+    impl NoFirstEmitGroupsAccumulator {
+        fn emit_counts(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+            match emit_to {
+                EmitTo::All => {
+                    let counts = std::mem::take(&mut self.counts);
+                    Ok(Arc::new(Int64Array::from(counts)))
+                }
+                EmitTo::First(_) => internal_err!(
+                    "partial grouped aggregate output must materialize with EmitTo::All before slicing"
+                ),
+            }
+        }
+    }
+
+    impl GroupsAccumulator for NoFirstEmitGroupsAccumulator {
+        fn update_batch(
+            &mut self,
+            _values: &[ArrayRef],
+            group_indices: &[usize],
+            _opt_filter: Option<&BooleanArray>,
+            total_num_groups: usize,
+        ) -> Result<()> {
+            self.counts.resize(total_num_groups, 0);
+            for group_index in group_indices {
+                self.counts[*group_index] += 1;
+            }
+            Ok(())
+        }
+
+        fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+            self.emit_counts(emit_to)
+        }
+
+        fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+            Ok(vec![self.emit_counts(emit_to)?])
+        }
+
+        fn merge_batch(
+            &mut self,
+            _values: &[ArrayRef],
+            _group_indices: &[usize],
+            _total_num_groups: usize,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self) + self.counts.capacity() * size_of::<i64>()
         }
     }
 

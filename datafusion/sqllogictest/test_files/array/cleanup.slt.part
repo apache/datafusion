@@ -167,4 +167,3 @@ drop table large_arrays_values_without_nulls;
 
 statement ok
 drop table fixed_size_arrays_values_without_nulls;
-

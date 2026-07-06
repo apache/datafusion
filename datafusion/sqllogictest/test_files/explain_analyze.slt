@@ -300,6 +300,237 @@ reset datafusion.explain.analyze_categories;
 statement ok
 reset datafusion.explain.analyze_level;
 
+# ------------------------------------------------
+# Test memory metrics display.
+# ------------------------------------------------
+
+statement ok
+set datafusion.explain.analyze_level = dev;
+
+statement ok
+set datafusion.explain.analyze_categories = 'bytes';
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = true;
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+set datafusion.optimizer.hash_join_inlist_pushdown_max_size = 0;
+
+statement ok
+set datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values = 0;
+
+query TT
+EXPLAIN ANALYZE
+WITH t1 (k) AS (
+    VALUES (1), (2), (3)
+), t2 (k) AS (
+    VALUES (1), (2), (3)
+)
+SELECT *
+FROM t1
+JOIN t2 ON t1.k = t2.k;
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0)], metrics=[output_bytes=128.0 KB, build_mem_used=44.0 B]
+02)--ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
+03)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+04)--ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
+05)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+statement ok
+set datafusion.execution.hash_join_buffering_capacity = 1024;
+
+query TT
+EXPLAIN ANALYZE
+WITH t1 (k) AS (
+    VALUES (1), (2), (3)
+), t2 (k) AS (
+    VALUES (1), (2), (3)
+)
+SELECT *
+FROM t1
+JOIN t2 ON t1.k = t2.k;
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0)], metrics=[output_bytes=128.0 KB, build_mem_used=44.0 B]
+02)--ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
+03)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+04)--BufferExec: capacity=1024, metrics=[max_mem_used=128.0 B]
+05)----ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
+06)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+statement ok
+reset datafusion.execution.hash_join_buffering_capacity;
+
+query TT
+EXPLAIN ANALYZE
+WITH t1 (k) AS (
+    VALUES (1), (2)
+), t2 (k) AS (
+    VALUES (10), (20)
+)
+SELECT *
+FROM t1
+CROSS JOIN t2;
+----
+Plan with Metrics
+01)CrossJoinExec, metrics=[output_bytes=96.0 B, build_mem_used=128.0 B]
+02)--ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
+03)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+04)--ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
+05)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+query TT
+EXPLAIN ANALYZE
+WITH t1 (k) AS (
+    VALUES (1), (2)
+), t2 (k) AS (
+    VALUES (2), (3)
+)
+SELECT *
+FROM t1
+JOIN t2 ON t1.k < t2.k;
+----
+Plan with Metrics
+01)NestedLoopJoinExec: join_type=Inner, filter=k@0 < k@1, metrics=[output_bytes=128.0 KB, spilled_bytes=0.0 B, build_mem_used=128.0 B]
+02)--ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
+03)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+04)--ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
+05)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query TT
+EXPLAIN ANALYZE
+WITH t1 (k) AS (
+    VALUES (3), (4)
+), t2 (k) AS (
+    VALUES (1), (2)
+)
+SELECT *
+FROM t1
+JOIN t2 ON t1.k > t2.k;
+----
+Plan with Metrics
+01)PiecewiseMergeJoin: operator=Gt, join_type=Inner, on=(k > k), metrics=[output_bytes=0.0 B, build_mem_used=144.0 B]
+02)--SortExec: expr=[k@0 ASC], preserve_partitioning=[false], metrics=[output_bytes=16.0 B, spilled_bytes=0.0 B]
+03)----ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
+04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+05)--ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
+06)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+statement ok
+CREATE TABLE ea_smj_t1(a text, b int) AS VALUES ('Alice', 50), ('Alice', 100), ('Bob', 1);
+
+statement ok
+CREATE TABLE ea_smj_t2(a text, b int) AS VALUES ('Alice', 2), ('Alice', 1);
+
+query TT
+EXPLAIN ANALYZE
+SELECT ea_smj_t1.a, ea_smj_t1.b, ea_smj_t2.a, ea_smj_t2.b
+FROM ea_smj_t1
+JOIN ea_smj_t2 ON ea_smj_t1.a = ea_smj_t2.a
+    AND ea_smj_t2.b * 50 <= ea_smj_t1.b;
+----
+Plan with Metrics
+01)SortMergeJoinExec: join_type=Inner, on=[(a@0, a@0)], filter=CAST(b@1 AS Int64) * 50 <= CAST(b@0 AS Int64), metrics=[output_bytes=320.0 KB, spilled_bytes=0.0 B, peak_mem_used=432.0 B]
+02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false], metrics=[output_bytes=60.0 B, spilled_bytes=0.0 B]
+03)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+04)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false], metrics=[output_bytes=40.0 B, spilled_bytes=0.0 B]
+05)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+query TT
+EXPLAIN ANALYZE
+SELECT ea_smj_t1.a, ea_smj_t1.b
+FROM ea_smj_t1
+LEFT SEMI JOIN ea_smj_t2 ON ea_smj_t1.a = ea_smj_t2.a;
+----
+Plan with Metrics
+01)SortMergeJoinExec: join_type=LeftSemi, on=[(a@0, a@0)], metrics=[output_bytes=160.0 KB, spilled_bytes=0.0 B, peak_mem_used=0.0 B]
+02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false], metrics=[output_bytes=60.0 B, spilled_bytes=0.0 B]
+03)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+04)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false], metrics=[output_bytes=32.0 B, spilled_bytes=0.0 B]
+05)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+statement ok
+DROP TABLE ea_smj_t1;
+
+statement ok
+DROP TABLE ea_smj_t2;
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+statement ok
+set datafusion.execution.enable_migration_aggregate = false;
+
+query TT
+EXPLAIN ANALYZE
+WITH t (k) AS (
+    VALUES (1), (2), (1), (3)
+)
+SELECT k, count(*)
+FROM t
+GROUP BY k;
+----
+Plan with Metrics
+01)ProjectionExec: expr=[k@0 as k, count(Int64(1))@1 as count(*)], metrics=[output_bytes=1056.0 B]
+02)--AggregateExec: mode=Single, gby=[k@0 as k], aggr=[count(Int64(1))], metrics=[output_bytes=1056.0 B, spilled_bytes=0.0 B, peak_mem_used=9.2 KB]
+03)----ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
+04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+statement ok
+reset datafusion.execution.enable_migration_aggregate;
+
+statement ok
+reset datafusion.optimizer.prefer_hash_join;
+
+statement ok
+reset datafusion.optimizer.hash_join_inlist_pushdown_max_size;
+
+statement ok
+reset datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values;
+
+statement ok
+reset datafusion.optimizer.repartition_joins;
+
+statement ok
+reset datafusion.optimizer.enable_piecewise_merge_join;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+reset datafusion.explain.analyze_level;
+
 # ------------------------------------------------------------------
 # Same category/level filtering, but via the Postgres-style
 # `EXPLAIN (ANALYZE, METRICS ..., LEVEL ...)` statement option list.

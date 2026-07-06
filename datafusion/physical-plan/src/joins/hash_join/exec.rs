@@ -1092,6 +1092,12 @@ impl HashJoinExec {
         &self,
         partition_mode: PartitionMode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_or_internal_err!(
+            self.dynamic_filter.is_none(),
+            "Cannot swap HashJoinExec inputs after dynamic filters have been constructed. \
+             Optimizer rules that reorder join inputs must run before optimizer rules `FilterPushdown::new_post_optimization()`"
+        );
+
         let left = self.left();
         let right = self.right();
         let new_join = self
@@ -1247,8 +1253,8 @@ impl ExecutionPlan for HashJoinExec {
                     .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
                     .unzip();
                 vec![
-                    Distribution::HashPartitioned(left_expr),
-                    Distribution::HashPartitioned(right_expr),
+                    Distribution::KeyPartitioned(left_expr),
+                    Distribution::KeyPartitioned(right_expr),
                 ]
             }
             PartitionMode::Auto => vec![
@@ -6623,6 +6629,45 @@ mod tests {
                 .expect("DynamicFilterPhysicalExpr always has an expression_id"),
             df.expression_id()
                 .expect("DynamicFilterPhysicalExpr always has an expression_id"),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_swap_inputs_rejects_dynamic_filter() -> Result<()> {
+        let left = build_table(
+            ("l_key", &vec![1]),
+            ("l_payload", &vec![10]),
+            ("l_other", &vec![100]),
+        );
+        let right = build_table(
+            ("r_payload", &vec![20]),
+            ("r_key", &vec![1]),
+            ("r_other", &vec![200]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("l_key", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("r_key", &right.schema())?) as _,
+        )];
+
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftSemi,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?
+        .with_dynamic_filter_expr(dynamic_filter)?;
+
+        let err = join.swap_inputs(PartitionMode::CollectLeft).unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Cannot swap HashJoinExec inputs after dynamic filters have been constructed"
         );
         Ok(())
     }

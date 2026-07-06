@@ -19,8 +19,11 @@
 
 use arrow::{
     array::{Array, AsArray},
-    compute::{FilterBuilder, interleave_record_batch, prep_null_mask_filter},
-    row::{RowConverter, Rows, SortField},
+    compute::{
+        BatchCoalescer, FilterBuilder, interleave_record_batch, prep_null_mask_filter,
+        take_record_batch,
+    },
+    row::{OwnedRow, RowConverter, Rows, SortField},
 };
 use datafusion_expr::{ColumnarValue, Operator};
 use std::mem::size_of;
@@ -34,7 +37,7 @@ use super::metrics::{
 use crate::spill::get_record_batch_memory_size;
 use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
 
-use arrow::array::{ArrayRef, RecordBatch};
+use arrow::array::{ArrayRef, RecordBatch, UInt32Array};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     HashMap, Result, ScalarValue, internal_datafusion_err, internal_err,
@@ -192,6 +195,68 @@ impl TopKThreshold {
 
     fn is_more_selective_than(&self, current: &Self) -> bool {
         self.full_sort_key_row() < current.full_sort_key_row()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TopKHeapBoundaryRow<'a> {
+    row: &'a TopKRow,
+}
+
+impl<'a> TopKHeapBoundaryRow<'a> {
+    fn new(row: &'a TopKRow) -> Self {
+        Self { row }
+    }
+
+    fn full_sort_key_row(&self) -> &[u8] {
+        self.row.row()
+    }
+
+    fn is_more_selective_than(&self, current: Option<&TopKThreshold>) -> bool {
+        current
+            .map(|current| self.full_sort_key_row() < current.full_sort_key_row())
+            .unwrap_or(true)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TopKHeapBoundary<'a> {
+    row: &'a TopKRow,
+    batch: &'a RecordBatch,
+}
+
+impl<'a> TopKHeapBoundary<'a> {
+    fn new(row: &'a TopKRow, batch: &'a RecordBatch) -> Self {
+        Self { row, batch }
+    }
+
+    fn threshold_values(
+        &self,
+        sort_exprs: &[PhysicalSortExpr],
+    ) -> Result<Vec<ScalarValue>> {
+        let mut scalar_values = Vec::with_capacity(sort_exprs.len());
+        for sort_expr in sort_exprs {
+            let value = sort_expr
+                .expr
+                .evaluate(&self.batch.slice(self.row.index, 1))?;
+
+            let scalar = match value {
+                ColumnarValue::Scalar(scalar) => scalar,
+                ColumnarValue::Array(array) if array.len() == 1 => {
+                    ScalarValue::try_from_array(&array, 0)?
+                }
+                array => {
+                    return internal_err!("Expected a scalar value, got {:?}", array);
+                }
+            };
+            scalar_values.push(scalar);
+        }
+
+        Ok(scalar_values)
+    }
+
+    fn threshold(&self, common_prefix_row: Option<Vec<u8>>) -> TopKThreshold {
+        TopKThreshold::new(self.row.row().to_vec(), common_prefix_row)
     }
 }
 
@@ -424,6 +489,28 @@ impl TopK {
         replacements
     }
 
+    fn current_heap_boundary_row(&self) -> Option<TopKHeapBoundaryRow<'_>> {
+        self.heap.max().map(TopKHeapBoundaryRow::new)
+    }
+
+    fn current_heap_boundary(&self) -> Result<Option<TopKHeapBoundary<'_>>> {
+        let Some(row) = self.heap.max() else {
+            return Ok(None);
+        };
+
+        self.heap_boundary(row).map(Some)
+    }
+
+    fn heap_boundary<'a>(&'a self, row: &'a TopKRow) -> Result<TopKHeapBoundary<'a>> {
+        let batch_entry = self
+            .heap
+            .store
+            .get(row.batch_id)
+            .ok_or_else(|| internal_datafusion_err!("Invalid batch ID in TopKRow"))?;
+
+        Ok(TopKHeapBoundary::new(row, &batch_entry.batch))
+    }
+
     /// Update the filter representation of our TopK heap.
     /// For example, given the sort expression `ORDER BY a DESC, b ASC LIMIT 3`,
     /// and the current heap values `[(1, 5), (1, 4), (2, 3)]`,
@@ -436,42 +523,31 @@ impl TopK {
     /// ```
     fn update_filter(&mut self) -> Result<()> {
         // If the heap doesn't have k elements yet, we can't create thresholds
-        let Some(max_row) = self.heap.max() else {
+        let Some(boundary_row) = self.current_heap_boundary_row() else {
             return Ok(());
         };
 
-        let new_threshold_row = max_row.row();
-
         // Fast path: check if the current value in topk is better than what is
         // currently set in the filter with a read only lock
-        let needs_update = self
-            .filter
-            .read()
-            .shared_threshold
-            .as_ref()
-            .map(|current_threshold| {
-                // new < current means new threshold is more selective
-                new_threshold_row < current_threshold.full_sort_key_row()
-            })
-            .unwrap_or(true); // No current threshold, so we need to set one
+        let needs_update = {
+            let filter = self.filter.read();
+            boundary_row.is_more_selective_than(filter.shared_threshold.as_ref())
+        };
 
         // exit early if the current values are better
         if !needs_update {
             return Ok(());
         }
 
+        let boundary = self.heap_boundary(boundary_row.row)?;
+
         // Extract scalar values BEFORE acquiring lock to reduce critical section
-        let thresholds = match self.heap.get_threshold_values(&self.expr)? {
-            Some(t) => t,
-            None => return Ok(()),
-        };
+        let thresholds = boundary.threshold_values(&self.expr)?;
 
         // Build the filter expression OUTSIDE any synchronization
         let predicate = Self::build_filter_expression(&self.expr, &thresholds)?;
-        let new_threshold = TopKThreshold::new(
-            new_threshold_row.to_vec(),
-            self.encode_topk_common_prefix_row(max_row)?,
-        );
+        let new_threshold =
+            boundary.threshold(self.encode_topk_common_prefix_row(boundary)?);
 
         // update the threshold. Since there was a lock gap, we must check if it is still the best
         // may have changed while we were building the expression without the lock
@@ -629,44 +705,45 @@ impl TopK {
             return Ok(());
         }
 
-        // Early exit if the heap is not full (`heap.max()` only returns `Some` if the heap is full).
-        let Some(max_topk_row) = self.heap.max() else {
+        // Early exit only from the local heap once it has a full boundary row.
+        let Some(boundary) = self.current_heap_boundary()? else {
             return Ok(());
         };
 
-        // Encode the local heap max row's common-prefix projection.
-        let Some(heap_common_prefix_row) =
-            self.encode_topk_common_prefix_row(max_topk_row)?
-        else {
-            return Ok(());
-        };
-
-        // If the last row's prefix is strictly greater than the max prefix, mark as finished.
-        if batch_common_prefix > heap_common_prefix_row.as_slice() {
+        if self.batch_prefix_exceeds_heap_boundary(batch_common_prefix, boundary)? {
             self.finished = true;
         }
 
         Ok(())
     }
 
+    fn batch_prefix_exceeds_heap_boundary(
+        &self,
+        batch_common_prefix: &[u8],
+        boundary: TopKHeapBoundary<'_>,
+    ) -> Result<bool> {
+        let Some(heap_common_prefix_row) =
+            self.encode_topk_common_prefix_row(boundary)?
+        else {
+            return Ok(false);
+        };
+
+        Ok(batch_common_prefix > heap_common_prefix_row.as_slice())
+    }
+
     fn encode_topk_common_prefix_row(
         &self,
-        topk_row: &TopKRow,
+        boundary: TopKHeapBoundary<'_>,
     ) -> Result<Option<Vec<u8>>> {
         let Some(prefix_converter) = &self.common_sort_prefix_converter else {
             return Ok(None);
         };
 
-        let store_entry = self
-            .heap
-            .store
-            .get(topk_row.batch_id)
-            .ok_or(internal_datafusion_err!("Invalid batch id in topK heap"))?;
         let mut scratch = prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW);
         self.append_common_prefix_row(
             prefix_converter,
-            &store_entry.batch,
-            topk_row.index,
+            boundary.batch,
+            boundary.row.index,
             &mut scratch,
         )?;
         Ok(Some(scratch.row(0).as_ref().to_vec()))
@@ -864,7 +941,7 @@ impl TopKHeap {
     /// Returns the values stored in this heap, from values low to
     /// high, as a single [`RecordBatch`], and a sorted vec of the
     /// current heap's contents
-    pub fn emit_with_state(&mut self) -> Result<(Option<RecordBatch>, Vec<TopKRow>)> {
+    fn emit_with_state(&mut self) -> Result<(Option<RecordBatch>, Vec<TopKRow>)> {
         // generate sorted rows
         let topk_rows = std::mem::take(&mut self.inner).into_sorted_vec();
 
@@ -950,47 +1027,6 @@ impl TopKHeap {
             + (self.inner.capacity() * size_of::<TopKRow>())
             + self.store.size()
             + self.owned_bytes
-    }
-
-    fn get_threshold_values(
-        &self,
-        sort_exprs: &[PhysicalSortExpr],
-    ) -> Result<Option<Vec<ScalarValue>>> {
-        // If the heap doesn't have k elements yet, we can't create thresholds
-        let max_row = match self.max() {
-            Some(row) => row,
-            None => return Ok(None),
-        };
-
-        // Get the batch that contains the max row
-        let batch_entry = match self.store.get(max_row.batch_id) {
-            Some(entry) => entry,
-            None => return internal_err!("Invalid batch ID in TopKRow"),
-        };
-
-        // Extract threshold values for each sort expression
-        let mut scalar_values = Vec::with_capacity(sort_exprs.len());
-        for sort_expr in sort_exprs {
-            // Extract the value for this column from the max row
-            let expr = Arc::clone(&sort_expr.expr);
-            let value = expr.evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
-
-            // Convert to scalar value - should be a single value since we're evaluating on a single row batch
-            let scalar = match value {
-                ColumnarValue::Scalar(scalar) => scalar,
-                ColumnarValue::Array(array) if array.len() == 1 => {
-                    // Extract the first (and only) value from the array
-                    ScalarValue::try_from_array(&array, 0)?
-                }
-                array => {
-                    return internal_err!("Expected a scalar value, got {:?}", array);
-                }
-            };
-
-            scalar_values.push(scalar);
-        }
-
-        Ok(Some(scalar_values))
     }
 }
 
@@ -1163,6 +1199,218 @@ impl RecordBatchStore {
         size_of::<Self>()
             + self.batches.capacity() * (size_of::<u32>() + size_of::<RecordBatchEntry>())
             + self.batches_size
+    }
+}
+
+/// Top-K-per-partition operator state.
+///
+/// Sibling to [`TopK`]. Where `TopK` maintains a single global heap,
+/// `PartitionedTopK` maintains one [`TopKHeap`] per distinct partition
+/// key while sharing a single [`RowConverter`], [`MemoryReservation`],
+/// scratch [`Rows`] buffer, and [`TopKMetrics`] across all partitions.
+///
+/// This sharing is the point of the type: with N distinct partition
+/// keys, a naive `HashMap<_, TopK>` pays N × constant overhead for
+/// `RowConverter::new`, `MemoryConsumer::register`, and metric
+/// counter setup. `PartitionedTopK` pays it once.
+pub(crate) struct PartitionedTopK {
+    schema: SchemaRef,
+    metrics: TopKMetrics,
+    reservation: MemoryReservation,
+    /// ORDER BY expressions (excludes PARTITION BY).
+    expr: LexOrdering,
+    /// Encoder for ORDER BY columns. Reused across partitions.
+    row_converter: RowConverter,
+    /// Scratch row buffer reused across `insert_batch` calls.
+    scratch_rows: Rows,
+    /// PARTITION BY expressions.
+    partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    /// Encoder for the partition key.
+    partition_converter: RowConverter,
+    /// One heap per distinct partition key seen so far.
+    heaps: HashMap<OwnedRow, TopKHeap>,
+    k: usize,
+    batch_size: usize,
+}
+
+impl PartitionedTopK {
+    #[expect(clippy::too_many_arguments)]
+    pub(crate) fn try_new(
+        partition_id: usize,
+        schema: SchemaRef,
+        partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        partition_sort_fields: Vec<SortField>,
+        order_expr: LexOrdering,
+        k: usize,
+        batch_size: usize,
+        runtime: &Arc<RuntimeEnv>,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Result<Self> {
+        assert!(k > 0, "PartitionedTopK requires k > 0");
+        let reservation = MemoryConsumer::new(format!("PartitionedTopK[{partition_id}]"))
+            .register(&runtime.memory_pool);
+
+        let order_sort_fields = build_sort_fields(&order_expr, &schema)?;
+        let row_converter = RowConverter::new(order_sort_fields)?;
+        let scratch_rows =
+            row_converter.empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
+
+        let partition_converter = RowConverter::new(partition_sort_fields)?;
+
+        Ok(Self {
+            schema,
+            metrics: TopKMetrics::new(metrics, partition_id),
+            reservation,
+            expr: order_expr,
+            row_converter,
+            scratch_rows,
+            partition_exprs,
+            partition_converter,
+            heaps: HashMap::new(),
+            k,
+            batch_size,
+        })
+    }
+
+    /// Demultiplex `batch` rows by partition key, encode the ORDER BY
+    /// columns once for the whole batch, and feed each partition's
+    /// rows into its dedicated [`TopKHeap`].
+    pub(crate) fn insert_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let baseline = self.metrics.baseline.clone();
+        let _timer = baseline.elapsed_compute().timer();
+
+        let num_rows = batch.num_rows();
+        if num_rows == 0 {
+            return Ok(());
+        }
+
+        // 1. Evaluate + encode partition columns.
+        let pk_arrays: Vec<ArrayRef> = self
+            .partition_exprs
+            .iter()
+            .map(|e| e.evaluate(batch).and_then(|v| v.into_array(num_rows)))
+            .collect::<Result<_>>()?;
+        let pk_rows = self.partition_converter.convert_columns(&pk_arrays)?;
+
+        // 2. Demultiplex row indices by partition key (per-batch).
+        let mut groups: HashMap<OwnedRow, Vec<u32>> = HashMap::new();
+        for i in 0..num_rows {
+            groups
+                .entry(pk_rows.row(i).owned())
+                .or_default()
+                .push(i as u32);
+        }
+
+        // 3. Evaluate ORDER BY columns on the full batch and encode ONCE.
+        let ob_arrays: Vec<ArrayRef> = self
+            .expr
+            .iter()
+            .map(|e| e.expr.evaluate(batch).and_then(|v| v.into_array(num_rows)))
+            .collect::<Result<_>>()?;
+        self.scratch_rows.clear();
+        self.row_converter
+            .append(&mut self.scratch_rows, &ob_arrays)?;
+
+        // 4. Per-partition: take the sub-batch, walk indices, dispatch
+        //    qualifying rows into the partition's heap.
+        let k = self.k;
+        let mut replacements: usize = 0;
+        for (pk, indices) in groups {
+            let heap = self.heaps.entry(pk).or_insert_with(|| TopKHeap::new(k));
+
+            // Once a heap is full, most rows at high partition cardinality
+            // are rejected. Skip the gather + batch registration entirely
+            // when nothing in this partition group can improve the heap.
+            let any_qualify = indices.iter().any(|&orig_idx| {
+                let bytes = self.scratch_rows.row(orig_idx as usize);
+                match heap.max() {
+                    Some(max_row) => bytes.as_ref() < max_row.row(),
+                    None => true,
+                }
+            });
+            if !any_qualify {
+                continue;
+            }
+
+            let indices_arr = UInt32Array::from(indices);
+            let sub_batch = take_record_batch(batch, &indices_arr)?;
+            let mut entry = heap.register_batch(sub_batch);
+
+            for (sub_idx, &orig_idx) in indices_arr.values().iter().enumerate() {
+                let row = self.scratch_rows.row(orig_idx as usize);
+                match heap.max() {
+                    Some(max_row) if row.as_ref() >= max_row.row() => {}
+                    None | Some(_) => {
+                        heap.add(&mut entry, row, sub_idx);
+                        replacements += 1;
+                    }
+                }
+            }
+
+            heap.insert_batch_entry(entry);
+            heap.maybe_compact()?;
+        }
+
+        if replacements > 0 {
+            self.metrics.row_replacements.add(replacements);
+        }
+        self.reservation.try_resize(self.size())?;
+        Ok(())
+    }
+
+    /// Drain all heaps in partition-key order and return the rows as
+    /// a stream of coalesced `RecordBatch`es ordered by
+    /// `(partition_keys, order_keys)`.
+    pub(crate) fn emit(self) -> Result<SendableRecordBatchStream> {
+        let Self {
+            schema,
+            metrics,
+            reservation: _,
+            expr: _,
+            row_converter: _,
+            scratch_rows: _,
+            partition_exprs: _,
+            partition_converter: _,
+            mut heaps,
+            k: _,
+            batch_size,
+        } = self;
+        let _timer = metrics.baseline.elapsed_compute().timer();
+
+        let mut sorted_pks: Vec<OwnedRow> = heaps.keys().cloned().collect();
+        sorted_pks.sort();
+
+        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
+
+        for pk in sorted_pks {
+            let mut heap = heaps.remove(&pk).expect("key from heaps.keys()");
+            if let Some(batch) = heap.emit()? {
+                (&batch).record_output(&metrics.baseline);
+                coalescer.push_batch(batch)?;
+            }
+        }
+        coalescer.finish_buffered_batch()?;
+
+        let mut out: Vec<Result<RecordBatch>> = Vec::new();
+        while let Some(b) = coalescer.next_completed_batch() {
+            out.push(Ok(b));
+        }
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            futures::stream::iter(out),
+        )))
+    }
+
+    /// Total memory currently held by this operator, including all
+    /// per-partition heaps.
+    fn size(&self) -> usize {
+        size_of::<Self>()
+            + self.row_converter.size()
+            + self.partition_converter.size()
+            + self.scratch_rows.size()
+            + self.heaps.values().map(|h| h.size()).sum::<usize>()
+            + self.heaps.capacity() * (size_of::<OwnedRow>() + size_of::<TopKHeap>())
     }
 }
 
@@ -1810,6 +2058,322 @@ mod tests {
             &results
         );
 
+        Ok(())
+    }
+
+    /// Builds a `(pk Int32, val Int32)` schema and a `PartitionedTopK`
+    /// partitioned by `pk` with order `val ASC`. Helper for the
+    /// `PartitionedTopK` tests below.
+    fn build_partitioned_topk(k: usize) -> Result<(Arc<Schema>, PartitionedTopK)> {
+        build_partitioned_topk_with_opts(k, SortOptions::default(), false)
+    }
+
+    /// Variant of [`build_partitioned_topk`] that lets the test pick the
+    /// `val` column's `SortOptions` (direction, null ordering) and
+    /// nullability. Used by tests that exercise the shared encoder
+    /// across `ASC`/`DESC` and `NULLS FIRST/LAST` paths.
+    fn build_partitioned_topk_with_opts(
+        k: usize,
+        val_sort_options: SortOptions,
+        val_nullable: bool,
+    ) -> Result<(Arc<Schema>, PartitionedTopK)> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::Int32, false),
+            Field::new("val", DataType::Int32, val_nullable),
+        ]));
+
+        let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
+        let pk_sort_expr = PhysicalSortExpr {
+            expr: Arc::clone(&pk_expr),
+            options: SortOptions::default(),
+        };
+        let val_sort_expr = PhysicalSortExpr {
+            expr: col("val", schema.as_ref())?,
+            options: val_sort_options,
+        };
+
+        let partition_sort_fields = build_sort_fields(&[pk_sort_expr], &schema)?;
+        let order_expr = LexOrdering::from([val_sort_expr]);
+
+        let state = PartitionedTopK::try_new(
+            0,
+            Arc::clone(&schema),
+            vec![pk_expr],
+            partition_sort_fields,
+            order_expr,
+            k,
+            8, // batch_size
+            &Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
+        )?;
+        Ok((schema, state))
+    }
+
+    fn pk_val_batch(
+        schema: &Arc<Schema>,
+        pks: Vec<i32>,
+        vals: Vec<i32>,
+    ) -> Result<RecordBatch> {
+        Ok(RecordBatch::try_new(
+            Arc::clone(schema),
+            vec![
+                Arc::new(Int32Array::from(pks)),
+                Arc::new(Int32Array::from(vals)),
+            ],
+        )?)
+    }
+
+    /// Variant of [`pk_val_batch`] that accepts nullable `val`s. Used by
+    /// tests that exercise null-ordering through the shared encoder.
+    fn nullable_pk_val_batch(
+        schema: &Arc<Schema>,
+        pks: Vec<i32>,
+        vals: Vec<Option<i32>>,
+    ) -> Result<RecordBatch> {
+        Ok(RecordBatch::try_new(
+            Arc::clone(schema),
+            vec![
+                Arc::new(Int32Array::from(pks)),
+                Arc::new(Int32Array::from(vals)),
+            ],
+        )?)
+    }
+
+    /// Multiple distinct partition keys interleaved within a single
+    /// input batch — the per-batch demux, per-partition heap eviction,
+    /// and partition-key-ordered emit must all behave correctly.
+    #[tokio::test]
+    async fn test_partitioned_topk_multi_partition_within_batch() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk(2)?;
+
+        // pk=1 vals: 10, 5, 8 → top-2 ASC = [5, 8]
+        // pk=2 vals: 20, 15   → top-2 ASC = [15, 20]
+        // pk=3 vals: 7        → top-2 ASC = [7]
+        let batch =
+            pk_val_batch(&schema, vec![1, 2, 1, 2, 1, 3], vec![10, 20, 5, 15, 8, 7])?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 5   |",
+                "| 1  | 8   |",
+                "| 2  | 15  |",
+                "| 2  | 20  |",
+                "| 3  | 7   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// State must accumulate across `insert_batch` calls: a partition
+    /// key seen in batch 1 should still own its heap when batch 2
+    /// arrives, and a row in batch 2 that beats the existing K-th
+    /// best should evict the loser.
+    #[tokio::test]
+    async fn test_partitioned_topk_cross_batch_eviction() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk(2)?;
+
+        // Batch 1: pk=1 fills the heap with [50, 40].
+        state.insert_batch(&pk_val_batch(&schema, vec![1, 1], vec![50, 40])?)?;
+
+        // Batch 2: pk=1 sees a smaller value (10) — it must evict 50.
+        // pk=2 appears for the first time mid-stream.
+        state.insert_batch(&pk_val_batch(
+            &schema,
+            vec![1, 2, 1],
+            vec![10, 99, 60], // 60 > 40 stays on top, gets discarded
+        )?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 10  |",
+                "| 1  | 40  |",
+                "| 2  | 99  |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// Empty input must produce an empty output stream, not panic.
+    #[tokio::test]
+    async fn test_partitioned_topk_empty_input() -> Result<()> {
+        let (_schema, state) = build_partitioned_topk(3)?;
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert!(results.is_empty(), "empty input → empty output");
+        Ok(())
+    }
+
+    /// `fetch = 1` is a common case (rn = 1 filter). The heap should
+    /// hold exactly one row per partition: the partition's minimum.
+    #[tokio::test]
+    async fn test_partitioned_topk_fetch_one() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk(1)?;
+        state.insert_batch(&pk_val_batch(
+            &schema,
+            vec![1, 1, 2, 2, 3],
+            vec![3, 1, 9, 4, 7],
+        )?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 1   |",
+                "| 2  | 4   |",
+                "| 3  | 7   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// `ORDER BY val DESC` exercises the shared encoder's sort-direction
+    /// handling: the row converter must flip the sort sign for `val` so
+    /// that larger values compare smaller in row-encoded form. Each
+    /// partition should keep its top-K *largest* values.
+    #[tokio::test]
+    async fn test_partitioned_topk_desc_ordering() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_with_opts(
+            2,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+            false,
+        )?;
+
+        // pk=1 vals: 10, 5, 8, 12 → top-2 DESC = [12, 10]
+        // pk=2 vals: 20, 15, 25   → top-2 DESC = [25, 20]
+        let batch = pk_val_batch(
+            &schema,
+            vec![1, 2, 1, 2, 1, 1, 2],
+            vec![10, 20, 5, 15, 8, 12, 25],
+        )?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 12  |",
+                "| 1  | 10  |",
+                "| 2  | 25  |",
+                "| 2  | 20  |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// NULL sort values exercise the shared encoder's null-ordering
+    /// handling. With `ASC NULLS LAST`, NULLs sort *after* every
+    /// non-NULL value, so a partition whose only non-NULL value beats
+    /// a NULL must evict the NULL when `K = 1`. A partition that holds
+    /// only NULLs must still emit them.
+    #[tokio::test]
+    async fn test_partitioned_topk_nulls_last_ordering() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_with_opts(
+            1,
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            true,
+        )?;
+
+        // pk=1 vals: NULL, 7, NULL → top-1 ASC NULLS LAST = [7]
+        // pk=2 vals: NULL          → top-1                 = [NULL]
+        // pk=3 vals: NULL, 4, 2    → top-1                 = [2]
+        let batch = nullable_pk_val_batch(
+            &schema,
+            vec![1, 2, 1, 1, 3, 3, 3],
+            vec![None, None, Some(7), None, None, Some(4), Some(2)],
+        )?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 7   |",
+                "| 2  |     |",
+                "| 3  | 2   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// `ASC NULLS FIRST` (the `SortOptions::default()`) sorts NULLs
+    /// *before* every non-NULL value, so under `fetch = K` a partition's
+    /// NULLs are kept preferentially over larger non-NULL values.
+    #[tokio::test]
+    async fn test_partitioned_topk_nulls_first_ordering() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_with_opts(
+            2,
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+            true,
+        )?;
+
+        // pk=1 vals: NULL, 5, NULL, 8 → top-2 ASC NULLS FIRST = [NULL, NULL]
+        // pk=2 vals: 7, NULL          → top-2                  = [NULL, 7]
+        // pk=3 vals: 3, 1             → top-2                  = [1, 3]
+        let batch = nullable_pk_val_batch(
+            &schema,
+            vec![1, 2, 1, 3, 1, 2, 1, 3],
+            vec![
+                None,
+                Some(7),
+                Some(5),
+                Some(3),
+                None,
+                None,
+                Some(8),
+                Some(1),
+            ],
+        )?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  |     |",
+                "| 1  |     |",
+                "| 2  |     |",
+                "| 2  | 7   |",
+                "| 3  | 1   |",
+                "| 3  | 3   |",
+                "+----+-----+",
+            ],
+            &results
+        );
         Ok(())
     }
 }
