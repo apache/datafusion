@@ -116,6 +116,18 @@ impl<T: CursorValues> Cursor<T> {
         t
     }
 
+    /// Returns true if no rows of this cursor were consumed yet
+    pub fn is_at_start(&self) -> bool {
+        self.offset == 0
+    }
+
+    /// Compare this cursor's *last* row to `other`'s current row. Since the
+    /// values are sorted, `Less` means every remaining row of this cursor
+    /// sorts before all of `other`'s remaining rows.
+    pub fn compare_last_to(&self, other: &Self) -> Ordering {
+        T::compare(&self.values, self.values.len() - 1, &other.values, other.offset)
+    }
+
     pub fn is_eq_to_prev_one(&self, prev_cursor: Option<&Cursor<T>>) -> bool {
         if self.offset > 0 {
             self.is_eq_to_prev_row()
