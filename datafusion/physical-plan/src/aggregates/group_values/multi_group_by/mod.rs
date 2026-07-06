@@ -215,6 +215,11 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// [`GroupValuesRows`]: crate::aggregates::group_values::GroupValuesRows
     group_values: Vec<Box<dyn GroupColumn>>,
 
+    /// Indices into `group_values` ordered cheapest → most expensive comparison
+    /// cost. Built once in `try_new` from the schema so that `vectorized_equal_to`
+    /// eliminates rows with cheap columns before paying the cost of expensive ones.
+    compare_order: Vec<usize>,
+
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
 
@@ -273,6 +278,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         let map = HashTable::with_capacity(0);
         let group_values = Self::build_group_columns(&schema)?;
+        let compare_order = Self::build_group_compare_order(&schema);
         Ok(Self {
             schema,
             map,
@@ -281,6 +287,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             vectorized_operation_buffers: VectorizedOperationBuffers::default(),
             map_size: 0,
             group_values,
+            compare_order,
             hashes_buffer: Default::default(),
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         })
@@ -293,6 +300,12 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     /// `clear_shrink`). Centralising it keeps the post-condition that
     /// `self.group_values` always contains exactly one builder per schema
     /// field outside of those transient drain points.
+    fn build_group_compare_order(schema: &Schema) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..schema.fields().len()).collect();
+        order.sort_by_key(|&i| compare_tier(schema.field(i).data_type()));
+        order
+    }
+
     fn build_group_columns(schema: &Schema) -> Result<Vec<Box<dyn GroupColumn>>> {
         let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(schema.fields().len());
         for f in schema.fields().iter() {
@@ -651,8 +664,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         equal_to_results.truncate(0);
         equal_to_results.append_n(n, true);
 
-        for (col_idx, group_col) in self.group_values.iter().enumerate() {
-            group_col.vectorized_equal_to(
+        for &col_idx in &self.compare_order {
+            self.group_values[col_idx].vectorized_equal_to(
                 &self.vectorized_operation_buffers.equal_to_group_indices,
                 &cols[col_idx],
                 &self.vectorized_operation_buffers.equal_to_row_indices,
@@ -1075,6 +1088,35 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
         "make_group_column must push exactly one builder"
     );
     Ok(v.into_iter().next().unwrap())
+}
+/// Returns a comparison cost tier for `data_type` (1 = cheapest, 5 = most expensive).
+/// Used to order columns in [`GroupValuesColumn::compare_order`] so cheap comparisons
+/// eliminate rows before expensive ones are evaluated.
+/// see https://github.com/apache/datafusion/issues/23342
+fn compare_tier(data_type: &DataType) -> u8 {
+    match data_type {
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Timestamp(_, _) => 1,
+        DataType::Float32 | DataType::Float64 => 2,
+        DataType::Decimal128(_, _) | DataType::Boolean => 3,
+        DataType::Utf8View | DataType::BinaryView => 4,
+        DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Binary
+        | DataType::LargeBinary => 5,
+        _ => u8::MAX,
+    }
 }
 
 impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
