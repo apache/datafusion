@@ -26,11 +26,11 @@
 
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayRef, MutableArrayData, RecordBatch, RecordBatchOptions, UInt32Array,
-    make_array,
-};
+#[cfg(test)]
+use arrow::array::{Array, MutableArrayData, make_array};
+use arrow::array::{ArrayRef, RecordBatch, RecordBatchOptions, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+#[cfg(test)]
 use datafusion_common::cast::as_uint32_array;
 use datafusion_common::{Result, internal_err};
 
@@ -110,6 +110,7 @@ pub(crate) fn append_subpartition_column(
 }
 
 /// Reusable scratch space for [`reorder_by_subpartition`].
+#[cfg(test)]
 #[derive(Default)]
 pub(crate) struct SubpartitionReorderBuffer {
     counts: Vec<usize>,
@@ -118,6 +119,7 @@ pub(crate) struct SubpartitionReorderBuffer {
     runs: Vec<PartitionRun>,
 }
 
+#[cfg(test)]
 impl SubpartitionReorderBuffer {
     /// Create an empty reorder scratch buffer.
     pub(crate) fn new() -> Self {
@@ -138,6 +140,7 @@ impl SubpartitionReorderBuffer {
 }
 
 /// Reorder `batch` by its internal subpartition column and strip that column.
+#[cfg(test)]
 pub(crate) fn reorder_by_subpartition(
     batch: &RecordBatch,
     buffer: &mut SubpartitionReorderBuffer,
@@ -232,6 +235,7 @@ pub(crate) fn reorder_by_subpartition(
     Ok(Some(output))
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct SourcePartitionRun {
     start: usize,
@@ -239,6 +243,7 @@ struct SourcePartitionRun {
     output_start: usize,
 }
 
+#[cfg(test)]
 fn push_source_run(
     buffer: &mut SubpartitionReorderBuffer,
     relative_partition: usize,
@@ -256,6 +261,7 @@ fn push_source_run(
     });
 }
 
+#[cfg(test)]
 fn reorder_columns_by_source_runs(
     columns: &[ArrayRef],
     source_runs: &[SourcePartitionRun],
@@ -267,6 +273,7 @@ fn reorder_columns_by_source_runs(
         .collect()
 }
 
+#[cfg(test)]
 fn reorder_array_by_source_runs(
     array: &ArrayRef,
     source_runs: &[SourcePartitionRun],
@@ -287,6 +294,27 @@ pub(crate) fn partition_runs(schema: &Schema) -> Result<Option<Vec<PartitionRun>
         .get(AGGR_PARTITION_RUNS_METADATA_KEY)
         .map(|value| decode_partition_runs(value))
         .transpose()
+}
+
+/// Return `batch` without partition run metadata.
+pub(crate) fn strip_partition_runs_metadata(batch: &RecordBatch) -> Result<RecordBatch> {
+    if !batch
+        .schema_ref()
+        .metadata()
+        .contains_key(AGGR_PARTITION_RUNS_METADATA_KEY)
+    {
+        return Ok(batch.clone());
+    }
+
+    let mut metadata = batch.schema_ref().metadata().clone();
+    metadata.remove(AGGR_PARTITION_RUNS_METADATA_KEY);
+    let schema = Arc::new(Schema::new_with_metadata(
+        batch.schema_ref().fields().clone(),
+        metadata,
+    ));
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    RecordBatch::try_new_with_options(schema, batch.columns().to_vec(), &options)
+        .map_err(Into::into)
 }
 
 /// Encode partition runs as schema metadata value.
@@ -325,7 +353,7 @@ pub(crate) fn set_partition_runs_metadata(
     Ok(batch)
 }
 
-fn subpartition_column_index(schema: &Schema) -> Option<usize> {
+pub(crate) fn subpartition_column_index(schema: &Schema) -> Option<usize> {
     schema
         .fields()
         .iter()
@@ -341,6 +369,17 @@ fn strip_subpartition_schema(schema: &SchemaRef, subpartition_idx: usize) -> Sch
         .map(|(_, field)| Arc::clone(field))
         .collect::<Vec<_>>();
     Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+/// Return `batch` without its internal subpartition column.
+pub(crate) fn strip_subpartition_column(
+    batch: &RecordBatch,
+    subpartition_idx: usize,
+) -> Result<RecordBatch> {
+    let schema = strip_subpartition_schema(batch.schema_ref(), subpartition_idx);
+    let columns = strip_subpartition_columns(batch, subpartition_idx);
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    RecordBatch::try_new_with_options(schema, columns, &options).map_err(Into::into)
 }
 
 fn strip_subpartition_columns(
