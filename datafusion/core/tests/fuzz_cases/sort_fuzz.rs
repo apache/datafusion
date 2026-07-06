@@ -40,7 +40,7 @@ use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
 const KB: usize = 1 << 10;
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn test_sort_10k_mem() {
     for (batch_size, should_spill) in [(5, false), (20000, true), (500000, true)] {
         let (input, collected) = SortTest::new()
@@ -58,7 +58,7 @@ async fn test_sort_10k_mem() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn test_sort_100k_mem() {
     for (batch_size, should_spill) in
         [(5, false), (10000, false), (20000, true), (1000000, true)]
@@ -78,7 +78,7 @@ async fn test_sort_100k_mem() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn test_sort_strings_100k_mem() {
     for (batch_size, should_spill) in
         [(5, false), (1000, false), (10000, true), (20000, true)]
@@ -116,7 +116,7 @@ async fn test_sort_strings_100k_mem() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn test_sort_multi_columns_100k_mem() {
     for (batch_size, should_spill) in
         [(5, false), (1000, false), (10000, true), (20000, true)]
