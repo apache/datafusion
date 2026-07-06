@@ -168,8 +168,8 @@ pub struct ListFilesResult {
 /// // Create a new TableProvider
 /// let provider = Arc::new(ListingTable::try_new(config)?);
 ///
-/// # Ok(provider)
-/// # }
+/// Ok(provider)
+/// }
 /// ```
 #[derive(Debug, Clone)]
 pub struct ListingTable {
