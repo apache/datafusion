@@ -970,6 +970,7 @@ where
     }
 
     fn size(&self) -> usize {
-        self.counts.capacity() * size_of::<u64>() + self.sums.capacity() * size_of::<T>()
+        self.counts.capacity() * size_of::<u64>()
+            + self.sums.capacity() * size_of::<T::Native>()
     }
 }
