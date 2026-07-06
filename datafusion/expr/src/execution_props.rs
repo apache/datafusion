@@ -205,11 +205,6 @@ impl SubqueryContext {
     pub fn results(&self) -> &ScalarSubqueryResults {
         &self.results
     }
-
-    /// Returns true if no subqueries are registered.
-    pub fn is_empty(&self) -> bool {
-        self.indexes.is_empty()
-    }
 }
 
 /// Index of a scalar subquery within a [`ScalarSubqueryResults`] container.
