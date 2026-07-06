@@ -1092,7 +1092,7 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
 /// Returns a comparison cost tier for `data_type` (1 = cheapest, 5 = most expensive).
 /// Used to order columns in [`GroupValuesColumn::compare_order`] so cheap comparisons
 /// eliminate rows before expensive ones are evaluated.
-/// see https://github.com/apache/datafusion/issues/23342
+/// see <https://github.com/apache/datafusion/issues/23342>
 fn compare_tier(data_type: &DataType) -> u8 {
     match data_type {
         DataType::Int8
