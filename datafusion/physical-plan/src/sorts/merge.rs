@@ -356,6 +356,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 }
                 // Flush already-merged rows first
                 // they all sort before the skipped batch
+                //
+                // No need to reserve memory for holding this batch: it is a
+                // zero-copy slice of a batch the builder still buffers which also reserve memory for
                 self.pending_skipped_batch = Some(batch);
                 return Poll::Ready(self.emit_in_progress_batch().transpose());
             }
