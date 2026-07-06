@@ -2940,6 +2940,32 @@ macro_rules! expr_vec_fmt {
 }
 
 struct SchemaDisplay<'a>(&'a Expr);
+
+fn write_schema_display_binary_child(
+    f: &mut Formatter<'_>,
+    expr: &Expr,
+    precedence: u8,
+) -> fmt::Result {
+    match expr {
+        Expr::BinaryExpr(child) => {
+            let child_precedence = child.op.precedence();
+            if child_precedence == 0 || child_precedence < precedence {
+                write!(f, "({})", SchemaDisplay(expr))
+            } else {
+                write!(f, "{}", SchemaDisplay(expr))
+            }
+        }
+        _ => write!(f, "{}", SchemaDisplay(expr)),
+    }
+}
+
+fn write_schema_display_unary_child(f: &mut Formatter<'_>, expr: &Expr) -> fmt::Result {
+    match expr {
+        Expr::BinaryExpr(_) => write!(f, "({})", SchemaDisplay(expr)),
+        _ => write!(f, "{}", SchemaDisplay(expr)),
+    }
+}
+
 impl Display for SchemaDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
@@ -2994,7 +3020,10 @@ impl Display for SchemaDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right),)
+                let precedence = op.precedence();
+                write_schema_display_binary_child(f, left, precedence)?;
+                write!(f, " {op} ")?;
+                write_schema_display_binary_child(f, right, precedence)
             }
             Expr::Case(Case {
                 expr,
@@ -3104,8 +3133,15 @@ impl Display for SchemaDisplay<'_> {
 
                 Ok(())
             }
-            Expr::Negative(expr) => write!(f, "(- {})", SchemaDisplay(expr)),
-            Expr::Not(expr) => write!(f, "NOT {}", SchemaDisplay(expr)),
+            Expr::Negative(expr) => {
+                write!(f, "(- ")?;
+                write_schema_display_unary_child(f, expr)?;
+                write!(f, ")")
+            }
+            Expr::Not(expr) => {
+                write!(f, "NOT ")?;
+                write_schema_display_unary_child(f, expr)
+            }
             Expr::Unnest(Unnest { expr }) => {
                 write!(f, "UNNEST({})", SchemaDisplay(expr))
             }
@@ -3245,6 +3281,31 @@ impl Display for SchemaDisplay<'_> {
 /// A helper struct for displaying an `Expr` as an SQL-like string.
 struct SqlDisplay<'a>(&'a Expr);
 
+fn write_sql_display_binary_child(
+    f: &mut Formatter<'_>,
+    expr: &Expr,
+    precedence: u8,
+) -> fmt::Result {
+    match expr {
+        Expr::BinaryExpr(child) => {
+            let child_precedence = child.op.precedence();
+            if child_precedence == 0 || child_precedence < precedence {
+                write!(f, "({})", SqlDisplay(expr))
+            } else {
+                write!(f, "{}", SqlDisplay(expr))
+            }
+        }
+        _ => write!(f, "{}", SqlDisplay(expr)),
+    }
+}
+
+fn write_sql_display_unary_child(f: &mut Formatter<'_>, expr: &Expr) -> fmt::Result {
+    match expr {
+        Expr::BinaryExpr(_) => write!(f, "({})", SqlDisplay(expr)),
+        _ => write!(f, "{}", SqlDisplay(expr)),
+    }
+}
+
 impl Display for SqlDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
@@ -3275,7 +3336,10 @@ impl Display for SqlDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right),)
+                let precedence = op.precedence();
+                write_sql_display_binary_child(f, left, precedence)?;
+                write!(f, " {op} ")?;
+                write_sql_display_binary_child(f, right, precedence)
             }
             Expr::Case(Case {
                 expr,
@@ -3379,8 +3443,15 @@ impl Display for SqlDisplay<'_> {
 
                 Ok(())
             }
-            Expr::Negative(expr) => write!(f, "(- {})", SqlDisplay(expr)),
-            Expr::Not(expr) => write!(f, "NOT {}", SqlDisplay(expr)),
+            Expr::Negative(expr) => {
+                write!(f, "(- ")?;
+                write_sql_display_unary_child(f, expr)?;
+                write!(f, ")")
+            }
+            Expr::Not(expr) => {
+                write!(f, "NOT ")?;
+                write_sql_display_unary_child(f, expr)
+            }
             Expr::Unnest(Unnest { expr }) => {
                 write!(f, "UNNEST({})", SqlDisplay(expr))
             }
@@ -4071,6 +4142,33 @@ mod test {
         assert_eq!("Decimal128(NULL,10,2)", format!("{null_expr}"));
         assert_eq!("Decimal128(NULL,10,2)", null_expr.schema_name().to_string());
         assert_eq!("NULL", null_expr.human_display().to_string());
+    }
+
+    #[test]
+    fn format_nested_binary_exprs_with_parentheses() {
+        let one_plus_two = binary_expr(lit(1i64), Operator::Plus, lit(2i64));
+        let expr = binary_expr(one_plus_two.clone(), Operator::Multiply, lit(3i64));
+
+        assert_eq!(
+            "(Int64(1) + Int64(2)) * Int64(3)",
+            expr.schema_name().to_string()
+        );
+        assert_eq!("(1 + 2) * 3", expr.human_display().to_string());
+
+        let negative_expr = Expr::Negative(Box::new(one_plus_two.clone()));
+        assert_eq!(
+            "(- (Int64(1) + Int64(2)))",
+            negative_expr.schema_name().to_string()
+        );
+        assert_eq!("(- (1 + 2))", negative_expr.human_display().to_string());
+
+        let not_expr =
+            Expr::Not(Box::new(binary_expr(lit(1i64), Operator::Eq, lit(2i64))));
+        assert_eq!(
+            "NOT (Int64(1) = Int64(2))",
+            not_expr.schema_name().to_string()
+        );
+        assert_eq!("NOT (1 = 2)", not_expr.human_display().to_string());
     }
 
     #[test]
