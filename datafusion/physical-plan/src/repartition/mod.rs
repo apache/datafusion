@@ -61,7 +61,7 @@ use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, RangePartitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use crate::filter_pushdown::{
@@ -575,10 +575,11 @@ enum BatchPartitionerState {
     Range {
         /// Ordered partitioning key.
         ordering: LexOrdering,
+        /// Sort options from the `LexOrdering`
+        sort_options: Vec<SortOptions>,
         /// Boundaries between adjacent partitions.
         split_points: Vec<SplitPoint>,
-        /// Collection of arrays, where the index of each array is associated w/ that corresponding output partition, and the values in that array
-        /// correspond to the rows that will make up the RecordBatch being sent to the corresponding output partition
+        /// Row indices grouped by output partition
         indices: Vec<Vec<u32>>,
         /// Buffer of `ScalarValue` used to represent the values for a row - based on the `LexOrdering` ordering - to compare against split points
         partition_buffer: Vec<ScalarValue>,
@@ -723,20 +724,22 @@ impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] for range-based repartitioning.
     ///
     /// # Parameters
-    /// - `ordering`: Expressions used to define the partitioning key and ordering
-    /// - `split_points`: Tuples used to define the boundaries between adjacent partitions
-    /// - `num_partitions`: Total number of output partitions
+    /// - `range_partitioning`: `RangePartitioning` struct used for ordering, split points, and number of partitions
     /// - `timer`: Metric used to record time spent during repartitioning.
     pub fn new_range_partitioner(
-        ordering: LexOrdering,
-        split_points: Vec<SplitPoint>,
-        num_partitions: usize,
+        range_partitioning: &RangePartitioning,
         timer: metrics::Time,
     ) -> Self {
+        let ordering = range_partitioning.ordering().clone();
+        let split_points = range_partitioning.split_points().to_vec();
+        let num_partitions = range_partitioning.partition_count();
+        let sort_options: Vec<SortOptions> = ordering.iter().map(|e| e.options).collect();
+
         Self {
             state: BatchPartitionerState::Range {
                 partition_buffer: Vec::with_capacity(ordering.len()),
                 ordering,
+                sort_options,
                 split_points,
                 indices: vec![vec![]; num_partitions],
             },
@@ -747,10 +750,10 @@ impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] based on the provided [`Partitioning`] scheme.
     ///
     /// This is a convenience constructor that delegates to the specialized
-    /// hash or round-robin or range constructors depending on the partitioning variant.
+    /// hash, round-robin, or range constructors depending on the partitioning variant.
     ///
     /// # Parameters
-    /// - `partitioning`: Partitioning scheme to apply (hash or round-robin or range).
+    /// - `partitioning`: Partitioning scheme to apply (hash, round-robin, or range).
     /// - `timer`: Metric used to record time spent during repartitioning.
     /// - `input_partition`: Index of the current input partition.
     /// - `num_input_partitions`: Total number of input partitions.
@@ -776,12 +779,9 @@ impl BatchPartitioner {
                     num_input_partitions,
                 ))
             }
-            Partitioning::Range(range_repartitioning) => Ok(Self::new_range_partitioner(
-                range_repartitioning.ordering().clone(),
-                range_repartitioning.split_points().to_vec(),
-                range_repartitioning.partition_count(),
-                timer,
-            )),
+            Partitioning::Range(range_repartitioning) => {
+                Ok(Self::new_range_partitioner(&range_repartitioning, timer))
+            }
             other => {
                 not_impl_err!("Unsupported repartitioning scheme {other:?}")
             }
@@ -870,6 +870,7 @@ impl BatchPartitioner {
                 }
                 BatchPartitionerState::Range {
                     ordering,
+                    sort_options,
                     split_points,
                     indices,
                     partition_buffer,
@@ -883,13 +884,11 @@ impl BatchPartitioner {
                     )?;
 
                     indices.iter_mut().for_each(|v| v.clear());
-                    let sort_options: Vec<SortOptions> =
-                        ordering.iter().map(|e| e.options).collect();
 
-                    Self::partition_indices_for_split_points(
+                    Self::partition_range_indices(
                         &arrays,
                         split_points,
-                        &sort_options,
+                        sort_options,
                         partition_buffer,
                         indices,
                     )?;
@@ -910,25 +909,28 @@ impl BatchPartitioner {
     /// This function takes the `arrays` associated with the evaluated expressions for the ordering, split points and sort options, and indices array
     /// Then for every row, creates the "row key" based on the given ordering for the range, and binary searches through the split points to find the appropriate partition index
     /// That partition index is associated with the array in `indices`, which is given the row index, meaning that the row is sent to the partition at that index
-    fn partition_indices_for_split_points(
+    fn partition_range_indices(
         arrays: &[Arc<dyn Array>],
         split_points: &[SplitPoint],
         sort_options: &[SortOptions],
-        row_key: &mut Vec<ScalarValue>,
+        row_key_buffer: &mut Vec<ScalarValue>,
         indices: &mut [Vec<u32>],
     ) -> Result<()> {
         use std::cmp::Ordering;
         let num_rows = arrays.first().map(|a| a.len()).unwrap_or(0);
         for row_idx in 0..num_rows {
-            // Note that `extract_row_at_idx_to_buf` clears the buffer `row_key` on each invocation, creating a new row key for comparison for each row
-            extract_row_at_idx_to_buf(arrays, row_idx, row_key)?;
+            // Note that `extract_row_at_idx_to_buf` clears the `row_key_buffer` on each invocation, creating a new row key for comparison for each row
+            extract_row_at_idx_to_buf(arrays, row_idx, row_key_buffer)?;
 
             let mut low = 0;
             let mut high = split_points.len();
             while low < high {
                 let mid = low + (high - low) / 2;
-                let comparison =
-                    compare_rows(row_key, split_points[mid].values(), sort_options)?;
+                let comparison = compare_rows(
+                    row_key_buffer,
+                    split_points[mid].values(),
+                    sort_options,
+                )?;
                 match comparison {
                     Ordering::Less => high = mid,
                     Ordering::Equal | Ordering::Greater => low = mid + 1,
@@ -1760,9 +1762,7 @@ impl RepartitionExec {
             }
             Partitioning::Range(range_partitioning) => {
                 BatchPartitioner::new_range_partitioner(
-                    range_partitioning.ordering().clone(),
-                    range_partitioning.split_points().to_vec(),
-                    range_partitioning.partition_count(),
+                    range_partitioning,
                     metrics.repartition_time.clone(),
                 )
             }
