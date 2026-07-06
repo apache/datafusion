@@ -246,7 +246,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             self.produced += batch.num_rows();
             return Poll::Ready(Some(Ok(batch)));
         }
-        
+
         // Once all partitions have set their corresponding cursors for the loser tree,
         // we skip the following block. Until then, this function may be called multiple
         // times and can return Poll::Pending if any partition returns Poll::Pending.
@@ -333,16 +333,15 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             //
             // TODO - support fetch
             if self.fetch.is_none()
-              && self
-              .cursors[stream_idx]
-              .as_ref()
-              .is_some_and(|cursor| cursor.is_at_start())
-              && self.winner_batch_beats_all(stream_idx)
+                && self.cursors[stream_idx]
+                    .as_ref()
+                    .is_some_and(|cursor| cursor.is_at_start())
+                && self.winner_batch_beats_all(stream_idx)
             {
                 let batch = self
-                  .in_progress
-                  .remaining_rows_of(stream_idx)
-                  .expect("winner cursor is at the start, so rows remain");
+                    .in_progress
+                    .remaining_rows_of(stream_idx)
+                    .expect("winner cursor is at the start, so rows remain");
                 // The batch is fully emitted: retire the cursor like `advance_cursors` does for a finished one
                 self.prev_cursors[stream_idx] = self.cursors[stream_idx].take();
                 self.loser_tree_adjusted = false;
@@ -356,7 +355,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 self.pending_skipped_batch = Some(batch);
                 return Poll::Ready(self.emit_in_progress_batch().transpose());
             }
-            
+
             if self.advance_cursors(stream_idx) {
                 self.loser_tree_adjusted = false;
                 self.in_progress.push_row(stream_idx);
@@ -389,14 +388,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         let mut node = self.lt_leaf_node_index(winner);
         while node != 0 {
             let challenger = self.loser_tree[node];
-            if let Some(other) = &self.cursors[challenger] {
-                if !winner_cursor
-                  .compare_last_to(other)
-                  .then_with(|| winner.cmp(&challenger))
-                  .is_lt()
-                {
-                    return false;
-                }
+            if let Some(other) = &self.cursors[challenger]
+                && !winner_cursor
+                    .compare_last_to(other)
+                    .then_with(|| winner.cmp(&challenger))
+                    .is_lt()
+            {
+                return false;
             }
             node = self.lt_parent_node_index(node);
         }

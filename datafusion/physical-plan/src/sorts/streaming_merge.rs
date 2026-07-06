@@ -265,3 +265,232 @@ impl<'a> StreamingMergeBuilder<'a> {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::collect;
+    use crate::memory::MemoryStream;
+    use arrow::array::{Int32Array, RecordBatch};
+    use arrow::datatypes::Int32Type;
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::metrics::ExecutionPlanMetricsSet;
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+    use std::sync::Arc;
+
+    /// Merge the given streams (each a list of batches of `sort_key` values)
+    /// and return the merged values.
+    async fn merge_i32_streams(
+        inputs: Vec<Vec<Vec<i32>>>,
+        batch_size: usize,
+        fetch: Option<usize>,
+    ) -> Vec<Vec<i32>> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "sort_key",
+            DataType::Int32,
+            false,
+        )]));
+
+        let streams = inputs
+          .into_iter()
+          .map(|batches| {
+              let batches = batches
+                .into_iter()
+                .map(|values| {
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![Arc::new(Int32Array::from(values))],
+                    )
+                      .unwrap()
+                })
+                .collect::<Vec<_>>();
+              Box::pin(
+                  MemoryStream::try_new(batches, Arc::clone(&schema), None).unwrap(),
+              ) as SendableRecordBatchStream
+          })
+          .collect::<Vec<_>>();
+
+        let merged = StreamingMergeBuilder::new()
+          .with_streams(streams)
+          .with_batch_size(batch_size)
+          .with_schema(Arc::clone(&schema))
+          .with_reservation({
+              let mem_pool: Arc<dyn MemoryPool> =
+                Arc::new(UnboundedMemoryPool::default());
+              MemoryConsumer::new("merge stream mock memory").register(&mem_pool)
+          })
+          .with_expressions(
+              &([
+                  PhysicalSortExpr::new_default(col("sort_key", &schema).unwrap())
+                    .asc(),
+              ]
+                .into()),
+          )
+          .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+          .with_fetch(fetch)
+          .build()
+          .unwrap();
+
+        let output = collect(merged).await.unwrap();
+
+        output
+          .iter()
+          .map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
+          .collect()
+    }
+
+    fn flatten_vec<T>(input: Vec<Vec<T>>) -> Vec<T> {
+        input.into_iter().flatten().collect()
+    }
+
+    #[tokio::test]
+    async fn test_merge_non_overlapping_batches() {
+        // streams take turns holding the smallest batch
+        let streams = vec![
+            vec![
+                vec![1, 2, 3, 4, 5],
+                vec![16, 17, 18, 19, 20],
+                vec![31, 32, 33],
+            ],
+            vec![
+                vec![6, 7, 8, 9, 10],
+                vec![21, 22, 23, 24, 25],
+                vec![34, 35, 36],
+            ],
+            vec![
+                vec![11, 12, 13, 14, 15],
+                vec![26, 27, 28, 29, 30],
+                vec![37, 38],
+            ],
+        ];
+
+        let output = merge_i32_streams(streams, 5, None).await;
+
+        assert_eq!(flatten_vec(output), (1..=38).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn test_merge_interleaved_rows() {
+        // every batch overlaps batches of the other streams
+        let streams = vec![
+            vec![vec![1, 4, 7], vec![10, 13, 16]],
+            vec![vec![2, 5, 8], vec![11, 14, 17]],
+            vec![vec![3, 6, 9], vec![12, 15, 18]],
+        ];
+
+        let output = merge_i32_streams(streams, 4, None).await;
+
+        assert_eq!(flatten_vec(output), (1..=18).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn test_merge_some_rows_from_other_streams_then_a_whole_batch_from_one() {
+        // one row from stream 0, two from stream 1 (batch_size 4 is still
+        // not filled), then stream 2's entire batch [4, 5, 6, 7] sorts before
+        // everything the other streams have left (8 and 11)
+        let streams = vec![
+            vec![vec![1, 8, 9, 10], vec![17, 18, 19, 20]],
+            vec![vec![2, 3, 11, 12], vec![21, 22, 23, 24]],
+            vec![vec![4, 5, 6, 7], vec![13, 14, 15, 16]],
+        ];
+
+        let output = merge_i32_streams(streams, 4, None).await;
+
+        assert_eq!(flatten_vec(output), (1..=24).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn test_merge_equal_values_across_batch_and_stream_boundaries() {
+        // the value 3 ends stream 0's first batch, starts its second
+        // one, and appears in every other stream as well
+        let streams = vec![
+            vec![vec![1, 2, 3], vec![3, 3, 4]],
+            vec![vec![3, 4, 5], vec![5, 6, 7]],
+            vec![vec![3, 3, 3], vec![7, 7, 7]],
+        ];
+
+        let output = merge_i32_streams(streams, 3, None).await;
+
+        assert_eq!(
+            flatten_vec(output),
+            vec![1, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 5, 5, 6, 7, 7, 7, 7]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_streams_of_different_lengths() {
+        // stream 1 ends first, then stream 2, stream 0 finishes alone
+        let streams = vec![
+            vec![
+                vec![1, 2],
+                vec![3, 4],
+                vec![5, 6],
+                vec![7, 8],
+                vec![20, 21, 22],
+            ],
+            vec![vec![0, 9]],
+            vec![vec![4, 5], vec![10, 11, 12]],
+        ];
+
+        let output = merge_i32_streams(streams, 4, None).await;
+
+        assert_eq!(
+            flatten_vec(output),
+            vec![0, 1, 2, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10, 11, 12, 20, 21, 22]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_batch_size_smaller_than_input_batches() {
+        let streams = vec![
+            vec![vec![1, 4, 7, 10], vec![13, 14, 15, 16]],
+            vec![vec![2, 5, 8, 11]],
+            vec![vec![3, 6, 9, 12]],
+        ];
+
+        let output = merge_i32_streams(streams, 2, None).await;
+
+        assert_eq!(flatten_vec(output), (1..=16).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn test_merge_batch_size_larger_than_entire_input() {
+        let streams = vec![
+            vec![vec![1, 4, 7, 10], vec![13, 14, 15, 16]],
+            vec![vec![2, 5, 8, 11]],
+            vec![vec![3, 6, 9, 12]],
+        ];
+
+        let output = merge_i32_streams(streams, 8192, None).await;
+
+        assert_eq!(flatten_vec(output), (1..=16).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn test_merge_fetch_smaller_than_input() {
+        let streams = vec![
+            vec![vec![1, 4, 7], vec![10, 11, 12]],
+            vec![vec![2, 5, 8]],
+            vec![vec![3, 6, 9]],
+        ];
+
+        let output = merge_i32_streams(streams, 4, Some(5)).await;
+
+        assert_eq!(flatten_vec(output), vec![1, 2, 3, 4, 5]);
+    }
+
+    #[tokio::test]
+    async fn test_merge_fetch_larger_than_input() {
+        let streams = vec![
+            vec![vec![1, 4, 7], vec![10, 11, 12]],
+            vec![vec![2, 5, 8]],
+            vec![vec![3, 6, 9]],
+        ];
+
+        let output = merge_i32_streams(streams, 4, Some(100)).await;
+
+        assert_eq!(flatten_vec(output), (1..=12).collect::<Vec<_>>());
+    }
+
+}
