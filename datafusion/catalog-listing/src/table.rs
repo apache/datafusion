@@ -146,15 +146,15 @@ pub struct ListFilesResult {
 /// # use datafusion_datasource_parquet::file_format::ParquetFormat;/// #
 /// # use datafusion_catalog::Session;
 /// async fn get_listing_table(session: &dyn Session) -> Result<Arc<dyn TableProvider>> {
-/// let table_path = "/path/to/parquet";
+///     let table_path = "/path/to/parquet";
 ///
-/// // Parse the path
-/// let table_path = ListingTableUrl::parse(table_path)?;
+///     // Parse the path
+///     let table_path = ListingTableUrl::parse(table_path)?;
 ///
-/// // Create default parquet options
-/// let file_format = ParquetFormat::new();
-/// let listing_options = ListingOptions::new(Arc::new(file_format))
-///   .with_file_extension(".parquet");
+///     // Create default parquet options
+///     let file_format = ParquetFormat::new();
+///     let listing_options = ListingOptions::new(Arc::new(file_format))
+///         .with_file_extension(".parquet");
 ///
 /// // Resolve the schema
 /// let resolved_schema = listing_options
