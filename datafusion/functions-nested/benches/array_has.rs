@@ -155,8 +155,9 @@ fn string_value_array(
     }
 }
 
-/// Array needle, fixed list length (64), across null patterns. i64 covers no
-/// nulls / found / not-found / all-null / null-fill collision. Each string
+/// Array needle, fixed list length (64), across null patterns. i64 covers
+/// no-nulls found/not-found, 30% nulls found/not-found, all-null, and a
+/// null-fill collision. Each string
 /// element type (`Utf8`, `LargeUtf8`, `Utf8View`) covers no nulls / 30% nulls at
 /// both short (inline, <= 12 byte) and long (> 12 byte, shared-prefix) element
 /// lengths, plus all-null. `not_found` shifts the needle out of the value range.
@@ -169,6 +170,15 @@ fn bench_array_has_array_null_patterns(c: &mut Criterion) {
         "i64/no_nulls".to_string(),
         create_int64_list_array(rows, size, 0.0),
         create_int64_value_array(rows, s, 0),
+        rows,
+    );
+    // Worst case for the all-valid fold: non-null, no match -> the whole row is
+    // scanned (the branchless OR-reduction never short-circuits).
+    run_array_needle_case(
+        &mut group,
+        "i64/no_nulls_not_found".to_string(),
+        create_int64_list_array(rows, size, 0.0),
+        create_int64_value_array(rows, s, s),
         rows,
     );
     run_array_needle_case(
