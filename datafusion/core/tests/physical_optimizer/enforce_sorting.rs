@@ -2839,10 +2839,11 @@ async fn test_sort_with_streaming_table() -> Result<()> {
     let sql = "SELECT a FROM test_table GROUP BY a ORDER BY a";
     let results = ctx.sql(sql).await?.collect().await?;
 
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].num_columns(), 1);
+    // the merge may split the output into several batches, so concat first
+    let results = arrow::compute::concat_batches(&results[0].schema(), &results)?;
+    assert_eq!(results.num_columns(), 1);
     let expected = create_array!(Int32, vec![1, 2, 3]) as ArrayRef;
-    assert_eq!(results[0].column(0), &expected);
+    assert_eq!(results.column(0), &expected);
 
     Ok(())
 }

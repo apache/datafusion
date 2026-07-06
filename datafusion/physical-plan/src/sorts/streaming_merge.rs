@@ -274,6 +274,7 @@ mod tests {
     use arrow::array::{Int32Array, RecordBatch};
     use arrow::datatypes::Int32Type;
     use arrow_schema::{DataType, Field, Schema};
+    use datafusion_execution::memory_pool::GreedyMemoryPool;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr_common::metrics::ExecutionPlanMetricsSet;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -285,6 +286,21 @@ mod tests {
         inputs: Vec<Vec<Vec<Option<i32>>>>,
         batch_size: usize,
         fetch: Option<usize>,
+    ) -> Vec<Vec<Option<i32>>> {
+        merge_nullable_i32_streams_with_pool(
+            inputs,
+            batch_size,
+            fetch,
+            Arc::new(UnboundedMemoryPool::default()),
+        )
+        .await
+    }
+
+    async fn merge_nullable_i32_streams_with_pool(
+        inputs: Vec<Vec<Vec<Option<i32>>>>,
+        batch_size: usize,
+        fetch: Option<usize>,
+        mem_pool: Arc<dyn MemoryPool>,
     ) -> Vec<Vec<Option<i32>>> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "sort_key",
@@ -315,11 +331,9 @@ mod tests {
             .with_streams(streams)
             .with_batch_size(batch_size)
             .with_schema(Arc::clone(&schema))
-            .with_reservation({
-                let mem_pool: Arc<dyn MemoryPool> =
-                    Arc::new(UnboundedMemoryPool::default());
-                MemoryConsumer::new("merge stream mock memory").register(&mem_pool)
-            })
+            .with_reservation(
+                MemoryConsumer::new("merge stream mock memory").register(&mem_pool),
+            )
             .with_expressions(
                 &([
                     PhysicalSortExpr::new_default(col("sort_key", &schema).unwrap())
@@ -391,6 +405,112 @@ mod tests {
         let output = merge_i32_streams(streams, 5, None).await;
 
         assert_eq!(flatten_vec(output), (1..=38).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn test_merge_full_batch_release_memory() {
+        // The pool only fits a few batches of the ~400KB total input:
+        // if skipped batches were not released as the merge progresses, the reservation would exhaust the pool.
+        const ROWS: i32 = 1024; // ~4KB per batch
+        const BATCHES_PER_STREAM: i32 = 50;
+
+        let batch_of = |start: i32| (start..start + ROWS).map(Some).collect::<Vec<_>>();
+        let streams = (0..2)
+            .map(|stream| {
+                (0..BATCHES_PER_STREAM)
+                    .map(|batch| batch_of((batch * 2 + stream) * ROWS))
+                    .collect()
+            })
+            .collect();
+
+        let output = merge_nullable_i32_streams_with_pool(
+            streams,
+            ROWS as usize,
+            None,
+            Arc::new(GreedyMemoryPool::new(64 * 1024)),
+        )
+        .await;
+
+        let expected = (0..2 * BATCHES_PER_STREAM * ROWS)
+            .map(Some)
+            .collect::<Vec<_>>();
+        assert_eq!(flatten_vec(output), expected);
+    }
+
+    #[tokio::test]
+    async fn test_merge_full_batch_skip_round_robins_between_tied_streams() {
+        // all sort keys are equal, so every batch-level comparison is a tie:
+        // the full-batch skip must round-robin between the streams instead of
+        // draining one stream completely while the other's input backs up
+        // (which is what the round-robin tie breaker exists to prevent)
+        const ROWS: usize = 4;
+        const BATCHES_PER_STREAM: usize = 4;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("sort_key", DataType::Int32, false),
+            Field::new("stream_id", DataType::Int32, false),
+        ]));
+
+        let streams = (0..2_i32)
+            .map(|stream_id| {
+                let batches = (0..BATCHES_PER_STREAM)
+                    .map(|_| {
+                        RecordBatch::try_new(
+                            Arc::clone(&schema),
+                            vec![
+                                Arc::new(Int32Array::from(vec![7; ROWS])),
+                                Arc::new(Int32Array::from(vec![stream_id; ROWS])),
+                            ],
+                        )
+                        .unwrap()
+                    })
+                    .collect();
+                Box::pin(
+                    MemoryStream::try_new(batches, Arc::clone(&schema), None).unwrap(),
+                ) as SendableRecordBatchStream
+            })
+            .collect();
+
+        let merged = StreamingMergeBuilder::new()
+            .with_streams(streams)
+            .with_batch_size(ROWS)
+            .with_schema(Arc::clone(&schema))
+            .with_reservation(
+                MemoryConsumer::new("test")
+                    .register(&(Arc::new(UnboundedMemoryPool::default()) as _)),
+            )
+            .with_expressions(
+                &([
+                    PhysicalSortExpr::new_default(col("sort_key", &schema).unwrap())
+                        .asc(),
+                ]
+                .into()),
+            )
+            .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+            .with_fetch(None)
+            .build()
+            .unwrap();
+
+        let output = collect(merged).await.unwrap();
+
+        let stream_ids = output
+            .iter()
+            .flat_map(|b| b.column(1).as_primitive::<Int32Type>().values().iter())
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(stream_ids.len(), 2 * BATCHES_PER_STREAM * ROWS);
+
+        // neither stream may emit long runs while the other is starved:
+        // batch-level round-robin caps a run at one batch per stream
+        let longest_run = stream_ids
+            .chunk_by(|a, b| a == b)
+            .map(|run| run.len())
+            .max()
+            .unwrap();
+        assert!(
+            longest_run <= 2 * ROWS,
+            "stream emitted {longest_run} consecutive rows, tie breaker starved the other stream: {stream_ids:?}"
+        );
     }
 
     #[tokio::test]

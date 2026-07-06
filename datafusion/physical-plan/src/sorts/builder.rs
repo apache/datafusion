@@ -129,13 +129,21 @@ impl BatchBuilder {
         &self.schema
     }
 
-    /// The rows of `stream_idx`'s current batch that have not been pushed
-    /// via [`Self::push_row`] yet, as a zero-copy slice.
-    pub fn remaining_rows_of(&self, stream_idx: usize) -> Option<RecordBatch> {
-        let cursor = &self.cursors[stream_idx];
+    /// Consume the rows of `stream_idx`'s current batch that have not been
+    /// pushed via [`Self::push_row`] yet, as a zero-copy slice.
+    ///
+    /// Also releases batches that are no longer referenced: skip-heavy merges
+    /// never reach [`Self::build_record_batch`], which otherwise does that.
+    pub fn take_remaining_rows_of(&mut self, stream_idx: usize) -> Option<RecordBatch> {
+        let cursor = &mut self.cursors[stream_idx];
         let (_, batch) = &self.batches[cursor.batch_idx];
         let remaining = batch.num_rows() - cursor.row_idx;
-        (remaining > 0).then(|| batch.slice(cursor.row_idx, remaining))
+        let slice = (remaining > 0).then(|| batch.slice(cursor.row_idx, remaining));
+        cursor.row_idx = batch.num_rows();
+        if self.indices.is_empty() {
+            self.release_unreferenced_batches();
+        }
+        slice
     }
 
     /// Try to interleave all columns using the given index slice.
@@ -173,27 +181,40 @@ impl BatchBuilder {
         // hot path. The retention is bounded and short-lived since leftover
         // rows are drained over subsequent polls.
         if self.indices.is_empty() {
-            // New cursors are only created once the previous cursor for the stream
-            // is finished. This means all remaining rows from all but the last batch
-            // for each stream have been yielded to the newly created record batch
-            //
-            // We can therefore drop all but the last batch for each stream
-            let mut batch_idx = 0;
-            let mut retained = 0;
-            self.batches.retain(|(stream_idx, batch)| {
-                let stream_cursor = &mut self.cursors[*stream_idx];
-                let retain = stream_cursor.batch_idx == batch_idx;
-                batch_idx += 1;
-
-                if retain {
-                    stream_cursor.batch_idx = retained;
-                    retained += 1;
-                } else {
-                    self.batches_mem_used -= get_record_batch_memory_size(batch);
-                }
-                retain
-            });
+            self.release_unreferenced_batches();
         }
+
+        RecordBatch::try_new(Arc::clone(&self.schema), columns).map_err(Into::into)
+    }
+
+    /// Drop buffered batches no stream cursor references anymore and release
+    /// their memory back to the pool.
+    ///
+    /// Must only be called when `indices` is empty, since indices reference
+    /// batches by position.
+    fn release_unreferenced_batches(&mut self) {
+        assert_eq!(self.indices.len(), 0);
+
+        // New cursors are only created once the previous cursor for the stream
+        // is finished. This means all remaining rows from all but the last batch
+        // for each stream have been yielded to the newly created record batch
+        //
+        // We can therefore drop all but the last batch for each stream
+        let mut batch_idx = 0;
+        let mut retained = 0;
+        self.batches.retain(|(stream_idx, batch)| {
+            let stream_cursor = &mut self.cursors[*stream_idx];
+            let retain = stream_cursor.batch_idx == batch_idx;
+            batch_idx += 1;
+
+            if retain {
+                stream_cursor.batch_idx = retained;
+                retained += 1;
+            } else {
+                self.batches_mem_used -= get_record_batch_memory_size(batch);
+            }
+            retain
+        });
 
         // Release excess memory back to the pool, but never shrink below
         // initial_reservation to maintain the anti-starvation guarantee
@@ -202,8 +223,6 @@ impl BatchBuilder {
         if self.reservation.size() > target {
             self.reservation.shrink(self.reservation.size() - target);
         }
-
-        RecordBatch::try_new(Arc::clone(&self.schema), columns).map_err(Into::into)
     }
 
     /// Drains the in_progress row indexes, and builds a new RecordBatch from them

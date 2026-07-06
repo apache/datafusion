@@ -442,7 +442,7 @@ mod tests {
         ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray,
         TimestampNanosecondArray,
     };
-    use arrow::compute::SortOptions;
+    use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{assert_batches_eq, exec_err};
@@ -776,9 +776,9 @@ mod tests {
         context: Arc<TaskContext>,
     ) -> RecordBatch {
         let merge = Arc::new(SortPreservingMergeExec::new(sort, input));
-        let mut result = collect(merge, context).await.unwrap();
-        assert_eq!(result.len(), 1);
-        result.remove(0)
+        let result = collect(merge, context).await.unwrap();
+        // the merge may split the output into several batches, so concat first
+        concat_batches(&result[0].schema(), &result).unwrap()
     }
 
     async fn partition_sort(
@@ -1139,10 +1139,10 @@ mod tests {
             .with_reservation(reservation)
             .build()?;
 
-        let mut merged = common::collect(merge_stream).await.unwrap();
+        let merged = common::collect(merge_stream).await.unwrap();
 
-        assert_eq!(merged.len(), 1);
-        let merged = merged.remove(0);
+        // the merge may split the output into several batches, so concat first
+        let merged = concat_batches(&merged[0].schema(), &merged).unwrap();
         let basic = basic_sort(batches, sort.clone(), Arc::clone(&task_ctx)).await;
 
         let basic = arrow::util::pretty::pretty_format_batches(&[basic])
@@ -1557,8 +1557,16 @@ mod tests {
             .with_reservation(reservation)
             .build()?;
 
-        let first = merge_stream.next().await.unwrap();
-        assert!(first.is_err(), "expected merge stream to surface the error");
+        // the merge may emit already-proven-sorted batches before polling the
+        // failing stream again, so consume until the error surfaces
+        let mut saw_error = false;
+        while let Some(item) = merge_stream.next().await {
+            if item.is_err() {
+                saw_error = true;
+                break;
+            }
+        }
+        assert!(saw_error, "expected merge stream to surface the error");
         assert!(
             merge_stream.next().await.is_none(),
             "merge stream yielded data after returning an error"

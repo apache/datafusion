@@ -25,7 +25,9 @@ use datafusion_execution::SendableRecordBatchStream;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, expressions::col};
 use datafusion_physical_plan::test::TestMemoryExec;
-use datafusion_physical_plan::{collect, execute_stream, sorts::sort_preserving_merge::SortPreservingMergeExec};
+use datafusion_physical_plan::{
+    collect, execute_stream, sorts::sort_preserving_merge::SortPreservingMergeExec,
+};
 use futures::StreamExt;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -243,8 +245,10 @@ fn generate_keys(ordering: &str) -> Vec<u64> {
 /// Distribute the arrival sequence round-robin (a batch at a time) over the
 /// partitions, then sort each partition's keys, as SortExec would before a
 /// sort preserving merge
-fn partition_keys(keys: Vec<u64>) -> Vec<Vec<u64>> {
-    let mut partitions = vec![Vec::with_capacity(ROWS_PER_PARTITION); NUM_PARTITIONS];
+fn partition_keys(keys: &[u64]) -> Vec<Vec<u64>> {
+    let mut partitions: Vec<Vec<u64>> = (0..NUM_PARTITIONS)
+        .map(|_| Vec::with_capacity(ROWS_PER_PARTITION))
+        .collect();
     for (i, chunk) in keys.chunks(BATCH_SIZE).enumerate() {
         partitions[i % NUM_PARTITIONS].extend_from_slice(chunk);
     }
@@ -283,7 +287,7 @@ fn create_case(
     key_type: &str,
     payload_width: usize,
 ) -> (Vec<Vec<RecordBatch>>, SchemaRef, LexOrdering) {
-    let partitions = partition_keys(generate_keys(ordering))
+    let partitions = partition_keys(&generate_keys(ordering))
         .into_iter()
         .map(|keys| {
             keys.chunks(BATCH_SIZE)

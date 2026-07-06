@@ -56,13 +56,16 @@ mod tests {
             .sort_by(vec![col("a")])?;
 
         let result = df.collect().await?;
+        // the merge may split the output into several batches, so concat first
+        let result =
+            arrow::compute::concat_batches(&result[0].schema(), &result).unwrap();
 
         let expected = record_batch!(
             ("a", Int32, vec![1, 2, 4]),
             ("sum_b", Float64, vec![1.0, 4.0, 16.0])
         )?;
 
-        assert_eq!(result[0], expected);
+        assert_eq!(result, expected);
 
         Ok(())
     }
@@ -105,7 +108,10 @@ mod tests {
             .sort_by(vec![col("a")])?;
 
         let result = df.collect().await?;
-        let result = result[0].column_by_name("stddev_b").unwrap();
+        // the merge may split the output into several batches, so concat first
+        let result =
+            arrow::compute::concat_batches(&result[0].schema(), &result).unwrap();
+        let result = result.column_by_name("stddev_b").unwrap();
         let result = result
             .as_any()
             .downcast_ref::<Float64Array>()
@@ -162,13 +168,16 @@ mod tests {
         df.clone().show().await?;
 
         let result = df.collect().await?;
+        // the merge may split the output into several batches, so concat first
+        let result =
+            arrow::compute::concat_batches(&result[0].schema(), &result).unwrap();
 
         let expected = record_batch!(
             ("a", Int32, vec![1, 2, 4]),
             ("sum_b", Float64, vec![2.0, 8.0, 32.0])
         )?;
 
-        assert_eq!(result[0], expected);
+        assert_eq!(result, expected);
 
         Ok(())
     }
