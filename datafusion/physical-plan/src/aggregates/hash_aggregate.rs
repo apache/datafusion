@@ -30,7 +30,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{Array, ArrayData, MutableArrayData, make_array};
+use arrow::array::{Array, ArrayData, ArrayRef, MutableArrayData, make_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_uint32_array;
@@ -93,6 +93,11 @@ struct MaterializeRun {
     batch_idx: usize,
     start: usize,
     end: usize,
+}
+
+struct MaterializeGroup {
+    partitions: Vec<usize>,
+    total_rows: usize,
 }
 
 struct FinalPartitionRunState {
@@ -196,63 +201,56 @@ impl FinalPartitionRunState {
         let num_columns = schema.fields().len();
         let partition_runs =
             build_partition_runs(&self.buffered_batches, &partition_lengths);
-        let mut materialized_rows = 0;
-        for group_start in
-            (0..partition_lengths.len()).step_by(PARTITION_MATERIALIZE_GROUP_SIZE)
-        {
-            let group_end = (group_start + PARTITION_MATERIALIZE_GROUP_SIZE)
-                .min(partition_lengths.len());
-            let group_partitions = (group_start..group_end)
-                .filter(|partition_id| partition_lengths[*partition_id] != 0)
-                .collect::<Vec<_>>();
-            if group_partitions.is_empty() {
-                continue;
-            }
+        let groups = build_materialize_groups(&partition_lengths);
+        let materialized_rows =
+            groups.iter().map(|group| group.total_rows).sum::<usize>();
+        debug_assert_eq!(materialized_rows, total_rows);
 
-            let group_total_rows = group_partitions
+        let mut group_columns = groups
+            .iter()
+            .map(|_| Vec::with_capacity(num_columns))
+            .collect::<Vec<Vec<ArrayRef>>>();
+
+        for column_idx in 0..num_columns {
+            let source_data = self
+                .buffered_batches
                 .iter()
-                .map(|partition_id| partition_lengths[*partition_id])
-                .sum::<usize>();
-            materialized_rows += group_total_rows;
-
-            let columns = (0..num_columns)
-                .map(|column_idx| {
-                    let source_data = self
-                        .buffered_batches
-                        .iter()
-                        .map(|batch| batch.batch.column(column_idx).to_data())
-                        .collect::<Vec<_>>();
-                    let source_refs = source_data.iter().collect::<Vec<&ArrayData>>();
-                    let mut mutable =
-                        MutableArrayData::new(source_refs, false, group_total_rows);
-
-                    for partition_id in &group_partitions {
-                        for run in &partition_runs[*partition_id] {
-                            mutable.extend(run.batch_idx, run.start, run.end);
-                        }
-                    }
-
-                    make_array(mutable.freeze())
-                })
+                .map(|batch| batch.batch.column(column_idx).to_data())
                 .collect::<Vec<_>>();
+            let source_refs = source_data.iter().collect::<Vec<&ArrayData>>();
+
+            for (group_idx, group) in groups.iter().enumerate() {
+                let mut mutable =
+                    MutableArrayData::new(source_refs.clone(), false, group.total_rows);
+                for partition_id in &group.partitions {
+                    for run in &partition_runs[*partition_id] {
+                        mutable.extend(run.batch_idx, run.start, run.end);
+                    }
+                }
+                group_columns[group_idx].push(make_array(mutable.freeze()));
+            }
+        }
+
+        for (group_idx, group) in groups.iter().enumerate() {
+            let columns = std::mem::take(&mut group_columns[group_idx]);
             let group_batch = RecordBatch::try_new(Arc::clone(schema), columns)?;
             let group_batch_size = get_record_batch_memory_size(&group_batch);
 
             let mut offset = 0;
             let mut accounted_size = 0;
             for (partition_idx, partition_id) in
-                group_partitions.iter().copied().enumerate()
+                group.partitions.iter().copied().enumerate()
             {
                 let len = partition_lengths[partition_id];
                 let batch = group_batch.slice(offset, len);
                 offset += len;
 
-                let batch_size = if partition_idx + 1 == group_partitions.len() {
+                let batch_size = if partition_idx + 1 == group.partitions.len() {
                     group_batch_size - accounted_size
                 } else {
                     group_batch_size
                         .saturating_mul(len)
-                        .checked_div(group_total_rows)
+                        .checked_div(group.total_rows)
                         .unwrap_or(0)
                 };
                 accounted_size += batch_size;
@@ -264,10 +262,9 @@ impl FinalPartitionRunState {
                 *self.staged_sizes.entry(partition_id).or_default() += batch_size;
                 self.total_staged_size += batch_size;
             }
-            debug_assert_eq!(offset, group_total_rows);
+            debug_assert_eq!(offset, group.total_rows);
             debug_assert_eq!(accounted_size, group_batch_size);
         }
-        debug_assert_eq!(materialized_rows, total_rows);
 
         self.buffered_batches.clear();
         self.total_buffered_size = 0;
@@ -306,6 +303,31 @@ impl FinalPartitionRunState {
         self.replaying_partition_id = Some(partition_id);
         Ok(batches)
     }
+}
+
+fn build_materialize_groups(partition_lengths: &[usize]) -> Vec<MaterializeGroup> {
+    (0..partition_lengths.len())
+        .step_by(PARTITION_MATERIALIZE_GROUP_SIZE)
+        .filter_map(|group_start| {
+            let group_end = (group_start + PARTITION_MATERIALIZE_GROUP_SIZE)
+                .min(partition_lengths.len());
+            let partitions = (group_start..group_end)
+                .filter(|partition_id| partition_lengths[*partition_id] != 0)
+                .collect::<Vec<_>>();
+            if partitions.is_empty() {
+                return None;
+            }
+
+            let total_rows = partitions
+                .iter()
+                .map(|partition_id| partition_lengths[*partition_id])
+                .sum();
+            Some(MaterializeGroup {
+                partitions,
+                total_rows,
+            })
+        })
+        .collect()
 }
 
 fn build_partition_runs(
