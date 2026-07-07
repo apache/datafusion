@@ -1736,7 +1736,7 @@ mod test {
             plan,
             @ r"
         Projection: __common_expr_1 AS NOT (test.a = test.b), __common_expr_1 AS NOT (test.b = test.a)
-          Projection: NOT test.a = test.b AS __common_expr_1, test.a, test.b, test.c
+          Projection: NOT (test.a = test.b) AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
         )?;

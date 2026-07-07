@@ -3578,6 +3578,13 @@ pub fn schema_name_from_sorts(sorts: &[Sort]) -> Result<String, fmt::Error> {
 pub const OUTER_REFERENCE_COLUMN_PREFIX: &str = "outer_ref";
 pub const UNNEST_COLUMN_PREFIX: &str = "UNNEST";
 
+fn write_expr_display_unary_child(f: &mut Formatter<'_>, expr: &Expr) -> fmt::Result {
+    match expr {
+        Expr::BinaryExpr(_) => write!(f, "({expr})"),
+        _ => write!(f, "{expr}"),
+    }
+}
+
 /// Format expressions for display as part of a logical plan. In many cases, this will produce
 /// similar output to `Expr.name()` except that column names will be prefixed with '#'.
 impl Display for Expr {
@@ -3618,8 +3625,15 @@ impl Display for Expr {
                     format_type_and_metadata(field.data_type(), Some(field.metadata()));
                 write!(f, "TRY_CAST({expr} AS {formatted})")
             }
-            Expr::Not(expr) => write!(f, "NOT {expr}"),
-            Expr::Negative(expr) => write!(f, "(- {expr})"),
+            Expr::Not(expr) => {
+                write!(f, "NOT ")?;
+                write_expr_display_unary_child(f, expr)
+            }
+            Expr::Negative(expr) => {
+                write!(f, "(- ")?;
+                write_expr_display_unary_child(f, expr)?;
+                write!(f, ")")
+            }
             Expr::IsNull(expr) => write!(f, "{expr} IS NULL"),
             Expr::IsNotNull(expr) => write!(f, "{expr} IS NOT NULL"),
             Expr::IsTrue(expr) => write!(f, "{expr} IS TRUE"),
@@ -4161,6 +4175,7 @@ mod test {
             negative_expr.schema_name().to_string()
         );
         assert_eq!("(- (1 + 2))", negative_expr.human_display().to_string());
+        assert_eq!("(- (Int64(1) + Int64(2)))", negative_expr.to_string());
 
         let not_expr =
             Expr::Not(Box::new(binary_expr(lit(1i64), Operator::Eq, lit(2i64))));
@@ -4169,6 +4184,7 @@ mod test {
             not_expr.schema_name().to_string()
         );
         assert_eq!("NOT (1 = 2)", not_expr.human_display().to_string());
+        assert_eq!("NOT (Int64(1) = Int64(2))", not_expr.to_string());
     }
 
     #[test]
