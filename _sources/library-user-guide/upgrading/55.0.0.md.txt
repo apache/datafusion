@@ -460,3 +460,22 @@ type aliases:
 Implement the newly introduced types for your custom cache implementation.
 
 See [PR #22613](https://github.com/apache/datafusion/pull/22613) for details.
+
+### `CachedFileMetadata` now validates file schema
+
+The file-statistics cache remains keyed by `TableScopedPath`, but
+`CachedFileMetadata` now stores a `SchemaFingerprint` of the `file_schema` used
+to compute the cached statistics. Cache hits are valid only when both the file
+metadata and schema fingerprint match.
+
+**Who is affected:**
+
+- Users constructing `CachedFileMetadata` values directly.
+
+**Migration guide:**
+
+- Pass `Arc::new(SchemaFingerprint::from_schema(file_schema))` to
+  `CachedFileMetadata::new`.
+- Pass the current schema fingerprint to `CachedFileMetadata::is_valid_for`.
+
+See [PR #23201](https://github.com/apache/datafusion/pull/23201) for details.

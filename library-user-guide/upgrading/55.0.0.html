@@ -831,6 +831,24 @@ type aliases:</p>
 <p>Implement the newly introduced types for your custom cache implementation.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/22613">PR #22613</a> for details.</p>
 </section>
+<section id="cachedfilemetadata-now-validates-file-schema">
+<h3><code class="docutils literal notranslate"><span class="pre">CachedFileMetadata</span></code> now validates file schema<a class="headerlink" href="#cachedfilemetadata-now-validates-file-schema" title="Link to this heading">#</a></h3>
+<p>The file-statistics cache remains keyed by <code class="docutils literal notranslate"><span class="pre">TableScopedPath</span></code>, but
+<code class="docutils literal notranslate"><span class="pre">CachedFileMetadata</span></code> now stores a <code class="docutils literal notranslate"><span class="pre">SchemaFingerprint</span></code> of the <code class="docutils literal notranslate"><span class="pre">file_schema</span></code> used
+to compute the cached statistics. Cache hits are valid only when both the file
+metadata and schema fingerprint match.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users constructing <code class="docutils literal notranslate"><span class="pre">CachedFileMetadata</span></code> values directly.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<ul class="simple">
+<li><p>Pass <code class="docutils literal notranslate"><span class="pre">Arc::new(SchemaFingerprint::from_schema(file_schema))</span></code> to
+<code class="docutils literal notranslate"><span class="pre">CachedFileMetadata::new</span></code>.</p></li>
+<li><p>Pass the current schema fingerprint to <code class="docutils literal notranslate"><span class="pre">CachedFileMetadata::is_valid_for</span></code>.</p></li>
+</ul>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23201">PR #23201</a> for details.</p>
+</section>
 </section>
 </section>
 
@@ -895,6 +913,7 @@ type aliases:</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#listingoptions-target-partitions-and-collect-stat-removed"><code class="docutils literal notranslate"><span class="pre">ListingOptions::target_partitions</span></code> and <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spark-map-functions-now-reject-duplicate-keys-by-default">Spark map functions now reject duplicate keys by default</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unify-lru-memory-limiting-caches-into-one-generic-cache">Unify LRU memory-limiting caches into one generic cache</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cachedfilemetadata-now-validates-file-schema"><code class="docutils literal notranslate"><span class="pre">CachedFileMetadata</span></code> now validates file schema</a></li>
 </ul>
 </li>
 </ul>
