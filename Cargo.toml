@@ -151,7 +151,7 @@ datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", 
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "54.0.0", default-features = false }
 datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "54.0.0" }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "54.0.0" }
-datafusion-proto = { path = "datafusion/proto", version = "54.0.0" }
+datafusion-proto = { path = "datafusion/proto", version = "54.0.0", default-features = false }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "54.0.0" }
 datafusion-proto-models = { path = "datafusion/proto-models", version = "54.0.0" }
 datafusion-pruning = { path = "datafusion/pruning", version = "54.0.0" }
