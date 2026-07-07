@@ -426,7 +426,11 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        match self.mode {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(match self.mode {
             StreamJoinPartitionMode::Partitioned => {
                 let (left_expr, right_expr) = self
                     .on
@@ -441,7 +445,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             StreamJoinPartitionMode::SinglePartition => {
                 vec![Distribution::SinglePartition, Distribution::SinglePartition]
             }
-        }
+        })
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {

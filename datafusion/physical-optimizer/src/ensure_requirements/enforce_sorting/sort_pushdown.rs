@@ -80,7 +80,10 @@ pub type SortPushDown = PlanContext<ParentRequirements>;
 /// Assigns the ordering requirement of the root node to the its children.
 pub fn assign_initial_requirements(sort_push_down: &mut SortPushDown) {
     let reqs = sort_push_down.plan.required_input_ordering();
-    let dists = sort_push_down.plan.required_input_distribution();
+    let dists = sort_push_down
+        .plan
+        .input_distribution_requirements()
+        .into_per_child();
     for (idx, (child, requirement)) in
         sort_push_down.children.iter_mut().zip(reqs).enumerate()
     {
@@ -165,7 +168,10 @@ fn pushdown_sorts_helper(
         }
         sort_push_down.plan = plan;
         // No ordering is being pushed; use each child's own distribution requirement
-        let dists = sort_push_down.plan.required_input_distribution();
+        let dists = sort_push_down
+            .plan
+            .input_distribution_requirements()
+            .into_per_child();
         for (idx, child) in sort_push_down.children.iter_mut().enumerate() {
             child.data.distribution_requirement = dists
                 .get(idx)
@@ -242,7 +248,10 @@ fn pushdown_sorts_helper(
     if satisfy_parent {
         // For non-sort operators which satisfy ordering:
         let reqs = sort_push_down.plan.required_input_ordering();
-        let dists = sort_push_down.plan.required_input_distribution();
+        let dists = sort_push_down
+            .plan
+            .input_distribution_requirements()
+            .into_per_child();
 
         // If this node already outputs single partition, don't push SinglePartition
         // requirement to children (they're below the merge point).
@@ -274,7 +283,10 @@ fn pushdown_sorts_helper(
         // requirements. If this node already outputs single partition (e.g. SPM),
         // don't push SinglePartition to children.
         let current_fetch = sort_push_down.plan.fetch();
-        let dists = sort_push_down.plan.required_input_distribution();
+        let dists = sort_push_down
+            .plan
+            .input_distribution_requirements()
+            .into_per_child();
         let effective_dist =
             if sort_push_down.plan.output_partitioning().partition_count() == 1 {
                 Distribution::UnspecifiedDistribution
