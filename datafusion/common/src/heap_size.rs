@@ -364,6 +364,17 @@ where
     }
 }
 
+impl<A, B, C> DFHeapSize for (A, B, C)
+where
+    A: DFHeapSize,
+    B: DFHeapSize,
+    C: DFHeapSize,
+{
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.0.heap_size(ctx) + self.1.heap_size(ctx) + self.2.heap_size(ctx)
+    }
+}
+
 impl DFHeapSize for String {
     fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
         self.capacity()

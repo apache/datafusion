@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
-use arrow::datatypes::{DataType, Int8Type, Int16Type, UInt8Type, UInt16Type};
+use arrow::datatypes::{
+    DataType, Float16Type, Int8Type, Int16Type, UInt8Type, UInt16Type,
+};
 use datafusion_common::Result;
 
 use super::array_static_filter::ArrayStaticFilter;
@@ -41,6 +43,9 @@ pub(super) fn instantiate_static_filter(
         DataType::UInt8 => Ok(Arc::new(BitmapFilter::<UInt8Type>::try_new(&in_array)?)),
         DataType::Int16 => Ok(Arc::new(BitmapFilter::<Int16Type>::try_new(&in_array)?)),
         DataType::UInt16 => Ok(Arc::new(BitmapFilter::<UInt16Type>::try_new(&in_array)?)),
+        DataType::Float16 => {
+            Ok(Arc::new(BitmapFilter::<Float16Type>::try_new(&in_array)?))
+        }
         DataType::Int32 => Ok(Arc::new(Int32StaticFilter::try_new(&in_array)?)),
         DataType::Int64 => Ok(Arc::new(Int64StaticFilter::try_new(&in_array)?)),
         DataType::UInt32 => Ok(Arc::new(UInt32StaticFilter::try_new(&in_array)?)),
