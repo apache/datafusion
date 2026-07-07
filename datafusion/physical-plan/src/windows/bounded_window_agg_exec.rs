@@ -325,12 +325,15 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
-        crate::InputDistributionRequirements::new(if self.partition_keys().is_empty() {
+        if self.partition_keys().is_empty() {
             debug!("No partition defined for BoundedWindowAggExec!!!");
-            vec![Distribution::SinglePartition]
+            crate::InputDistributionRequirements::new(vec![Distribution::SinglePartition])
         } else {
-            vec![Distribution::KeyPartitioned(self.partition_keys().clone())]
-        })
+            crate::InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(
+                self.partition_keys(),
+            )])
+            .allow_range_satisfaction_for_key_partitioning()
+        }
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
