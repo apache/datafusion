@@ -76,6 +76,12 @@ pub struct DFHeapSizeCtx {
     seen: HashSet<usize>,
 }
 
+impl DFHeapSizeCtx {
+    fn count_allocation_once(&mut self, ptr: usize) -> bool {
+        self.seen.insert(ptr)
+    }
+}
+
 impl DFHeapSize for Statistics {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
         self.num_rows.heap_size(ctx)
@@ -281,14 +287,12 @@ impl<K: DFHeapSize, V: DFHeapSize> DFHeapSize for HashMap<K, V> {
     }
 }
 
-fn count_allocation_once(ptr: usize, ctx: &mut DFHeapSizeCtx) -> bool {
-    ctx.seen.insert(ptr)
-}
-
 fn arc_ptr<T>(arc: &Arc<T>) -> usize {
     Arc::as_ptr(arc) as usize
 }
 
+/// For unsized types, `Arc::as_ptr` returns the data address + metadata - we only need the thin address
+/// Casting through `*const i32` gets us the thin pointer
 fn arc_unsized_ptr<T: ?Sized>(arc: &Arc<T>) -> usize {
     Arc::as_ptr(arc) as *const i32 as usize
 }
@@ -297,7 +301,7 @@ impl<T: DFHeapSize> DFHeapSize for Arc<T> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
         let ptr = arc_ptr(self);
 
-        if !count_allocation_once(ptr, ctx) {
+        if !ctx.count_allocation_once(ptr) {
             return 0;
         }
 
@@ -310,7 +314,7 @@ impl DFHeapSize for Arc<str> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
         let ptr = arc_unsized_ptr(self);
 
-        if !count_allocation_once(ptr, ctx) {
+        if !ctx.count_allocation_once(ptr) {
             return 0;
         }
 
@@ -323,7 +327,7 @@ impl DFHeapSize for Arc<dyn DFHeapSize> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
         let ptr = arc_unsized_ptr(self);
 
-        if !count_allocation_once(ptr, ctx) {
+        if !ctx.count_allocation_once(ptr) {
             return 0;
         }
 
