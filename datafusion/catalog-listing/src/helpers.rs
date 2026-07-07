@@ -44,7 +44,10 @@ use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
-use percent_encoding::percent_decode_str;
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
+
+const PARTITION_VALUE_ENCODE_SET: &AsciiSet =
+    &CONTROLS.add(b' ').add(b'%').add(b'/').add(b'?').add(b'#');
 
 /// Check whether the given expression can be resolved using only the columns `col_names`.
 /// This means that if this function returns true:
@@ -274,7 +277,8 @@ pub fn evaluate_partition_prefix<'a>(
             Some(PartitionValue::Single(val)) => {
                 // if a partition only has a single literal value, then it can be added to the
                 // prefix
-                parts.push(format!("{p}={val}"));
+                let encoded = encode_partition_value(val);
+                parts.push(format!("{p}={encoded}"));
             }
             _ => {
                 // break on the first unconstrainted partition to create a common prefix
@@ -289,6 +293,10 @@ pub fn evaluate_partition_prefix<'a>(
     } else {
         Some(Path::from_iter(parts))
     }
+}
+
+fn encode_partition_value(value: &str) -> Cow<'_, str> {
+    utf8_percent_encode(value, PARTITION_VALUE_ENCODE_SET).into()
 }
 
 pub fn filter_partitioned_file(
@@ -567,47 +575,42 @@ mod tests {
                 vec!["mypartition"]
             )
         );
-        assert_eq!(
-            Some(vec![Cow::<str>::Owned("v/1".to_string())]),
-            parse_partitions_for_path(
-                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
-                &Path::parse("bucket/mytable/mypartition=v%2F1/file.csv").unwrap(),
-                vec!["mypartition"]
-            )
-        );
-        assert_eq!(
-            Some(vec![Cow::<str>::Owned("John Doe".to_string())]),
-            parse_partitions_for_path(
-                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
-                &Path::parse("bucket/mytable/name=John%20Doe/file.csv").unwrap(),
-                vec!["name"]
-            )
-        );
-        assert_eq!(
-            Some(vec![Cow::<str>::Owned("test dir/file".to_string())]),
-            parse_partitions_for_path(
-                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
-                &Path::parse("bucket/mytable/mypartition=test%20dir%2Ffile/file.csv")
-                    .unwrap(),
-                vec!["mypartition"]
-            )
-        );
-        assert_eq!(
-            Some(vec![Cow::<str>::Owned("é".to_string())]),
-            parse_partitions_for_path(
-                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
-                &Path::parse("bucket/mytable/mypartition=%C3%A9/file.csv").unwrap(),
-                vec!["mypartition"]
-            )
-        );
-        assert_eq!(
-            Some(vec![Cow::Borrowed("%FF")]),
-            parse_partitions_for_path(
-                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
-                &Path::parse("bucket/mytable/mypartition=%FF/file.csv").unwrap(),
-                vec!["mypartition"]
-            )
-        );
+        for (path, column, expected) in [
+            (
+                "bucket/mytable/mypartition=v%2F1/file.csv",
+                "mypartition",
+                "v/1",
+            ),
+            (
+                "bucket/mytable/name=John%20Doe/file.csv",
+                "name",
+                "John Doe",
+            ),
+            (
+                "bucket/mytable/mypartition=test%20dir%2Ffile/file.csv",
+                "mypartition",
+                "test dir/file",
+            ),
+            (
+                "bucket/mytable/mypartition=%C3%A9/file.csv",
+                "mypartition",
+                "é",
+            ),
+            (
+                "bucket/mytable/mypartition=%FF/file.csv",
+                "mypartition",
+                "%FF",
+            ),
+        ] {
+            assert_eq!(
+                Some(vec![Cow::Borrowed(expected)]),
+                parse_partitions_for_path(
+                    &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
+                    &Path::parse(path).unwrap(),
+                    vec![column]
+                )
+            );
+        }
         assert_eq!(
             Some(vec![Cow::Borrowed("v1")]),
             parse_partitions_for_path(
@@ -844,6 +847,19 @@ mod tests {
         assert_eq!(
             evaluate_partition_prefix(partitions, &[lit("foo").eq(col("a"))]),
             Some(Path::from("a=foo")),
+        );
+
+        assert_eq!(
+            evaluate_partition_prefix(
+                partitions,
+                &[col("a").eq(lit("Electronics/Computers"))],
+            ),
+            Some(Path::from("a=Electronics%2FComputers")),
+        );
+
+        assert_eq!(
+            evaluate_partition_prefix(partitions, &[col("a").eq(lit("John Doe"))]),
+            Some(Path::from("a=John%20Doe")),
         );
 
         assert_eq!(
