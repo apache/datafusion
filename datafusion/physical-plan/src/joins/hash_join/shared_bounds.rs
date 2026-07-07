@@ -834,6 +834,36 @@ mod tests {
             .expect("expected InListExpr dynamic filter")
     }
 
+    fn assert_in_list_column_values(
+        expr: &PhysicalExprRef,
+        expected_column_name: &str,
+        expected_column_index: usize,
+        expected_values: &[i32],
+    ) {
+        let in_list = in_list_expr(expr);
+        let column = in_list
+            .expr()
+            .downcast_ref::<Column>()
+            .expect("expected InListExpr child column");
+        assert_eq!(column.name(), expected_column_name);
+        assert_eq!(column.index(), expected_column_index);
+
+        let actual_values = in_list
+            .list()
+            .iter()
+            .map(|expr| {
+                let literal = expr
+                    .downcast_ref::<Literal>()
+                    .expect("expected InListExpr literal value");
+                match literal.value() {
+                    ScalarValue::Int32(Some(value)) => *value,
+                    value => panic!("expected Int32 in-list value, got {value:?}"),
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual_values, expected_values);
+    }
+
     fn binary_expr(expr: &PhysicalExprRef) -> &BinaryExpr {
         expr.downcast_ref::<BinaryExpr>()
             .expect("expected BinaryExpr dynamic filter")
@@ -878,7 +908,7 @@ mod tests {
         .unwrap();
 
         let expr = current_expr(&acc);
-        in_list_expr(&expr);
+        assert_in_list_column_values(&expr, "probe_key", 0, &[1, 2, 3]);
     }
 
     #[test]
