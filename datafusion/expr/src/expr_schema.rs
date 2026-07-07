@@ -93,19 +93,42 @@ fn scalar_arguments_for_fields(
 ) -> Result<Vec<Option<ScalarValue>>> {
     args.iter()
         .zip(arg_fields)
-        .map(|(expr, field)| {
-            literal_scalar_value(expr)
-                .map(|sv| sv.cast_to(field.data_type()))
-                .transpose()
-        })
+        .map(|(expr, field)| scalar_argument_for_field(expr, field))
         .collect()
 }
 
-fn literal_scalar_value(expr: &Expr) -> Option<&ScalarValue> {
+fn scalar_argument_for_field(
+    expr: &Expr,
+    arg_field: &FieldRef,
+) -> Result<Option<ScalarValue>> {
+    let Some(sv) = literal_scalar_value(expr, arg_field) else {
+        return Ok(None);
+    };
+
+    // Preserve existing error behavior for functions that validate literal
+    // values themselves. This helper only normalizes scalar argument types when
+    // the planning-time cast is valid.
+    Ok(Some(
+        sv.cast_to(arg_field.data_type())
+            .unwrap_or_else(|_| sv.clone()),
+    ))
+}
+
+fn literal_scalar_value<'a>(
+    expr: &'a Expr,
+    arg_field: &FieldRef,
+) -> Option<&'a ScalarValue> {
     match expr {
         Expr::Literal(sv, _) => Some(sv),
-        Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
-            literal_scalar_value(expr)
+        Expr::Cast(Cast { expr, field })
+            if field.data_type() == arg_field.data_type() =>
+        {
+            match expr.as_ref() {
+                Expr::Literal(sv, _) if sv.data_type() != *arg_field.data_type() => {
+                    Some(sv)
+                }
+                _ => None,
+            }
         }
         _ => None,
     }

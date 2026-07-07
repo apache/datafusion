@@ -215,6 +215,22 @@ async fn test_fn_arrow_cast() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_fn_arrow_cast_requires_literal_type_arg() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx
+        .sql("select arrow_cast(1, cast('Utf8' as varchar))")
+        .await?;
+    let err = df.collect().await.unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("arrow_cast requires its second argument")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_nvl() -> Result<()> {
     let lit_null = lit(ScalarValue::Utf8(None));
     // nvl(CASE WHEN a = 'abcDEF' THEN NULL ELSE a END, 'TURNED_NULL')
