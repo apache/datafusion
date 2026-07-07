@@ -330,6 +330,11 @@ enum FilterComposition {
     Update(PhysicalExprRef),
 }
 
+enum PartitionBranch {
+    Empty,
+    Real(PhysicalExprRef, PhysicalExprRef),
+}
+
 struct DynamicFilterExprComposer<'a> {
     on_right: &'a [PhysicalExprRef],
     repartition_random_state: &'a SeededRandomState,
@@ -337,18 +342,6 @@ struct DynamicFilterExprComposer<'a> {
 }
 
 impl<'a> DynamicFilterExprComposer<'a> {
-    fn new(
-        on_right: &'a [PhysicalExprRef],
-        repartition_random_state: &'a SeededRandomState,
-        probe_schema: &'a Schema,
-    ) -> Self {
-        Self {
-            on_right,
-            repartition_random_state,
-            probe_schema,
-        }
-    }
-
     fn compose(&self, finalize_input: FinalizeInput) -> Result<FilterComposition> {
         match finalize_input {
             FinalizeInput::CollectLeft(partition) => self.compose_collect_left(partition),
@@ -397,46 +390,20 @@ impl<'a> DynamicFilterExprComposer<'a> {
         partitions: Vec<PartitionStatus>,
     ) -> Result<FilterComposition> {
         let num_partitions = partitions.len();
-        let routing_hash_expr = Arc::new(HashExpr::new(
-            self.on_right.to_vec(),
-            self.repartition_random_state.clone(),
-            "hash_repartition".to_string(),
-        )) as Arc<dyn PhysicalExpr>;
-
-        let modulo_expr = Arc::new(BinaryExpr::new(
-            routing_hash_expr,
-            Operator::Modulo,
-            lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-        )) as Arc<dyn PhysicalExpr>;
-
         let mut real_branches = Vec::new();
         let mut empty_partition_ids = Vec::new();
         let mut has_canceled_unknown = false;
 
         for (partition_id, partition) in partitions.iter().enumerate() {
             match partition {
-                PartitionStatus::Reported(partition)
-                    if matches!(partition.pushdown, PushdownStrategy::Empty) =>
+                PartitionStatus::Reported(partition) => match self
+                    .compose_reported_partition_branch(partition_id, partition)?
                 {
-                    empty_partition_ids.push(partition_id);
-                }
-                PartitionStatus::Reported(partition) => {
-                    let membership_expr = create_membership_predicate(
-                        self.on_right,
-                        partition.pushdown.clone(),
-                        &HASH_JOIN_SEED,
-                        self.probe_schema,
-                    )?;
-                    let bounds_expr =
-                        create_bounds_predicate(self.on_right, &partition.bounds);
-                    let then_expr =
-                        combine_membership_and_bounds(membership_expr, bounds_expr)
-                            .unwrap_or_else(|| lit(true));
-                    real_branches.push((
-                        lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                        then_expr,
-                    ));
-                }
+                    PartitionBranch::Empty => empty_partition_ids.push(partition_id),
+                    PartitionBranch::Real(when_expr, then_expr) => {
+                        real_branches.push((when_expr, then_expr));
+                    }
+                },
                 PartitionStatus::CanceledUnknown => {
                     has_canceled_unknown = true;
                 }
@@ -463,11 +430,7 @@ impl<'a> DynamicFilterExprComposer<'a> {
             if when_then_branches.is_empty() {
                 lit(true)
             } else {
-                Arc::new(CaseExpr::try_new(
-                    Some(modulo_expr),
-                    when_then_branches,
-                    Some(lit(true)),
-                )?) as Arc<dyn PhysicalExpr>
+                self.partition_case(num_partitions, when_then_branches, true)?
             }
         } else if real_branches.is_empty() {
             lit(false)
@@ -476,14 +439,62 @@ impl<'a> DynamicFilterExprComposer<'a> {
         {
             Arc::clone(&real_branches[0].1)
         } else {
-            Arc::new(CaseExpr::try_new(
-                Some(modulo_expr),
-                real_branches,
-                Some(lit(false)),
-            )?) as Arc<dyn PhysicalExpr>
+            self.partition_case(num_partitions, real_branches, false)?
         };
 
         Ok(FilterComposition::Update(filter_expr))
+    }
+
+    fn compose_reported_partition_branch(
+        &self,
+        partition_id: usize,
+        partition: &PartitionData,
+    ) -> Result<PartitionBranch> {
+        if matches!(partition.pushdown, PushdownStrategy::Empty) {
+            return Ok(PartitionBranch::Empty);
+        }
+
+        let membership_expr = create_membership_predicate(
+            self.on_right,
+            partition.pushdown.clone(),
+            &HASH_JOIN_SEED,
+            self.probe_schema,
+        )?;
+        let bounds_expr = create_bounds_predicate(self.on_right, &partition.bounds);
+        let then_expr = combine_membership_and_bounds(membership_expr, bounds_expr)
+            .unwrap_or_else(|| lit(true));
+
+        Ok(PartitionBranch::Real(
+            lit(ScalarValue::UInt64(Some(partition_id as u64))),
+            then_expr,
+        ))
+    }
+
+    fn partition_case(
+        &self,
+        num_partitions: usize,
+        branches: Vec<(PhysicalExprRef, PhysicalExprRef)>,
+        else_value: bool,
+    ) -> Result<PhysicalExprRef> {
+        Ok(Arc::new(CaseExpr::try_new(
+            Some(self.routing_modulo_expr(num_partitions)),
+            branches,
+            Some(lit(else_value)),
+        )?) as Arc<dyn PhysicalExpr>)
+    }
+
+    fn routing_modulo_expr(&self, num_partitions: usize) -> PhysicalExprRef {
+        let routing_hash_expr = Arc::new(HashExpr::new(
+            self.on_right.to_vec(),
+            self.repartition_random_state.clone(),
+            "hash_repartition".to_string(),
+        )) as Arc<dyn PhysicalExpr>;
+
+        Arc::new(BinaryExpr::new(
+            routing_hash_expr,
+            Operator::Modulo,
+            lit(ScalarValue::UInt64(Some(num_partitions as u64))),
+        )) as Arc<dyn PhysicalExpr>
     }
 }
 
@@ -726,11 +737,11 @@ impl SharedBuildAccumulator {
     }
 
     fn build_filter(&self, finalize_input: FinalizeInput) -> Result<()> {
-        let composer = DynamicFilterExprComposer::new(
-            &self.on_right,
-            &self.repartition_random_state,
-            self.probe_schema.as_ref(),
-        );
+        let composer = DynamicFilterExprComposer {
+            on_right: &self.on_right,
+            repartition_random_state: &self.repartition_random_state,
+            probe_schema: self.probe_schema.as_ref(),
+        };
 
         if let FilterComposition::Update(filter_expr) =
             composer.compose(finalize_input)?
