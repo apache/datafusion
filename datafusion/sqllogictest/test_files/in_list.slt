@@ -214,6 +214,25 @@ match true true true true true true true true
 no_match false false false false false false false false
 nulls NULL NULL NULL NULL NULL NULL NULL NULL
 
+# NOT IN without NULL list values returns false for matches and true for non-matches.
+query TBBBBBBBB
+SELECT
+  label,
+  i8 NOT IN (3, 4, 5, 6, 11),
+  u8 NOT IN (3, 4, 5, 6, 11),
+  i16 NOT IN (3, 258, 4097, 16385, 11),
+  u16 NOT IN (3, 258, 4097, 16385, 11),
+  i32 NOT IN (3, 258, 66051, 16909060, 11),
+  u32 NOT IN (3, 258, 66051, 16909060, 11),
+  i64 NOT IN (3, 258, 66051, 16909060, 11),
+  u64 NOT IN (3, 258, 66051, 16909060, 11)
+FROM in_list_ints_nullable
+ORDER BY label
+----
+match false false false false false false false false
+no_match true true true true true true true true
+nulls NULL NULL NULL NULL NULL NULL NULL NULL
+
 # Null IN list values return true for matches and NULL for non-matches.
 query TBBBBBBBB
 SELECT
