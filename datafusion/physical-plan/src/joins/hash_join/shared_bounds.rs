@@ -349,7 +349,7 @@ impl<'a> DynamicFilterExprComposer<'a> {
         match finalize_input {
             FinalizeInput::CollectLeft(partition) => self.compose_collect_left(partition),
             FinalizeInput::Partitioned(partitions) => {
-                self.compose_partitioned(partitions)
+                self.compose_partitioned(&partitions)
             }
         }
     }
@@ -390,7 +390,7 @@ impl<'a> DynamicFilterExprComposer<'a> {
 
     fn compose_partitioned(
         &self,
-        partitions: Vec<PartitionStatus>,
+        partitions: &[PartitionStatus],
     ) -> Result<FilterComposition> {
         let num_partitions = partitions.len();
         let mut real_branches = Vec::new();
