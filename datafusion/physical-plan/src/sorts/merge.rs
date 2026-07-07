@@ -409,7 +409,12 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             return Poll::Ready(Some(Ok(remainder)));
         }
 
-        // 3. Forwarding the stream's remaining batches as is
+        // 3. Everything buffered was emitted, so release the buffered batches
+        // and their memory reservation since we now no longer hold on to any memory
+        // no need to reserve memory
+        self.in_progress.release_buffered_batches();
+
+        // 4. Forwarding the stream's remaining batches as is
         match futures::ready!(self.streams.poll_next(cx, stream_idx)) {
             None => Poll::Ready(None),
             Some(Err(e)) => {

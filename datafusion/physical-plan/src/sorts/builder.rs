@@ -138,6 +138,33 @@ impl BatchBuilder {
         (remaining > 0).then(|| batch.slice(cursor.row_idx, remaining))
     }
 
+    /// Drop all buffered batches and release their memory back to the pool
+    /// (never shrinking below the pre-reserved `initial_reservation` floor).
+    ///
+    /// Only valid when there are no in-progress rows, and no rows may be
+    /// pushed or read afterwards: used when the merge switches to forwarding
+    /// whole batches that bypass this builder entirely.
+    pub(crate) fn release_buffered_batches(&mut self) {
+        assert_eq!(
+            self.indices.len(),
+            0,
+            "in-progress rows still reference the buffered batches"
+        );
+        if self.batches.is_empty() {
+            return;
+        }
+        // Remove data and release capacity
+        self.batches = vec![];
+        self.indices = vec![];
+        self.cursors = vec![];
+
+        self.batches_mem_used = 0;
+        if self.reservation.size() > self.initial_reservation {
+            self.reservation
+                .shrink(self.reservation.size() - self.initial_reservation);
+        }
+    }
+
     /// Try to interleave all columns using the given index slice.
     fn try_interleave_columns(
         &self,
