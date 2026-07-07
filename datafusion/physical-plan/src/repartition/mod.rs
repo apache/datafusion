@@ -911,8 +911,8 @@ impl BatchPartitioner {
         Ok(it)
     }
 
-    /// Groups input row indices by range partition - after this returns, `indices[p]` contains the row indices from `arrays`
-    /// that belong in output partition `p`, according to `split_points` and `sort_options`.
+    /// Groups input row indices by range partition. This populates `indices[p]` with the
+    /// row indices from `arrays` that belong in output partition `p` according to `split_points` and `sort_options`.
     fn partition_range_indices(
         arrays: &[Arc<dyn Array>],
         split_points: &[SplitPoint],
@@ -957,7 +957,7 @@ impl BatchPartitioner {
 
     /// Build repartitioned hash/range output batches using one `take` per input batch.
     ///
-    /// The hash and range routers first fills one index vector per output partition. This method
+    /// The routers first fills one index vector per output partition. This method
     /// concatenates those index vectors, performs one grouped `take_arrays`, and
     /// then returns each output partition as a slice of the reordered batch.
     ///
@@ -1753,32 +1753,12 @@ impl RepartitionExec {
         input_partition: usize,
         num_input_partitions: usize,
     ) -> Result<()> {
-        let mut partitioner = match &partitioning {
-            Partitioning::Hash(exprs, num_partitions) => {
-                BatchPartitioner::new_hash_partitioner(
-                    exprs.clone(),
-                    *num_partitions,
-                    metrics.repartition_time.clone(),
-                )?
-            }
-            Partitioning::RoundRobinBatch(num_partitions) => {
-                BatchPartitioner::new_round_robin_partitioner(
-                    *num_partitions,
-                    metrics.repartition_time.clone(),
-                    input_partition,
-                    num_input_partitions,
-                )
-            }
-            Partitioning::Range(range_partitioning) => {
-                BatchPartitioner::new_range_partitioner(
-                    range_partitioning,
-                    metrics.repartition_time.clone(),
-                )
-            }
-            other => {
-                return not_impl_err!("Unsupported repartitioning scheme {other:?}");
-            }
-        };
+        let mut partitioner = BatchPartitioner::try_new(
+            partitioning,
+            metrics.repartition_time.clone(),
+            input_partition,
+            num_input_partitions,
+        )?;
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
