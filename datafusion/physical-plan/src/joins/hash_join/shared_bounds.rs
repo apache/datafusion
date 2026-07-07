@@ -332,7 +332,10 @@ enum FilterComposition {
 
 enum PartitionBranch {
     Empty,
-    Real(PhysicalExprRef, PhysicalExprRef),
+    Real {
+        when_expr: PhysicalExprRef,
+        then_expr: PhysicalExprRef,
+    },
 }
 
 struct DynamicFilterExprComposer<'a> {
@@ -400,7 +403,10 @@ impl<'a> DynamicFilterExprComposer<'a> {
                     .compose_reported_partition_branch(partition_id, partition)?
                 {
                     PartitionBranch::Empty => empty_partition_ids.push(partition_id),
-                    PartitionBranch::Real(when_expr, then_expr) => {
+                    PartitionBranch::Real {
+                        when_expr,
+                        then_expr,
+                    } => {
                         real_branches.push((when_expr, then_expr));
                     }
                 },
@@ -464,10 +470,10 @@ impl<'a> DynamicFilterExprComposer<'a> {
         let then_expr = combine_membership_and_bounds(membership_expr, bounds_expr)
             .unwrap_or_else(|| lit(true));
 
-        Ok(PartitionBranch::Real(
-            lit(ScalarValue::UInt64(Some(partition_id as u64))),
+        Ok(PartitionBranch::Real {
+            when_expr: lit(ScalarValue::UInt64(Some(partition_id as u64))),
             then_expr,
-        ))
+        })
     }
 
     fn partition_case(
