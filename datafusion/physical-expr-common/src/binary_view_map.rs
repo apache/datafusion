@@ -143,6 +143,8 @@ where
     random_state: RandomState,
     /// buffer that stores hash values (reused across batches to save allocations)
     hashes_buffer: Vec<u64>,
+    /// Maps input views to payloads for repeated physical views in one batch.
+    input_view_to_payload: datafusion_common::HashMap<u128, V>,
     /// `(payload, null_index)` for the 'null' value, if any
     /// NOTE null_index is the logical index in the final array, not the index
     /// in the buffer
@@ -167,6 +169,7 @@ where
             nulls: NullBufferBuilder::new(0),
             random_state: RandomState::default(),
             hashes_buffer: vec![],
+            input_view_to_payload: Default::default(),
             null: None,
         }
     }
@@ -273,8 +276,7 @@ where
         assert_eq!(values.len(), self.hashes_buffer.len());
 
         let input_has_buffers = !values.data_buffers().is_empty();
-        let mut input_view_to_payload =
-            hashbrown::hash_table::HashTable::<(u128, V)>::new();
+        self.input_view_to_payload.clear();
         for i in 0..values.len() {
             let view_u128 = input_views[i];
             let hash = self.hashes_buffer[i];
@@ -299,10 +301,7 @@ where
             let len = view_u128 as u32;
 
             let cached_payload = if input_has_buffers && len > 12 {
-                let view_hash = Self::hash_input_view(view_u128);
-                input_view_to_payload
-                    .find(view_hash, |(cached_view, _)| *cached_view == view_u128)
-                    .map(|(_, payload)| *payload)
+                self.input_view_to_payload.get(&view_u128).copied()
             } else {
                 None
             };
@@ -345,6 +344,9 @@ where
             };
 
             let payload = if let Some(payload) = maybe_payload {
+                if input_has_buffers && len > 12 {
+                    self.input_view_to_payload.insert(view_u128, payload);
+                }
                 payload
             } else {
                 // no existing value, make a new one
@@ -380,22 +382,8 @@ where
                     .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
                 payload
             };
-            if input_has_buffers && len > 12 {
-                let view_hash = Self::hash_input_view(view_u128);
-                input_view_to_payload.insert_unique(
-                    view_hash,
-                    (view_u128, payload),
-                    |(cached_view, _)| Self::hash_input_view(*cached_view),
-                );
-            }
-
             observe_payload_fn(payload);
         }
-    }
-
-    #[inline(always)]
-    fn hash_input_view(view: u128) -> u64 {
-        (view as u64) ^ ((view >> 64) as u64)
     }
 
     #[inline(always)]
@@ -558,6 +546,7 @@ where
             + completed_size
             + nulls_size
             + self.hashes_buffer.allocated_size()
+            + self.input_view_to_payload.capacity() * size_of::<(u128, V)>()
     }
 }
 
