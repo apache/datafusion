@@ -278,6 +278,14 @@ pub fn evaluate_partition_prefix<'a>(
                 // if a partition only has a single literal value, then it can be added to the
                 // prefix
                 let encoded = encode_partition_value(val);
+                if encoded != val.as_str() {
+                    // The same decoded value can be represented by both raw and
+                    // percent-encoded partition directories. Prefix pruning is
+                    // an optimization, so stop before this partition rather
+                    // than listing only one spelling and potentially skipping
+                    // valid rows.
+                    break;
+                }
                 parts.push(format!("{p}={encoded}"));
             }
             _ => {
@@ -854,12 +862,20 @@ mod tests {
                 partitions,
                 &[col("a").eq(lit("Electronics/Computers"))],
             ),
-            Some(Path::from("a=Electronics%2FComputers")),
+            None,
         );
 
         assert_eq!(
             evaluate_partition_prefix(partitions, &[col("a").eq(lit("John Doe"))]),
-            Some(Path::from("a=John%20Doe")),
+            None,
+        );
+
+        assert_eq!(
+            evaluate_partition_prefix(
+                partitions,
+                &[col("a").eq(lit("foo")).and(col("b").eq(lit("John Doe")))],
+            ),
+            Some(Path::from("a=foo")),
         );
 
         assert_eq!(
