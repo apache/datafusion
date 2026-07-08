@@ -5265,7 +5265,8 @@ impl ScalarValue {
 /// as necessary.
 pub fn copy_array_data(src_data: &ArrayData) -> ArrayData {
     let mut copy = MutableArrayData::new(vec![&src_data], true, src_data.len());
-    copy.extend(0, 0, src_data.len());
+    copy.try_extend(0, 0, src_data.len())
+        .expect("copy_array_data failed due to offset overflow");
     copy.freeze()
 }
 

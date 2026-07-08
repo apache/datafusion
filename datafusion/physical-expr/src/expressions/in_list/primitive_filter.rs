@@ -79,7 +79,7 @@ impl BitmapStorage for Box<[u64; 1024]> {
 ///
 /// Arrow already defines the Rust value type as `T::Native`. This trait only
 /// supplies the bitmap storage size and maps values to their bit-pattern index
-/// for the two integer domains that are small enough to represent with one bit
+/// for the primitive domains that are small enough to represent with one bit
 /// per possible value.
 pub(super) trait BitmapFilterType:
     ArrowPrimitiveType + Send + Sync + 'static
@@ -131,6 +131,17 @@ impl BitmapFilterType for UInt16Type {
     #[inline(always)]
     fn index(value: Self::Native) -> usize {
         value as usize
+    }
+}
+
+/// `Float16` has 65,536 possible bit patterns, so 1,024 `u64` words cover the
+/// full domain.
+impl BitmapFilterType for Float16Type {
+    type Storage = Box<[u64; 1024]>;
+
+    #[inline(always)]
+    fn index(value: Self::Native) -> usize {
+        value.to_bits() as usize
     }
 }
 
@@ -418,7 +429,10 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use arrow::array::{DictionaryArray, Int8Array, Int16Array, UInt8Array, UInt16Array};
+    use arrow::array::{
+        DictionaryArray, Float16Array, Int8Array, Int16Array, UInt8Array, UInt16Array,
+    };
+    use half::f16;
 
     fn assert_contains(
         filter: &dyn StaticFilter,
@@ -530,6 +544,42 @@ mod tests {
         assert_eq!(
             filter.contains(&needles, true)?,
             BooleanArray::from(vec![Some(false), None, Some(false)])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn bitmap_filter_f16_handles_bit_patterns_and_slices() -> Result<()> {
+        let nan_a = f16::from_bits(0x7e01);
+        let nan_b = f16::from_bits(0x7e02);
+        let haystack: ArrayRef = Arc::new(
+            Float16Array::from(vec![
+                Some(f16::from_f32(9.0)),
+                Some(f16::from_f32(1.5)),
+                None,
+                Some(f16::from_f32(-0.0)),
+                Some(nan_a),
+            ])
+            .slice(1, 4),
+        );
+        let filter = BitmapFilter::<Float16Type>::try_new(&haystack)?;
+        let needles = Float16Array::from(vec![
+            Some(f16::from_f32(0.0)),
+            Some(f16::from_f32(-0.0)),
+            Some(nan_a),
+            Some(nan_b),
+            None,
+        ])
+        .slice(1, 4);
+
+        assert_eq!(
+            filter.contains(&needles, false)?,
+            BooleanArray::from(vec![Some(true), Some(true), None, None])
+        );
+        assert_eq!(
+            filter.contains(&needles, true)?,
+            BooleanArray::from(vec![Some(false), Some(false), None, None])
         );
 
         Ok(())

@@ -1288,11 +1288,11 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
             let (valid_or_empty, _nulls) = valid_or_empty.into_parts();
 
             for (start, end) in valid_or_empty.set_slices() {
-                mutable_array_data.extend(
+                mutable_array_data.try_extend(
                     0,
                     offsets[start].as_usize(),
                     offsets[end].as_usize(),
-                );
+                )?;
             }
 
             let lengths = std::iter::zip(offsets.lengths(), nulls)
