@@ -344,8 +344,11 @@ fn string_view_overflow_error(field: &str) -> DataFusionError {
 }
 
 fn try_string_view_part(field: &str, value: usize) -> Result<u32> {
-    // StringView stores these fields as u32, but Arrow limits lengths,
-    // offsets, and buffer indices to i32::MAX.
+    // Long StringView parts are encoded as u32, but Arrow IPC represents
+    // length, offset, and buffer index as signed 32-bit fields. The buffer
+    // index guard is mainly a contract/precondition check for long-view
+    // encoding; hitting it would require more than i32::MAX completed data
+    // buffers, not merely many rows.
     Ok(i32::try_from(value).map_err(|_| string_view_overflow_error(field))? as u32)
 }
 
@@ -648,9 +651,10 @@ impl StringViewArrayBuilder {
     /// # Errors
     ///
     /// Returns an error if the value length, in-progress buffer offset, or
-    /// number of completed buffers exceeds `i32::MAX`. The ByteView spec uses
-    /// signed 32-bit integers for these fields; exceeding `i32::MAX` would
-    /// produce an array that does not round-trip through Arrow IPC (see
+    /// completed-buffer index exceeds `i32::MAX`. The buffer-index case is a
+    /// long-view encoding precondition, not an expected runtime limit. Arrow
+    /// IPC uses signed 32-bit integers for these fields; exceeding `i32::MAX`
+    /// would produce an array that does not round-trip through Arrow IPC (see
     /// <https://github.com/apache/arrow-rs/issues/6172>).
     #[inline]
     pub fn try_append_value(&mut self, value: &str) -> Result<()> {
@@ -666,7 +670,7 @@ impl StringViewArrayBuilder {
         let offset = try_string_view_part("offset", self.in_progress.len())?;
         let buffer_index = try_string_view_part("buffer count", self.completed.len())?;
         self.in_progress.extend_from_slice(v);
-        self.views.push(Self::make_long_view_checked(
+        self.views.push(Self::make_long_view_from_checked_parts(
             length,
             buffer_index,
             offset,
@@ -733,15 +737,16 @@ impl StringViewArrayBuilder {
         Ok(())
     }
 
-    /// Encode a long-form view referencing `length` bytes already written
-    /// into the in-progress block at `offset`. `prefix_bytes` is the row's
-    /// data slice (or any slice starting with the row's first 4 bytes).
+    /// Encode a long-form view from already-validated ByteView parts.
+    /// `prefix_bytes` is the row's data slice (or any slice starting with the
+    /// row's first 4 bytes). Length, buffer index, and offset must already fit
+    /// Arrow IPC's signed 32-bit long-view fields.
     ///
     /// Built inline rather than going through Arrow's `make_view`: that
     /// function is `[inline(never)]` and has to handle short strings, so
     /// building the view here ourselves is faster.
     #[inline]
-    fn make_long_view_checked(
+    fn make_long_view_from_checked_parts(
         length: u32,
         buffer_index: u32,
         offset: u32,
@@ -790,7 +795,7 @@ impl StringViewArrayBuilder {
         let offset = try_string_view_part("offset", cursor)?;
         let buffer_index = try_string_view_part("buffer count", self.completed.len())?;
         self.in_progress.extend(src.iter().map(|&b| map(b)));
-        self.views.push(Self::make_long_view_checked(
+        self.views.push(Self::make_long_view_from_checked_parts(
             length,
             buffer_index,
             offset,
@@ -817,7 +822,7 @@ impl StringViewArrayBuilder {
                 let offset = try_string_view_part("offset", start)?;
                 let buffer_index =
                     try_string_view_part("buffer count", self.completed.len())?;
-                self.views.push(Self::make_long_view_checked(
+                self.views.push(Self::make_long_view_from_checked_parts(
                     length,
                     buffer_index,
                     offset,
@@ -929,16 +934,25 @@ pub(crate) struct StringViewWriter<'a> {
     /// `None` while the row fits inline; becomes `Some(start)` (offset of
     /// the row's first byte in `in_progress`) at first spill.
     spill_cursor: Option<usize>,
+    /// First write error observed by this adapter. [`StringWriter`] methods
+    /// are infallible, so `try_append_with` reads this after the closure
+    /// returns and rolls back the in-progress row on error.
     error: Option<DataFusionError>,
     builder: &'a mut StringViewArrayBuilder,
 }
 
 impl StringViewWriter<'_> {
+    /// Store the first write error. The writer cannot return `Result` through
+    /// the [`StringWriter`] API, so subsequent writes become no-ops and
+    /// `try_append_with` reports this error after the closure finishes.
     #[inline]
     fn fail(&mut self, error: DataFusionError) {
         self.error.get_or_insert(error);
     }
 
+    /// Append bytes to an already-spilled row in `in_progress`. Validate the
+    /// resulting row length and next block offset before mutating the buffer so
+    /// `try_append_with` can roll back to the original block length on error.
     #[inline]
     fn write_spilled_bytes(&mut self, bytes: &[u8]) {
         let Some(next_len) = self.builder.in_progress.len().checked_add(bytes.len())
