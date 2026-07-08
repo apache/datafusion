@@ -909,7 +909,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a * Int32(1) - test.b), sum(__common_expr_1 AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]
+        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a * (Int32(1) - test.b)), sum(__common_expr_1 AS test.a * (Int32(1) - test.b) * (Int32(1) + test.c))]]
           Projection: test.a * (Int32(1) - test.b) AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
@@ -1735,8 +1735,8 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: __common_expr_1 AS NOT test.a = test.b, __common_expr_1 AS NOT test.b = test.a
-          Projection: NOT test.a = test.b AS __common_expr_1, test.a, test.b, test.c
+        Projection: __common_expr_1 AS NOT (test.a = test.b), __common_expr_1 AS NOT (test.b = test.a)
+          Projection: NOT (test.a = test.b) AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
         )?;
