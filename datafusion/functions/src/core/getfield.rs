@@ -140,11 +140,11 @@ fn process_map_array(
             .find(|(_, t)| t.unwrap());
 
         if maybe_matched.is_none() {
-            mutable.extend_nulls(1);
+            mutable.try_extend_nulls(1)?;
             continue;
         }
         let (match_offset, _) = maybe_matched.unwrap();
-        mutable.extend(0, start + match_offset, start + match_offset + 1);
+        mutable.try_extend(0, start + match_offset, start + match_offset + 1)?;
     }
 
     let data = mutable.freeze();
@@ -177,14 +177,14 @@ fn process_map_with_nested_key(
         let mut found_match = false;
         for i in start..end {
             if comparator(i, 0).is_eq() {
-                mutable.extend(0, i, i + 1);
+                mutable.try_extend(0, i, i + 1)?;
                 found_match = true;
                 break;
             }
         }
 
         if !found_match {
-            mutable.extend_nulls(1);
+            mutable.try_extend_nulls(1)?;
         }
     }
 
