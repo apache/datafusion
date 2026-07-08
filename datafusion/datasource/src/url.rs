@@ -368,14 +368,8 @@ impl ListingTableUrl {
 /// * `prefix` - Optional prefix relative to table base for filtering results
 ///
 /// # Cache Behavior:
-/// The cache key is always `table_base_path`. When a prefix-filtered listing
-/// is requested via `prefix`, the cache:
-/// - Looks up `table_base_path` in the cache
-/// - Filters results to match `table_base_path/prefix`
-/// - Returns filtered results without a storage call
-///
-/// On cache miss, the full table is always listed and cached, ensuring
-/// subsequent prefix queries can be served from cache.
+/// A full table listing can satisfy a prefix-filtered request by filtering the
+/// cached files. On cache miss, only the requested path is listed and cached.
 async fn list_with_cache<'b>(
     ctx: &'b dyn Session,
     store: &'b dyn ObjectStore,
@@ -399,29 +393,32 @@ async fn list_with_cache<'b>(
             .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
             .boxed()),
         Some(cache) => {
-            // Build the filter prefix (only Some if prefix was requested)
             let filter_prefix = prefix.is_some().then(|| full_prefix.clone());
 
             let table_scoped_base_path = TableScopedPath {
                 table: table_ref.cloned(),
                 path: table_base_path.clone(),
             };
+            let table_scoped_list_path = TableScopedPath {
+                table: table_ref.cloned(),
+                path: full_prefix.clone(),
+            };
 
-            // Try cache lookup - get returns CachedFileList
             let vec = if let Some(cached) = cache.get(&table_scoped_base_path) {
                 debug!("Hit list files cache");
                 cached.files_matching_prefix(&filter_prefix)
+            } else if let Some(cached) = cache.get(&table_scoped_list_path) {
+                debug!("Hit list files cache for requested path");
+                cached.files_matching_prefix(&None)
             } else {
-                // Cache miss - always list and cache the full table
-                // This ensures we have complete data for future prefix queries
                 let mut vec = store
-                    .list(Some(table_base_path))
+                    .list(Some(&full_prefix))
                     .try_collect::<Vec<ObjectMeta>>()
                     .await?;
                 vec.shrink_to_fit(); // Right-size before caching
                 let cached: CachedFileList = vec.into();
-                let result = cached.files_matching_prefix(&filter_prefix);
-                cache.put(&table_scoped_base_path, cached);
+                let result = cached.files_matching_prefix(&None);
+                cache.put(&table_scoped_list_path, cached);
                 result
             };
             Ok(
@@ -530,6 +527,7 @@ mod tests {
     use std::any::Any;
     use std::collections::HashMap;
     use std::ops::Range;
+    use std::sync::Mutex;
     use tempfile::tempdir;
 
     #[test]
@@ -746,10 +744,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_files() -> Result<()> {
-        let store = MockObjectStore {
-            in_mem: object_store::memory::InMemory::new(),
-            forbidden_paths: vec!["forbidden/e.parquet".into()],
-        };
+        let store =
+            MockObjectStore::with_forbidden_paths(vec!["forbidden/e.parquet".into()]);
 
         // Create some files:
         create_file(&store, "a.parquet").await;
@@ -847,10 +843,7 @@ mod tests {
     async fn test_cache_path_equivalence() -> Result<()> {
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
-        let store = MockObjectStore {
-            in_mem: object_store::memory::InMemory::new(),
-            forbidden_paths: vec![],
-        };
+        let store = MockObjectStore::new();
 
         // Create test files with partition-style paths
         create_file(&store, "/table/year=2023/data1.parquet").await;
@@ -948,15 +941,114 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_cache_miss_with_prefix_lists_prefixed_path() -> Result<()> {
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+        let store = MockObjectStore::new();
+        create_file(&store, "/table/year=2023/data1.parquet").await;
+        create_file(&store, "/table/year=2024/month=06/data2.parquet").await;
+        create_file(&store, "/table/year=2024/month=12/data3.parquet").await;
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_object_list_cache_limit(1024 * 1024)
+            .build_arc()?;
+        let session = MockSession::with_runtime_env(runtime);
+        let url = ListingTableUrl::parse("/table/")?;
+        let prefix = Path::from("year=2024/month=06");
+
+        let results: Vec<String> = url
+            .list_prefixed_files(&session, &store, Some(prefix.clone()), "parquet")
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|m| m.location.to_string())
+            .collect();
+
+        assert_eq!(results, vec!["table/year=2024/month=06/data2.parquet"]);
+        assert_eq!(
+            store.list_prefixes(),
+            vec![Some(Path::from("table/year=2024/month=06"))]
+        );
+
+        let results: Vec<String> = url
+            .list_prefixed_files(&session, &store, Some(prefix), "parquet")
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|m| m.location.to_string())
+            .collect();
+
+        assert_eq!(results, vec!["table/year=2024/month=06/data2.parquet"]);
+        assert_eq!(
+            store.list_prefixes(),
+            vec![Some(Path::from("table/year=2024/month=06"))]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefix_cache_does_not_satisfy_full_listing() -> Result<()> {
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+        let store = MockObjectStore::new();
+        create_file(&store, "/sales/region=US/q1.parquet").await;
+        create_file(&store, "/sales/region=US/q2.parquet").await;
+        create_file(&store, "/sales/region=EU/q1.parquet").await;
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_object_list_cache_limit(1024 * 1024)
+            .build_arc()?;
+        let session = MockSession::with_runtime_env(runtime);
+        let url = ListingTableUrl::parse("/sales/")?;
+
+        let us_results: Vec<String> = url
+            .list_prefixed_files(
+                &session,
+                &store,
+                Some(Path::from("region=US")),
+                "parquet",
+            )
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|m| m.location.to_string())
+            .collect();
+        assert_eq!(
+            us_results,
+            vec!["sales/region=US/q1.parquet", "sales/region=US/q2.parquet"]
+        );
+
+        let full_results: Vec<String> = url
+            .list_prefixed_files(&session, &store, None, "parquet")
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|m| m.location.to_string())
+            .collect();
+        assert_eq!(full_results.len(), 3);
+        assert_eq!(
+            store.list_prefixes(),
+            vec![
+                Some(Path::from("sales/region=US")),
+                Some(Path::from("sales"))
+            ]
+        );
+
+        Ok(())
+    }
+
     /// Tests that prefix queries can be served from a cached full-table listing
     #[tokio::test]
     async fn test_cache_serves_partition_from_full_listing() -> Result<()> {
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
-        let store = MockObjectStore {
-            in_mem: object_store::memory::InMemory::new(),
-            forbidden_paths: vec![],
-        };
+        let store = MockObjectStore::new();
 
         // Create test files
         create_file(&store, "/sales/region=US/q1.parquet").await;
@@ -981,6 +1073,7 @@ mod tests {
             .map(|m| m.location.to_string())
             .collect();
         assert_eq!(full_results.len(), 3);
+        assert_eq!(store.list_prefixes(), vec![Some(Path::from("sales"))]);
 
         // Second: query with prefix (should be served from cache)
         let mut us_results: Vec<String> = url
@@ -1002,6 +1095,7 @@ mod tests {
             us_results,
             vec!["sales/region=US/q1.parquet", "sales/region=US/q2.parquet"]
         );
+        assert_eq!(store.list_prefixes(), vec![Some(Path::from("sales"))]);
 
         // Third: different prefix (also from cache)
         let eu_results: Vec<String> = url
@@ -1019,6 +1113,7 @@ mod tests {
             .collect();
 
         assert_eq!(eu_results, vec!["sales/region=EU/q1.parquet"]);
+        assert_eq!(store.list_prefixes(), vec![Some(Path::from("sales"))]);
 
         Ok(())
     }
@@ -1078,6 +1173,25 @@ mod tests {
     struct MockObjectStore {
         in_mem: object_store::memory::InMemory,
         forbidden_paths: Vec<Path>,
+        list_prefixes: Arc<Mutex<Vec<Option<Path>>>>,
+    }
+
+    impl MockObjectStore {
+        fn new() -> Self {
+            Self::with_forbidden_paths(vec![])
+        }
+
+        fn with_forbidden_paths(forbidden_paths: Vec<Path>) -> Self {
+            Self {
+                in_mem: object_store::memory::InMemory::new(),
+                forbidden_paths,
+                list_prefixes: Default::default(),
+            }
+        }
+
+        fn list_prefixes(&self) -> Vec<Option<Path>> {
+            self.list_prefixes.lock().unwrap().clone()
+        }
     }
 
     impl std::fmt::Display for MockObjectStore {
@@ -1139,6 +1253,7 @@ mod tests {
             &self,
             prefix: Option<&Path>,
         ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.list_prefixes.lock().unwrap().push(prefix.cloned());
             self.in_mem.list(prefix)
         }
 
