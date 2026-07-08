@@ -1559,9 +1559,7 @@ impl ExecutionPlan for RepartitionExec {
             Partitioning::Range(_) => {
                 // Range partitioning optimizer propagation is tracked in
                 // https://github.com/apache/datafusion/issues/23230
-                return not_impl_err!(
-                    "Projection pushdown through RepartitionExec with range partitioning is not implemented"
-                );
+                return Ok(None);
             }
             others => others.clone(),
         };
@@ -1603,9 +1601,7 @@ impl ExecutionPlan for RepartitionExec {
             Partitioning::Range(_) => {
                 // Range partitioning optimizer propagation is tracked in
                 // https://github.com/apache/datafusion/issues/23230
-                return not_impl_err!(
-                    "Sort pushdown through RepartitionExec with range partitioning is not implemented"
-                );
+                return Ok(SortOrderPushdownResult::Unsupported);
             }
             Partitioning::RoundRobinBatch(_)
             | Partitioning::Hash(_, _)
@@ -1637,9 +1633,7 @@ impl ExecutionPlan for RepartitionExec {
             Range(_) => {
                 // Range repartition optimizations are tracked in
                 // https://github.com/apache/datafusion/issues/23230
-                return not_impl_err!(
-                    "Changing RepartitionExec partition counts with range partitioning is not implemented"
-                );
+                return Ok(None);
             }
         };
         Ok(Some(Arc::new(Self {
@@ -2586,7 +2580,11 @@ mod tests {
     }
 
     fn test_schema(nullable: bool) -> Arc<Schema> {
-        Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, nullable)]))
+        Arc::new(Schema::new(vec![Field::new(
+            "c0",
+            DataType::UInt32,
+            nullable,
+        )]))
     }
 
     fn u32_range_partitioning(
