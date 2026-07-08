@@ -264,7 +264,7 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
             &original_data,
             &default_value_data,
             output_values_len,
-            |mutable, _, extra_count| mutable.extend(1, 0, extra_count),
+            |mutable, _, extra_count| Ok(mutable.try_extend(1, 0, extra_count)?),
         )
     } else {
         // Slow path: rows may need different fill values, so append from the
@@ -286,8 +286,9 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
             output_values_len,
             |mutable, row_index, extra_count| {
                 for _ in 0..extra_count {
-                    mutable.extend(1, row_index, row_index + 1);
+                    mutable.try_extend(1, row_index, row_index + 1)?;
                 }
+                Ok(())
             },
         )
     }
@@ -304,7 +305,7 @@ fn build_resized_list<O, F>(
 ) -> Result<ArrayRef>
 where
     O: OffsetSizeTrait + TryInto<i64>,
-    F: FnMut(&mut MutableArrayData, usize, usize),
+    F: FnMut(&mut MutableArrayData, usize, usize) -> Result<()>,
 {
     let capacity = Capacities::Array(output_values_len);
     let mut offsets = vec![O::usize_as(0)];
@@ -331,11 +332,11 @@ where
         if start + count > offset_window[1] {
             let extra_count = (start + count - offset_window[1]).to_usize().unwrap();
             let end = offset_window[1];
-            mutable.extend(0, start.to_usize().unwrap(), end.to_usize().unwrap());
-            append_fill_values(&mut mutable, row_index, extra_count);
+            mutable.try_extend(0, start.to_usize().unwrap(), end.to_usize().unwrap())?;
+            append_fill_values(&mut mutable, row_index, extra_count)?;
         } else {
             let end = start + count;
-            mutable.extend(0, start.to_usize().unwrap(), end.to_usize().unwrap());
+            mutable.try_extend(0, start.to_usize().unwrap(), end.to_usize().unwrap())?;
         };
         offsets.push(offsets[row_index] + count);
     }
