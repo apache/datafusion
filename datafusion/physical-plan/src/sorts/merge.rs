@@ -346,9 +346,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 // The batch is fully emitted: retire the cursor like `advance_cursors` does for a finished one
                 self.prev_cursors[stream_idx] = self.cursors[stream_idx].take();
                 self.loser_tree_adjusted = false;
-                if self.enable_round_robin_tie_breaker {
-                    self.update_poll_count_after_skip(stream_idx);
-                }
 
                 if self.in_progress.is_empty() {
                     self.produced += batch.num_rows();
@@ -398,15 +395,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             if let Some(other) = &self.cursors[challenger] {
                 let beats = match winner_cursor.compare_last_to(other) {
                     Ordering::Less => true,
-                    // Mirror the loser tree's tie-breaking: round-robin by
-                    // poll count when enabled (see [`Self::handle_tie`]) so
-                    // batch-level ties alternate between streams instead of
-                    // starving one, otherwise by stream index like
-                    // [`Self::is_gt`]
                     Ordering::Equal => {
                         if self.enable_round_robin_tie_breaker {
-                            !self.is_skip_poll_count_gt(winner, challenger)
+                            // true if in round-robin because the winner already decided in a
+                            // round-robin fashion
+                            true
                         } else {
+                            // Keep sort stable
                             winner < challenger
                         }
                     }
@@ -483,38 +478,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         let poll_a = self.num_of_polled_with_same_value[a];
         let poll_b = self.num_of_polled_with_same_value[b];
         poll_a.cmp(&poll_b).then_with(|| a.cmp(&b)).is_gt()
-    }
-
-    /// Poll count of `idx`, treating counts from a stale reset epoch as zero
-    /// (the same lazy reset [`Self::update_poll_count_on_the_same_value`] does)
-    #[inline]
-    fn effective_poll_count(&self, idx: usize) -> usize {
-        if self.poll_reset_epochs[idx] == self.current_reset_epoch {
-            self.num_of_polled_with_same_value[idx]
-        } else {
-            0
-        }
-    }
-
-    /// Like [`Self::is_poll_count_gt`], but epoch-aware since full-batch skips
-    /// happen outside the per-row tie-breaker flow that lazily resets counts
-    #[inline]
-    fn is_skip_poll_count_gt(&self, a: usize, b: usize) -> bool {
-        self.effective_poll_count(a)
-            .cmp(&self.effective_poll_count(b))
-            .then_with(|| a.cmp(&b))
-            .is_gt()
-    }
-
-    /// Count a full-batch skip as a poll so consecutive batch-level ties
-    /// round-robin between the streams instead of starving one
-    #[inline]
-    fn update_poll_count_after_skip(&mut self, idx: usize) {
-        if self.poll_reset_epochs[idx] != self.current_reset_epoch {
-            self.poll_reset_epochs[idx] = self.current_reset_epoch;
-            self.num_of_polled_with_same_value[idx] = 0;
-        }
-        self.num_of_polled_with_same_value[idx] += 1;
     }
 
     #[inline]
