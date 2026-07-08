@@ -31,7 +31,7 @@ use datafusion_common::{
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{
-    FileScanConfig, FileScanConfigBuilder, hash_partitioning_from_partition_fields,
+    FileScanConfig, FileScanConfigBuilder, output_partitioning_from_partition_fields,
 };
 use datafusion_datasource::file_sink_config::{FileOutputMode, FileSinkConfig};
 #[expect(deprecated)]
@@ -64,7 +64,7 @@ pub struct ListFilesResult {
     pub file_groups: Vec<FileGroup>,
     /// Aggregated statistics for all files.
     pub statistics: Statistics,
-    /// Whether files are grouped by partition values (enables Hash partitioning).
+    /// Whether files are grouped by partition values.
     pub grouped_by_partition: bool,
 }
 
@@ -626,10 +626,10 @@ impl TableProvider for ListingTable {
             }
             Some(output_partitioning)
         } else if partitioned_by_file_group {
-            // Files are grouped by partition column values: declare Hash
-            // partitioning on those columns so the optimizer can skip hash
+            // Files are grouped by partition column values: declare output
+            // partitioning on those columns so the optimizer can skip
             // repartitioning for aggregates and joins on the partition columns.
-            hash_partitioning_from_partition_fields(
+            output_partitioning_from_partition_fields(
                 &self.table_schema,
                 &table_partition_cols.clone().into(),
                 partitioned_file_lists.len(),
@@ -866,8 +866,8 @@ impl ListingTable {
         // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
         //
         // When enabled, files are grouped by their Hive partition column values, allowing
-        // FileScanConfig to declare Hash partitioning. This enables the optimizer to skip
-        // hash repartitioning for aggregates and joins on partition columns.
+        // FileScanConfig to declare output partitioning. This enables the optimizer to
+        // skip repartitioning for aggregates and joins on partition columns.
         let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
         let (file_groups, grouped_by_partition) =

@@ -575,11 +575,11 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
     }
 }
 
-/// Builds `Partitioning::Hash` over `partition_cols` (resolved to their indices in
+/// Builds output partitioning over `partition_cols` (resolved to their indices in
 /// `schema`) with `partition_count` partitions. Returns `None` when there are no
 /// partition columns. Callers use this to declare the output partitioning of a scan
 /// whose file groups are organized by partition column values.
-pub fn hash_partitioning_from_partition_fields(
+pub fn output_partitioning_from_partition_fields(
     schema: &Schema,
     partition_cols: &Fields,
     partition_count: usize,
@@ -2611,7 +2611,7 @@ mod tests {
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f3.parquet".to_string(), 1024)]),
         ];
-        config.output_partitioning = hash_partitioning_from_partition_fields(
+        config.output_partitioning = output_partitioning_from_partition_fields(
             config.file_source.table_schema().table_schema(),
             config.table_partition_cols(),
             config.file_groups.len(),
@@ -2643,7 +2643,7 @@ mod tests {
             FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
         ];
-        config.output_partitioning = hash_partitioning_from_partition_fields(
+        config.output_partitioning = output_partitioning_from_partition_fields(
             config.file_source.table_schema().table_schema(),
             config.table_partition_cols(),
             config.file_groups.len(),
