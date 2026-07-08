@@ -76,8 +76,13 @@ const SPLIT_SLOP_FACTOR: usize = 2;
 /// more than this multiple of its logical size...
 const WASTE_RATIO: usize = 2;
 
-/// ...and the absolute waste exceeds this many bytes. Compaction copies data,
-/// which is only worth it if it frees a meaningful amount of memory.
+/// ...and the absolute waste exceeds `max(MIN_WASTE_BYTES, target_bytes)`.
+/// Compaction copies data, which only pays off when it frees memory that is
+/// large on the scale the byte target cares about. In particular,
+/// parquet-decoded string/view batches routinely retain 2-4x their logical
+/// size because decode buffers are shared across consecutive batches;
+/// compacting every such batch costs a copy per batch for no benefit (the
+/// batches die immediately in streaming pipelines).
 const MIN_WASTE_BYTES: usize = 1024 * 1024;
 
 /// Metrics for [`BatchNormalizer`]
@@ -306,8 +311,9 @@ impl BatchNormalizer {
         // (e.g. a small slice of a huge batch): copy it so the backing
         // buffers can be freed.
         let retained = get_record_batch_memory_size(&batch);
+        let min_waste = MIN_WASTE_BYTES.max(self.target_bytes);
         let wasteful = retained > WASTE_RATIO * logical
-            && retained.saturating_sub(logical) >= MIN_WASTE_BYTES;
+            && retained.saturating_sub(logical) >= min_waste;
         let batch = if wasteful {
             self.metrics.batches_compacted.add(1);
             compact_slice(&batch, 0, rows)?
@@ -755,6 +761,37 @@ mod tests {
         let out = run(&mut normalizer(), [slice.clone()]);
         assert_eq!(out.len(), 1);
         assert!(Arc::ptr_eq(slice.column(1), out[0].column(1)));
+    }
+
+    #[test]
+    fn moderately_wasteful_batch_below_target_passes_through() {
+        // ClickBench regression shape: parquet-decoded view/string batches
+        // routinely retain 2-4x their logical size because decode buffers are
+        // shared across consecutive batches. Waste that is large in ratio but
+        // small relative to target_bytes must NOT trigger a per-batch copy --
+        // in a streaming pipeline these batches die immediately and
+        // compacting them is pure overhead.
+        let target_bytes = 16 * 1024 * 1024;
+        let parent = string_batch(16 * 1024, 1024); // ~17MB retained
+        let slice = parent.slice(0, 5000); // ~5MB logical, ~12MB waste, ratio >2
+        let logical = logical_size(&slice);
+        let retained = get_record_batch_memory_size(&slice);
+        assert!(retained > WASTE_RATIO * logical);
+        assert!(retained - logical > MIN_WASTE_BYTES);
+        assert!(retained - logical < target_bytes);
+
+        let mut n = BatchNormalizer::new(
+            test_schema(),
+            8192,
+            target_bytes,
+            BatchNormalizerMetrics::default(),
+        );
+        let out = run(&mut n, [slice.clone()]);
+        assert_eq!(out.len(), 1);
+        assert!(
+            Arc::ptr_eq(slice.column(1), out[0].column(1)),
+            "moderately wasteful batch should pass through zero-copy"
+        );
     }
 
     // === ordering / flush ===
