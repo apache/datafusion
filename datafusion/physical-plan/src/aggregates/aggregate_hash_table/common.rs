@@ -177,19 +177,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     /// Each aggregation mode chooses a different `aggregate_fn` according to its
     /// semantics. For example, partial aggregation takes raw inputs, and update them
     /// into stored partial states, so [`GroupsAccumulator::update_batch`] is used.
-    pub(super) fn aggregate_batch_inner<F>(
+    pub(super) fn aggregate_batch_inner(
         &mut self,
         batch: &RecordBatch,
-        mut aggregate_fn: F,
-    ) -> Result<()>
-    where
-        F: FnMut(
-            &mut HashAggregateAccumulator,
-            &EvaluatedAccumulatorArgs,
-            &[usize],
-            usize,
-        ) -> Result<()>,
-    {
+        aggregate_fn: AggregateBatchFn,
+    ) -> Result<()> {
         let evaluated_batch = self.evaluate_batch(batch)?;
         let state = self.state.building_mut();
 
@@ -340,6 +332,22 @@ pub(super) struct HashAggregateAccumulator {
 }
 
 pub(super) type AggregateAccumulator = HashAggregateAccumulator;
+
+/// Function used by [`AggregateHashTable::aggregate_batch_inner`] to update one
+/// accumulator with one evaluated input batch.
+///
+/// Arguments:
+/// * accumulator to update.
+/// * accumulator's evaluated arguments and optional filter.
+/// * one group index per input row, mapping each row to its interned group.
+/// * total number of groups currently interned in that buffer, including newly
+///   interned groups.
+pub(super) type AggregateBatchFn = fn(
+    &mut AggregateAccumulator,
+    &EvaluatedAccumulatorArgs,
+    &[usize],
+    usize,
+) -> Result<()>;
 
 /// Evaluated aggregate arguments and filter for one input batch.
 ///

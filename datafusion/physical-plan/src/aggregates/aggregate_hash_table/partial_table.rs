@@ -115,12 +115,7 @@ impl AggregateHashTable<PartialMarker> {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
-        self.aggregate_batch_inner(
-            batch,
-            |acc, values, group_indices, total_num_groups| {
-                acc.update_batch(values, group_indices, total_num_groups)
-            },
-        )
+        self.aggregate_batch_inner(batch, HashAggregateAccumulator::update_batch)
     }
 
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {

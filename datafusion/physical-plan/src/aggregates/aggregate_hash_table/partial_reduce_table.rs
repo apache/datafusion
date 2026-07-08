@@ -21,7 +21,7 @@ use datafusion_common::Result;
 
 use crate::aggregates::AggregateExec;
 
-use super::common::{AggregateHashTable, PartialReduceMarker};
+use super::common::{AggregateHashTable, HashAggregateAccumulator, PartialReduceMarker};
 
 /// Methods specific to the aggregate hash table used in the partial-reduce stage.
 impl AggregateHashTable<PartialReduceMarker> {
@@ -61,12 +61,7 @@ impl AggregateHashTable<PartialReduceMarker> {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
-        self.aggregate_batch_inner(
-            batch,
-            |acc, values, group_indices, total_num_groups| {
-                acc.merge_batch(values, group_indices, total_num_groups)
-            },
-        )
+        self.aggregate_batch_inner(batch, HashAggregateAccumulator::merge_batch)
     }
 
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {
