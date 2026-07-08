@@ -21,14 +21,6 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
-use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::context::SessionConfig;
-use datafusion::execution::memory_pool::{
-    FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
-};
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::logical_expr::ExplainFormat;
-use datafusion::prelude::SessionContext;
 use crate::catalog::DynamicObjectStoreCatalog;
 use crate::functions::{
     ListFilesCacheFunc, MetadataCacheFunc, ParquetMetadataFunc, StatisticsCacheFunc,
@@ -43,6 +35,14 @@ use crate::{
     print_format::PrintFormat,
     print_options::{MaxRows, PrintOptions},
 };
+use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::context::SessionConfig;
+use datafusion::execution::memory_pool::{
+    FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::logical_expr::ExplainFormat;
+use datafusion::prelude::SessionContext;
 
 use clap::Parser;
 use datafusion::common::config_err;
@@ -186,156 +186,156 @@ impl CliSession {
     pub fn session_context(&self) -> &SessionContext {
         &self.ctx
     }
-pub fn try_from_args() -> Result<Self> {
-    env_logger::init();
-    let args = Args::parse();
+    pub fn try_from_args() -> Result<Self> {
+        env_logger::init();
+        let args = Args::parse();
 
-    if !args.quiet {
-        println!("DataFusion CLI v{DATAFUSION_CLI_VERSION}");
-    }
+        if !args.quiet {
+            println!("DataFusion CLI v{DATAFUSION_CLI_VERSION}");
+        }
 
-    if let Some(ref path) = args.data_path {
-        let p = Path::new(path);
-        env::set_current_dir(p).unwrap();
-    };
-
-    let session_config = get_session_config(&args)?;
-
-    let mut rt_builder = RuntimeEnvBuilder::new();
-    // set memory pool size
-    if let Some(memory_limit) = args.memory_limit {
-        // set memory pool type
-        let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
-            PoolType::Fair if args.top_memory_consumers == 0 => {
-                Arc::new(FairSpillPool::new(memory_limit))
-            }
-            PoolType::Fair => Arc::new(TrackConsumersPool::new(
-                FairSpillPool::new(memory_limit),
-                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
-            )),
-            PoolType::Greedy if args.top_memory_consumers == 0 => {
-                Arc::new(GreedyMemoryPool::new(memory_limit))
-            }
-            PoolType::Greedy => Arc::new(TrackConsumersPool::new(
-                GreedyMemoryPool::new(memory_limit),
-                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
-            )),
+        if let Some(ref path) = args.data_path {
+            let p = Path::new(path);
+            env::set_current_dir(p).unwrap();
         };
 
-        rt_builder = rt_builder.with_memory_pool(pool)
-    }
+        let session_config = get_session_config(&args)?;
 
-    // set disk limit
-    if let Some(disk_limit) = args.disk_limit {
-        let builder = DiskManagerBuilder::default()
-            .with_mode(DiskManagerMode::OsTmpDirectory)
-            .with_max_temp_directory_size(disk_limit.try_into().unwrap());
-        rt_builder = rt_builder.with_disk_manager_builder(builder);
-    }
-
-    let instrumented_registry = Arc::new(
-        InstrumentedObjectStoreRegistry::new()
-            .with_profile_mode(args.object_store_profiling),
-    );
-    rt_builder = rt_builder.with_object_store_registry(instrumented_registry.clone());
-
-    let runtime_env = rt_builder.build_arc()?;
-
-    // enable dynamic file query
-    let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
-        .enable_url_table();
-    Ok(Self {
-        ctx,
-        instrumented_registry,
-        args,
-    })
-}
-
-/// Main CLI entrypoint
-pub async fn run(self) -> Result<()> {
-    let CliSession {
-        ctx,
-        args,
-        instrumented_registry,
-    } = self;
-    ctx.refresh_catalogs().await?;
-    // install dynamic catalog provider that can register required object stores
-    ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
-        ctx.state().catalog_list().clone(),
-        ctx.state_weak_ref(),
-    )));
-    // register `parquet_metadata` table function to get metadata from parquet files
-    ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
-
-    // register `metadata_cache` table function to get the contents of the file metadata cache
-    ctx.register_udtf(
-        "metadata_cache",
-        Arc::new(MetadataCacheFunc::new(
-            ctx.task_ctx().runtime_env().cache_manager.clone(),
-        )),
-    );
-
-    // register `statistics_cache` table function to get the contents of the file statistics cache
-    ctx.register_udtf(
-        "statistics_cache",
-        Arc::new(StatisticsCacheFunc::new(
-            ctx.task_ctx().runtime_env().cache_manager.clone(),
-        )),
-    );
-
-    ctx.register_udtf(
-        "list_files_cache",
-        Arc::new(ListFilesCacheFunc::new(
-            ctx.task_ctx().runtime_env().cache_manager.clone(),
-        )),
-    );
-
-    let mut print_options = PrintOptions {
-        format: args.format,
-        quiet: args.quiet,
-        maxrows: args.maxrows,
-        color: args.color,
-        instrumented_registry: Arc::clone(&instrumented_registry),
-    };
-
-    let repl_mode = args.repl_mode();
-    let commands = args.command;
-    let files = args.file;
-    let rc = match args.rc {
-        Some(file) => file,
-        None => {
-            let mut files = Vec::new();
-            let home = dirs::home_dir();
-            if let Some(p) = home {
-                let home_rc = p.join(".datafusionrc");
-                if home_rc.exists() {
-                    files.push(home_rc.into_os_string().into_string().unwrap());
+        let mut rt_builder = RuntimeEnvBuilder::new();
+        // set memory pool size
+        if let Some(memory_limit) = args.memory_limit {
+            // set memory pool type
+            let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
+                PoolType::Fair if args.top_memory_consumers == 0 => {
+                    Arc::new(FairSpillPool::new(memory_limit))
                 }
+                PoolType::Fair => Arc::new(TrackConsumersPool::new(
+                    FairSpillPool::new(memory_limit),
+                    NonZeroUsize::new(args.top_memory_consumers).unwrap(),
+                )),
+                PoolType::Greedy if args.top_memory_consumers == 0 => {
+                    Arc::new(GreedyMemoryPool::new(memory_limit))
+                }
+                PoolType::Greedy => Arc::new(TrackConsumersPool::new(
+                    GreedyMemoryPool::new(memory_limit),
+                    NonZeroUsize::new(args.top_memory_consumers).unwrap(),
+                )),
+            };
+
+            rt_builder = rt_builder.with_memory_pool(pool)
+        }
+
+        // set disk limit
+        if let Some(disk_limit) = args.disk_limit {
+            let builder = DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::OsTmpDirectory)
+                .with_max_temp_directory_size(disk_limit.try_into().unwrap());
+            rt_builder = rt_builder.with_disk_manager_builder(builder);
+        }
+
+        let instrumented_registry = Arc::new(
+            InstrumentedObjectStoreRegistry::new()
+                .with_profile_mode(args.object_store_profiling),
+        );
+        rt_builder = rt_builder.with_object_store_registry(instrumented_registry.clone());
+
+        let runtime_env = rt_builder.build_arc()?;
+
+        // enable dynamic file query
+        let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
+            .enable_url_table();
+        Ok(Self {
+            ctx,
+            instrumented_registry,
+            args,
+        })
+    }
+
+    /// Main CLI entrypoint
+    pub async fn run(self) -> Result<()> {
+        let CliSession {
+            ctx,
+            args,
+            instrumented_registry,
+        } = self;
+        ctx.refresh_catalogs().await?;
+        // install dynamic catalog provider that can register required object stores
+        ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
+            ctx.state().catalog_list().clone(),
+            ctx.state_weak_ref(),
+        )));
+        // register `parquet_metadata` table function to get metadata from parquet files
+        ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
+
+        // register `metadata_cache` table function to get the contents of the file metadata cache
+        ctx.register_udtf(
+            "metadata_cache",
+            Arc::new(MetadataCacheFunc::new(
+                ctx.task_ctx().runtime_env().cache_manager.clone(),
+            )),
+        );
+
+        // register `statistics_cache` table function to get the contents of the file statistics cache
+        ctx.register_udtf(
+            "statistics_cache",
+            Arc::new(StatisticsCacheFunc::new(
+                ctx.task_ctx().runtime_env().cache_manager.clone(),
+            )),
+        );
+
+        ctx.register_udtf(
+            "list_files_cache",
+            Arc::new(ListFilesCacheFunc::new(
+                ctx.task_ctx().runtime_env().cache_manager.clone(),
+            )),
+        );
+
+        let mut print_options = PrintOptions {
+            format: args.format,
+            quiet: args.quiet,
+            maxrows: args.maxrows,
+            color: args.color,
+            instrumented_registry: Arc::clone(&instrumented_registry),
+        };
+
+        let repl_mode = args.repl_mode();
+        let commands = args.command;
+        let files = args.file;
+        let rc = match args.rc {
+            Some(file) => file,
+            None => {
+                let mut files = Vec::new();
+                let home = dirs::home_dir();
+                if let Some(p) = home {
+                    let home_rc = p.join(".datafusionrc");
+                    if home_rc.exists() {
+                        files.push(home_rc.into_os_string().into_string().unwrap());
+                    }
+                }
+                files
             }
-            files
+        };
+
+        if repl_mode {
+            if !rc.is_empty() {
+                exec::exec_from_files(&ctx, rc, &print_options).await?;
+            }
+            // TODO maybe we can have thiserror for cli but for now let's keep it simple
+            return exec::exec_from_repl(&ctx, &mut print_options)
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)));
         }
-    };
 
-    if repl_mode {
-        if !rc.is_empty() {
-            exec::exec_from_files(&ctx, rc, &print_options).await?;
+        if !files.is_empty() {
+            exec::exec_from_files(&ctx, files, &print_options).await?;
         }
-        // TODO maybe we can have thiserror for cli but for now let's keep it simple
-        return exec::exec_from_repl(&ctx, &mut print_options)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)));
-    }
 
-    if !files.is_empty() {
-        exec::exec_from_files(&ctx, files, &print_options).await?;
-    }
+        if !commands.is_empty() {
+            exec::exec_from_commands(&ctx, commands, &print_options).await?;
+        }
 
-    if !commands.is_empty() {
-        exec::exec_from_commands(&ctx, commands, &print_options).await?;
+        Ok(())
     }
-
-    Ok(())
-}
 }
 
 /// Get the session configuration based on the provided arguments
