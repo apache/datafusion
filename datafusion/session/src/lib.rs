@@ -37,7 +37,9 @@
 //! * Query state persistence
 
 pub mod physical_optimizer;
+pub mod query_planner;
 pub mod session;
 
 pub use crate::physical_optimizer::{PhysicalOptimizerContext, PhysicalOptimizerRule};
+pub use crate::query_planner::QueryPlanner;
 pub use crate::session::{Session, SessionStore};

@@ -42,7 +42,7 @@ use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::protobuf::LogicalExprNode;
-use datafusion_session::Session;
+use datafusion_session::{PhysicalOptimizerRule, Session};
 use prost::Message;
 
 use stabby::str::Str as SStr;
@@ -54,6 +54,7 @@ use crate::arrow_wrappers::WrappedSchema;
 use crate::execution::FFI_TaskContext;
 use crate::execution_plan::FFI_ExecutionPlan;
 use crate::physical_expr::FFI_PhysicalExpr;
+use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use crate::session::config::FFI_SessionConfig;
 use crate::udaf::FFI_AggregateUDF;
@@ -106,6 +107,8 @@ pub(crate) struct FFI_SessionRef {
     default_table_options: unsafe extern "C" fn(&Self) -> SVec<(SString, SString)>,
 
     task_ctx: unsafe extern "C" fn(&Self) -> FFI_TaskContext,
+
+    physical_optimizers: unsafe extern "C" fn(&Self) -> SVec<FFI_PhysicalOptimizerRule>,
 
     logical_codec: FFI_LogicalExtensionCodec,
 
@@ -289,6 +292,18 @@ unsafe extern "C" fn task_ctx_fn_wrapper(session: &FFI_SessionRef) -> FFI_TaskCo
     session.inner().task_ctx().into()
 }
 
+unsafe extern "C" fn physical_optimizers_fn_wrapper(
+    session: &FFI_SessionRef,
+) -> SVec<FFI_PhysicalOptimizerRule> {
+    let runtime = unsafe { session.runtime().clone() };
+    session
+        .inner()
+        .physical_optimizers()
+        .iter()
+        .map(|rule| FFI_PhysicalOptimizerRule::new(Arc::clone(rule), runtime.clone()))
+        .collect()
+}
+
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SessionRef) {
     unsafe {
         let private_data =
@@ -317,6 +332,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionR
             table_options: table_options_fn_wrapper,
             default_table_options: default_table_options_fn_wrapper,
             task_ctx: task_ctx_fn_wrapper,
+            physical_optimizers: physical_optimizers_fn_wrapper,
             logical_codec: provider.logical_codec.clone(),
 
             clone: clone_fn_wrapper,
@@ -358,6 +374,7 @@ impl FFI_SessionRef {
             table_options: table_options_fn_wrapper,
             default_table_options: default_table_options_fn_wrapper,
             task_ctx: task_ctx_fn_wrapper,
+            physical_optimizers: physical_optimizers_fn_wrapper,
             logical_codec,
 
             clone: clone_fn_wrapper,
@@ -385,6 +402,7 @@ pub struct ForeignSession {
     table_options: TableOptions,
     runtime_env: Arc<RuntimeEnv>,
     props: ExecutionProps,
+    physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
 }
 
 unsafe impl Send for ForeignSession {}
@@ -442,6 +460,10 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                     )
                 })
                 .collect();
+            let physical_optimizers = (session.physical_optimizers)(session)
+                .into_iter()
+                .map(|rule| (&rule).into())
+                .collect();
 
             Ok(Self {
                 session: session.clone(),
@@ -454,6 +476,7 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                 extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
                 runtime_env: Default::default(),
                 props: Default::default(),
+                physical_optimizers,
             })
         }
     }
@@ -586,10 +609,8 @@ impl Session for ForeignSession {
         }
     }
 
-    fn physical_optimizers(
-        &self,
-    ) -> &[Arc<dyn datafusion_session::PhysicalOptimizerRule + Send + Sync>] {
-        &[]
+    fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        &self.physical_optimizers
     }
 
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {

@@ -43,6 +43,7 @@ use crate::execution_plan::FFI_ExecutionPlan;
 use crate::execution_plan::tests::EmptyExec;
 use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::query_planner::FFI_QueryPlanner;
 use crate::table_provider::FFI_TableProvider;
 use crate::table_provider_factory::FFI_TableProviderFactory;
 use crate::tests::catalog::create_catalog_provider_list;
@@ -55,6 +56,7 @@ mod async_provider;
 pub mod catalog;
 pub mod config;
 mod physical_optimizer;
+mod query_planner;
 mod sync_provider;
 mod table_provider_factory;
 mod udf_udaf_udwf;
@@ -90,6 +92,8 @@ pub struct ForeignLibraryModule {
 
     pub create_timezone_udf: extern "C" fn() -> FFI_ScalarUDF,
 
+    pub create_placement_udf: extern "C" fn() -> FFI_ScalarUDF,
+
     pub create_table_function:
         extern "C" fn(FFI_LogicalExtensionCodec) -> FFI_TableFunction,
 
@@ -112,6 +116,11 @@ pub struct ForeignLibraryModule {
         extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProvider,
 
     pub create_physical_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
+
+    pub create_context_aware_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
+
+    pub create_query_planner:
+        extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_QueryPlanner,
 
     pub version: extern "C" fn() -> u64,
 }
@@ -249,6 +258,7 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_scalar_udf: create_ffi_abs_func,
         create_nullary_udf: create_ffi_random_func,
         create_timezone_udf: udf_udaf_udwf::create_timezone_func,
+        create_placement_udf: udf_udaf_udwf::create_placement_func,
         create_table_function: create_ffi_table_func,
         create_sum_udaf: create_ffi_sum_func,
         create_stddev_udaf: create_ffi_stddev_func,
@@ -259,6 +269,9 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_table_with_statistics,
         create_physical_optimizer_rule:
             physical_optimizer::create_physical_optimizer_rule,
+        create_context_aware_optimizer_rule:
+            physical_optimizer::create_context_aware_optimizer_rule,
+        create_query_planner: query_planner::create_query_planner,
         version: super::version,
     }
 }

@@ -15,17 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Shared state for query planning and execution.
+//! Query planner trait for DataFusion sessions.
 
-pub mod context;
-pub mod session_state;
-pub use session_state::{SessionState, SessionStateBuilder};
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
 
-mod session_state_defaults;
+use async_trait::async_trait;
+use datafusion_common::Result;
+use datafusion_expr::LogicalPlan;
+use datafusion_physical_plan::ExecutionPlan;
 
-pub use session_state_defaults::SessionStateDefaults;
+use crate::Session;
 
-// backwards compatibility
-pub use crate::datasource::file_format::options;
-pub use datafusion_execution::*;
-pub use datafusion_session::{QueryPlanner, Session};
+/// A planner used to add extensions to DataFusion logical and physical plans.
+#[async_trait]
+pub trait QueryPlanner: Any + Debug {
+    /// Given a [`LogicalPlan`], create an [`ExecutionPlan`] suitable for execution
+    async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        session: &dyn Session,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
+}

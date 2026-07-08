@@ -38,6 +38,7 @@ pub mod physical_expr;
 pub mod physical_optimizer;
 pub mod plan_properties;
 pub mod proto;
+pub mod query_planner;
 pub mod record_batch_stream;
 pub mod schema_provider;
 pub mod session;

@@ -28,7 +28,7 @@ use crate::datasource::file_format::FileFormatFactory;
 #[cfg(feature = "sql")]
 use crate::datasource::provider_as_source;
 use crate::execution::SessionStateDefaults;
-use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
+use crate::execution::context::{EmptySerializerRegistry, FunctionFactory};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use arrow_schema::{DataType, FieldRef};
 use datafusion_catalog::MemoryCatalogProviderList;
@@ -73,7 +73,9 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
-use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
+use datafusion_session::{
+    PhysicalOptimizerContext, PhysicalOptimizerRule, QueryPlanner, Session,
+};
 #[cfg(feature = "sql")]
 use datafusion_sql::{
     parser::{DFParserBuilder, Statement},
