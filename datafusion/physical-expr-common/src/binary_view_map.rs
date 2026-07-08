@@ -20,7 +20,9 @@
 use crate::binary_map::OutputType;
 use arrow::array::NullBufferBuilder;
 use arrow::array::cast::AsArray;
-use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView, make_view};
+use arrow::array::{
+    Array, ArrayRef, BinaryViewArray, ByteView, GenericByteViewArray, make_view,
+};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
@@ -270,6 +272,7 @@ where
         // Ensure lengths are equivalent
         assert_eq!(values.len(), self.hashes_buffer.len());
 
+        let input_has_buffers = !values.data_buffers().is_empty();
         for i in 0..values.len() {
             let view_u128 = input_views[i];
             let hash = self.hashes_buffer[i];
@@ -295,7 +298,6 @@ where
 
             // Check if value already exists
             let maybe_payload = {
-                // Borrow completed and in_progress for comparison
                 let completed = &self.completed;
                 let in_progress = &self.in_progress;
 
@@ -305,32 +307,23 @@ where
                             return false;
                         }
 
-                        // Fast path: inline strings can be compared directly
-                        if len <= 12 {
-                            return header.view == view_u128;
-                        }
-
-                        // For larger strings: first compare the 4-byte prefix
-                        let stored_prefix = (header.view >> 32) as u32;
-                        let input_prefix = (view_u128 >> 32) as u32;
-                        if stored_prefix != input_prefix {
-                            return false;
-                        }
-
-                        // Prefix matched - compare full bytes
-                        let byte_view = ByteView::from(header.view);
-                        let stored_len = byte_view.length as usize;
-                        let buffer_index = byte_view.buffer_index as usize;
-                        let offset = byte_view.offset as usize;
-
-                        let stored_value = if buffer_index < completed.len() {
-                            &completed[buffer_index].as_slice()
-                                [offset..offset + stored_len]
+                        if input_has_buffers {
+                            Self::view_equal_to_input::<B, true>(
+                                header.view,
+                                completed,
+                                in_progress,
+                                values,
+                                i,
+                            )
                         } else {
-                            &in_progress[offset..offset + stored_len]
-                        };
-                        let input_value: &[u8] = values.value(i).as_ref();
-                        stored_value == input_value
+                            Self::view_equal_to_input::<B, false>(
+                                header.view,
+                                completed,
+                                in_progress,
+                                values,
+                                i,
+                            )
+                        }
                     })
                     .map(|entry| entry.payload)
             };
@@ -373,6 +366,59 @@ where
             };
             observe_payload_fn(payload);
         }
+    }
+
+    #[inline(always)]
+    fn view_equal_to_input<B: ByteViewType, const HAS_BUFFERS: bool>(
+        exist_view: u128,
+        completed: &[Buffer],
+        in_progress: &[u8],
+        array: &GenericByteViewArray<B>,
+        rhs_row: usize,
+    ) -> bool {
+        // SAFETY: caller ensures `rhs_row` is valid.
+        let input_view = unsafe { *array.views().get_unchecked(rhs_row) };
+
+        if !HAS_BUFFERS {
+            return exist_view == input_view;
+        }
+
+        let exist_view_len = exist_view as u32;
+        let input_view_len = input_view as u32;
+        if exist_view_len != input_view_len {
+            return false;
+        }
+
+        if exist_view_len <= 12 {
+            return exist_view == input_view;
+        }
+
+        let exist_prefix =
+            unsafe { GenericByteViewArray::<B>::inline_value(&exist_view, 4) };
+        let input_prefix =
+            unsafe { GenericByteViewArray::<B>::inline_value(&input_view, 4) };
+        if exist_prefix != input_prefix {
+            return false;
+        }
+
+        let exist_full = {
+            let byte_view = ByteView::from(exist_view);
+            let buffer_index = byte_view.buffer_index as usize;
+            let offset = byte_view.offset as usize;
+            let length = byte_view.length as usize;
+            debug_assert!(buffer_index <= completed.len());
+
+            unsafe {
+                if buffer_index < completed.len() {
+                    let block = completed.get_unchecked(buffer_index);
+                    block.as_slice().get_unchecked(offset..offset + length)
+                } else {
+                    in_progress.get_unchecked(offset..offset + length)
+                }
+            }
+        };
+        let input_full: &[u8] = unsafe { array.value_unchecked(rhs_row).as_ref() };
+        exist_full == input_full
     }
 
     /// Converts this set into a `StringViewArray`, or `BinaryViewArray`,
