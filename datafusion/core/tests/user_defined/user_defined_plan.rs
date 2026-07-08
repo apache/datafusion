@@ -73,6 +73,7 @@ use datafusion::{
     common::{DFSchemaRef, arrow_datafusion_err},
     error::{DataFusionError, Result},
     execution::{
+        Session,
         context::{QueryPlanner, SessionState, TaskContext},
         runtime_env::RuntimeEnv,
     },
@@ -466,8 +467,17 @@ impl QueryPlanner for TopKQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let session_state =
+            session
+                .as_any()
+                .downcast_ref::<SessionState>()
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "TopKQueryPlanner requires a SessionState".to_string(),
+                    )
+                })?;
         // Teach the default physical planner how to plan TopK nodes.
         let physical_planner =
             DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(

@@ -24,11 +24,11 @@ use std::sync::{Arc, RwLock};
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use datafusion::catalog::memory::MemorySourceConfig;
-use datafusion::common::DFSchemaRef;
+use datafusion::common::{DFSchemaRef, internal_err};
 use datafusion::error::Result;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::session_state::CacheFactory;
-use datafusion::execution::{SessionState, SessionStateBuilder};
+use datafusion::execution::{Session, SessionState, SessionStateBuilder};
 use datafusion::logical_expr::{
     Extension, LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };
@@ -198,8 +198,11 @@ impl QueryPlanner for CacheNodeQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let Some(session_state) = session.as_any().downcast_ref::<SessionState>() else {
+            return internal_err!("CacheNodeQueryPlanner requires a SessionState");
+        };
         let physical_planner =
             DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
                 CacheNodePlanner {

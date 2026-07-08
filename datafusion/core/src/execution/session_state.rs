@@ -2309,8 +2309,17 @@ impl QueryPlanner for DefaultQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session: &dyn Session,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let session_state =
+            session
+                .as_any()
+                .downcast_ref::<SessionState>()
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "DefaultQueryPlanner requires a SessionState".to_string(),
+                    )
+                })?;
         let planner = DefaultPhysicalPlanner::default();
         planner
             .create_physical_plan(logical_plan, session_state)

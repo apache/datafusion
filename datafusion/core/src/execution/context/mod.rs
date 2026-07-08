@@ -98,7 +98,7 @@ use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{Analyzer, OptimizerContext};
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
-use datafusion_session::SessionStore;
+use datafusion_session::{Session, SessionStore};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -2160,7 +2160,7 @@ pub trait QueryPlanner: Debug {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }
 
@@ -2830,8 +2830,16 @@ mod tests {
         async fn create_physical_plan(
             &self,
             logical_plan: &LogicalPlan,
-            session_state: &SessionState,
+            session: &dyn Session,
         ) -> Result<Arc<dyn ExecutionPlan>> {
+            let session_state = session
+                .as_any()
+                .downcast_ref::<SessionState>()
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "MyQueryPlanner requires a SessionState".to_string(),
+                    )
+                })?;
             let physical_planner = MyPhysicalPlanner {};
             physical_planner
                 .create_physical_plan(logical_plan, session_state)

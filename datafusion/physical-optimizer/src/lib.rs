@@ -48,4 +48,5 @@ pub mod update_aggr_exprs;
 pub mod utils;
 pub mod window_topn;
 
-pub use optimizer::{ConfigOnlyContext, PhysicalOptimizerContext, PhysicalOptimizerRule};
+pub use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule};
+pub use optimizer::ConfigOnlyContext;

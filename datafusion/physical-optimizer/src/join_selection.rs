@@ -23,8 +23,7 @@
 //! pipeline-friendly ones. To achieve the second goal, it selects the proper
 //! `PartitionMode` and the build side using the available statistics for hash joins.
 
-use crate::PhysicalOptimizerRule;
-use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
+use crate::{ConfigOnlyContext, PhysicalOptimizerContext, PhysicalOptimizerRule};
 use datafusion_common::Statistics;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
