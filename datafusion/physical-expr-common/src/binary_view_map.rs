@@ -305,7 +305,10 @@ where
 
             let cached_payload = if input_has_buffers && len > 12 {
                 num_cache_lookups += 1;
-                self.input_view_to_payload.get(&view_u128).copied()
+                self.input_view_to_payload
+                    .raw_entry()
+                    .from_hash(hash, |cached_view| *cached_view == view_u128)
+                    .map(|(_, payload)| *payload)
             } else {
                 None
             };
@@ -350,8 +353,17 @@ where
 
             let payload = if let Some(payload) = maybe_payload {
                 if input_has_buffers && len > 12 {
-                    self.input_view_to_payload.insert(view_u128, payload);
-                    num_cache_inserts += 1;
+                    match self
+                        .input_view_to_payload
+                        .raw_entry_mut()
+                        .from_hash(hash, |cached_view| *cached_view == view_u128)
+                    {
+                        hashbrown::hash_map::RawEntryMut::Occupied(_) => {}
+                        hashbrown::hash_map::RawEntryMut::Vacant(entry) => {
+                            entry.insert_hashed_nocheck(hash, view_u128, payload);
+                            num_cache_inserts += 1;
+                        }
+                    }
                 }
                 payload
             } else {
