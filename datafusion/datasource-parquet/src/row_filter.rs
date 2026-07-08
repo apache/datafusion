@@ -69,7 +69,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arrow::array::BooleanArray;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
@@ -644,6 +644,17 @@ pub(crate) fn build_projection_read_plan(
         };
     }
 
+    // Nested projection pruning: if every projection expr references a single file
+    // column, and at least one requests a narrower nested type than the file holds,
+    // derive a leaf-level mask from the requested (output) types. This covers
+    // projections the `get_field` path cannot express (e.g. array<struct>, map),
+    // where the pruned type arrives as a whole-column cast rather than get_field
+    // chains. Keyed off `expr.data_type`, so it is independent of the concrete
+    // projection expression type.
+    if let Some(plan) = try_nested_projection_leaves(&exprs, file_schema, schema_descr) {
+        return plan;
+    }
+
     // secondary fast path: if the schema has no struct columns, we can skip
     // PushdownChecker traversal and use root-level projection
     let has_struct_columns = file_schema
@@ -730,6 +741,147 @@ pub(crate) fn build_projection_read_plan(
         projection_mask,
         projected_schema,
     }
+}
+
+/// `field` rebuilt with a new data type, preserving its name, nullability, and metadata.
+fn with_type(field: &Field, dt: DataType) -> Arc<Field> {
+    Arc::new(field.clone().with_data_type(dt))
+}
+
+/// Element type of `pruned` if it is a list variant.
+fn pruned_list_element(pruned: Option<&DataType>) -> Option<&DataType> {
+    match pruned {
+        Some(
+            DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _),
+        ) => Some(f.data_type()),
+        _ => None,
+    }
+}
+
+/// Prune `full` to the subtree present in `pruned`, advancing `*leaf` across every
+/// primitive of `full` in parquet leaf order and recording the kept indices in `out`.
+/// Names and nullability come from `full` so the result matches the decoder's output.
+/// Returns `None` when no leaf under `full` is kept, which lets callers detect a
+/// request that is not a structural subtree (e.g. a `get_field` extraction) and defer.
+fn prune_and_collect(
+    full: &DataType,
+    pruned: Option<&DataType>,
+    leaf: &mut usize,
+    out: &mut Vec<usize>,
+) -> Option<DataType> {
+    match full {
+        DataType::Struct(fields) => {
+            let pruned = match pruned {
+                Some(DataType::Struct(p)) => Some(p),
+                _ => None,
+            };
+            let kept: Fields = fields
+                .iter()
+                .filter_map(|f| {
+                    let child = pruned
+                        .and_then(|p| p.iter().find(|x| x.name() == f.name()))
+                        .map(|x| x.data_type());
+                    Some(with_type(
+                        f,
+                        prune_and_collect(f.data_type(), child, leaf, out)?,
+                    ))
+                })
+                .collect();
+            (!kept.is_empty()).then_some(DataType::Struct(kept))
+        }
+        DataType::List(f) => {
+            prune_and_collect(f.data_type(), pruned_list_element(pruned), leaf, out)
+                .map(|dt| DataType::List(with_type(f, dt)))
+        }
+        DataType::LargeList(f) => {
+            prune_and_collect(f.data_type(), pruned_list_element(pruned), leaf, out)
+                .map(|dt| DataType::LargeList(with_type(f, dt)))
+        }
+        DataType::FixedSizeList(f, n) => {
+            prune_and_collect(f.data_type(), pruned_list_element(pruned), leaf, out)
+                .map(|dt| DataType::FixedSizeList(with_type(f, dt), *n))
+        }
+        DataType::Map(entries, sorted) => {
+            let child = match pruned {
+                Some(DataType::Map(p, _)) => Some(p.data_type()),
+                _ => None,
+            };
+            prune_and_collect(entries.data_type(), child, leaf, out)
+                .map(|dt| DataType::Map(with_type(entries, dt), *sorted))
+        }
+        _ => {
+            if pruned.is_some() {
+                out.push(*leaf);
+            }
+            *leaf += 1;
+            pruned.map(|_| full.clone())
+        }
+    }
+}
+
+/// Build a leaf-pruned read plan for projections that narrow nested columns, or `None`
+/// to defer to the generic path. Fires only when every expression projects a single
+/// distinct file column and at least one requests a nested type narrower than the
+/// file's; then only the leaves reached by each requested type are read. Keyed off
+/// `expr.data_type`, so it is independent of the concrete projection expression.
+fn try_nested_projection_leaves(
+    exprs: &[Arc<dyn PhysicalExpr>],
+    file_schema: &Schema,
+    schema_descr: &SchemaDescriptor,
+) -> Option<ParquetReadPlan> {
+    // First parquet leaf index of each root column. Iterating leaves high to low, each
+    // root's slot ends holding its lowest leaf index, where prune_and_collect starts.
+    let mut offsets = vec![0usize; file_schema.fields().len()];
+    for leaf in (0..schema_descr.num_columns()).rev() {
+        offsets[schema_descr.get_column_root_idx(leaf)] = leaf;
+    }
+
+    let mut leaves = Vec::new();
+    let mut projected: Vec<(usize, Arc<Field>)> = Vec::new();
+    let mut roots = std::collections::HashSet::new();
+    let mut any_narrowed = false;
+
+    for expr in exprs {
+        let cols = collect_columns(expr);
+        if cols.len() != 1 {
+            return None;
+        }
+        let root = cols.into_iter().next().unwrap().index();
+        if !roots.insert(root) {
+            return None;
+        }
+        let field = file_schema.field(root);
+        let requested = expr.data_type(file_schema).ok()?;
+        // A whole-column projection targets the file type itself, keeping every leaf;
+        // the cast expression handles any scalar coercion on top of the decoded batch.
+        let narrowed = &requested != field.data_type() && field.data_type().is_nested();
+        let target = if narrowed {
+            &requested
+        } else {
+            field.data_type()
+        };
+
+        let mut leaf = offsets[root];
+        let dt =
+            prune_and_collect(field.data_type(), Some(target), &mut leaf, &mut leaves)?;
+        any_narrowed |= narrowed;
+        projected.push((root, with_type(field, dt)));
+    }
+
+    any_narrowed.then(|| {
+        leaves.sort_unstable();
+        leaves.dedup();
+        // The reader yields projected columns in file order.
+        projected.sort_by_key(|(root, _)| *root);
+        let fields: Fields = projected.into_iter().map(|(_, f)| f).collect();
+        ParquetReadPlan {
+            projection_mask: ProjectionMask::leaves(schema_descr, leaves),
+            projected_schema: Arc::new(Schema::new_with_metadata(
+                fields,
+                file_schema.metadata().clone(),
+            )),
+        }
+    })
 }
 
 fn leaf_indices_for_roots<I>(
@@ -1167,7 +1319,6 @@ impl<'a> RowFilterGenerator<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use arrow::datatypes::Fields;
     use datafusion_common::ScalarValue;
 
     use arrow::array::{
@@ -2140,5 +2291,78 @@ mod test {
     ) -> bool {
         let batch = RecordBatch::new_empty(Arc::clone(table_schema));
         expr.evaluate(&batch).is_ok()
+    }
+
+    fn list_of(inner: DataType) -> DataType {
+        DataType::List(Arc::new(Field::new("element", inner, true)))
+    }
+
+    fn struct_of(fields: Vec<Field>) -> DataType {
+        DataType::Struct(fields.into_iter().map(Arc::new).collect::<Fields>())
+    }
+
+    #[test]
+    fn nested_leaf_helpers_prune_array_of_struct() {
+        // events: array<struct<id: Int64, payload: Utf8>>; parquet leaves id=0, payload=1.
+        let full = list_of(struct_of(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("payload", DataType::Utf8, true),
+        ]));
+        let requested = list_of(struct_of(vec![Field::new("id", DataType::Int64, true)]));
+
+        let mut leaf = 0;
+        let mut out = Vec::new();
+        let pruned = prune_and_collect(&full, Some(&requested), &mut leaf, &mut out);
+        assert_eq!(out, vec![0], "only the id leaf is kept");
+        assert_eq!(leaf, 2, "counter still advances past both leaves");
+        // Pruned type keeps the file's element field name and drops payload.
+        assert_eq!(pruned, Some(requested));
+    }
+
+    #[test]
+    fn nested_leaf_helpers_prune_two_struct_levels() {
+        // array<struct<id, inner: struct<a, blob>>>; leaves id=0, inner.a=1, inner.blob=2.
+        let full = list_of(struct_of(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new(
+                "inner",
+                struct_of(vec![
+                    Field::new("a", DataType::Int64, true),
+                    Field::new("blob", DataType::Utf8, true),
+                ]),
+                true,
+            ),
+        ]));
+        // Request only inner.a: drops the top-level sibling `id` and the inner sibling `blob`.
+        let requested = list_of(struct_of(vec![Field::new(
+            "inner",
+            struct_of(vec![Field::new("a", DataType::Int64, true)]),
+            true,
+        )]));
+
+        let mut leaf = 0;
+        let mut out = Vec::new();
+        let pruned = prune_and_collect(&full, Some(&requested), &mut leaf, &mut out);
+        assert_eq!(out, vec![1], "only inner.a (leaf 1) is kept");
+        assert_eq!(leaf, 3);
+        assert_eq!(pruned, Some(requested));
+    }
+
+    #[test]
+    fn prune_and_collect_returns_none_when_request_is_not_a_subtree() {
+        // A get_field-style request that extracts a primitive from a struct is not
+        // nested narrowing: prune_and_collect keeps nothing and returns None, so the
+        // caller defers to the generic (PushdownChecker) path.
+        let full = struct_of(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let mut leaf = 0;
+        let mut out = Vec::new();
+        assert_eq!(
+            prune_and_collect(&full, Some(&DataType::Int64), &mut leaf, &mut out),
+            None
+        );
+        assert!(out.is_empty());
     }
 }
