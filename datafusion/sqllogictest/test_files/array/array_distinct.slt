@@ -19,11 +19,10 @@ include ./init_data.slt.part
 
 ## array_distinct
 
-#TODO: https://github.com/apache/datafusion/issues/7142
-#query ?
-#select array_distinct(null);
-#----
-#NULL
+query ?
+select array_distinct(null);
+----
+NULL
 
 # test with empty row, the row that does not match the condition has row count 0
 statement ok

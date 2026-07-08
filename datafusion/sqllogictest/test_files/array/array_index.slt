@@ -94,17 +94,23 @@ NULL NULL e
 [13, 14] NULL NULL
 [NULL, 18] NULL NULL
 
-# TODO: support index as column
 # single index with columns #5 (index as column)
-# query ?
-# select make_array(1, 2, 3, 4, 5)[column2] from arrays_with_repeating_elements;
-# ----
+query I
+select make_array(1, 2, 3, 4, 5)[column2] from arrays_with_repeating_elements;
+----
+2
+4
+NULL
+NULL
 
-# TODO: support argument and index as columns
 # single index with columns #6 (argument and index as columns)
-# query I
-# select column1[column2] from arrays_with_repeating_elements;
-# ----
+query I
+select column1[column2] from arrays_with_repeating_elements;
+----
+2
+5
+7
+10
 
 ## array[i:j]
 
@@ -141,11 +147,11 @@ select arrow_cast([1, 2, 3], 'LargeList(Int64)')[1];
 ----
 1
 
-# TODO: support multiple negative index
 # multiple index with columns #3 (negative index)
-# query II
-# select make_array(1, 2, 3)[-3:-1], make_array(1.0, 2.0, 3.0)[-3:-1], make_array('h', 'e', 'l', 'l', 'o')[-2:0];
-# ----
+query ???
+select make_array(1, 2, 3)[-3:-1], make_array(1.0, 2.0, 3.0)[-3:-1], make_array('h', 'e', 'l', 'l', 'o')[-2:0];
+----
+[1, 2, 3] [1.0, 2.0, 3.0] []
 
 # TODO: support complex index
 # multiple index with columns #4 (complex index)
@@ -177,36 +183,56 @@ NULL [13.3, 14.4, 15.5] [a, m, e, t]
 [[11, 12], [13, 14]] NULL [,]
 [[15, 16], [NULL, 18]] [16.6, 17.7, 18.8] NULL
 
-# TODO: support negative index
 # multiple index with columns #3 (negative index)
-# query ?RT
-# select column1[-2:-4], column2[-3:-5], column3[-1:-4] from arrays;
-# ----
-# [NULL, 2] 1.1 m
+query ???
+select column1[-2:-4], column2[-3:-5], column3[-1:-4] from arrays;
+----
+[] [] []
+[] [] []
+[] [] []
+[] [] []
+NULL [] []
+[] NULL []
+[] [] NULL
 
-# TODO: support complex index
 # multiple index with columns #4 (complex index)
-# query ?RT
-# select column1[9 - 7:2 + 2], column2[1 * 0:2 * 3], column3[1 + 1 - 0:5 % 3] from arrays;
-# ----
+query ???
+select column1[9 - 7:2 + 2], column2[1 * 0:2 * 3], column3[1 + 1 - 0:5 % 3] from arrays;
+----
+[[3, NULL]] [1.1, 2.2, 3.3] [o]
+[[5, 6]] [NULL, 5.5, 6.6] [p]
+[[7, 8]] [7.7, 8.8, 9.9] [NULL]
+[[9, 10]] [10.1, NULL, 12.2] [i]
+NULL [13.3, 14.4, 15.5] [m]
+[[13, 14]] NULL []
+[[NULL, 18]] [16.6, 17.7, 18.8] NULL
 
-# TODO: support first index as column
 # multiple index with columns #5 (first index as column)
-# query ?
-# select make_array(1, 2, 3, 4, 5)[column2:4] from arrays_with_repeating_elements
-# ----
+query ?
+select make_array(1, 2, 3, 4, 5)[column2:4] from arrays_with_repeating_elements
+----
+[2, 3, 4]
+[4]
+[]
+[]
 
-# TODO: support last index as column
 # multiple index with columns #6 (last index as column)
-# query ?RT
-# select make_array(1, 2, 3, 4, 5)[2:column3] from arrays_with_repeating_elements;
-# ----
+query ?
+select make_array(1, 2, 3, 4, 5)[2:column3] from arrays_with_repeating_elements;
+----
+[2, 3, 4]
+[2, 3, 4, 5]
+[2, 3, 4, 5]
+[2, 3, 4, 5]
 
-# TODO: support argument and indices as column
 # multiple index with columns #7 (argument and indices as column)
-# query ?RT
-# select column1[column2:column3] from arrays_with_repeating_elements;
-# ----
+query ?
+select column1[column2:column3] from arrays_with_repeating_elements;
+----
+[2, 1, 3]
+[5, 6, 5, 5]
+[7, 8, 7, 7]
+[10]
 
 # array[i:j:k]
 
@@ -222,12 +248,11 @@ select make_array(1, 2, 3)[0:0:2], make_array(1.0, 2.0, 3.0)[0:2:2], make_array(
 ----
 [] [1.0] [h, l, o]
 
-#TODO: sqlparser does not support negative index
 ## multiple index with columns #3 (negative index)
-#query ???
-#select make_array(1, 2, 3)[-1:-2:-2], make_array(1.0, 2.0, 3.0)[-2:-3:-2], make_array('h', 'e', 'l', 'l', 'o')[-2:-4:-2];
-#----
-#[1] [2.0] [e, l]
+query ???
+select make_array(1, 2, 3)[-1:-2:-2], make_array(1.0, 2.0, 3.0)[-2:-3:-2], make_array('h', 'e', 'l', 'l', 'o')[-2:-4:-2];
+----
+[3] [2.0] [l, e]
 
 # multiple index with columns #1 (positive index)
 query ???
