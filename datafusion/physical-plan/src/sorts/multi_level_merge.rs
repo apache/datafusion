@@ -591,16 +591,16 @@ impl MultiLevelMergeBuilder {
 
         // Push the re-spilled (smaller) file and swap it back into `index`, undoing
         // the swap-to-back above so the order is preserved.
-;        self.push_sorted_spill_file(SortedSpillFile::new(file).with_max_record_batch(Some(new_max)));
+        self.push_sorted_spill_file(SortedSpillFile::new(file).with_max_record_batch(Some(new_max)));
         let last = self.sorted_spill_files.len() - 1;
         self.sorted_spill_files.swap(index, last);
 
         Ok(())
     }
-    
+
     fn push_sorted_spill_file(&mut self, sorted_spill_file: SortedSpillFile) {
         Self::assert_valid_sorted_spill_file(&sorted_spill_file);
-        
+
         self.sorted_spill_files.push(sorted_spill_file);
     }
 
