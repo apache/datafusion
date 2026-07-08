@@ -16,10 +16,10 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::env;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
+use std::{env, fmt};
 
 use crate::catalog::DynamicObjectStoreCatalog;
 use crate::functions::{
@@ -35,7 +35,7 @@ use crate::{
     print_format::PrintFormat,
     print_options::{MaxRows, PrintOptions},
 };
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
@@ -49,16 +49,37 @@ use datafusion::common::config_err;
 use datafusion::config::ConfigOptions;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 
+use rustyline::error::ReadlineError;
+use thiserror::Error;
+
+#[derive(Error)]
+pub enum CliError {
+    #[error("DataFusion error `{0}`")]
+    DataFusion(#[from] DataFusionError),
+    #[error("Readline error `{0}`")]
+    Readline(#[from] ReadlineError),
+    // This is used to print e.g. help text so we don't want to embellish it
+    #[error(transparent)]
+    ArgumentParsing(#[from] clap::Error),
+}
+
+impl fmt::Debug for CliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // We use Display ({}) here instead of Debug ({:?}) for nicer `error?` output.
+        write!(f, "{self}")
+    }
+}
+
 /// `CliSession` implements argument parsing, and construction of the default `CliSessionContext`.
 pub struct CliSession {
-    ctx: SessionContext,
-    instrumented_registry: Arc<InstrumentedObjectStoreRegistry>,
-    args: Args,
+    pub ctx: SessionContext,
+    pub print_options: PrintOptions,
+    pub args: Args,
 }
 
 #[derive(Debug, Parser, PartialEq)]
 #[clap(author, version, about, long_about= None)]
-struct Args {
+pub struct Args {
     #[clap(
         short = 'p',
         long,
@@ -179,16 +200,16 @@ impl Args {
 }
 
 impl CliSession {
-    pub async fn entry_point() -> Result<()> {
-        let cli_session = CliSession::try_from_args()?;
+    pub async fn entry_point() -> Result<(), CliError> {
+        let cli_session = CliSession::try_from_args(env::args())?;
         Ok(cli_session.run().await?)
     }
     pub fn session_context(&self) -> &SessionContext {
         &self.ctx
     }
-    pub fn try_from_args() -> Result<Self> {
+    pub fn try_from_args(args: impl Iterator<Item = String>) -> Result<Self, CliError> {
         env_logger::init();
-        let args = Args::parse();
+        let args = Args::try_parse_from(args)?;
 
         if !args.quiet {
             println!("DataFusion CLI v{DATAFUSION_CLI_VERSION}");
@@ -244,19 +265,27 @@ impl CliSession {
         // enable dynamic file query
         let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
             .enable_url_table();
+
+        let print_options = PrintOptions {
+            format: args.format,
+            quiet: args.quiet,
+            maxrows: args.maxrows,
+            color: args.color,
+            instrumented_registry: Arc::clone(&instrumented_registry),
+        };
         Ok(Self {
             ctx,
-            instrumented_registry,
             args,
+            print_options,
         })
     }
 
     /// Main CLI entrypoint
-    pub async fn run(self) -> Result<()> {
+    pub async fn run(self) -> Result<(), CliError> {
         let CliSession {
             ctx,
             args,
-            instrumented_registry,
+            mut print_options,
         } = self;
         ctx.refresh_catalogs().await?;
         // install dynamic catalog provider that can register required object stores
@@ -290,14 +319,6 @@ impl CliSession {
             )),
         );
 
-        let mut print_options = PrintOptions {
-            format: args.format,
-            quiet: args.quiet,
-            maxrows: args.maxrows,
-            color: args.color,
-            instrumented_registry: Arc::clone(&instrumented_registry),
-        };
-
         let repl_mode = args.repl_mode();
         let commands = args.command;
         let files = args.file;
@@ -320,10 +341,7 @@ impl CliSession {
             if !rc.is_empty() {
                 exec::exec_from_files(&ctx, rc, &print_options).await?;
             }
-            // TODO maybe we can have thiserror for cli but for now let's keep it simple
-            return exec::exec_from_repl(&ctx, &mut print_options)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)));
+            exec::exec_from_repl(&ctx, &mut print_options).await?;
         }
 
         if !files.is_empty() {
@@ -340,7 +358,7 @@ impl CliSession {
 
 /// Get the session configuration based on the provided arguments
 /// and environment settings.
-fn get_session_config(args: &Args) -> Result<SessionConfig> {
+fn get_session_config(args: &Args) -> Result<SessionConfig, DataFusionError> {
     // Read options from environment variables and merge with command line options
     let mut config_options = ConfigOptions::from_env()?;
 

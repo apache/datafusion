@@ -1858,6 +1858,7 @@ dependencies = [
  "rustyline",
  "serde_json",
  "testcontainers-modules",
+ "thiserror",
  "tokio",
  "url",
 ]

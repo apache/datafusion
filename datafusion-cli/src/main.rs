@@ -24,7 +24,7 @@ use mimalloc::MiMalloc;
 static GLOBAL: MiMalloc = MiMalloc;
 
 #[tokio::main]
-/// Calls [`main_inner`], then handles printing errors and returning the correct exit code
+/// Calls [`CliSession`], then handles printing errors and returning the correct exit code
 pub async fn main() -> ExitCode {
     if let Err(e) = CliSession::entry_point().await {
         println!("Error: {e}");

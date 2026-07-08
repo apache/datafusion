@@ -19,9 +19,9 @@ use arrow::datatypes::DataType;
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::logical_expr::{ColumnarValue, Volatility, create_udf};
 use datafusion::prelude::SessionContext;
+use datafusion_cli::entry_point::{CliError, CliSession};
 use datafusion_common::cast::as_string_array;
 use mimalloc::MiMalloc;
-use std::process::ExitCode;
 use std::sync::Arc;
 
 #[global_allocator]
@@ -34,7 +34,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 /// 3. Registers the udf function with the `SessionContext` so the user can input `select hello(1)` at the prompt.
 /// 4. Runs the cli using [`dataframe_cli::CliSession::run`], printing any errors then exits.
 #[tokio::main]
-pub async fn main() -> ExitCode {
+pub async fn main() -> Result<(), CliError> {
     let custom_udf = create_udf(
         "hello",
         vec![DataType::Utf8],
@@ -51,19 +51,9 @@ pub async fn main() -> ExitCode {
             Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
         }),
     );
-    let cli_session = match datafusion_cli::entry_point::CliSession::try_from_args() {
-        Ok(cli) => cli,
-        Err(e) => {
-            println!("Error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let cli_session = CliSession::try_from_args(std::env::args())?;
     let ctx: &SessionContext = cli_session.session_context();
     ctx.register_udf(custom_udf);
-    if let Err(e) = cli_session.run().await {
-        println!("Error: {e}");
-        return ExitCode::FAILURE;
-    }
-
-    ExitCode::SUCCESS
+    cli_session.run().await?;
+    Ok(())
 }
