@@ -48,7 +48,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt,
 };
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_datasource::ListingTableUrl;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
@@ -245,6 +245,9 @@ fn report_bytes_scanned(ctx: &SessionContext, rt: &Runtime, label: &str, sql: &s
 
 struct Fixture {
     ctx: SessionContext,
+    /// Same tables, `nested_projection_pruning` disabled: the pre-pruning
+    /// behavior, kept so the before/after stays visible.
+    ctx_pruning_disabled: SessionContext,
     rt: Runtime,
     _files: Vec<NamedTempFile>,
 }
@@ -260,6 +263,13 @@ fn setup(
 ) -> Fixture {
     let rt = Runtime::new().unwrap();
     let ctx = SessionContext::new();
+    let mut cfg_off = SessionConfig::new();
+    cfg_off
+        .options_mut()
+        .execution
+        .parquet
+        .nested_projection_pruning = false;
+    let ctx_pruning_disabled = SessionContext::new_with_config(cfg_off);
 
     let wide = wide_item_fields();
     let narrow = narrow_item_fields();
@@ -294,9 +304,17 @@ fn setup(
         &narrow_path,
         schema_fn(narrow.clone()),
     );
+    register_table(
+        &ctx_pruning_disabled,
+        &rt,
+        &format!("{name}_narrow_schema"),
+        &wide_path,
+        schema_fn(narrow.clone()),
+    );
 
     Fixture {
         ctx,
+        ctx_pruning_disabled,
         rt,
         _files: vec![wide_file, narrow_file],
     }
@@ -313,6 +331,12 @@ fn list_struct_benchmarks(c: &mut Criterion) {
     ] {
         report_bytes_scanned(ctx, rt, table, &format!("SELECT events FROM {table}"));
     }
+    report_bytes_scanned(
+        &f.ctx_pruning_disabled,
+        rt,
+        "list_struct_narrow_schema (pruning disabled)",
+        "SELECT events FROM list_struct_narrow_schema",
+    );
 
     let mut group = c.benchmark_group("list_struct");
     group.sample_size(10);
@@ -332,6 +356,17 @@ fn list_struct_benchmarks(c: &mut Criterion) {
     // narrow file: the floor
     group.bench_function("select_events_physically_narrow", |b| {
         b.iter(|| query(ctx, rt, "SELECT events FROM list_struct_physically_narrow"))
+    });
+
+    // wide file, narrow schema, pruning disabled: the pre-pruning behavior
+    group.bench_function("select_events_narrow_schema_pruning_disabled", |b| {
+        b.iter(|| {
+            query(
+                &f.ctx_pruning_disabled,
+                rt,
+                "SELECT events FROM list_struct_narrow_schema",
+            )
+        })
     });
 
     // aggregation over one narrow leaf through unnest
@@ -359,6 +394,12 @@ fn top_level_struct_benchmarks(c: &mut Criterion) {
     ] {
         report_bytes_scanned(ctx, rt, table, &format!("SELECT s FROM {table}"));
     }
+    report_bytes_scanned(
+        &f.ctx_pruning_disabled,
+        rt,
+        "struct_narrow_schema (pruning disabled)",
+        "SELECT s FROM struct_narrow_schema",
+    );
 
     let mut group = c.benchmark_group("top_level_struct");
     group.sample_size(10);
@@ -375,6 +416,17 @@ fn top_level_struct_benchmarks(c: &mut Criterion) {
 
     group.bench_function("select_struct_physically_narrow", |b| {
         b.iter(|| query(ctx, rt, "SELECT s FROM struct_physically_narrow"))
+    });
+
+    // wide file, narrow schema, pruning disabled: the pre-pruning behavior
+    group.bench_function("select_struct_narrow_schema_pruning_disabled", |b| {
+        b.iter(|| {
+            query(
+                &f.ctx_pruning_disabled,
+                rt,
+                "SELECT s FROM struct_narrow_schema",
+            )
+        })
     });
 
     // get_field on a schema-narrowed struct column: the expression-level
