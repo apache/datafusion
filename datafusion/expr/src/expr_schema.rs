@@ -539,7 +539,7 @@ impl ExprSchemable for Expr {
                 let WindowFunction {
                     fun,
                     params: WindowFunctionParams { args, .. },
-                    ..
+                    spans,
                 } = window_function.as_ref();
 
                 let fields = args
@@ -548,14 +548,20 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 match fun {
                     WindowFunctionDefinition::AggregateUDF(udaf) => {
-                        let new_fields =
-                            verify_function_arguments(udaf.as_ref(), &fields, None)?;
+                        let new_fields = verify_function_arguments(
+                            udaf.as_ref(),
+                            &fields,
+                            spans.first(),
+                        )?;
                         let return_field = udaf.return_field(&new_fields)?;
                         Ok(return_field)
                     }
                     WindowFunctionDefinition::WindowUDF(udwf) => {
-                        let new_fields =
-                            verify_function_arguments(udwf.as_ref(), &fields, None)?;
+                        let new_fields = verify_function_arguments(
+                            udwf.as_ref(),
+                            &fields,
+                            spans.first(),
+                        )?;
                         let return_field = udwf
                             .field(WindowUDFFieldArgs::new(&new_fields, &schema_name))?;
                         Ok(return_field)

@@ -275,6 +275,7 @@ impl TreeNode for Expr {
                             null_treatment,
                             distinct,
                         },
+                    spans,
                 } = *window_fun;
 
                 (args, partition_by, order_by, filter)
@@ -292,6 +293,7 @@ impl TreeNode for Expr {
                                     null_treatment,
                                     distinct,
                                 },
+                                spans,
                             }))
                         },
                     )?

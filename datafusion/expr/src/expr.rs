@@ -1245,6 +1245,8 @@ pub struct WindowFunction {
     /// Name of the function
     pub fun: WindowFunctionDefinition,
     pub params: WindowFunctionParams,
+    /// Original source code location, if known
+    pub spans: Spans,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
@@ -1280,7 +1282,13 @@ impl WindowFunction {
                 null_treatment: None,
                 distinct: false,
             },
+            spans: Spans::new(),
         }
+    }
+
+    /// Returns a mutable reference to the spans
+    pub fn spans_mut(&mut self) -> &mut Spans {
+        &mut self.spans
     }
 
     /// Returns this window function's simplification hook, if any.
@@ -2308,6 +2316,7 @@ impl Expr {
             Expr::Not(inner) | Expr::Negative(inner) => inner.spans(),
             Expr::ScalarFunction(func) => Some(&func.spans),
             Expr::AggregateFunction(func) => Some(&func.spans),
+            Expr::WindowFunction(func) => Some(&func.spans),
             _ => None,
         }
     }
@@ -2582,6 +2591,7 @@ impl NormalizeEq for Expr {
                             null_treatment: self_null_treatment,
                             distinct: self_distinct,
                         },
+                    ..
                 } = left.as_ref();
                 let WindowFunction {
                     fun: other_fun,
@@ -2595,6 +2605,7 @@ impl NormalizeEq for Expr {
                             null_treatment: other_null_treatment,
                             distinct: other_distinct,
                         },
+                    ..
                 } = other.as_ref();
 
                 self_fun.name() == other_fun.name()
@@ -2856,6 +2867,7 @@ impl HashNode for Expr {
                             null_treatment,
                             distinct,
                         },
+                    ..
                 } = window_fun.as_ref();
                 fun.hash(state);
                 window_frame.hash(state);
@@ -3175,7 +3187,7 @@ impl Display for SchemaDisplay<'_> {
                 Ok(())
             }
             Expr::WindowFunction(window_fun) => {
-                let WindowFunction { fun, params } = window_fun.as_ref();
+                let WindowFunction { fun, params, .. } = window_fun.as_ref();
                 match fun {
                     WindowFunctionDefinition::AggregateUDF(fun) => {
                         match fun.window_function_schema_name(params) {
@@ -3615,7 +3627,7 @@ impl Display for Expr {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }
             Expr::WindowFunction(window_fun) => {
-                let WindowFunction { fun, params } = window_fun.as_ref();
+                let WindowFunction { fun, params, .. } = window_fun.as_ref();
                 match fun {
                     WindowFunctionDefinition::AggregateUDF(fun) => {
                         match fun.window_function_display_name(params) {

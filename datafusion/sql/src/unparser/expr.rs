@@ -277,6 +277,7 @@ impl Unparser<'_> {
                             distinct,
                             ..
                         },
+                    ..
                 } = window_fun.as_ref();
                 let func_name = fun.name();
 
@@ -2297,6 +2298,7 @@ mod tests {
                         distinct: false,
                         filter: None,
                     },
+                    spans: Spans::new(),
                 }),
                 r#"row_number(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
             ),
@@ -2324,6 +2326,7 @@ mod tests {
                         distinct: false,
                         filter: Some(Box::new(col("a").gt(lit(100)))),
                     },
+                    spans: Spans::new(),
                 }),
                 r#"count(*) FILTER (WHERE (a > 100)) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
             ),

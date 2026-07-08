@@ -19,7 +19,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{
-    DFSchema, Dependency, Diagnostic, HashSet, Result, Span, datatype::FieldExt,
+    DFSchema, Dependency, Diagnostic, HashSet, Result, Span, Spans, datatype::FieldExt,
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
@@ -682,7 +682,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     distinct,
                 } = window_expr;
 
-                let inner = WindowFunction {
+                let mut inner = WindowFunction {
                     fun: func_def,
                     params: expr::WindowFunctionParams {
                         args,
@@ -693,7 +693,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         null_treatment,
                         distinct,
                     },
+                    spans: Spans::new(),
                 };
+                if self.options.collect_spans
+                    && let Some(span) = Span::try_from_sqlparser_span(sql_parser_span)
+                {
+                    inner.spans_mut().add_span(span);
+                }
 
                 if name.eq_ignore_ascii_case(inner.fun.name()) {
                     return Ok(Expr::WindowFunction(Box::new(inner)));

@@ -30,9 +30,9 @@ use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
-    plan_err,
+    Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, Spans,
+    TableReference, exec_err, internal_datafusion_err, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists,
@@ -746,6 +746,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                             null_treatment,
                             distinct,
                         },
+                    ..
                 } = *window_fun;
                 let window_frame =
                     coerce_window_frame(window_frame, self.schema, &order_by)?;
@@ -775,6 +776,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         null_treatment,
                         distinct,
                     },
+                    spans: Spans::new(),
                 });
                 Ok(Transformed::yes(new_expr))
             }

@@ -706,3 +706,17 @@ fn test_invalid_aggregate_function_argument_types() -> Result<()> {
     assert_snapshot!(diag.helps[0].message, @"candidate function(s): sum(UserDefined)");
     Ok(())
 }
+
+#[test]
+fn test_invalid_window_function_argument_types() -> Result<()> {
+    // An aggregate used as a window function (`... OVER ()`) reaches the
+    // `WindowFunctionDefinition::AggregateUDF` branch, which must also carry the
+    // call-site span into the diagnostic.
+    let state = MockSessionState::default().with_aggregate_function(sum_udaf());
+    let query = "SELECT /*a*/sum/*a*/(first_name) OVER () FROM person";
+    let spans = get_spans(query);
+    let diag = do_query_with_state(query, state);
+    assert_snapshot!(diag.message, @"invalid argument type(s) for 'sum'");
+    assert_eq!(diag.span, Some(spans["a"]));
+    Ok(())
+}
