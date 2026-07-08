@@ -58,11 +58,76 @@ macro_rules! merge_helper {
     }};
 }
 
-pub struct SortedSpillFile {
-    pub file: Arc<dyn SpillFile>,
+#[derive(Clone, Debug)]
+pub struct BasicRecordBatchStats {
+    /// How many bytes the largest record batch takes
+    memory: usize,
 
-    /// how much memory the largest memory batch is taking
-    pub max_record_batch_memory: usize,
+    /// For the record batch that takes the most amount of memory, how many rows it contains
+    num_rows: usize,
+}
+
+impl BasicRecordBatchStats {
+    pub fn new(memory: usize, num_rows: usize) -> Self {
+        Self { memory, num_rows }
+    }
+
+    pub fn num_rows(&self) -> usize {
+        self.num_rows
+    }
+
+    pub fn memory(&self) -> usize {
+        self.memory
+    }
+
+    pub fn set_max_memory_wise(&mut self, memory: usize, num_rows: usize) {
+        if self.memory > memory {
+            return;
+        }
+
+        self.memory = memory;
+        self.num_rows = num_rows;
+    }
+
+    pub fn set_max_row_wise(&mut self, memory: usize, num_rows: usize) {
+        if self.num_rows > num_rows {
+            return;
+        }
+
+        self.memory = memory;
+        self.num_rows = num_rows;
+    }
+}
+
+#[derive(Clone)]
+pub struct SortedSpillFile {
+    file: Arc<dyn SpillFile>,
+
+    /// For the largest batch in memory
+    max_record_batch_memory_and_row_count: Option<BasicRecordBatchStats>,
+}
+
+impl SortedSpillFile {
+    pub fn new(file: Arc<dyn SpillFile>) -> Self {
+        Self {
+            file,
+            max_record_batch_memory_and_row_count: None,
+        }
+    }
+
+    pub fn with_max_record_batch(mut self, max: Option<BasicRecordBatchStats>) -> Self {
+        self.max_record_batch_memory_and_row_count = max;
+
+        self
+    }
+
+    pub fn max_record_batch(&self) -> Option<&BasicRecordBatchStats> {
+        self.max_record_batch_memory_and_row_count.as_ref()
+    }
+
+    pub fn into_file(self) -> Arc<dyn SpillFile> {
+        self.file
+    }
 }
 
 impl std::fmt::Debug for SortedSpillFile {
@@ -70,16 +135,25 @@ impl std::fmt::Debug for SortedSpillFile {
         match self.file.path() {
             Some(path) => write!(
                 f,
-                "SortedSpillFile({:?}) takes {}",
-                path,
-                human_readable_size(self.max_record_batch_memory)
-            ),
+                "SortedSpillFile({path:?})",
+            )?,
             None => write!(
                 f,
-                "SortedSpillFile(<custom_backend>) takes {}",
-                human_readable_size(self.max_record_batch_memory)
-            ),
+                "SortedSpillFile(<custom_backend>)",
+            )?,
         }
+
+        match &self.max_record_batch_memory_and_row_count {
+            Some(stats) => write!(
+                f,
+                " takes {} and have {} for that batch",
+                human_readable_size(stats.memory),
+                stats.num_rows
+            )?,
+            None => {}
+        }
+
+        Ok(())
     }
 }
 
@@ -178,7 +252,7 @@ impl<'a> StreamingMergeBuilder<'a> {
 
     pub fn build(self) -> Result<SendableRecordBatchStream> {
         let Self {
-            streams,
+            mut streams,
             sorted_spill_files,
             spill_manager,
             schema,
@@ -195,7 +269,23 @@ impl<'a> StreamingMergeBuilder<'a> {
             return internal_err!("Sort expressions cannot be empty for streaming merge");
         };
 
-        if !sorted_spill_files.is_empty() {
+        let (sorted_spill_files_with_mem, sorted_spill_files_without_mem): (Vec<SortedSpillFile>, Vec<SortedSpillFile>) = sorted_spill_files.into_iter().partition(|s| {
+            s.max_record_batch().is_some()
+        });
+
+        if !sorted_spill_files_without_mem.is_empty() {
+            let spill_manager = spill_manager.as_ref().expect("spill_manager should exist");
+
+            let extra_spill_files_as_streams =sorted_spill_files_without_mem.into_iter().map(|s| {
+                // Unbuffered to not take any extra memory
+                spill_manager
+                  .read_spill_as_stream_unbuffered(s.into_file(), None)
+            }).collect::<Result<Vec<_>>>()?;
+
+            streams.extend(extra_spill_files_as_streams);
+        }
+
+        if !sorted_spill_files_with_mem.is_empty() {
             // Unwrapping mandatory fields
             let schema = schema.expect("Schema cannot be empty for streaming merge");
             let metrics = metrics.expect("Metrics cannot be empty for streaming merge");
@@ -207,7 +297,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             return Ok(MultiLevelMergeBuilder::new(
                 spill_manager.expect("spill_manager should exist"),
                 schema,
-                sorted_spill_files,
+                sorted_spill_files_with_mem,
                 streams,
                 expressions.clone(),
                 metrics,

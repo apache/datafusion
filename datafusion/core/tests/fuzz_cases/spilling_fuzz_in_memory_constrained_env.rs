@@ -67,7 +67,7 @@ async fn test_sort_with_limited_memory() -> Result<()> {
             ))
     };
 
-    let record_batch_size = pool_size / 16;
+    let record_batch_size = RecordBatchMeta::with_memory(pool_size / 16);
 
     // Basic test with a lot of groups that cannot all fit in memory and 1 record batch
     // from each spill file is too much memory
@@ -116,11 +116,11 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch() -> 
         task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
-            if i % 25 == 1 {
+            RecordBatchMeta::with_memory(if i % 25 == 1 {
                 pool_size / 6
             } else {
                 16 * KB as usize
-            }
+            })
         }),
         memory_behavior: Default::default(),
         assert_all_output_batches_roughly_match_batch_size_conf: true,
@@ -155,11 +155,11 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_c
         task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
-            if i % 25 == 1 {
+            RecordBatchMeta::with_memory(if i % 25 == 1 {
                 pool_size / 6
             } else {
                 16 * KB as usize
-            }
+            })
         }),
         memory_behavior: MemoryBehavior::TakeAllMemoryAndReleaseEveryNthBatch(10),
         assert_all_output_batches_roughly_match_batch_size_conf: true,
@@ -194,11 +194,11 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_t
         task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
-            if i % 25 == 1 {
+            RecordBatchMeta::with_memory(if i % 25 == 1 {
                 pool_size / 6
             } else {
                 16 * KB as usize
-            }
+            })
         }),
         memory_behavior: MemoryBehavior::TakeAllMemoryAtTheBeginning,
         assert_all_output_batches_roughly_match_batch_size_conf: true,
@@ -232,7 +232,7 @@ async fn test_sort_with_limited_memory_and_large_record_batch() -> Result<()> {
         pool_size,
         task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
-        get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 6),
+        get_size_of_record_batch_to_generate: Box::pin(move |_| RecordBatchMeta::with_memory(pool_size / 6)),
         memory_behavior: Default::default(),
         assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
@@ -248,16 +248,16 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch() -> Result<()
     let task_ctx = {
         let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         TaskContext::default()
-            .with_session_config(
-                SessionConfig::new()
-                    .with_batch_size(record_batch_size)
-                    .with_sort_spill_reservation_bytes(1),
-            )
-            .with_runtime(Arc::new(
-                RuntimeEnvBuilder::new()
-                    .with_memory_pool(memory_pool)
-                    .build()?,
-            ))
+          .with_session_config(
+              SessionConfig::new()
+                .with_batch_size(record_batch_size)
+                .with_sort_spill_reservation_bytes(1),
+          )
+          .with_runtime(Arc::new(
+              RuntimeEnvBuilder::new()
+                .with_memory_pool(memory_pool)
+                .build()?,
+          ))
     };
 
     let number_of_record_batches = 100;
@@ -272,12 +272,12 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch() -> Result<()
         pool_size,
         task_ctx: Arc::new(task_ctx),
         number_of_record_batches,
-        get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 3),
+        get_size_of_record_batch_to_generate: Box::pin(move |_| RecordBatchMeta::with_memory(pool_size / 3)),
         memory_behavior: Default::default(),
 
         assert_all_output_batches_roughly_match_batch_size_conf: false,
     })
-    .await?;
+      .await?;
 
     let output_batches = get_output_batches_from_metrics(&metrics);
 
@@ -290,12 +290,83 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch() -> Result<()
     Ok(())
 }
 
+#[tokio::test]
+async fn test_sort_with_limited_memory_and_oversized_record_batch_with_small_number_of_rows() -> Result<()> {
+    let record_batch_size = 8192;
+    let pool_size = 2 * MB as usize;
+    let task_ctx = {
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
+        TaskContext::default()
+          .with_session_config(
+              SessionConfig::new()
+                .with_batch_size(record_batch_size)
+                .with_sort_spill_reservation_bytes(1),
+          )
+          .with_runtime(Arc::new(
+              RuntimeEnvBuilder::new()
+                .with_memory_pool(memory_pool)
+                .build()?,
+          ))
+    };
+
+    let number_of_record_batches = 100;
+
+    // Each spilled run's largest batch is so big that two merge streams cannot be
+    // reserved at once even at the smallest read-buffer size (`2 * (2 * batch) >
+    // pool`), yet a single stream still fits (`2 * batch < pool`). Reducing the
+    // buffer size therefore cannot help, the multi-level merge has to re-spill a
+    // run with a smaller batch size to make progress instead of failing with
+    // `ResourcesExhausted`.
+    let metrics = run_sort_test_with_limited_memory(RunTestWithLimitedMemoryArgs {
+        pool_size,
+        task_ctx: Arc::new(task_ctx),
+        number_of_record_batches,
+        get_size_of_record_batch_to_generate: Box::pin(move |index| {
+            RecordBatchMeta {
+                memory: pool_size / 3,
+                num_rows: if index == number_of_record_batches / 2 { Some(record_batch_size / 4) } else { None }
+            }
+        }),
+        memory_behavior: Default::default(),
+
+        assert_all_output_batches_roughly_match_batch_size_conf: false,
+    })
+      .await?;
+
+    let output_batches = get_output_batches_from_metrics(&metrics);
+
+    // minimum 2 batches more
+    assert!(
+        output_batches >= number_of_record_batches + 2,
+        "output_batches {output_batches} should be greater than number_of_record_batches ({number_of_record_batches}) + 2"
+    );
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RecordBatchMeta {
+    /// None will be for using the runtime default batch size
+    num_rows: Option<usize>,
+    memory: usize,
+}
+
+impl RecordBatchMeta {
+    fn with_memory(memory: usize) -> Self {
+        Self {
+            num_rows: None,
+            memory,
+        }
+    }
+}
+
 struct RunTestWithLimitedMemoryArgs {
     pool_size: usize,
     task_ctx: Arc<TaskContext>,
     number_of_record_batches: usize,
+    /// return the record batch size in memory and number of rows
     get_size_of_record_batch_to_generate:
-        Pin<Box<dyn Fn(usize) -> usize + Send + 'static>>,
+        Pin<Box<dyn Fn(usize) -> RecordBatchMeta + Send + 'static>>,
     memory_behavior: MemoryBehavior,
 
     /// When true we would `assert_eq(the number of output_rows metric / output_batches metric == task_ctx.batch_size)`
@@ -324,6 +395,7 @@ async fn run_sort_test_with_limited_memory(
     ]));
 
     let record_batch_size = args.task_ctx.session_config().batch_size() as u64;
+    let mut total_number_of_rows = 0;
 
     let schema = Arc::clone(&scan_schema);
     let plan: Arc<dyn ExecutionPlan> =
@@ -331,25 +403,27 @@ async fn run_sort_test_with_limited_memory(
             Arc::clone(&schema),
             futures::stream::iter((0..args.number_of_record_batches as u64).map(
                 move |index| {
-                    let mut record_batch_memory_size =
-                        get_size_of_record_batch_to_generate(index as usize);
+                    let RecordBatchMeta {memory: record_batch_memory_size, num_rows} = get_size_of_record_batch_to_generate(index as usize);
+                    let num_rows = num_rows.unwrap_or(record_batch_size);
+                    total_number_of_rows += num_rows;
+
                     record_batch_memory_size = record_batch_memory_size
-                        .saturating_sub(size_of::<u64>() * record_batch_size as usize);
+                        .saturating_sub(size_of::<u64>() * num_rows);
 
                     let string_item_size =
-                        record_batch_memory_size / record_batch_size as usize;
+                        record_batch_memory_size / num_rows;
                     let string_array =
                         Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
                             "a".repeat(string_item_size),
-                            record_batch_size as usize,
+                            num_rows,
                         )));
 
                     RecordBatch::try_new(
                         Arc::clone(&schema),
                         vec![
                             Arc::new(UInt64Array::from_iter_values(
-                                (index * record_batch_size)
-                                    ..(index * record_batch_size) + record_batch_size,
+                                (index * num_rows)
+                                    ..(index * num_rows) + num_rows,
                             )),
                             string_array,
                         ],
@@ -372,7 +446,6 @@ async fn run_sort_test_with_limited_memory(
 
     let result = sort_exec.execute(0, Arc::clone(&args.task_ctx))?;
 
-    let number_of_record_batches = args.number_of_record_batches;
     let assert_output_batch_size =
         args.assert_all_output_batches_roughly_match_batch_size_conf;
 
@@ -380,7 +453,7 @@ async fn run_sort_test_with_limited_memory(
 
     assert_baseline_metrics_for_non_empty_output(
         &metrics,
-        number_of_record_batches * record_batch_size as usize,
+        total_number_of_rows,
         if assert_output_batch_size {
             Some(record_batch_size as usize)
         } else {
@@ -418,7 +491,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory() -> Result<()
             ))
     };
 
-    let record_batch_size = pool_size / 16;
+    let record_batch_size = RecordBatchMeta::from_memory(pool_size / 16);
 
     // Basic test with a lot of groups that cannot all fit in memory and 1 record batch
     // from each spill file is too much memory
@@ -464,11 +537,11 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
         task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
-            if i % 25 == 1 {
+            RecordBatchMeta::from_memory(if i % 25 == 1 {
                 pool_size / 6
             } else {
                 (16 * KB) as usize
-            }
+            })
         }),
         memory_behavior: Default::default(),
         assert_all_output_batches_roughly_match_batch_size_conf: true,
@@ -499,11 +572,11 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
         task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
-            if i % 25 == 1 {
+            RecordBatchMeta::from_memory(if i % 25 == 1 {
                 pool_size / 6
             } else {
                 (16 * KB) as usize
-            }
+            })
         }),
         memory_behavior: MemoryBehavior::TakeAllMemoryAndReleaseEveryNthBatch(10),
         assert_all_output_batches_roughly_match_batch_size_conf: true,
@@ -534,11 +607,11 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
         task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
-            if i % 25 == 1 {
+            RecordBatchMeta::from_memory(if i % 25 == 1 {
                 pool_size / 6
             } else {
                 (16 * KB) as usize
-            }
+            })
         }),
         memory_behavior: MemoryBehavior::TakeAllMemoryAtTheBeginning,
         assert_all_output_batches_roughly_match_batch_size_conf: true,
@@ -569,7 +642,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_large_reco
         pool_size,
         task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
-        get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 6),
+        get_size_of_record_batch_to_generate: Box::pin(move |_| RecordBatchMeta::from_memory(pool_size / 6)),
         memory_behavior: Default::default(),
         assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
@@ -613,17 +686,17 @@ async fn run_test_aggregate_with_high_cardinality(
             Arc::clone(&schema),
             futures::stream::iter((0..args.number_of_record_batches as u64).map(
                 move |index| {
-                    let mut record_batch_memory_size =
-                        get_size_of_record_batch_to_generate(index as usize);
+                    let RecordBatchMeta {memory: record_batch_memory_size, num_rows} = get_size_of_record_batch_to_generate(index as usize);
+                    let num_rows = num_rows.unwrap_or(record_batch_size);
                     record_batch_memory_size = record_batch_memory_size
-                        .saturating_sub(size_of::<u64>() * record_batch_size as usize);
+                        .saturating_sub(size_of::<u64>() * num_rows);
 
                     let string_item_size =
-                        record_batch_memory_size / record_batch_size as usize;
+                        record_batch_memory_size / num_rows;
                     let string_array =
                         Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
                             "a".repeat(string_item_size),
-                            record_batch_size as usize,
+                            num_rows,
                         )));
 
                     RecordBatch::try_new(
@@ -631,8 +704,8 @@ async fn run_test_aggregate_with_high_cardinality(
                         vec![
                             // Grouping key
                             Arc::new(UInt64Array::from_iter_values(
-                                (index * record_batch_size)
-                                    ..(index * record_batch_size) + record_batch_size,
+                                (index * (num_rows as u64))
+                                    ..(index * (num_rows as u64)) + (num_rows as u64),
                             )),
                             // Grouping value
                             string_array,

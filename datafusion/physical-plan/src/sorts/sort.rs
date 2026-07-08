@@ -41,7 +41,7 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::IncrementalSortIterator;
-use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
+use crate::sorts::streaming_merge::{BasicRecordBatchStats, SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
@@ -235,8 +235,8 @@ struct ExternalSorter {
     ///
     /// this is a tuple of:
     /// 1. `InProgressSpillFile` - the file that is being written to
-    /// 2. `max_record_batch_memory` - the maximum memory usage of a single batch in this spill file.
-    in_progress_spill_file: Option<(InProgressSpillFile, usize)>,
+    /// 2. `max_record_batch_memory` - the stats for the largest batch memory wise in this spill file.
+    in_progress_spill_file: Option<(InProgressSpillFile, BasicRecordBatchStats)>,
     /// If data has previously been spilled, the locations of the spill files (in
     /// Arrow IPC format)
     /// Within the same spill file, the data might be chunked into multiple batches,
@@ -417,7 +417,7 @@ impl ExternalSorter {
         // Lazily initialize the in-progress spill file
         if self.in_progress_spill_file.is_none() {
             self.in_progress_spill_file =
-                Some((self.spill_manager.create_in_progress_file("Sorting")?, 0));
+                Some((self.spill_manager.create_in_progress_file("Sorting")?, BasicRecordBatchStats::new(0, 0)));
         }
 
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
@@ -433,7 +433,7 @@ impl ExternalSorter {
         for batch in batches_to_spill {
             let gc_sliced_size = in_progress_file.append_batch(&batch)?;
 
-            *max_record_batch_size = (*max_record_batch_size).max(gc_sliced_size);
+            max_record_batch_size.set_max_memory_wise(gc_sliced_size, batch.num_rows());
         }
 
         assert_or_internal_err!(
@@ -453,10 +453,7 @@ impl ExternalSorter {
         let spill_file = in_progress_file.finish()?;
 
         if let Some(spill_file) = spill_file {
-            self.finished_spill_files.push(SortedSpillFile {
-                file: spill_file,
-                max_record_batch_memory,
-            });
+            self.finished_spill_files.push(SortedSpillFile::new(spill_file).with_max_record_batch(Some(max_record_batch_memory)));
         }
 
         Ok(())

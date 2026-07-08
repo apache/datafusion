@@ -29,6 +29,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::spill_file::SpillFile;
 use std::borrow::Borrow;
 use std::sync::Arc;
+use crate::sorts::streaming_merge::BasicRecordBatchStats;
 
 /// The `SpillManager` is responsible for the following tasks:
 /// - Reading and writing `RecordBatch`es to raw files based on the provided configurations.
@@ -119,10 +120,10 @@ impl SpillManager {
         &self,
         mut iter: impl Iterator<Item = Result<impl Borrow<RecordBatch>>>,
         request_description: &str,
-    ) -> Result<Option<(Arc<dyn SpillFile>, usize)>> {
+    ) -> Result<Option<(Arc<dyn SpillFile>, BasicRecordBatchStats)>> {
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
-        let mut max_record_batch_size = 0;
+        let mut max_record_batch = BasicRecordBatchStats::new(0, 0);
 
         iter.try_for_each(|batch| {
             let batch = batch?;
@@ -131,13 +132,13 @@ impl SpillManager {
                 return Ok(());
             }
             let gc_sliced_size = in_progress_file.append_batch(borrowed)?;
-            max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
+            max_record_batch.set_max_memory_wise(gc_sliced_size, borrowed.num_rows());
             Result::<_, DataFusionError>::Ok(())
         })?;
 
         let file = in_progress_file.finish()?;
 
-        Ok(file.map(|f| (f, max_record_batch_size)))
+        Ok(file.map(|f| (f, max_record_batch)))
     }
 
     /// Spill a stream of `RecordBatch`es to disk and return the spill file and the size of the largest batch in memory
@@ -145,23 +146,23 @@ impl SpillManager {
         &self,
         stream: &mut SendableRecordBatchStream,
         request_description: &str,
-    ) -> Result<Option<(Arc<dyn SpillFile>, usize)>> {
+    ) -> Result<Option<(Arc<dyn SpillFile>, BasicRecordBatchStats)>> {
         use futures::StreamExt;
 
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
-        let mut max_record_batch_size = 0;
+        let mut max_record_batch = BasicRecordBatchStats::new(0, 0);
 
         while let Some(batch) = stream.next().await {
             let batch = batch?;
             let gc_sliced_size = in_progress_file.append_batch(&batch)?;
 
-            max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
+            max_record_batch.set_max_memory_wise(gc_sliced_size, batch.num_rows());
         }
 
         let file = in_progress_file.finish()?;
 
-        Ok(file.map(|f| (f, max_record_batch_size)))
+        Ok(file.map(|f| (f, max_record_batch)))
     }
 
     /// Reads a spill file as a stream. The file must be created by the current
