@@ -580,6 +580,12 @@ mod tests {
             ) -> Result<Arc<dyn PhysicalExpr>> {
                 unimplemented!()
             }
+            fn physical_optimizers(
+                &self,
+            ) -> &[Arc<dyn datafusion_session::PhysicalOptimizerRule + Send + Sync>]
+            {
+                &[]
+            }
             fn scalar_functions(
                 &self,
             ) -> &HashMap<String, Arc<datafusion_expr::ScalarUDF>> {

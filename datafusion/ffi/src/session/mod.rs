@@ -586,6 +586,12 @@ impl Session for ForeignSession {
         }
     }
 
+    fn physical_optimizers(
+        &self,
+    ) -> &[Arc<dyn datafusion_session::PhysicalOptimizerRule + Send + Sync>] {
+        &[]
+    }
+
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
         &self.scalar_functions
     }

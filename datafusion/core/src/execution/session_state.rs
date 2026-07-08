@@ -70,12 +70,10 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_optimizer::PhysicalOptimizerContext;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
-use datafusion_session::Session;
+use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
 #[cfg(feature = "sql")]
 use datafusion_sql::{
     parser::{DFParserBuilder, Statement},
@@ -280,6 +278,10 @@ impl Session for SessionState {
         df_schema: &DFSchema,
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
         self.create_physical_expr(expr, df_schema)
+    }
+
+    fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        &self.physical_optimizers.rules
     }
 
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
@@ -832,11 +834,6 @@ impl SessionState {
     /// Return the logical optimizers
     pub fn optimizers(&self) -> &[Arc<dyn OptimizerRule + Send + Sync>] {
         &self.optimizer.rules
-    }
-
-    /// Return the physical optimizers
-    pub fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
-        &self.physical_optimizers.rules
     }
 
     /// return the configuration options

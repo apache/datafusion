@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::PhysicalOptimizerRule;
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigOptions, TableOptions};
 use datafusion_common::{DFSchema, Result};
@@ -83,6 +84,9 @@ pub trait Session: Send + Sync {
     fn config_options(&self) -> &ConfigOptions {
         self.config().options()
     }
+
+    /// Return the physical optimizers
+    fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>];
 
     /// Creates a physical [`ExecutionPlan`] plan from a [`LogicalPlan`].
     ///
