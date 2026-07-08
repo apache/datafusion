@@ -1218,10 +1218,7 @@ impl GroupedHashAggregateStream {
 
         match spillfile {
             Some((spillfile, max_record_batch_memory)) => {
-                self.spill_state.spills.push(SortedSpillFile {
-                    file: spillfile,
-                    max_record_batch_memory,
-                })
+                self.spill_state.spills.push(SortedSpillFile::new(spillfile).with_max_record_batch(Some(max_record_batch_memory)))
             }
             None => {
                 return internal_err!(
