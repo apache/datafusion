@@ -695,9 +695,9 @@ UDF.</p>
 <span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
 <span class="w">            </span><span class="n">signature</span><span class="p">:</span><span class="w"> </span><span class="nc">Signature</span><span class="p">::</span><span class="n">new</span><span class="p">(</span>
-<span class="w">                </span><span class="n">TypeSignature</span><span class="p">::</span><span class="n">Coercible</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">Coercion</span><span class="p">::</span><span class="n">Exact</span><span class="w"> </span><span class="p">{</span>
-<span class="w">                    </span><span class="n">desired_type</span><span class="p">:</span><span class="w"> </span><span class="nc">TypeSignatureClass</span><span class="p">::</span><span class="n">Native</span><span class="p">(</span><span class="n">logical_string</span><span class="p">()),</span>
-<span class="w">                </span><span class="p">}]),</span>
+<span class="w">                </span><span class="n">TypeSignature</span><span class="p">::</span><span class="n">Coercible</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">Coercion</span><span class="p">::</span><span class="n">new_exact</span><span class="p">(</span>
+<span class="w">                    </span><span class="n">TypeSignatureClass</span><span class="p">::</span><span class="n">Native</span><span class="p">(</span><span class="n">logical_string</span><span class="p">()),</span>
+<span class="w">                </span><span class="p">)]),</span>
 <span class="w">                </span><span class="n">Volatility</span><span class="p">::</span><span class="n">Volatile</span><span class="p">,</span>
 <span class="w">            </span><span class="p">),</span>
 <span class="w">        </span><span class="p">}</span>

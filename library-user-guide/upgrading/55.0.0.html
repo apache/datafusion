@@ -529,6 +529,24 @@ will now appear as <code class="docutils literal notranslate"><span class="pre">
 <p>Query result values already used human-readable decimal formatting and are
 unchanged.</p>
 </section>
+<section id="coercion-supports-dictionary-encoding-preservation">
+<h3><code class="docutils literal notranslate"><span class="pre">Coercion</span></code> supports dictionary encoding preservation<a class="headerlink" href="#coercion-supports-dictionary-encoding-preservation" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_expr_common::signature::Coercion</span></code> now supports optional dictionary
+encoding preservation. When enabled for <code class="docutils literal notranslate"><span class="pre">TypeSignatureClass::Native(...)</span></code>
+coercions, DataFusion coerces dictionary inputs to
+<code class="docutils literal notranslate"><span class="pre">Dictionary(original_key_type,</span> <span class="pre">coerced_value_type)</span></code> instead of materializing them
+to the coerced value type.</p>
+<p>User-defined functions can opt in by setting dictionary encoding preservation on
+the relevant coercion:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">Coercion</span><span class="p">::</span><span class="n">new_exact</span><span class="p">(</span><span class="n">TypeSignatureClass</span><span class="p">::</span><span class="n">Native</span><span class="p">(</span><span class="n">logical_string</span><span class="p">()))</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_encoding_preservation</span><span class="p">(</span><span class="n">EncodingPreservation</span><span class="p">::</span><span class="n">dictionary</span><span class="p">())</span>
+</pre></div>
+</div>
+<p>This changes the coerced argument type passed to the function. If a function
+derives its return type from that coerced argument type, code that checks exact
+result types may need to update its expectations or add an explicit cast to
+materialize the result.</p>
+</section>
 <section id="groupsaccumulator-merge-batch-no-longer-takes-opt-filter">
 <h3><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::merge_batch</span></code> no longer takes <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code><a class="headerlink" href="#groupsaccumulator-merge-batch-no-longer-takes-opt-filter" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code> argument has been removed from
@@ -940,6 +958,7 @@ metadata and schema fingerprint match.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dialect-available-replaced-by-dialect-available"><code class="docutils literal notranslate"><span class="pre">Dialect::AVAILABLE</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spill-record-batch-by-size-removed"><code class="docutils literal notranslate"><span class="pre">spill_record_batch_by_size</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#decimal-scalar-formatting-uses-human-readable-values">Decimal scalar formatting uses human-readable values</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#coercion-supports-dictionary-encoding-preservation"><code class="docutils literal notranslate"><span class="pre">Coercion</span></code> supports dictionary encoding preservation</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupsaccumulator-merge-batch-no-longer-takes-opt-filter"><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::merge_batch</span></code> no longer takes <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#is-dynamic-physical-expr-is-deprecated"><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics"><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new</span></code> no longer builds a pruner for static predicates without statistics</a></li>
