@@ -65,10 +65,7 @@ impl AggregateHashTable<PartialMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(|acc, emit_to, output| {
-            output.extend(acc.state(emit_to)?);
-            Ok(())
-        })
+        self.next_output_batch_inner(HashAggregateAccumulator::state)
     }
 
     pub(in crate::aggregates) fn can_skip_aggregation(&self) -> bool {

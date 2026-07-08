@@ -210,17 +210,14 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     ///
     /// Each aggregation mode chooses a different `materialize_accumulator_fn`
     /// according to its semantics. For example, partial aggregation emits
-    /// partial states to feed the final stage, so it us [`GroupsAccumulator::state`].
+    /// partial states to feed the final stage, so it uses [`GroupsAccumulator::state`].
     ///
     /// This is a temporary solution until blocked state management is implemented:
     /// Issue: <https://github.com/apache/datafusion/issues/7065>
-    pub(super) fn next_output_batch_inner<F>(
+    pub(super) fn next_output_batch_inner(
         &mut self,
-        mut materialize_accumulator_fn: F,
-    ) -> Result<Option<RecordBatch>>
-    where
-        F: FnMut(&mut HashAggregateAccumulator, EmitTo, &mut Vec<ArrayRef>) -> Result<()>,
-    {
+        materialize_accumulator_fn: MaterializeAccumulatorFn,
+    ) -> Result<Option<RecordBatch>> {
         let output_schema = Arc::clone(&self.output_schema);
         let batch_size = self.batch_size;
 
@@ -237,7 +234,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                     let timer = self.group_by_metrics.emitting_time.timer();
                     let mut columns = state.group_values.emit(emit_to)?;
                     for acc in state.accumulators.iter_mut() {
-                        materialize_accumulator_fn(acc, emit_to, &mut columns)?;
+                        columns.extend(materialize_accumulator_fn(acc, emit_to)?);
                     }
                     drop(timer);
 
@@ -348,6 +345,15 @@ pub(super) type AggregateBatchFn = fn(
     &[usize],
     usize,
 ) -> Result<()>;
+
+/// Function used by [`AggregateHashTable::next_output_batch_inner`] to
+/// materialize one accumulator's output columns.
+///
+/// Arguments:
+/// * accumulator to materialize.
+/// * group range to emit from the accumulator.
+pub(super) type MaterializeAccumulatorFn =
+    fn(&mut AggregateAccumulator, EmitTo) -> Result<Vec<ArrayRef>>;
 
 /// Evaluated aggregate arguments and filter for one input batch.
 ///
@@ -545,6 +551,13 @@ impl HashAggregateAccumulator {
     /// , and clear the inner buffers)
     pub(super) fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         self.accumulator.evaluate(emit_to)
+    }
+
+    pub(super) fn evaluate_to_columns(
+        &mut self,
+        emit_to: EmitTo,
+    ) -> Result<Vec<ArrayRef>> {
+        Ok(vec![self.evaluate(emit_to)?])
     }
 
     /// Evaluating partial aggregate results according to `EmitTo`, and reset inner

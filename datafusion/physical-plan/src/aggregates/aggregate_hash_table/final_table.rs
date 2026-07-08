@@ -55,10 +55,7 @@ impl AggregateHashTable<FinalMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(|acc, emit_to, output| {
-            output.push(acc.evaluate(emit_to)?);
-            Ok(())
-        })
+        self.next_output_batch_inner(HashAggregateAccumulator::evaluate_to_columns)
     }
 
     /// Final aggregation consumes partial aggregate states and merges them into
