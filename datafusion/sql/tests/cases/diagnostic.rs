@@ -708,6 +708,18 @@ fn test_invalid_aggregate_function_argument_types() -> Result<()> {
 }
 
 #[test]
+fn test_invalid_scalar_function_argument_types() -> Result<()> {
+    let state = MockSessionState::default()
+        .with_scalar_function(datafusion_functions::math::power());
+    let query = "SELECT /*a*/power/*a*/(first_name, first_name) FROM person";
+    let spans = get_spans(query);
+    let diag = do_query_with_state(query, state);
+    assert_snapshot!(diag.message, @"invalid argument type(s) for 'power'");
+    assert_eq!(diag.span, Some(spans["a"]));
+    Ok(())
+}
+
+#[test]
 fn test_invalid_window_function_argument_types() -> Result<()> {
     // An aggregate used as a window function (`... OVER ()`) reaches the
     // `WindowFunctionDefinition::AggregateUDF` branch, which must also carry the
