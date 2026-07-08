@@ -143,8 +143,8 @@ where
     random_state: RandomState,
     /// buffer that stores hash values (reused across batches to save allocations)
     hashes_buffer: Vec<u64>,
-    /// Maps input views to payloads for repeated physical views in one batch.
-    input_view_to_payload: datafusion_common::HashMap<u128, V>,
+    /// Maps input buffer locations to payloads for repeated physical views in one batch.
+    input_view_to_payload: datafusion_common::HashMap<u64, V>,
     /// `(payload, null_index)` for the 'null' value, if any
     /// NOTE null_index is the logical index in the final array, not the index
     /// in the buffer
@@ -304,10 +304,13 @@ where
             let len = view_u128 as u32;
 
             let cached_payload = if input_has_buffers && len > 12 {
+                let input_buffer_location = Self::buffer_location(view_u128);
                 num_cache_lookups += 1;
                 self.input_view_to_payload
                     .raw_entry()
-                    .from_hash(hash, |cached_view| *cached_view == view_u128)
+                    .from_hash(hash, |cached_location| {
+                        *cached_location == input_buffer_location
+                    })
                     .map(|(_, payload)| *payload)
             } else {
                 None
@@ -353,14 +356,20 @@ where
 
             let payload = if let Some(payload) = maybe_payload {
                 if input_has_buffers && len > 12 {
+                    let input_buffer_location = Self::buffer_location(view_u128);
                     match self
                         .input_view_to_payload
                         .raw_entry_mut()
-                        .from_hash(hash, |cached_view| *cached_view == view_u128)
-                    {
+                        .from_hash(hash, |cached_location| {
+                            *cached_location == input_buffer_location
+                        }) {
                         hashbrown::hash_map::RawEntryMut::Occupied(_) => {}
                         hashbrown::hash_map::RawEntryMut::Vacant(entry) => {
-                            entry.insert_hashed_nocheck(hash, view_u128, payload);
+                            entry.insert_hashed_nocheck(
+                                hash,
+                                input_buffer_location,
+                                payload,
+                            );
                             num_cache_inserts += 1;
                         }
                     }
@@ -412,6 +421,12 @@ where
             self.input_view_to_payload.len(),
             self.input_view_to_payload.capacity(),
         ));
+    }
+
+    #[inline(always)]
+    fn buffer_location(view: u128) -> u64 {
+        let byte_view = ByteView::from(view);
+        u64::from(byte_view.buffer_index) << 32 | u64::from(byte_view.offset)
     }
 
     #[inline(always)]
