@@ -32,6 +32,9 @@ struct BatchCursor {
     batch_idx: usize,
     /// The row index within the given batch
     row_idx: usize,
+    /// Estimated in-memory bytes per row of the current batch, used to
+    /// track the byte size of in-progress output rows
+    bytes_per_row: usize,
 }
 
 /// Provides an API to incrementally build a [`RecordBatch`] from partitioned [`RecordBatch`]
@@ -67,14 +70,26 @@ pub struct BatchBuilder {
     /// The accumulated stream indexes from which to pull rows
     /// Consists of a tuple of `(batch_idx, row_idx)`
     indices: Vec<(usize, usize)>,
+
+    /// Emit an output batch once the estimated bytes of in-progress rows
+    /// reach this target, even if fewer than `batch_size` rows are buffered.
+    /// `None` disables byte-based emission (row-count only).
+    target_bytes: Option<usize>,
+
+    /// Estimated in-memory bytes of the in-progress rows
+    in_progress_bytes: usize,
 }
 
 impl BatchBuilder {
-    /// Create a new [`BatchBuilder`] with the provided `stream_count` and `batch_size`
+    /// Create a new [`BatchBuilder`] with the provided `stream_count` and
+    /// `batch_size`. If `target_bytes` is set, [`Self::byte_target_reached`]
+    /// reports when the in-progress rows reach that estimated size so the
+    /// caller can emit byte-bounded batches.
     pub fn new(
         schema: SchemaRef,
         stream_count: usize,
         batch_size: usize,
+        target_bytes: Option<usize>,
         reservation: MemoryReservation,
     ) -> Self {
         let initial_reservation = reservation.size();
@@ -86,6 +101,8 @@ impl BatchBuilder {
             reservation,
             batches_mem_used: 0,
             initial_reservation,
+            target_bytes,
+            in_progress_bytes: 0,
         }
     }
 
@@ -98,10 +115,12 @@ impl BatchBuilder {
         // pre-reserved bytes from sort_spill_reservation_bytes).
         try_grow_reservation_to_at_least(&mut self.reservation, self.batches_mem_used)?;
         let batch_idx = self.batches.len();
+        let bytes_per_row = size / batch.num_rows().max(1);
         self.batches.push((stream_idx, batch));
         self.cursors[stream_idx] = BatchCursor {
             batch_idx,
             row_idx: 0,
+            bytes_per_row,
         };
         Ok(())
     }
@@ -112,6 +131,14 @@ impl BatchBuilder {
         let row_idx = cursor.row_idx;
         cursor.row_idx += 1;
         self.indices.push((cursor.batch_idx, row_idx));
+        self.in_progress_bytes += cursor.bytes_per_row;
+    }
+
+    /// Returns `true` if a byte target is configured and the estimated size
+    /// of the in-progress rows has reached it
+    pub fn byte_target_reached(&self) -> bool {
+        self.target_bytes
+            .is_some_and(|target| self.in_progress_bytes >= target)
     }
 
     /// Returns the number of in-progress rows in this [`BatchBuilder`]
@@ -154,6 +181,17 @@ impl BatchBuilder {
         rows_to_emit: usize,
         columns: Vec<ArrayRef>,
     ) -> Result<RecordBatch> {
+        // Scale the in-progress byte estimate by the fraction of rows left
+        // behind (only the offset-overflow partial-emit path keeps any);
+        // exact per-row attribution is not worth tracking here.
+        let total_rows = self.indices.len();
+        let remaining_rows = total_rows - rows_to_emit;
+        self.in_progress_bytes = if remaining_rows == 0 {
+            0
+        } else {
+            (self.in_progress_bytes / total_rows.max(1)) * remaining_rows
+        };
+
         // Remove consumed indices, keeping any remaining for the next call.
         self.indices.drain(..rows_to_emit);
 
@@ -342,12 +380,52 @@ mod tests {
     }
 
     #[test]
+    fn test_byte_target_reached() {
+        use arrow::array::StringArray;
+        // 100 rows of ~1KiB strings
+        let s = StringArray::from_iter_values((0..100).map(|i| format!("{i:0>1024}")));
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s)]).unwrap();
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation = MemoryConsumer::new("test").register(&pool);
+        let mut builder =
+            BatchBuilder::new(Arc::clone(&schema), 1, 8192, Some(10 * 1024), reservation);
+        builder.push_batch(0, batch.clone()).unwrap();
+
+        let mut pushed = 0;
+        while !builder.byte_target_reached() && pushed < 100 {
+            builder.push_row(0);
+            pushed += 1;
+        }
+        // ~10 rows of ~1KiB reach the 10KiB byte target, far below the row target
+        assert!(builder.byte_target_reached());
+        assert!((5..=20).contains(&pushed), "pushed {pushed} rows");
+
+        // building the pending rows resets byte progress
+        let out = builder.build_record_batch().unwrap().unwrap();
+        assert_eq!(out.num_rows(), pushed);
+        assert!(!builder.byte_target_reached());
+
+        // without a byte target the check never fires
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation = MemoryConsumer::new("test").register(&pool);
+        let mut builder =
+            BatchBuilder::new(Arc::clone(&schema), 1, 8192, None, reservation);
+        builder.push_batch(0, batch).unwrap();
+        for _ in 0..100 {
+            builder.push_row(0);
+        }
+        assert!(!builder.byte_target_reached());
+    }
+
+    #[test]
     fn test_try_interleave_columns_surfaces_arrow_offset_overflow() {
         let batch = overflow_list_batch();
         let schema = batch.schema();
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
         let reservation = MemoryConsumer::new("test").register(&pool);
-        let mut builder = BatchBuilder::new(schema, 1, 2, reservation);
+        let mut builder = BatchBuilder::new(schema, 1, 2, None, reservation);
         builder.push_batch(0, batch).unwrap();
 
         let error = builder

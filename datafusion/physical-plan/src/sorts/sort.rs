@@ -218,6 +218,12 @@ struct ExternalSorter {
     expr: LexOrdering,
     /// The target number of rows for output batches
     batch_size: usize,
+    /// Soft byte-size target for output batches (from
+    /// `datafusion.execution.target_batch_size_bytes`): sorted output chunks
+    /// and merged batches are additionally bounded to about this many bytes,
+    /// so wide rows do not produce arbitrarily large batches. `None` bounds
+    /// output by row count only.
+    target_batch_size_bytes: Option<usize>,
     /// If the in size of buffered memory batches is below this size,
     /// the data will be concatenated and sorted in place rather than
     /// sort/merged.
@@ -273,6 +279,7 @@ impl ExternalSorter {
         schema: SchemaRef,
         expr: LexOrdering,
         batch_size: usize,
+        target_batch_size_bytes: Option<usize>,
         sort_spill_reservation_bytes: usize,
         sort_in_place_threshold_bytes: usize,
         // Configured via `datafusion.execution.spill_compression`.
@@ -308,6 +315,7 @@ impl ExternalSorter {
             merge_reservation,
             runtime,
             batch_size,
+            target_batch_size_bytes,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
         })
@@ -365,6 +373,7 @@ impl ExternalSorter {
                 .with_expressions(&self.expr.clone())
                 .with_metrics(self.metrics.baseline.clone())
                 .with_batch_size(self.batch_size)
+                .with_batch_size_bytes(self.target_batch_size_bytes)
                 .with_fetch(None)
                 .with_reservation(self.merge_reservation.take())
                 .build()
@@ -664,6 +673,7 @@ impl ExternalSorter {
                 self.metrics.baseline.intermediate()
             })
             .with_batch_size(self.batch_size)
+            .with_batch_size_bytes(self.target_batch_size_bytes)
             .with_fetch(None)
             .with_reservation(self.merge_reservation.new_empty())
             .build()
@@ -743,12 +753,14 @@ impl ExternalSorter {
         let schema = batch.schema();
         let expressions = self.expr.clone();
         let batch_size = self.batch_size;
+        let target_bytes = self.target_batch_size_bytes;
 
         let stream = futures::stream::once(async move {
             let schema = batch.schema();
 
             // Sort the batch immediately and get all output batches
-            let sorted_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
+            let sorted_batches =
+                sort_batch_chunked(&batch, &expressions, batch_size, target_bytes)?;
 
             // Resize the reservation to match the actual sorted output size.
             // Using try_resize avoids a release-then-reacquire cycle, which
@@ -916,12 +928,22 @@ pub fn sort_batch(
 /// Sort a batch and return the result as multiple batches of size `batch_size`.
 /// This is useful when you want to avoid creating one large sorted batch in memory,
 /// and instead want to process the sorted data in smaller chunks.
+///
+/// If `target_bytes` is set, chunks are additionally bounded to about that
+/// many bytes each (wide rows would otherwise produce huge chunks).
 pub fn sort_batch_chunked(
     batch: &RecordBatch,
     expressions: &LexOrdering,
     batch_size: usize,
+    target_bytes: Option<usize>,
 ) -> Result<Vec<RecordBatch>> {
-    IncrementalSortIterator::new(batch.clone(), expressions.clone(), batch_size).collect()
+    IncrementalSortIterator::new(
+        batch.clone(),
+        expressions.clone(),
+        batch_size,
+        target_bytes,
+    )
+    .collect()
 }
 
 /// Sort execution plan.
@@ -1381,6 +1403,7 @@ impl ExecutionPlan for SortExec {
                     input.schema(),
                     self.expr.clone(),
                     context.session_config().batch_size(),
+                    execution_options.target_batch_size_bytes,
                     execution_options.sort_spill_reservation_bytes,
                     execution_options.sort_in_place_threshold_bytes,
                     context.session_config().spill_compression(),
@@ -2890,6 +2913,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_sort_batch_chunked_byte_target() -> Result<()> {
+        use arrow::array::StringArray;
+        // 100 rows x ~1KiB strings (~100KiB): an 8KiB byte target must
+        // produce many small chunks even though 100 rows < batch_size
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let s =
+            StringArray::from_iter_values((0..100).rev().map(|i| format!("{i:0>1024}")));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s)])?;
+
+        let expressions: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("s", 0)))].into();
+
+        let target_bytes = 8 * 1024;
+        let result_batches =
+            sort_batch_chunked(&batch, &expressions, 1000, Some(target_bytes))?;
+
+        assert!(
+            result_batches.len() > 1,
+            "expected byte target to split the sorted output"
+        );
+        let mut total_rows = 0;
+        for chunk in &result_batches {
+            assert!(
+                get_record_batch_memory_size(chunk) <= 2 * target_bytes,
+                "chunk of {} bytes exceeds byte target",
+                get_record_batch_memory_size(chunk)
+            );
+            total_rows += chunk.num_rows();
+        }
+        assert_eq!(total_rows, 100);
+
+        // Concatenated output must equal a full sort of the input
+        let expected = sort_batch(&batch, &expressions, None)?;
+        let actual = concat_batches(&schema, &result_batches)?;
+        assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_exec_byte_bounded_output() -> Result<()> {
+        use arrow::array::StringArray;
+        // Multiple wide-row input batches; with target_batch_size_bytes set,
+        // the sorted output batches must be bounded by bytes, not just rows
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let batches: Vec<RecordBatch> = (0..4)
+            .map(|b| {
+                let s = StringArray::from_iter_values(
+                    (0..50).map(|i| format!("{:0>1024}", (b * 50 + i * 7919) % 200)),
+                );
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s)]).unwrap()
+            })
+            .collect();
+
+        let target_bytes = 16 * 1024;
+        let mut config = SessionConfig::new();
+        config.options_mut().execution.target_batch_size_bytes = Some(target_bytes);
+        let task_ctx = Arc::new(TaskContext::default().with_session_config(config));
+
+        let plan = TestMemoryExec::try_new_exec(
+            std::slice::from_ref(&batches),
+            Arc::clone(&schema),
+            None,
+        )?;
+        let sort_exec = Arc::new(SortExec::new(
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("s", 0)))].into(),
+            plan,
+        ));
+        let result = collect(sort_exec, task_ctx).await?;
+
+        assert!(
+            result.len() > 1,
+            "expected byte-bounded output batches, got {}",
+            result.len()
+        );
+        let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 200);
+        for batch in &result {
+            assert!(
+                get_record_batch_memory_size(batch) <= 2 * target_bytes,
+                "output batch of {} bytes exceeds byte target",
+                get_record_batch_memory_size(batch)
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_sort_batch_chunked_basic() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
 
@@ -2907,7 +3017,7 @@ mod tests {
             [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
 
         // Sort with batch_size = 250
-        let result_batches = sort_batch_chunked(&batch, &expressions, 250)?;
+        let result_batches = sort_batch_chunked(&batch, &expressions, 250, None)?;
 
         // Verify 4 batches are returned
         assert_eq!(result_batches.len(), 4);
@@ -2960,7 +3070,7 @@ mod tests {
             [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
 
         // Sort with batch_size = 100
-        let result_batches = sort_batch_chunked(&batch, &expressions, 100)?;
+        let result_batches = sort_batch_chunked(&batch, &expressions, 100, None)?;
 
         // Should return exactly 1 batch
         assert_eq!(result_batches.len(), 1);
@@ -2992,7 +3102,7 @@ mod tests {
             [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
 
         // Sort with batch_size = 100
-        let result_batches = sort_batch_chunked(&batch, &expressions, 100)?;
+        let result_batches = sort_batch_chunked(&batch, &expressions, 100, None)?;
 
         // Should return exactly 10 batches of 100 rows each
         assert_eq!(result_batches.len(), 10);
@@ -3019,7 +3129,7 @@ mod tests {
         let expressions: LexOrdering =
             [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
 
-        let result_batches = sort_batch_chunked(&batch, &expressions, 100)?;
+        let result_batches = sort_batch_chunked(&batch, &expressions, 100, None)?;
 
         // Empty input produces no output batches (0 chunks)
         assert_eq!(result_batches.len(), 0);
@@ -3273,7 +3383,8 @@ mod tests {
             0,
             Arc::clone(&schema),
             [PhysicalSortExpr::new_default(Arc::new(Column::new("x", 0)))].into(),
-            128, // batch_size
+            128,  // batch_size
+            None, // target_batch_size_bytes
             sort_spill_reservation_bytes,
             usize::MAX, // sort_in_place_threshold_bytes (high to avoid concat path)
             SpillCompression::Uncompressed,

@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
+use crate::spill::get_record_batch_memory_size;
 use crate::{EmptyRecordBatchStream, SendableRecordBatchStream};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{Array, UInt32Array};
@@ -316,11 +317,25 @@ pub(crate) struct IncrementalSortIterator {
 }
 
 impl IncrementalSortIterator {
+    /// Create a new iterator yielding sorted chunks of at most `batch_size`
+    /// rows. If `target_bytes` is set, the chunk row count is further reduced
+    /// so each chunk's estimated in-memory size is about `target_bytes`,
+    /// bounding output batches by bytes as well as rows (wide rows would
+    /// otherwise produce arbitrarily large chunks).
     pub(crate) fn new(
         batch: RecordBatch,
         expressions: LexOrdering,
         batch_size: usize,
+        target_bytes: Option<usize>,
     ) -> Self {
+        let batch_size = match target_bytes {
+            Some(target) if batch.num_rows() > 0 => {
+                let bytes_per_row =
+                    (get_record_batch_memory_size(&batch) / batch.num_rows()).max(1);
+                (target / bytes_per_row).clamp(1, batch_size)
+            }
+            _ => batch_size,
+        };
         Self {
             batch,
             expressions,
@@ -430,7 +445,7 @@ mod tests {
         .unwrap();
 
         let mut total_rows = 0;
-        IncrementalSortIterator::new(batch.clone(), expressions, batch_size).try_for_each(
+        IncrementalSortIterator::new(batch.clone(), expressions, batch_size, None).try_for_each(
             |result| {
                 let chunk = result?;
                 total_rows += chunk.num_rows();

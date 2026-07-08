@@ -161,6 +161,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         schema: SchemaRef,
         metrics: BaselineMetrics,
         batch_size: usize,
+        batch_size_bytes: Option<usize>,
         fetch: Option<usize>,
         reservation: MemoryReservation,
         enable_round_robin_tie_breaker: bool,
@@ -168,7 +169,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         let stream_count = streams.partitions();
 
         Self {
-            in_progress: BatchBuilder::new(schema, stream_count, batch_size, reservation),
+            in_progress: BatchBuilder::new(
+                schema,
+                stream_count,
+                batch_size,
+                batch_size_bytes,
+                reservation,
+            ),
             streams,
             metrics,
             done: false,
@@ -318,7 +325,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 if self.fetch_reached() {
                     self.done = true;
                     self.drain_in_progress_on_done = true;
-                } else if self.in_progress.len() < self.batch_size {
+                } else if self.in_progress.len() < self.batch_size
+                    && !self.in_progress.byte_target_reached()
+                {
                     continue;
                 }
             }
@@ -652,6 +661,7 @@ mod tests {
             Arc::clone(&schema),
             BaselineMetrics::new(&metrics, 0),
             16,
+            None,
             Some(1),
             reservation,
             true,

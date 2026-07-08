@@ -363,6 +363,13 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     .with_expressions(&self.expr)
                     .with_metrics(BaselineMetrics::new(&self.metrics, partition))
                     .with_batch_size(context.session_config().batch_size())
+                    .with_batch_size_bytes(
+                        context
+                            .session_config()
+                            .options()
+                            .execution
+                            .target_batch_size_bytes,
+                    )
                     .with_fetch(self.fetch)
                     .with_reservation(reservation)
                     .with_round_robin_tie_breaker(self.enable_round_robin_repartition)
@@ -836,6 +843,64 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_merge_byte_bounded_output() {
+        use crate::spill::get_record_batch_memory_size;
+        use crate::stream::RecordBatchStreamAdapter;
+        use arrow::array::StringArray;
+        use datafusion_execution::memory_pool::{MemoryPool, UnboundedMemoryPool};
+
+        // Two sorted streams of wide rows (~1KiB strings). With a byte
+        // target set, merged output batches must be bounded by bytes even
+        // though the row target (8192) is never reached.
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let make_stream = |offset: usize| -> SendableRecordBatchStream {
+            let s = StringArray::from_iter_values(
+                (0..100).map(|i| format!("{:0>1024}", 2 * i + offset)),
+            );
+            let batch =
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s)]).unwrap();
+            Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&schema),
+                futures::stream::iter(vec![Ok(batch)]),
+            ))
+        };
+
+        let exprs: LexOrdering =
+            [PhysicalSortExpr::new_default(col("s", &schema).unwrap())].into();
+        let target_bytes = 16 * 1024;
+
+        let merged = StreamingMergeBuilder::new()
+            .with_streams(vec![make_stream(0), make_stream(1)])
+            .with_schema(Arc::clone(&schema))
+            .with_expressions(&exprs)
+            .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+            .with_batch_size(8192)
+            .with_batch_size_bytes(Some(target_bytes))
+            .with_reservation({
+                let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+                MemoryConsumer::new("test").register(&pool)
+            })
+            .build()
+            .unwrap();
+
+        let batches = common::collect(merged).await.unwrap();
+        assert!(
+            batches.len() > 1,
+            "expected byte target to bound merged batches, got {}",
+            batches.len()
+        );
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 200);
+        for batch in &batches {
+            assert!(
+                get_record_batch_memory_size(batch) <= 2 * target_bytes,
+                "merged batch of {} bytes exceeds byte target",
+                get_record_batch_memory_size(batch)
+            );
+        }
     }
 
     // Split the provided record batch into multiple batch_size record batches
