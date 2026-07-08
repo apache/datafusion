@@ -1,0 +1,78 @@
+{
+  "queries": [
+    {
+      "query": "1",
+      "iterations": [
+        {
+          "elapsed": 204.47537499999999,
+          "row_count": 1
+        },
+        {
+          "elapsed": 162.65116700000002,
+          "row_count": 1
+        }
+      ],
+      "start_time": 1783524305,
+      "success": true
+    },
+    {
+      "query": "2",
+      "iterations": [],
+      "start_time": 1783524306,
+      "success": false
+    },
+    {
+      "query": "3",
+      "iterations": [],
+      "start_time": 1783524306,
+      "success": false
+    },
+    {
+      "query": "4",
+      "iterations": [
+        {
+          "elapsed": 219.99279199999998,
+          "row_count": 1000
+        },
+        {
+          "elapsed": 216.437584,
+          "row_count": 1000
+        }
+      ],
+      "start_time": 1783524307,
+      "success": true
+    },
+    {
+      "query": "5",
+      "iterations": [
+        {
+          "elapsed": 348.959166,
+          "row_count": 1
+        },
+        {
+          "elapsed": 422.631667,
+          "row_count": 1
+        }
+      ],
+      "start_time": 1783524307,
+      "success": true
+    }
+  ],
+  "context": {
+    "benchmark_version": "54.0.0",
+    "datafusion_version": "54.0.0",
+    "num_cpus": 12,
+    "start_time": 1783524305,
+    "arguments": [
+      "large-values",
+      "--iterations",
+      "2",
+      "--path",
+      "/Users/adrian/GitHub/datafusion/benchmarks/data/large_values",
+      "--memory-limit",
+      "2G",
+      "-o",
+      "/tmp/datafusion-batch-normalizer/ab_results/lv-mem2g_on_r1.json"
+    ]
+  }
+}

@@ -1,0 +1,439 @@
+{
+  "queries": [
+    {
+      "query": "Query 1",
+      "iterations": [
+        {
+          "elapsed": 45.523584,
+          "row_count": 4
+        },
+        {
+          "elapsed": 37.542832999999995,
+          "row_count": 4
+        },
+        {
+          "elapsed": 38.704416,
+          "row_count": 4
+        }
+      ],
+      "start_time": 1783521317,
+      "success": true
+    },
+    {
+      "query": "Query 2",
+      "iterations": [
+        {
+          "elapsed": 13.292583,
+          "row_count": 100
+        },
+        {
+          "elapsed": 13.094875,
+          "row_count": 100
+        },
+        {
+          "elapsed": 12.456208,
+          "row_count": 100
+        }
+      ],
+      "start_time": 1783521317,
+      "success": true
+    },
+    {
+      "query": "Query 3",
+      "iterations": [
+        {
+          "elapsed": 28.26575,
+          "row_count": 10
+        },
+        {
+          "elapsed": 29.994833,
+          "row_count": 10
+        },
+        {
+          "elapsed": 30.247,
+          "row_count": 10
+        }
+      ],
+      "start_time": 1783521317,
+      "success": true
+    },
+    {
+      "query": "Query 4",
+      "iterations": [
+        {
+          "elapsed": 19.352,
+          "row_count": 5
+        },
+        {
+          "elapsed": 16.396416000000002,
+          "row_count": 5
+        },
+        {
+          "elapsed": 19.144792000000002,
+          "row_count": 5
+        }
+      ],
+      "start_time": 1783521317,
+      "success": true
+    },
+    {
+      "query": "Query 5",
+      "iterations": [
+        {
+          "elapsed": 80.001875,
+          "row_count": 5
+        },
+        {
+          "elapsed": 44.889167,
+          "row_count": 5
+        },
+        {
+          "elapsed": 40.862875,
+          "row_count": 5
+        }
+      ],
+      "start_time": 1783521317,
+      "success": true
+    },
+    {
+      "query": "Query 6",
+      "iterations": [
+        {
+          "elapsed": 16.637208,
+          "row_count": 1
+        },
+        {
+          "elapsed": 17.534417,
+          "row_count": 1
+        },
+        {
+          "elapsed": 21.551709,
+          "row_count": 1
+        }
+      ],
+      "start_time": 1783521317,
+      "success": true
+    },
+    {
+      "query": "Query 7",
+      "iterations": [
+        {
+          "elapsed": 56.581625,
+          "row_count": 4
+        },
+        {
+          "elapsed": 45.848333,
+          "row_count": 4
+        },
+        {
+          "elapsed": 49.040333,
+          "row_count": 4
+        }
+      ],
+      "start_time": 1783521317,
+      "success": true
+    },
+    {
+      "query": "Query 8",
+      "iterations": [
+        {
+          "elapsed": 41.24525,
+          "row_count": 2
+        },
+        {
+          "elapsed": 43.712292,
+          "row_count": 2
+        },
+        {
+          "elapsed": 41.177541,
+          "row_count": 2
+        }
+      ],
+      "start_time": 1783521318,
+      "success": true
+    },
+    {
+      "query": "Query 9",
+      "iterations": [
+        {
+          "elapsed": 47.659167000000004,
+          "row_count": 175
+        },
+        {
+          "elapsed": 48.496542,
+          "row_count": 175
+        },
+        {
+          "elapsed": 68.08975000000001,
+          "row_count": 175
+        }
+      ],
+      "start_time": 1783521318,
+      "success": true
+    },
+    {
+      "query": "Query 10",
+      "iterations": [
+        {
+          "elapsed": 41.386959000000004,
+          "row_count": 20
+        },
+        {
+          "elapsed": 41.043333000000004,
+          "row_count": 20
+        },
+        {
+          "elapsed": 43.026,
+          "row_count": 20
+        }
+      ],
+      "start_time": 1783521318,
+      "success": true
+    },
+    {
+      "query": "Query 11",
+      "iterations": [
+        {
+          "elapsed": 13.936542,
+          "row_count": 1048
+        },
+        {
+          "elapsed": 11.915624999999999,
+          "row_count": 1048
+        },
+        {
+          "elapsed": 14.540958,
+          "row_count": 1048
+        }
+      ],
+      "start_time": 1783521318,
+      "success": true
+    },
+    {
+      "query": "Query 12",
+      "iterations": [
+        {
+          "elapsed": 32.509459,
+          "row_count": 2
+        },
+        {
+          "elapsed": 26.507333000000003,
+          "row_count": 2
+        },
+        {
+          "elapsed": 27.958167,
+          "row_count": 2
+        }
+      ],
+      "start_time": 1783521318,
+      "success": true
+    },
+    {
+      "query": "Query 13",
+      "iterations": [
+        {
+          "elapsed": 32.657041,
+          "row_count": 42
+        },
+        {
+          "elapsed": 27.798375,
+          "row_count": 42
+        },
+        {
+          "elapsed": 28.59,
+          "row_count": 42
+        }
+      ],
+      "start_time": 1783521318,
+      "success": true
+    },
+    {
+      "query": "Query 14",
+      "iterations": [
+        {
+          "elapsed": 23.075666000000002,
+          "row_count": 1
+        },
+        {
+          "elapsed": 20.999166,
+          "row_count": 1
+        },
+        {
+          "elapsed": 23.111834,
+          "row_count": 1
+        }
+      ],
+      "start_time": 1783521318,
+      "success": true
+    },
+    {
+      "query": "Query 15",
+      "iterations": [
+        {
+          "elapsed": 27.155041,
+          "row_count": 1
+        },
+        {
+          "elapsed": 27.287458,
+          "row_count": 1
+        },
+        {
+          "elapsed": 28.633292,
+          "row_count": 1
+        }
+      ],
+      "start_time": 1783521318,
+      "success": true
+    },
+    {
+      "query": "Query 16",
+      "iterations": [
+        {
+          "elapsed": 14.518915999999999,
+          "row_count": 18314
+        },
+        {
+          "elapsed": 11.304124999999999,
+          "row_count": 18314
+        },
+        {
+          "elapsed": 12.738709,
+          "row_count": 18314
+        }
+      ],
+      "start_time": 1783521318,
+      "success": true
+    },
+    {
+      "query": "Query 17",
+      "iterations": [
+        {
+          "elapsed": 82.30125000000001,
+          "row_count": 1
+        },
+        {
+          "elapsed": 69.59929199999999,
+          "row_count": 1
+        },
+        {
+          "elapsed": 87.404834,
+          "row_count": 1
+        }
+      ],
+      "start_time": 1783521318,
+      "success": true
+    },
+    {
+      "query": "Query 18",
+      "iterations": [
+        {
+          "elapsed": 75.084542,
+          "row_count": 57
+        },
+        {
+          "elapsed": 66.318958,
+          "row_count": 57
+        },
+        {
+          "elapsed": 62.530375,
+          "row_count": 57
+        }
+      ],
+      "start_time": 1783521319,
+      "success": true
+    },
+    {
+      "query": "Query 19",
+      "iterations": [
+        {
+          "elapsed": 32.35325,
+          "row_count": 1
+        },
+        {
+          "elapsed": 30.159916,
+          "row_count": 1
+        },
+        {
+          "elapsed": 31.7975,
+          "row_count": 1
+        }
+      ],
+      "start_time": 1783521319,
+      "success": true
+    },
+    {
+      "query": "Query 20",
+      "iterations": [
+        {
+          "elapsed": 28.122874999999997,
+          "row_count": 186
+        },
+        {
+          "elapsed": 52.10025,
+          "row_count": 186
+        },
+        {
+          "elapsed": 29.025667000000002,
+          "row_count": 186
+        }
+      ],
+      "start_time": 1783521319,
+      "success": true
+    },
+    {
+      "query": "Query 21",
+      "iterations": [
+        {
+          "elapsed": 55.449208,
+          "row_count": 100
+        },
+        {
+          "elapsed": 70.486333,
+          "row_count": 100
+        },
+        {
+          "elapsed": 61.5685,
+          "row_count": 100
+        }
+      ],
+      "start_time": 1783521319,
+      "success": true
+    },
+    {
+      "query": "Query 22",
+      "iterations": [
+        {
+          "elapsed": 9.438875,
+          "row_count": 7
+        },
+        {
+          "elapsed": 9.135625,
+          "row_count": 7
+        },
+        {
+          "elapsed": 9.553167,
+          "row_count": 7
+        }
+      ],
+      "start_time": 1783521319,
+      "success": true
+    }
+  ],
+  "context": {
+    "benchmark_version": "54.0.0",
+    "datafusion_version": "54.0.0",
+    "num_cpus": 12,
+    "start_time": 1783521317,
+    "arguments": [
+      "tpch",
+      "--iterations",
+      "3",
+      "--path",
+      "/Users/adrian/GitHub/datafusion/benchmarks/data/tpch_sf1",
+      "--format",
+      "parquet",
+      "-o",
+      "/tmp/datafusion-batch-normalizer/ab_results/tpch_on_r2.json"
+    ]
+  }
+}

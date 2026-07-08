@@ -1,0 +1,114 @@
+{
+  "queries": [
+    {
+      "query": "1",
+      "iterations": [
+        {
+          "elapsed": 187.636208,
+          "row_count": 1
+        },
+        {
+          "elapsed": 156.58808299999998,
+          "row_count": 1
+        },
+        {
+          "elapsed": 148.589958,
+          "row_count": 1
+        }
+      ],
+      "start_time": 1783524297,
+      "success": true
+    },
+    {
+      "query": "2",
+      "iterations": [
+        {
+          "elapsed": 148.896334,
+          "row_count": 65536
+        },
+        {
+          "elapsed": 147.302166,
+          "row_count": 65536
+        },
+        {
+          "elapsed": 147.625292,
+          "row_count": 65536
+        }
+      ],
+      "start_time": 1783524298,
+      "success": true
+    },
+    {
+      "query": "3",
+      "iterations": [
+        {
+          "elapsed": 220.70004200000002,
+          "row_count": 65536
+        },
+        {
+          "elapsed": 209.40620900000002,
+          "row_count": 65536
+        },
+        {
+          "elapsed": 214.033583,
+          "row_count": 65536
+        }
+      ],
+      "start_time": 1783524298,
+      "success": true
+    },
+    {
+      "query": "4",
+      "iterations": [
+        {
+          "elapsed": 157.743708,
+          "row_count": 1000
+        },
+        {
+          "elapsed": 155.584333,
+          "row_count": 1000
+        },
+        {
+          "elapsed": 170.668709,
+          "row_count": 1000
+        }
+      ],
+      "start_time": 1783524299,
+      "success": true
+    },
+    {
+      "query": "5",
+      "iterations": [
+        {
+          "elapsed": 307.706375,
+          "row_count": 1
+        },
+        {
+          "elapsed": 308.719666,
+          "row_count": 1
+        },
+        {
+          "elapsed": 300.23645799999997,
+          "row_count": 1
+        }
+      ],
+      "start_time": 1783524299,
+      "success": true
+    }
+  ],
+  "context": {
+    "benchmark_version": "54.0.0",
+    "datafusion_version": "54.0.0",
+    "num_cpus": 12,
+    "start_time": 1783524297,
+    "arguments": [
+      "large-values",
+      "--iterations",
+      "3",
+      "--path",
+      "/Users/adrian/GitHub/datafusion/benchmarks/data/large_values",
+      "-o",
+      "/tmp/datafusion-batch-normalizer/ab_results/lv-unlimited_off_r2.json"
+    ]
+  }
+}

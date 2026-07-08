@@ -1,0 +1,114 @@
+{
+  "context": {
+    "benchmark_version": "54.0.0",
+    "datafusion_version": "54.0.0",
+    "num_cpus": 12,
+    "start_time": 1783524300,
+    "arguments": [
+      "large-values",
+      "--iterations",
+      "3",
+      "--path",
+      "/Users/adrian/GitHub/datafusion/benchmarks/data/large_values",
+      "-o",
+      "/tmp/datafusion-batch-normalizer/ab_results/lv-unlimited_on_r2.json"
+    ]
+  },
+  "queries": [
+    {
+      "query": "1",
+      "iterations": [
+        {
+          "elapsed": 194.511833,
+          "row_count": 1
+        },
+        {
+          "elapsed": 162.919083,
+          "row_count": 1
+        },
+        {
+          "elapsed": 164.84795799999998,
+          "row_count": 1
+        }
+      ],
+      "start_time": 1783524300,
+      "success": true
+    },
+    {
+      "query": "2",
+      "iterations": [
+        {
+          "elapsed": 163.59825,
+          "row_count": 65536
+        },
+        {
+          "elapsed": 169.151333,
+          "row_count": 65536
+        },
+        {
+          "elapsed": 167.220583,
+          "row_count": 65536
+        }
+      ],
+      "start_time": 1783524301,
+      "success": true
+    },
+    {
+      "query": "3",
+      "iterations": [
+        {
+          "elapsed": 250.01658300000003,
+          "row_count": 65536
+        },
+        {
+          "elapsed": 217.55041599999998,
+          "row_count": 65536
+        },
+        {
+          "elapsed": 220.9475,
+          "row_count": 65536
+        }
+      ],
+      "start_time": 1783524301,
+      "success": true
+    },
+    {
+      "query": "4",
+      "iterations": [
+        {
+          "elapsed": 179.51741700000002,
+          "row_count": 1000
+        },
+        {
+          "elapsed": 173.85179200000002,
+          "row_count": 1000
+        },
+        {
+          "elapsed": 186.247083,
+          "row_count": 1000
+        }
+      ],
+      "start_time": 1783524302,
+      "success": true
+    },
+    {
+      "query": "5",
+      "iterations": [
+        {
+          "elapsed": 341.749,
+          "row_count": 1
+        },
+        {
+          "elapsed": 338.359333,
+          "row_count": 1
+        },
+        {
+          "elapsed": 322.20941600000003,
+          "row_count": 1
+        }
+      ],
+      "start_time": 1783524303,
+      "success": true
+    }
+  ]
+}

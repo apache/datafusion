@@ -1,0 +1,114 @@
+{
+  "context": {
+    "benchmark_version": "54.0.0",
+    "datafusion_version": "54.0.0",
+    "num_cpus": 12,
+    "start_time": 1783524290,
+    "arguments": [
+      "large-values",
+      "--iterations",
+      "3",
+      "--path",
+      "/Users/adrian/GitHub/datafusion/benchmarks/data/large_values",
+      "-o",
+      "/tmp/datafusion-batch-normalizer/ab_results/lv-unlimited_off_r1.json"
+    ]
+  },
+  "queries": [
+    {
+      "query": "1",
+      "iterations": [
+        {
+          "elapsed": 336.059208,
+          "row_count": 1
+        },
+        {
+          "elapsed": 214.84883299999998,
+          "row_count": 1
+        },
+        {
+          "elapsed": 196.46845900000002,
+          "row_count": 1
+        }
+      ],
+      "start_time": 1783524290,
+      "success": true
+    },
+    {
+      "query": "2",
+      "iterations": [
+        {
+          "elapsed": 177.329917,
+          "row_count": 65536
+        },
+        {
+          "elapsed": 195.192375,
+          "row_count": 65536
+        },
+        {
+          "elapsed": 220.90258300000002,
+          "row_count": 65536
+        }
+      ],
+      "start_time": 1783524291,
+      "success": true
+    },
+    {
+      "query": "3",
+      "iterations": [
+        {
+          "elapsed": 257.799042,
+          "row_count": 65536
+        },
+        {
+          "elapsed": 223.499583,
+          "row_count": 65536
+        },
+        {
+          "elapsed": 213.221041,
+          "row_count": 65536
+        }
+      ],
+      "start_time": 1783524291,
+      "success": true
+    },
+    {
+      "query": "4",
+      "iterations": [
+        {
+          "elapsed": 193.086125,
+          "row_count": 1000
+        },
+        {
+          "elapsed": 181.814208,
+          "row_count": 1000
+        },
+        {
+          "elapsed": 157.193375,
+          "row_count": 1000
+        }
+      ],
+      "start_time": 1783524292,
+      "success": true
+    },
+    {
+      "query": "5",
+      "iterations": [
+        {
+          "elapsed": 319.102958,
+          "row_count": 1
+        },
+        {
+          "elapsed": 300.663708,
+          "row_count": 1
+        },
+        {
+          "elapsed": 313.03641700000003,
+          "row_count": 1
+        }
+      ],
+      "start_time": 1783524293,
+      "success": true
+    }
+  ]
+}
