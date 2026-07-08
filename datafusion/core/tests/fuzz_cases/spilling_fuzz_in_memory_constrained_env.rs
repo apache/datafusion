@@ -311,12 +311,7 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch_with_small_num
 
     let number_of_record_batches = 100;
 
-    // Each spilled run's largest batch is so big that two merge streams cannot be
-    // reserved at once even at the smallest read-buffer size (`2 * (2 * batch) >
-    // pool`), yet a single stream still fits (`2 * batch < pool`). Reducing the
-    // buffer size therefore cannot help, the multi-level merge has to re-spill a
-    // run with a smaller batch size to make progress instead of failing with
-    // `ResourcesExhausted`.
+    // Due to coalescing
     let metrics = run_sort_test_with_limited_memory(RunTestWithLimitedMemoryArgs {
         pool_size,
         task_ctx: Arc::new(task_ctx),
@@ -324,7 +319,7 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch_with_small_num
         get_size_of_record_batch_to_generate: Box::pin(move |index| {
             RecordBatchMeta {
                 memory: pool_size / 3,
-                num_rows: if index == number_of_record_batches / 2 { Some(record_batch_size / 4) } else { None }
+                num_rows: if number_of_record_batches % 3 == 1 { Some(record_batch_size / 4) } else { None }
             }
         }),
         memory_behavior: Default::default(),
@@ -335,11 +330,48 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch_with_small_num
 
     let output_batches = get_output_batches_from_metrics(&metrics);
 
-    // minimum 2 batches more
-    assert!(
-        output_batches >= number_of_record_batches + 2,
-        "output_batches {output_batches} should be greater than number_of_record_batches ({number_of_record_batches}) + 2"
-    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sort_with_limited_memory_and_with_small_number_of_rows() -> Result<()> {
+    let record_batch_size = 8192;
+    let pool_size = 2 * MB as usize;
+    let task_ctx = {
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
+        TaskContext::default()
+          .with_session_config(
+              SessionConfig::new()
+                .with_batch_size(record_batch_size)
+                .with_sort_spill_reservation_bytes(1),
+          )
+          .with_runtime(Arc::new(
+              RuntimeEnvBuilder::new()
+                .with_memory_pool(memory_pool)
+                .build()?,
+          ))
+    };
+
+    let number_of_record_batches = 100;
+
+    // Due to coalescing
+    let metrics = run_sort_test_with_limited_memory(RunTestWithLimitedMemoryArgs {
+        pool_size,
+        task_ctx: Arc::new(task_ctx),
+        number_of_record_batches,
+        get_size_of_record_batch_to_generate: Box::pin(move |index| {
+            RecordBatchMeta {
+                memory: pool_size / 6,
+                num_rows: if number_of_record_batches % 3 == 1 { Some((record_batch_size as f32 / 3.5) as usize) } else { None }
+            }
+        }),
+        memory_behavior: Default::default(),
+
+        assert_all_output_batches_roughly_match_batch_size_conf: false,
+    })
+      .await?;
+
+    let output_batches = get_output_batches_from_metrics(&metrics);
 
     Ok(())
 }
