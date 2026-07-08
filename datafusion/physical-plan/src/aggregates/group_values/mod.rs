@@ -51,6 +51,52 @@ mod null_builder;
 
 pub(crate) use metrics::GroupByMetrics;
 
+const NEAR_UNIQUE_SAMPLE_ROWS: usize = 100_000;
+const NEAR_UNIQUE_RATIO_THRESHOLD: f64 = 0.8;
+
+/// Samples input row counts to decide whether group values are near-unique.
+pub(in crate::aggregates) struct NearUniqueGroupValuesProbe {
+    /// Number of rows observed in the sample window.
+    num_sampled_rows: usize,
+    /// Whether the sampling decision has already been made.
+    is_complete: bool,
+}
+
+impl NearUniqueGroupValuesProbe {
+    /// Creates a new probe for the first input rows.
+    pub(in crate::aggregates) fn new() -> Self {
+        Self {
+            num_sampled_rows: 0,
+            is_complete: false,
+        }
+    }
+
+    /// Observes one interned batch and marks near-unique if needed.
+    pub(in crate::aggregates) fn observe(
+        &mut self,
+        group_values: &mut dyn GroupValues,
+        num_rows: usize,
+    ) {
+        if self.is_complete {
+            return;
+        }
+
+        let num_remaining_rows = NEAR_UNIQUE_SAMPLE_ROWS - self.num_sampled_rows;
+        let num_rows_to_sample = num_remaining_rows.min(num_rows);
+        self.num_sampled_rows += num_rows_to_sample;
+
+        if self.num_sampled_rows < NEAR_UNIQUE_SAMPLE_ROWS {
+            return;
+        }
+
+        let near_unique_ratio = group_values.len() as f64 / self.num_sampled_rows as f64;
+        if near_unique_ratio > NEAR_UNIQUE_RATIO_THRESHOLD {
+            group_values.mark_near_unique();
+        }
+        self.is_complete = true;
+    }
+}
+
 /// Stores the group values during hash aggregation.
 ///
 /// # Background
@@ -110,6 +156,9 @@ pub trait GroupValues: Send {
 
     /// Emits the group values
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
+
+    /// Marks this [`GroupValues`] as likely to receive mostly unique values.
+    fn mark_near_unique(&mut self) {}
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, num_rows: usize);

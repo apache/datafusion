@@ -30,7 +30,9 @@ use datafusion_expr::EmitTo;
 
 use crate::InputOrderMode;
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    GroupByMetrics, GroupValues, NearUniqueGroupValuesProbe, new_group_values,
+};
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
@@ -111,6 +113,9 @@ pub(super) struct OrderedAggregateTableBuffer {
     /// Interned group keys, in the same group-id order used by accumulators.
     pub(super) group_values: Box<dyn GroupValues>,
 
+    /// Samples final aggregate input to detect near-unique group keys.
+    pub(super) near_unique_probe: Option<NearUniqueGroupValuesProbe>,
+
     /// Scratch group id vector for the current input batch.
     pub(super) group_indices: Vec<usize>,
 
@@ -174,6 +179,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                 group_by: Arc::clone(&agg.group_by),
                 group_ordering,
                 group_values,
+                near_unique_probe: None,
                 group_indices: vec![],
                 accumulators,
             },
@@ -269,6 +275,9 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             self.buffer
                 .group_values
                 .intern(group_values, &mut self.buffer.group_indices)?;
+            if is_final && let Some(probe) = self.buffer.near_unique_probe.as_mut() {
+                probe.observe(self.buffer.group_values.as_mut(), group_values[0].len());
+            }
             let total_num_groups = self.buffer.group_values.len();
             if total_num_groups > starting_num_groups {
                 self.buffer.group_ordering.new_groups(

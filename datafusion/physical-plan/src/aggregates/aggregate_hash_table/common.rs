@@ -27,7 +27,9 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    GroupByMetrics, GroupValues, NearUniqueGroupValuesProbe, new_group_values,
+};
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
@@ -135,6 +137,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
                 group_by: Arc::clone(&agg.group_by),
                 group_values,
+                near_unique_probe: None,
                 batch_group_indices: Default::default(),
                 accumulators,
             }),
@@ -280,6 +283,9 @@ pub(super) struct AggregateHashTableBuffer {
 
     /// Interned group keys. Accumulator state is stored separately by group index.
     pub(super) group_values: Box<dyn GroupValues>,
+
+    /// Samples final aggregate input to detect near-unique group keys.
+    pub(super) near_unique_probe: Option<NearUniqueGroupValuesProbe>,
 
     /// Group index for each row in the current input batch.
     ///

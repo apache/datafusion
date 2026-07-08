@@ -154,6 +154,7 @@ impl AggregateHashTable<PartialMarker> {
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
                 group_by: Arc::clone(&state.group_by),
                 group_values,
+                near_unique_probe: None,
                 batch_group_indices: Default::default(),
                 accumulators,
             }),

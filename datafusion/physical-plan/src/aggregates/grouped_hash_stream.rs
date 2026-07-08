@@ -24,7 +24,9 @@ use std::vec;
 use super::order::GroupOrdering;
 use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, format_human_display};
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    GroupByMetrics, GroupValues, NearUniqueGroupValuesProbe, new_group_values,
+};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
@@ -39,7 +41,7 @@ use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
     internal_err, resources_datafusion_err,
@@ -330,6 +332,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// An interning store of group keys
     group_values: Box<dyn GroupValues>,
 
+    /// Samples final aggregate input to detect near-unique group keys.
+    near_unique_probe: Option<NearUniqueGroupValuesProbe>,
+
     /// scratch space for the current input [`RecordBatch`] being
     /// processed. Reused across batches here to avoid reallocations
     current_group_indices: Vec<usize>,
@@ -511,7 +516,17 @@ impl GroupedHashAggregateStream {
             _ => OutOfMemoryMode::ReportError,
         };
 
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        let group_values = new_group_values(Arc::clone(&group_schema), &group_ordering)?;
+        let near_unique_probe = if matches!(
+            agg.mode,
+            AggregateMode::Final | AggregateMode::FinalPartitioned
+        ) && group_schema.fields().len() == 1
+            && matches!(group_schema.field(0).data_type(), DataType::Utf8View)
+        {
+            Some(NearUniqueGroupValuesProbe::new())
+        } else {
+            None
+        };
         let reservation = MemoryConsumer::new(name)
             // We interpret 'can spill' as 'can handle memory back pressure'.
             // This value needs to be set to true for the default memory pool implementations
@@ -600,6 +615,7 @@ impl GroupedHashAggregateStream {
             reservation,
             oom_mode,
             group_values,
+            near_unique_probe,
             current_group_indices: Default::default(),
             exec_state,
             baseline_metrics,
@@ -885,6 +901,13 @@ impl GroupedHashAggregateStream {
             let starting_num_groups = self.group_values.len();
             self.group_values
                 .intern(group_values, &mut self.current_group_indices)?;
+            if matches!(
+                self.mode,
+                AggregateMode::Final | AggregateMode::FinalPartitioned
+            ) && let Some(probe) = self.near_unique_probe.as_mut()
+            {
+                probe.observe(self.group_values.as_mut(), group_values[0].len());
+            }
             let group_indices = &self.current_group_indices;
 
             // Update ordering information if necessary
