@@ -476,50 +476,20 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     /// # Errors
     ///
     /// Returns an error if the cumulative byte length exceeds this builder's
-    /// offset type limit.
+    /// offset type limit. If this method returns an error, the builder should
+    /// be discarded; it may contain uncommitted bytes from the failed row.
     #[inline]
     pub fn try_append_with<F>(&mut self, f: F) -> Result<()>
     where
         F: FnOnce(&mut GenericStringWriter<'_>),
     {
-        let old_len = self.value_buffer.len();
         let mut writer = GenericStringWriter {
             value_buffer: &mut self.value_buffer,
         };
         f(&mut writer);
-        let next_offset = match try_offset::<O>(self.value_buffer.len()) {
-            Ok(offset) => offset,
-            Err(e) => {
-                // SAFETY: `old_len` was the initialized length before `f` wrote to
-                // this owned buffer, so shrinking back preserves initialized data.
-                unsafe { self.value_buffer.set_len(old_len) };
-                return Err(e);
-            }
-        };
+        let next_offset = try_offset::<O>(self.value_buffer.len())?;
         self.offsets_buffer.push(next_offset);
         Ok(())
-    }
-
-    /// See [`BulkNullStringArrayBuilder::append_with`].
-    ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_with`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if the cumulative byte length exceeds `O::MAX`.
-    #[inline]
-    pub fn append_with<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut GenericStringWriter<'_>),
-    {
-        let mut writer = GenericStringWriter {
-            value_buffer: &mut self.value_buffer,
-        };
-        f(&mut writer);
-        let next_offset =
-            O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
-        self.offsets_buffer.push(next_offset);
     }
 
     /// Finalize into a [`GenericStringArray<O>`] using the caller-supplied
@@ -1236,13 +1206,6 @@ impl<O: OffsetSizeTrait> BulkNullStringArrayBuilder for GenericStringArrayBuilde
         F: for<'a> FnOnce(&mut Self::Writer<'a>),
     {
         GenericStringArrayBuilder::<O>::try_append_with(self, f)
-    }
-    #[inline]
-    fn append_with<F>(&mut self, f: F)
-    where
-        F: for<'a> FnOnce(&mut Self::Writer<'a>),
-    {
-        GenericStringArrayBuilder::<O>::append_with(self, f)
     }
     #[inline]
     unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
