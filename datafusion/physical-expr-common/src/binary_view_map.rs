@@ -119,6 +119,49 @@ impl ArrowBytesViewSet {
 /// Max size of the in-progress buffer before flushing to completed buffers
 const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
 
+#[derive(Debug)]
+struct BatchNonInlineCompareStats<V>
+where
+    V: Debug + PartialEq + Eq + Clone + Copy + Default,
+{
+    num_non_inline_compares: usize,
+    target_group_counts: Vec<(V, usize)>,
+}
+
+impl<V> BatchNonInlineCompareStats<V>
+where
+    V: Debug + PartialEq + Eq + Clone + Copy + Default,
+{
+    fn new() -> Self {
+        Self {
+            num_non_inline_compares: 0,
+            target_group_counts: Vec::new(),
+        }
+    }
+
+    fn record(&mut self, target_group_id: V) {
+        self.num_non_inline_compares += 1;
+        if let Some((_, count)) = self
+            .target_group_counts
+            .iter_mut()
+            .find(|(group_id, _)| *group_id == target_group_id)
+        {
+            *count += 1;
+        } else {
+            self.target_group_counts.push((target_group_id, 1));
+        }
+    }
+
+    fn num_target_groups(&self) -> usize {
+        self.target_group_counts.len()
+    }
+
+    fn num_redundant_compares(&self) -> usize {
+        self.num_non_inline_compares
+            .saturating_sub(self.num_target_groups())
+    }
+}
+
 pub struct ArrowBytesViewMap<V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
@@ -273,6 +316,7 @@ where
         assert_eq!(values.len(), self.hashes_buffer.len());
 
         let input_has_buffers = !values.data_buffers().is_empty();
+        let mut batch_non_inline_compare_stats = BatchNonInlineCompareStats::new();
         for i in 0..values.len() {
             let view_u128 = input_views[i];
             let hash = self.hashes_buffer[i];
@@ -310,18 +354,22 @@ where
                         if input_has_buffers {
                             Self::view_equal_to_input::<B, true>(
                                 header.view,
+                                header.payload,
                                 completed,
                                 in_progress,
                                 values,
                                 i,
+                                &mut batch_non_inline_compare_stats,
                             )
                         } else {
                             Self::view_equal_to_input::<B, false>(
                                 header.view,
+                                header.payload,
                                 completed,
                                 in_progress,
                                 values,
                                 i,
+                                &mut batch_non_inline_compare_stats,
                             )
                         }
                     })
@@ -366,15 +414,26 @@ where
             };
             observe_payload_fn(payload);
         }
+
+        dbg!((
+            "ArrowBytesViewMap::insert_if_new_inner",
+            values.len(),
+            batch_non_inline_compare_stats.num_non_inline_compares,
+            batch_non_inline_compare_stats.num_target_groups(),
+            batch_non_inline_compare_stats.num_redundant_compares(),
+            &batch_non_inline_compare_stats.target_group_counts,
+        ));
     }
 
     #[inline(always)]
     fn view_equal_to_input<B: ByteViewType, const HAS_BUFFERS: bool>(
         exist_view: u128,
+        target_group_id: V,
         completed: &[Buffer],
         in_progress: &[u8],
         array: &GenericByteViewArray<B>,
         rhs_row: usize,
+        batch_non_inline_compare_stats: &mut BatchNonInlineCompareStats<V>,
     ) -> bool {
         // SAFETY: caller ensures `rhs_row` is valid.
         let input_view = unsafe { *array.views().get_unchecked(rhs_row) };
@@ -400,6 +459,8 @@ where
         if exist_prefix != input_prefix {
             return false;
         }
+
+        batch_non_inline_compare_stats.record(target_group_id);
 
         let exist_full = {
             let byte_view = ByteView::from(exist_view);
