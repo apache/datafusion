@@ -64,6 +64,7 @@ mod visitor;
 pub mod aggregates;
 pub mod analyze;
 pub mod async_func;
+pub mod batch_normalizer;
 pub mod buffer;
 pub mod coalesce;
 pub mod coalesce_batches;
