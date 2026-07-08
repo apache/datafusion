@@ -639,6 +639,10 @@ impl FileSource for ParquetSource {
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
+            nested_projection_pruning: self
+                .table_parquet_options
+                .global
+                .nested_projection_pruning,
             coerce_int96,
             coerce_int96_tz,
             #[cfg(feature = "parquet_encryption")]

@@ -36,6 +36,10 @@ use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 
+use crate::nested_schema_pruning::{
+    CastColumnAccess, clip_for_cast, count_leaves, field_with_type,
+    prune_type_by_kept_offsets,
+};
 use crate::row_filter::PushdownChecker;
 
 /// The result of resolving which Parquet leaf columns and Arrow schema fields
@@ -80,6 +84,7 @@ pub(crate) fn build_projection_read_plan(
     exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
     file_schema: &Schema,
     schema_descr: &SchemaDescriptor,
+    prune_nested_casts: bool,
 ) -> ParquetReadPlan {
     // fast path: if every expression is a plain Column reference, skip all
     // struct analysis and use root-level projection directly
@@ -108,12 +113,13 @@ pub(crate) fn build_projection_read_plan(
         };
     }
 
-    // secondary fast path: if the schema has no struct columns, we can skip
-    // PushdownChecker traversal and use root-level projection
+    // secondary fast path: if no column contains a struct at any nesting
+    // level, there are no leaves to prune and we can skip PushdownChecker
+    // traversal and use root-level projection
     let has_struct_columns = file_schema
         .fields()
         .iter()
-        .any(|f| matches!(f.data_type(), DataType::Struct(_)));
+        .any(|f| contains_struct(f.data_type()));
 
     if !has_struct_columns {
         let mut root_indices = exprs
@@ -141,18 +147,37 @@ pub(crate) fn build_projection_read_plan(
 
     let mut all_root_indices = Vec::new();
     let mut all_struct_accesses = Vec::new();
+    let mut all_cast_accesses = Vec::new();
 
     for expr in exprs {
-        let mut checker = PushdownChecker::new(file_schema, true);
+        let mut checker = PushdownChecker::new(file_schema, true)
+            .with_cast_collection(prune_nested_casts);
         let _ = expr.visit(&mut checker);
         let columns = checker.into_sorted_columns();
 
         all_root_indices.extend_from_slice(&columns.required_columns);
         all_struct_accesses.extend(columns.struct_field_accesses);
+        all_cast_accesses.extend(columns.cast_accesses);
     }
 
     all_root_indices.sort_unstable();
     all_root_indices.dedup();
+
+    // A whole-column reference reads every leaf of the root, so clipping the
+    // same root for a cast (or a struct field access) would be overridden
+    // anyway: drop those accesses up front.
+    let whole_roots: BTreeSet<usize> = all_root_indices.iter().copied().collect();
+    all_cast_accesses.retain(|c| !whole_roots.contains(&c.root_index));
+
+    if !all_cast_accesses.is_empty() {
+        return build_read_plan_with_cast_clipping(
+            file_schema,
+            schema_descr,
+            &all_root_indices,
+            &all_struct_accesses,
+            &all_cast_accesses,
+        );
+    }
 
     // when no struct field accesses were found, fall back to root-level projection
     // to match the performance of the simple path
@@ -193,6 +218,156 @@ pub(crate) fn build_projection_read_plan(
     ParquetReadPlan {
         projection_mask,
         projected_schema,
+    }
+}
+
+/// Does this type contain a struct at any nesting depth?
+fn contains_struct(dt: &DataType) -> bool {
+    match dt {
+        DataType::Struct(_) => true,
+        DataType::List(f)
+        | DataType::LargeList(f)
+        | DataType::ListView(f)
+        | DataType::LargeListView(f)
+        | DataType::FixedSizeList(f, _)
+        | DataType::Map(f, _) => contains_struct(f.data_type()),
+        DataType::Dictionary(_, value) => contains_struct(value),
+        DataType::RunEndEncoded(_, value) => contains_struct(value.data_type()),
+        _ => false,
+    }
+}
+
+/// Builds a [`ParquetReadPlan`] when at least one projected root column is
+/// consumed through a cast to a narrower nested type.
+///
+/// Per root, in ascending root-index order:
+/// - roots referenced as whole columns keep every leaf and their full
+///   physical field (whole-column reads take precedence; cast accesses on
+///   such roots were already dropped by the caller);
+/// - roots consumed only through casts and/or `get_field` accesses keep the
+///   union of the leaves those accesses consume, and their projected field
+///   type is derived from that union.
+///
+/// Falls back to keeping all leaves of a root whenever its clipping is not
+/// provably safe (see [`crate::nested_schema_pruning`]).
+fn build_read_plan_with_cast_clipping(
+    file_schema: &Schema,
+    schema_descr: &SchemaDescriptor,
+    whole_root_indices: &[usize],
+    struct_accesses: &[StructFieldAccess],
+    cast_accesses: &[CastColumnAccess],
+) -> ParquetReadPlan {
+    let whole_roots: BTreeSet<usize> = whole_root_indices.iter().copied().collect();
+
+    // Union of kept *absolute* leaf indices per clipped root.
+    let mut kept_by_root: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+    // Roots where clipping had to be abandoned (treated as whole reads).
+    let mut fallback_roots: BTreeSet<usize> = BTreeSet::new();
+
+    for access in cast_accesses {
+        let root = access.root_index;
+        if fallback_roots.contains(&root) {
+            continue;
+        }
+        let physical_type = file_schema.field(root).data_type();
+        let root_leaves = leaf_indices_for_roots([root], schema_descr);
+
+        // Defensive: the arrow type's leaf count must agree with the parquet
+        // schema (it can diverge if the file embeds a different arrow
+        // schema). If not, never risk a wrong mask — read the whole root.
+        if root_leaves.len() != count_leaves(physical_type) {
+            fallback_roots.insert(root);
+            kept_by_root.remove(&root);
+            continue;
+        }
+
+        match clip_for_cast(physical_type, &access.target_type) {
+            Some(kept_offsets) => {
+                let start = root_leaves[0];
+                kept_by_root
+                    .entry(root)
+                    .or_default()
+                    .extend(kept_offsets.iter().map(|o| start + o));
+            }
+            // Nothing prunable for this cast: every leaf is consumed.
+            None => {
+                fallback_roots.insert(root);
+                kept_by_root.remove(&root);
+            }
+        }
+    }
+
+    // `get_field` accesses union into the same per-root sets. Accesses on
+    // whole-read or fallback roots are covered by the full read.
+    for access in struct_accesses {
+        let root = access.root_index;
+        if whole_roots.contains(&root) || fallback_roots.contains(&root) {
+            continue;
+        }
+        let leaves = resolve_struct_field_leaves(
+            std::slice::from_ref(access),
+            file_schema,
+            schema_descr,
+        );
+        match kept_by_root.get_mut(&root) {
+            Some(kept) => kept.extend(leaves),
+            None => {
+                kept_by_root.entry(root).or_default().extend(leaves);
+            }
+        }
+    }
+
+    // Assemble mask + schema over every referenced root in ascending order.
+    let all_roots: BTreeSet<usize> = whole_roots
+        .iter()
+        .copied()
+        .chain(fallback_roots.iter().copied())
+        .chain(kept_by_root.keys().copied())
+        .collect();
+
+    let mut leaf_indices: Vec<usize> = Vec::new();
+    let mut fields: Vec<Arc<Field>> = Vec::with_capacity(all_roots.len());
+
+    for &root in &all_roots {
+        let field = file_schema.field(root);
+        match kept_by_root.get(&root) {
+            Some(kept) if !kept.is_empty() => {
+                let root_leaves = leaf_indices_for_roots([root], schema_descr);
+                let start = root_leaves[0];
+                let relative: BTreeSet<usize> =
+                    kept.iter().map(|abs| abs - start).collect();
+                match prune_type_by_kept_offsets(field.data_type(), &relative) {
+                    Some(pruned_type) => {
+                        leaf_indices.extend(kept.iter().copied());
+                        fields.push(field_with_type(field, pruned_type));
+                    }
+                    // Cannot express the kept set as a type: full read.
+                    None => {
+                        leaf_indices.extend(root_leaves);
+                        fields.push(Arc::new(field.clone()));
+                    }
+                }
+            }
+            // Whole-column read (whole reference, fallback, or empty set).
+            _ => {
+                leaf_indices.extend(leaf_indices_for_roots([root], schema_descr));
+                fields.push(Arc::new(field.clone()));
+            }
+        }
+    }
+
+    leaf_indices.sort_unstable();
+    leaf_indices.dedup();
+
+    ParquetReadPlan {
+        projection_mask: ProjectionMask::leaves(
+            schema_descr,
+            leaf_indices.iter().copied(),
+        ),
+        projected_schema: Arc::new(Schema::new_with_metadata(
+            fields,
+            file_schema.metadata().clone(),
+        )),
     }
 }
 
@@ -458,7 +633,8 @@ mod test {
             ),
         ];
 
-        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+        let read_plan =
+            build_projection_read_plan(exprs, &file_schema, schema_descr, true);
 
         // The projected schema must have the FULL struct type because Column("s")
         // is in the projection. It should NOT be narrowed to Struct{value: Int32}.

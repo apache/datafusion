@@ -79,9 +79,10 @@ use parquet::file::metadata::ParquetMetaData;
 
 use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::nested_struct::requires_nested_struct_cast;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_physical_expr::ScalarFunctionExpr;
-use datafusion_physical_expr::expressions::{Column, Literal};
+use datafusion_physical_expr::expressions::{CastExpr, Column, Literal};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
@@ -89,6 +90,7 @@ use datafusion_physical_plan::metrics;
 
 use super::ParquetFileMetrics;
 use super::supported_predicates::supports_list_predicates;
+use crate::nested_schema_pruning::CastColumnAccess;
 use crate::projection_read_plan::{
     ParquetReadPlan, StructFieldAccess, build_filter_schema, leaf_indices_for_roots,
     resolve_struct_field_leaves,
@@ -255,6 +257,13 @@ pub(crate) struct PushdownChecker<'schema> {
     required_columns: Vec<usize>,
     /// Struct field accesses via `get_field`.
     struct_field_accesses: Vec<StructFieldAccess>,
+    /// Whole-column casts to a narrower nested type
+    /// (`CAST(col AS narrower_struct)`). Only collected when
+    /// [`Self::with_cast_collection`] enables it (projection analysis);
+    /// filter pushdown leaves this off.
+    cast_accesses: Vec<CastColumnAccess>,
+    /// Whether to collect [`Self::cast_accesses`].
+    collect_cast_accesses: bool,
     /// Whether nested list columns are supported by the predicate semantics.
     allow_list_columns: bool,
     /// The Arrow schema of the parquet file.
@@ -269,9 +278,17 @@ impl<'schema> PushdownChecker<'schema> {
             has_unpushable_udfs: false,
             required_columns: Vec::new(),
             struct_field_accesses: Vec::new(),
+            cast_accesses: Vec::new(),
+            collect_cast_accesses: false,
             allow_list_columns,
             file_schema,
         }
+    }
+
+    /// Enable collection of whole-column casts to narrower nested types.
+    pub(crate) fn with_cast_collection(mut self, collect: bool) -> Self {
+        self.collect_cast_accesses = collect;
+        self
     }
 
     /// Checks whether a struct's root column exists in the file schema and, if so,
@@ -378,6 +395,7 @@ impl<'schema> PushdownChecker<'schema> {
         PushdownColumns {
             required_columns: self.required_columns,
             struct_field_accesses: self.struct_field_accesses,
+            cast_accesses: self.cast_accesses,
         }
     }
 }
@@ -469,6 +487,28 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
             }
         }
 
+        // Handle whole-column casts to a narrower nested type, e.g.
+        // `CAST(events AS List<Struct<subset of fields>>)` as inserted by the
+        // physical expression adapter when the logical file schema declares a
+        // nested column narrower than the physical file. Recording the cast
+        // target lets the projection read only the leaves the cast consumes
+        // (see `crate::nested_schema_pruning`).
+        if self.collect_cast_accesses
+            && let Some(cast) = node.downcast_ref::<CastExpr>()
+            && let Some(column) = cast.expr().downcast_ref::<Column>()
+            && let Ok(idx) = self.file_schema.index_of(column.name())
+            && requires_nested_struct_cast(
+                self.file_schema.field(idx).data_type(),
+                cast.cast_type(),
+            )
+        {
+            self.cast_accesses.push(CastColumnAccess {
+                root_index: idx,
+                target_type: cast.cast_type().clone(),
+            });
+            return Ok(TreeNodeRecursion::Jump);
+        }
+
         if let Some(column) = node.downcast_ref::<Column>()
             && let Some(recursion) = self.check_single_column(column.name())
         {
@@ -500,6 +540,9 @@ pub(crate) struct PushdownColumns {
     /// Struct field accesses via `get_field`. Each entry records the root struct
     /// column index and the field path being accessed.
     pub(crate) struct_field_accesses: Vec<StructFieldAccess>,
+    /// Whole-column casts to a narrower nested type. Empty unless cast
+    /// collection was enabled on the checker.
+    pub(crate) cast_accesses: Vec<CastColumnAccess>,
 }
 
 /// Checks if a given expression can be pushed down to the parquet decoder.
@@ -849,7 +892,6 @@ mod test {
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use tempfile::NamedTempFile;
-
 
     // List predicates used by the decoder should be accepted for pushdown
     #[test]

@@ -568,6 +568,7 @@ message ParquetOptions {
   uint64 maximum_parallel_row_group_writers = 24; // default = 1
   uint64 maximum_buffered_record_batches_per_stream = 25; // default = 2
   bool bloom_filter_on_read = 26; // default = true
+  bool nested_projection_pruning = 38; // default = true
   bool bloom_filter_on_write = 27; // default = false
   bool schema_force_view_types = 28; // default = false
   bool binary_as_string = 29; // default = false

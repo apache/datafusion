@@ -84,6 +84,7 @@ impl DecoderProjection {
         parquet_schema: &SchemaDescriptor,
         output_schema: &SchemaRef,
         virtual_state: Option<&VirtualColumnsState>,
+        nested_projection_pruning: bool,
     ) -> Result<Self> {
         // Virtual columns are produced by the reader separately from the
         // projection mask, so strip them from the expressions we feed into
@@ -101,6 +102,7 @@ impl DecoderProjection {
             projection_for_read_plan.expr_iter(),
             physical_file_schema,
             parquet_schema,
+            nested_projection_pruning,
         );
 
         // The reader produces projected file columns followed by any virtual

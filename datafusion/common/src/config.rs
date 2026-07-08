@@ -1181,6 +1181,14 @@ config_namespace! {
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
 
+        /// (reading) If true, when a projected nested column (struct, or
+        /// struct nested in lists) is read through a cast to a narrower
+        /// nested type — as happens when the table schema declares fewer
+        /// struct fields than the parquet file contains — the reader only
+        /// fetches and decodes the leaf columns the cast retains, instead of
+        /// the entire column
+        pub nested_projection_pruning: bool, default = true
+
         /// (reading) The maximum predicate cache size, in bytes. When
         /// `pushdown_filters` is enabled, sets the maximum memory used to cache
         /// the results of predicate evaluation between filter evaluation and

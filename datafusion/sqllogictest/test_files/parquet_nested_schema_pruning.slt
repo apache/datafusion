@@ -1,0 +1,105 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+# Nested projection pruning: a table whose declared nested type is narrower
+# than the parquet file's physical type reads only the declared leaves
+# (`datafusion.execution.parquet.nested_projection_pruning`, default true).
+# Results must be identical with the setting on and off; the bytes-scanned
+# assertions live in the Rust tests
+# (datafusion/core/tests/parquet/expr_adapter.rs).
+##########
+
+# The file contains events: ARRAY<STRUCT<x, y, pad_a, pad_b>> and
+# s: STRUCT<x, y, pad>; the tables below declare narrower nested types.
+statement ok
+COPY (
+  SELECT id, events, s
+  FROM (VALUES
+    (1, [named_struct('x', 10, 'y', 'a1', 'pad_a', 'p', 'pad_b', 'q')],
+        named_struct('x', 100, 'y', 's1', 'pad', 'sp1')),
+    (2, [named_struct('x', 20, 'y', 'b1', 'pad_a', 'p', 'pad_b', 'q'),
+         named_struct('x', 21, 'y', 'b2', 'pad_a', 'p', 'pad_b', 'q')],
+        named_struct('x', 200, 'y', 's2', 'pad', 'sp2')),
+    (3, NULL,
+        NULL)
+  ) AS t(id, events, s)
+) TO 'test_files/scratch/parquet_nested_schema_pruning/wide.parquet'
+STORED AS PARQUET;
+
+# Declared schema drops pad_a/pad_b from the list elements and pad from the
+# struct, declares x as BIGINT (the file has INT), and adds a z column that
+# does not exist in the file.
+statement ok
+CREATE EXTERNAL TABLE narrow (
+  id INT,
+  events ARRAY<STRUCT<x BIGINT, y VARCHAR, z BIGINT>>,
+  s STRUCT<x BIGINT, y VARCHAR>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/wide.parquet';
+
+query I??
+SELECT id, events, s FROM narrow ORDER BY id;
+----
+1 [{x: 10, y: a1, z: NULL}] {x: 100, y: s1}
+2 [{x: 20, y: b1, z: NULL}, {x: 21, y: b2, z: NULL}] {x: 200, y: s2}
+3 NULL NULL
+
+# Struct-level nullability is preserved: row 3's struct is NULL, not a
+# struct of NULLs.
+query IBB
+SELECT id, events IS NULL, s IS NULL FROM narrow ORDER BY id;
+----
+1 false false
+2 false false
+3 true true
+
+query II
+SELECT id, s['x'] FROM narrow ORDER BY id;
+----
+1 100
+2 200
+3 NULL
+
+query II
+SELECT id, e['x'] FROM (SELECT id, unnest(events) AS e FROM narrow) ORDER BY id, e['x'];
+----
+1 10
+2 20
+2 21
+
+# Same results with the setting disabled (the unpruned read path).
+statement ok
+SET datafusion.execution.parquet.nested_projection_pruning = false;
+
+query I??
+SELECT id, events, s FROM narrow ORDER BY id;
+----
+1 [{x: 10, y: a1, z: NULL}] {x: 100, y: s1}
+2 [{x: 20, y: b1, z: NULL}, {x: 21, y: b2, z: NULL}] {x: 200, y: s2}
+3 NULL NULL
+
+query IBB
+SELECT id, events IS NULL, s IS NULL FROM narrow ORDER BY id;
+----
+1 false false
+2 false false
+3 true true
+
+statement ok
+SET datafusion.execution.parquet.nested_projection_pruning = true;

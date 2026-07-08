@@ -844,6 +844,9 @@ pub struct ParquetOptions {
     /// default = true
     #[prost(bool, tag = "26")]
     pub bloom_filter_on_read: bool,
+    /// default = true
+    #[prost(bool, tag = "38")]
+    pub nested_projection_pruning: bool,
     /// default = false
     #[prost(bool, tag = "27")]
     pub bloom_filter_on_write: bool,

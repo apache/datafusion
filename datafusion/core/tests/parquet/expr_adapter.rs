@@ -1126,3 +1126,392 @@ async fn test_physical_expr_adapter_factory_reuse_across_tables() {
     ];
     assert_batches_eq!(expected, &batches);
 }
+
+// ---------------------------------------------------------------------------
+// Nested projection pruning: when the table schema declares a nested column
+// narrower than the physical parquet file, the scan should only read the
+// leaves the declared schema names (`datafusion.execution.parquet.
+// nested_projection_pruning`), instead of reading the whole column and
+// discarding the extra subfields in the adapter-inserted cast.
+// ---------------------------------------------------------------------------
+
+mod nested_projection_pruning {
+    use super::*;
+    use arrow::array::{Array, Int64Array};
+    use arrow::buffer::NullBuffer;
+    use datafusion::physical_plan::collect;
+    use datafusion_physical_plan::metrics::MetricsSet;
+
+    use crate::parquet::utils::MetricsFinder;
+
+    const NUM_ELEMENTS: usize = 64;
+    const PAD_LEN: usize = 2048;
+
+    /// Physical item struct written to the file: the narrow fields plus fat
+    /// pads the table schema will not mention. `x` is Int32 in the file (the
+    /// table declares Int64 to also exercise leaf promotion).
+    fn wide_item_fields() -> Fields {
+        Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Utf8, true),
+            Field::new("pad_a", DataType::Utf8, false),
+            Field::new("pad_b", DataType::Utf8, false),
+            Field::new("pad_c", DataType::Utf8, false),
+        ])
+    }
+
+    /// The narrow item struct the table declares: a subset of the physical
+    /// fields in a different order, a promoted leaf type for `x`, plus `z`
+    /// which does not exist in the file (null-filled by the cast).
+    fn narrow_item_fields() -> Fields {
+        Fields::from(vec![
+            Field::new("y", DataType::Utf8, true),
+            Field::new("x", DataType::Int64, true),
+            Field::new("z", DataType::Int64, true),
+        ])
+    }
+
+    fn wide_struct_values(validity: Option<NullBuffer>) -> StructArray {
+        let pad = |seed: usize| {
+            let base = "x".repeat(PAD_LEN);
+            Arc::new(StringArray::from_iter_values(
+                (0..NUM_ELEMENTS).map(|i| format!("{}{base}", seed + i)),
+            )) as ArrayRef
+        };
+        StructArray::new(
+            wide_item_fields(),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..NUM_ELEMENTS as i32)),
+                Arc::new(StringArray::from_iter_values(
+                    (0..NUM_ELEMENTS).map(|i| format!("y-{i}")),
+                )),
+                pad(1000),
+                pad(2000),
+                pad(3000),
+            ],
+            validity,
+        )
+    }
+
+    /// File batch: `id Int32`, `events List<wide struct>` (one element per row).
+    fn wide_list_batch() -> RecordBatch {
+        let item = Arc::new(Field::new(
+            "item",
+            DataType::Struct(wide_item_fields()),
+            true,
+        ));
+        let events = ListArray::new(
+            Arc::clone(&item),
+            OffsetBuffer::from_lengths(std::iter::repeat_n(1, NUM_ELEMENTS)),
+            Arc::new(wide_struct_values(None)),
+            None,
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("events", DataType::List(item), true),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..NUM_ELEMENTS as i32)),
+                Arc::new(events),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn narrow_list_table_schema() -> SchemaRef {
+        let item = Arc::new(Field::new(
+            "item",
+            DataType::Struct(narrow_item_fields()),
+            true,
+        ));
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("events", DataType::List(item), true),
+        ]))
+    }
+
+    /// File batch: `id Int32`, `s <wide struct>`, with per-row struct
+    /// validity so struct-level nullability can be asserted.
+    fn wide_struct_batch() -> RecordBatch {
+        // rows 0, 10, 20, ... have a NULL struct
+        let validity =
+            NullBuffer::from((0..NUM_ELEMENTS).map(|i| i % 10 != 0).collect::<Vec<_>>());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("s", DataType::Struct(wide_item_fields()), true),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..NUM_ELEMENTS as i32)),
+                Arc::new(wide_struct_values(Some(validity))),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn narrow_struct_table_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("s", DataType::Struct(narrow_item_fields()), true),
+        ]))
+    }
+
+    async fn setup(
+        batches: Vec<(&str, RecordBatch)>,
+        table_schema: SchemaRef,
+        pruning_enabled: bool,
+    ) -> SessionContext {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        for (name, batch) in batches {
+            write_parquet(batch, Arc::clone(&store), &format!("data/{name}")).await;
+        }
+        let mut cfg = SessionConfig::new().with_collect_statistics(false);
+        cfg.options_mut()
+            .execution
+            .parquet
+            .nested_projection_pruning = pruning_enabled;
+        let ctx = SessionContext::new_with_config(cfg);
+        register_memory_listing_table(&ctx, store, "memory:///data/", table_schema).await;
+        ctx
+    }
+
+    async fn run(ctx: &SessionContext, sql: &str) -> (Vec<RecordBatch>, MetricsSet) {
+        let df = ctx.sql(sql).await.unwrap();
+        let (state, logical) = df.into_parts();
+        let plan = state.create_physical_plan(&logical).await.unwrap();
+        let batches = collect(Arc::clone(&plan), state.task_ctx()).await.unwrap();
+        let metrics = MetricsFinder::find_metrics(plan.as_ref()).unwrap();
+        (batches, metrics)
+    }
+
+    fn bytes_scanned(metrics: &MetricsSet) -> usize {
+        metrics
+            .sum(|m| m.value().name() == "bytes_scanned")
+            .map(|v| v.as_usize())
+            .expect("bytes_scanned metric")
+    }
+
+    /// Run `sql` with pruning on and off against the same data; assert
+    /// identical results and that pruning read strictly less than half of
+    /// the unpruned bytes (the pads dominate the file).
+    async fn assert_prunes(
+        batches: Vec<(&str, RecordBatch)>,
+        table_schema: SchemaRef,
+        sql: &str,
+    ) -> Vec<RecordBatch> {
+        let ctx_on = setup(batches.clone(), Arc::clone(&table_schema), true).await;
+        let ctx_off = setup(batches, table_schema, false).await;
+
+        let (result_on, metrics_on) = run(&ctx_on, sql).await;
+        let (result_off, metrics_off) = run(&ctx_off, sql).await;
+
+        let on = concat_batches(&result_on[0].schema(), &result_on).unwrap();
+        let off = concat_batches(&result_off[0].schema(), &result_off).unwrap();
+        assert_eq!(on, off, "results must not change under pruning: {sql}");
+
+        let (on_bytes, off_bytes) =
+            (bytes_scanned(&metrics_on), bytes_scanned(&metrics_off));
+        assert!(
+            on_bytes * 2 < off_bytes,
+            "expected pruned scan to read less than half of {off_bytes} bytes, \
+             read {on_bytes}: {sql}"
+        );
+        result_on
+    }
+
+    #[tokio::test]
+    async fn prunes_list_of_struct() {
+        // Narrow schema over the wide file: subset of fields, reordered,
+        // promoted leaf (x: Int32 -> Int64), missing subfield z null-filled.
+        let batches = assert_prunes(
+            vec![("wide.parquet", wide_list_batch())],
+            narrow_list_table_schema(),
+            "SELECT events FROM t ORDER BY id",
+        )
+        .await;
+
+        let events = batches[0].column(0);
+        let list = events.as_any().downcast_ref::<ListArray>().unwrap();
+        let items = list
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(items.fields().len(), 3);
+        let x = items
+            .column_by_name("x")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(x.value(5), 5);
+        let z = items.column_by_name("z").unwrap();
+        assert_eq!(z.null_count(), z.len(), "z is not in the file");
+    }
+
+    #[tokio::test]
+    async fn prunes_top_level_struct() {
+        assert_prunes(
+            vec![("wide.parquet", wide_struct_batch())],
+            narrow_struct_table_schema(),
+            "SELECT s FROM t ORDER BY id",
+        )
+        .await;
+    }
+
+    /// Struct-level nullability must survive the clip: rows where the struct
+    /// itself is NULL stay NULL (not `{y: NULL, x: NULL, z: NULL}`).
+    #[tokio::test]
+    async fn preserves_struct_nullability() {
+        let batches = assert_prunes(
+            vec![("wide.parquet", wide_struct_batch())],
+            narrow_struct_table_schema(),
+            "SELECT id, s IS NULL AS s_null, s FROM t ORDER BY id",
+        )
+        .await;
+
+        let combined = concat_batches(&batches[0].schema(), &batches).unwrap();
+        let s_null = combined
+            .column(1)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        for i in 0..NUM_ELEMENTS {
+            assert_eq!(s_null.value(i), i % 10 == 0, "row {i}");
+        }
+    }
+
+    /// `get_field` on a schema-narrowed struct becomes
+    /// `get_field(CAST(s), 'x')`; the read clips to the cast target.
+    #[tokio::test]
+    async fn prunes_get_field_on_narrowed_struct() {
+        let batches = assert_prunes(
+            vec![("wide.parquet", wide_struct_batch())],
+            narrow_struct_table_schema(),
+            "SELECT s['x'] AS x FROM t ORDER BY id",
+        )
+        .await;
+        let combined = concat_batches(&batches[0].schema(), &batches).unwrap();
+        let x = combined
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(x.value(5), 5);
+        assert_eq!(x.value(NUM_ELEMENTS - 1), NUM_ELEMENTS as i64 - 1);
+    }
+
+    /// Mixed access: the whole (narrowed) column and a subfield of it.
+    #[tokio::test]
+    async fn prunes_mixed_struct_and_subfield_access() {
+        assert_prunes(
+            vec![("wide.parquet", wide_struct_batch())],
+            narrow_struct_table_schema(),
+            "SELECT s, s['y'] AS y FROM t ORDER BY id",
+        )
+        .await;
+    }
+
+    /// Predicate on a primitive column with filter pushdown enabled while
+    /// the projected nested column is clipped.
+    #[tokio::test]
+    async fn prunes_with_filter_pushdown() {
+        let setup_with_pushdown = |enabled| async move {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            write_parquet(wide_list_batch(), Arc::clone(&store), "data/wide.parquet")
+                .await;
+            let mut cfg = SessionConfig::new().with_collect_statistics(false);
+            cfg.options_mut().execution.parquet.pushdown_filters = true;
+            cfg.options_mut()
+                .execution
+                .parquet
+                .nested_projection_pruning = enabled;
+            let ctx = SessionContext::new_with_config(cfg);
+            register_memory_listing_table(
+                &ctx,
+                store,
+                "memory:///data/",
+                narrow_list_table_schema(),
+            )
+            .await;
+            ctx
+        };
+
+        let sql = "SELECT events FROM t WHERE id >= 32 ORDER BY id";
+        let (result_on, metrics_on) = run(&setup_with_pushdown(true).await, sql).await;
+        let (result_off, metrics_off) = run(&setup_with_pushdown(false).await, sql).await;
+
+        let on = concat_batches(&result_on[0].schema(), &result_on).unwrap();
+        let off = concat_batches(&result_off[0].schema(), &result_off).unwrap();
+        assert_eq!(on, off);
+        assert_eq!(on.num_rows(), NUM_ELEMENTS / 2);
+        assert!(bytes_scanned(&metrics_on) * 2 < bytes_scanned(&metrics_off));
+    }
+
+    /// A scan over two files where one matches the table schema exactly (no
+    /// cast is inserted) and one is wider (clipped): both must be read
+    /// correctly in the same scan.
+    #[tokio::test]
+    async fn mixed_files_narrow_and_wide() {
+        // The physically-narrow file has exactly the table's item struct.
+        let narrow_item = narrow_item_fields();
+        let item = Arc::new(Field::new(
+            "item",
+            DataType::Struct(narrow_item.clone()),
+            true,
+        ));
+        let events = ListArray::new(
+            Arc::clone(&item),
+            OffsetBuffer::from_lengths([1]),
+            Arc::new(StructArray::new(
+                narrow_item,
+                vec![
+                    Arc::new(StringArray::from(vec![Some("y-narrow")])) as ArrayRef,
+                    Arc::new(Int64Array::from(vec![Some(4242)])) as ArrayRef,
+                    Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
+                ],
+                None,
+            )),
+            None,
+        );
+        let narrow_batch = RecordBatch::try_new(
+            narrow_list_table_schema(),
+            vec![
+                Arc::new(Int32Array::from(vec![NUM_ELEMENTS as i32])),
+                Arc::new(events),
+            ],
+        )
+        .unwrap();
+
+        let ctx = setup(
+            vec![
+                ("wide.parquet", wide_list_batch()),
+                ("narrow.parquet", narrow_batch),
+            ],
+            narrow_list_table_schema(),
+            true,
+        )
+        .await;
+
+        let (batches, _) = run(
+            &ctx,
+            "SELECT id, e['x'] AS x, e['z'] AS z \
+             FROM (SELECT id, unnest(events) AS e FROM t) ORDER BY id",
+        )
+        .await;
+        let combined = concat_batches(&batches[0].schema(), &batches).unwrap();
+        assert_eq!(combined.num_rows(), NUM_ELEMENTS + 1);
+        let x = combined
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(x.value(NUM_ELEMENTS), 4242, "row from the narrow file");
+        let z = combined.column(2);
+        // z is null-filled for the wide file, present in the narrow file
+        assert_eq!(z.null_count(), NUM_ELEMENTS);
+    }
+}
