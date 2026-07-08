@@ -145,6 +145,9 @@ where
     /// NOTE null_index is the logical index in the final array, not the index
     /// in the buffer
     null: Option<(V, usize)>,
+
+    /// Prefer retaining input buffers instead of compacting copied values.
+    is_near_unique: bool,
 }
 
 /// The size, in number of entries, of the initial hash table
@@ -166,6 +169,7 @@ where
             random_state: RandomState::default(),
             hashes_buffer: vec![],
             null: None,
+            is_near_unique: false,
         }
     }
 
@@ -173,8 +177,19 @@ where
     /// the same output type
     pub fn take(&mut self) -> Self {
         let mut new_self = Self::new(self.output_type);
+        new_self.is_near_unique = self.is_near_unique;
         std::mem::swap(self, &mut new_self);
         new_self
+    }
+
+    /// Marks this map as storing near-unique input values.
+    ///
+    /// In this mode, newly interned non-inline `StringView` values retain the
+    /// input array buffers instead of copying bytes into compacted buffers.
+    pub fn mark_near_unique(&mut self) {
+        if self.output_type == OutputType::Utf8View {
+            self.is_near_unique = true;
+        }
     }
 
     /// Inserts each value from `values` into the map, invoking `payload_fn` for
@@ -270,6 +285,7 @@ where
         // Ensure lengths are equivalent
         assert_eq!(values.len(), self.hashes_buffer.len());
 
+        let mut shared_buffer_index_offset = None;
         for i in 0..values.len() {
             let view_u128 = input_views[i];
             let hash = self.hashes_buffer[i];
@@ -357,7 +373,22 @@ where
                 } else {
                     let value: &[u8] = values.value(i).as_ref();
                     let payload = make_payload_fn(Some(value));
-                    let new_view = self.append_value(value);
+                    let new_view = if self.is_near_unique {
+                        let buffer_index_offset = match shared_buffer_index_offset {
+                            Some(buffer_index_offset) => buffer_index_offset,
+                            None => {
+                                self.flush_in_progress();
+                                let buffer_index_offset = self.completed.len() as u32;
+                                self.completed
+                                    .extend(values.data_buffers().iter().cloned());
+                                shared_buffer_index_offset = Some(buffer_index_offset);
+                                buffer_index_offset
+                            }
+                        };
+                        self.append_shared_view(view_u128, buffer_index_offset)
+                    } else {
+                        self.append_value(value)
+                    };
                     (new_view, payload)
                 };
 
@@ -383,10 +414,7 @@ where
     /// they were first seen.
     pub fn into_state(mut self) -> ArrayRef {
         // Flush any remaining in-progress buffer
-        if !self.in_progress.is_empty() {
-            let flushed = std::mem::take(&mut self.in_progress);
-            self.completed.push(Buffer::from_vec(flushed));
-        }
+        self.flush_in_progress();
 
         // Build null buffer if we have any nulls
         let null_buffer = self.nulls.finish();
@@ -424,6 +452,23 @@ where
         self.views.push(view);
         self.nulls.append_non_null();
         view
+    }
+
+    fn flush_in_progress(&mut self) {
+        if !self.in_progress.is_empty() {
+            let flushed = std::mem::take(&mut self.in_progress);
+            self.completed.push(Buffer::from_vec(flushed));
+        }
+    }
+
+    /// Append a non-inline view that points into shared input buffers.
+    fn append_shared_view(&mut self, view: u128, buffer_index_offset: u32) -> u128 {
+        let mut byte_view = ByteView::from(view);
+        byte_view.buffer_index += buffer_index_offset;
+        let new_view = byte_view.as_u128();
+        self.views.push(new_view);
+        self.nulls.append_non_null();
+        new_view
     }
 
     /// Append a value to our buffers and return the view pointing to it
@@ -658,6 +703,43 @@ mod tests {
         let mut set = ArrowBytesViewSet::new(OutputType::BinaryView);
         set.insert(&values);
         assert_eq!(&set.into_state(), &expected);
+    }
+
+    // Covers near-unique insertion retaining the input data buffer.
+    // Example: two long unique strings share the original `StringViewArray` buffer.
+    #[test]
+    fn test_bytes_view_map_mark_near_unique_retains_input_buffer() {
+        let input = StringViewArray::from(vec![
+            Some("long string value 1"),
+            Some("long string value 2"),
+        ]);
+        let input_buffer_ptr = input.data_buffers()[0].as_slice().as_ptr();
+        let values: ArrayRef = Arc::new(input);
+
+        let mut map = ArrowBytesViewMap::<usize>::new(OutputType::Utf8View);
+        map.mark_near_unique();
+        let mut next_index = 0;
+        map.insert_if_new(
+            &values,
+            |_| {
+                let index = next_index;
+                next_index += 1;
+                index
+            },
+            |_| {},
+        );
+
+        let output = map.into_state();
+        let output = output.as_string_view();
+        assert_eq!(
+            output.iter().collect::<Vec<_>>(),
+            vec![Some("long string value 1"), Some("long string value 2"),]
+        );
+        assert_eq!(output.data_buffers().len(), 1);
+        assert_eq!(
+            output.data_buffers()[0].as_slice().as_ptr(),
+            input_buffer_ptr
+        );
     }
 
     // inserting strings into the set does not increase reported memory

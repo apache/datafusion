@@ -17,12 +17,13 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::EmitTo;
 
 use crate::aggregates::AggregateExec;
+use crate::aggregates::group_values::NearUniqueGroupValuesProbe;
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState, FinalMarker,
@@ -43,13 +44,21 @@ impl AggregateHashTable<FinalMarker> {
         output_schema: SchemaRef,
         batch_size: usize,
     ) -> Result<Self> {
-        Self::new_with_filters(
+        let mut table = Self::new_with_filters(
             agg,
             partition,
             output_schema,
             batch_size,
             vec![None; agg.aggr_expr.len()],
-        )
+        )?;
+        let group_schema = agg.group_by.group_schema(&agg.input().schema())?;
+        if group_schema.fields().len() == 1
+            && matches!(group_schema.field(0).data_type(), DataType::Utf8View)
+        {
+            table.state.building_mut().near_unique_probe =
+                Some(NearUniqueGroupValuesProbe::new());
+        }
+        Ok(table)
     }
 
     /// Emits the next batch of aggregated group keys and final aggregate values.
@@ -131,6 +140,9 @@ impl AggregateHashTable<FinalMarker> {
             state
                 .group_values
                 .intern(group_values, &mut state.batch_group_indices)?;
+            if let Some(probe) = state.near_unique_probe.as_mut() {
+                probe.observe(state.group_values.as_mut(), group_values[0].len());
+            }
             let group_indices = &state.batch_group_indices;
             let total_num_groups = state.group_values.len();
 

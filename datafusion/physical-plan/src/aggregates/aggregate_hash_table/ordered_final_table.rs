@@ -19,12 +19,13 @@
 //!
 //! See comments in [`super::ordered_partial_table`] for details.
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
 use crate::InputOrderMode;
 use crate::aggregates::aggregate_hash_table::FinalMarker;
+use crate::aggregates::group_values::NearUniqueGroupValuesProbe;
 use crate::aggregates::{AggregateExec, AggregateMode};
 
 use super::common_ordered::OrderedAggregateTable;
@@ -47,7 +48,7 @@ impl OrderedAggregateTable<FinalMarker> {
         batch_size: usize,
         input_order_mode: &InputOrderMode,
     ) -> Result<Self> {
-        Self::new_for_mode(
+        let mut table = Self::new_for_mode(
             agg,
             partition,
             input_schema,
@@ -56,7 +57,14 @@ impl OrderedAggregateTable<FinalMarker> {
             input_order_mode,
             &AggregateMode::Final,
             vec![None; agg.aggr_expr.len()],
-        )
+        )?;
+        let group_schema = agg.group_by.group_schema(input_schema)?;
+        if group_schema.fields().len() == 1
+            && matches!(group_schema.field(0).data_type(), DataType::Utf8View)
+        {
+            table.buffer.near_unique_probe = Some(NearUniqueGroupValuesProbe::new());
+        }
+        Ok(table)
     }
 
     /// Merges one partial-state input batch and updates ordering information for
