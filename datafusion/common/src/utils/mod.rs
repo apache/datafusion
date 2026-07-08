@@ -613,7 +613,8 @@ impl SingleRowListArrayBuilder {
     /// Build a single element [`FixedSizeListArray`]
     pub fn build_fixed_size_list_array(self, list_size: usize) -> FixedSizeListArray {
         let (field, arr) = self.into_field_and_arr();
-        FixedSizeListArray::new(field, list_size as i32, arr, None)
+        FixedSizeListArray::try_new_with_length(field, list_size as i32, arr, None, 1)
+            .unwrap()
     }
 
     /// Build a single element [`FixedSizeListArray`] and wrap as [`ScalarValue::FixedSizeList`]

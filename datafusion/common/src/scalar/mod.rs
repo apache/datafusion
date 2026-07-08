@@ -11460,4 +11460,14 @@ mod tests {
         assert_eq!(utf8view_buffer_bytes(keys), one_len);
         assert_eq!(keys.value(0), strings.value(0));
     }
+
+    #[test]
+    fn test_zero_size_fsl() {
+        let s = ScalarValue::new_default(&DataType::FixedSizeList(
+            Field::new("a", DataType::Int32, true).into(),
+            0,
+        ))
+        .unwrap();
+        assert_eq!(s.to_string(), "[]");
+    }
 }
