@@ -569,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn test_object_store_listing_url() {
         let listing = ListingTableUrl::parse("file:///").unwrap();
         let store = listing.object_store();
