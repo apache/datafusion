@@ -1496,12 +1496,13 @@ logical_plan
 08)------------TableScan: tb projection=[k]
 physical_plan
 01)ProjectionExec: expr=[k@0 as k, k@1 as k, __unnest_placeholder(ta.l,depth=1)@2 as UNNEST(ta.l)]
-02)--UnnestExec
-03)----ProjectionExec: expr=[k@1 as k, k@0 as k, l@2 as __unnest_placeholder(ta.l)]
-04)------SortExec: TopK(fetch=100), expr=[k@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------CrossJoinExec
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--SortExec: expr=[k@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----UnnestExec
+04)------ProjectionExec: expr=[k@1 as k, k@0 as k, l@2 as __unnest_placeholder(ta.l)]
+05)--------SortExec: TopK(fetch=100), expr=[k@0 ASC NULLS LAST], preserve_partitioning=[false]
+06)----------CrossJoinExec
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table ta;
