@@ -23,6 +23,9 @@ use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, OnceLock};
 
 use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_plan::batch_normalizer::{
+    BatchNormalizerMetrics, BatchNormalizerStream,
+};
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, SchedulingType,
 };
@@ -408,11 +411,33 @@ impl ExecutionPlan for DataSourceExec {
             .with_shared_state(shared_state);
         let stream = self.data_source.open_with_args(args)?;
         let batch_size = context.session_config().batch_size();
+        let metrics = self.data_source.metrics();
+
+        // With a byte target configured, normalize output batches by both
+        // row count and in-memory size (splitting oversized batches and
+        // coalescing small ones); otherwise only split by row count.
+        let target_batch_size_bytes = context
+            .session_config()
+            .options()
+            .execution
+            .target_batch_size_bytes;
+        if let Some(target_bytes) = target_batch_size_bytes {
+            log::debug!(
+                "Batch normalization enabled for partition {partition}: \
+                 batch_size={batch_size} target_batch_size_bytes={target_bytes}"
+            );
+            let normalizer_metrics = BatchNormalizerMetrics::new(&metrics, partition);
+            return Ok(Box::pin(BatchNormalizerStream::new(
+                stream,
+                batch_size,
+                target_bytes,
+                normalizer_metrics,
+            )));
+        }
 
         log::debug!(
             "Batch splitting enabled for partition {partition}: batch_size={batch_size}"
         );
-        let metrics = self.data_source.metrics();
         let split_metrics = SplitMetrics::new(&metrics, partition);
         Ok(Box::pin(BatchSplitStream::new(
             stream,

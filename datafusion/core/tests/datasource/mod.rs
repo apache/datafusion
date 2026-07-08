@@ -20,5 +20,6 @@
 //! Note tests for the Parquet format are in `parquet_integration` binary
 
 // Include tests in csv module
+mod batch_normalizer;
 mod csv;
 mod object_store_access;
