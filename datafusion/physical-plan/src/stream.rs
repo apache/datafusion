@@ -416,6 +416,8 @@ pin_project! {
         // adapter itself is dropped.
         #[pin]
         stream: Option<S>,
+        
+        metrics: Option<BaselineMetrics>,
     }
 }
 
@@ -447,7 +449,14 @@ impl<S> RecordBatchStreamAdapter<S> {
         Self {
             schema,
             stream: Some(stream),
+            metrics: None,
         }
+    }
+    
+    pub fn with_metrics(mut self, baseline_metrics: BaselineMetrics) -> Self {
+        self.metrics = Some(baseline_metrics);
+        
+        self
     }
 }
 
@@ -468,7 +477,12 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
         let Some(inner) = this.stream.as_mut().as_pin_mut() else {
-            return Poll::Ready(None);
+            let poll = Poll::Ready(None);
+            return if let Some(metrics) = &this.metrics {
+                metrics.record_poll(poll)
+            } else {
+                poll
+            }
         };
         let item = ready!(inner.poll_next(cx));
         if item.is_none() {
@@ -481,7 +495,14 @@ where
                 *this.stream.as_mut().get_unchecked_mut() = None;
             }
         }
-        Poll::Ready(item)
+        
+        let poll = Poll::Ready(item);
+
+        if let Some(metrics) = &this.metrics {
+            metrics.record_poll(poll)
+        } else {
+            poll
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

@@ -83,12 +83,6 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// reference: <https://en.wikipedia.org/wiki/K-way_merge_algorithm#Tournament_Tree>
     loser_tree: Vec<usize>,
 
-    /// If the most recently yielded overall winner has been replaced
-    /// within the loser tree. A value of `false` indicates that the
-    /// overall winner has been yielded but the loser tree has not
-    /// been updated
-    loser_tree_adjusted: bool,
-
     /// Target batch size
     batch_size: usize,
 
@@ -165,7 +159,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             current_reset_epoch: 0,
             poll_reset_epochs: vec![0; stream_count],
             loser_tree: vec![],
-            loser_tree_adjusted: false,
             batch_size,
             fetch,
             produced: 0,
@@ -187,6 +180,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     {
         let schema_clone = Arc::clone(&schema);
 
+        let cloned_metrics = metrics.clone();
+
         let stream = Gen::new(|co| async move {
             let mut s = SortPreservingMergeStream::new(
                 streams,
@@ -203,7 +198,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             }
         });
 
-        Box::pin(RecordBatchStreamAdapter::new(schema_clone, stream))
+        Box::pin(RecordBatchStreamAdapter::new(schema_clone, stream).with_metrics(cloned_metrics))
     }
 
     /// If the stream at the given index is not exhausted, and the last cursor for the
@@ -489,7 +484,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             }
             self.loser_tree[cmp_node] = winner;
         }
-        self.loser_tree_adjusted = true;
     }
 
     /// Resets the poll count by incrementing the reset epoch.
@@ -601,7 +595,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
 
         self.loser_tree[0] = winner;
-        self.loser_tree_adjusted = true;
     }
 }
 
