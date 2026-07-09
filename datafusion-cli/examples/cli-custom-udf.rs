@@ -16,16 +16,30 @@
 // under the License.
 
 use arrow::datatypes::DataType;
+use clap::Parser;
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::logical_expr::{ColumnarValue, Volatility, create_udf};
 use datafusion::prelude::SessionContext;
-use datafusion_cli::entry_point::{CliError, CliSession};
+use datafusion_cli::entry_point::{CliError, CliSession, CliArgs};
 use datafusion_common::cast::as_string_array;
 use mimalloc::MiMalloc;
 use std::sync::Arc;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
+
+#[derive(Debug, Parser, PartialEq)]
+#[clap(author, version, about, long_about= None)]
+struct CustomArgs {
+    #[command(flatten)]
+    cli_args: CliArgs,
+    #[clap(
+        long,
+        help = "Register the hello udf function",
+        default_value = "true",
+    )]
+    register_hello: bool,
+}
 
 /// In this example we want to reuse the datafusion-cli binary argument, hen extend the `SessionContext` with custom udf.
 ///
@@ -35,7 +49,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 /// 4. Runs the cli using [`dataframe_cli::CliSession::run`], printing any errors then exits.
 #[tokio::main]
 pub async fn main() -> Result<(), CliError> {
-    let custom_udf = create_udf(
+    let hello_udf = create_udf(
         "hello",
         vec![DataType::Utf8],
         DataType::Utf8,
@@ -51,9 +65,12 @@ pub async fn main() -> Result<(), CliError> {
             Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
         }),
     );
-    let cli_session = CliSession::try_from_args(std::env::args())?;
+    let args = CustomArgs::try_parse()?;
+    let cli_session = CliSession::try_from_args(args.cli_args)?;
     let ctx: &SessionContext = cli_session.session_context();
-    ctx.register_udf(custom_udf);
+    if args.register_hello {
+        ctx.register_udf(hello_udf);
+    }
     cli_session.run().await?;
     Ok(())
 }

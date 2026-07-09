@@ -74,12 +74,12 @@ impl fmt::Debug for CliError {
 pub struct CliSession {
     pub ctx: SessionContext,
     pub print_options: PrintOptions,
-    pub args: Args,
+    pub args: CliArgs,
 }
 
 #[derive(Debug, Parser, PartialEq)]
 #[clap(author, version, about, long_about= None)]
-pub struct Args {
+pub struct CliArgs {
     #[clap(
         short = 'p',
         long,
@@ -182,7 +182,7 @@ pub struct Args {
     object_store_profiling: InstrumentedObjectStoreMode,
 }
 
-impl Args {
+impl CliArgs {
     /// Without -c/-f the CLI enters the REPL, which reads its SQL from
     /// stdin — interactively or piped.
     fn repl_mode(&self) -> bool {
@@ -201,15 +201,14 @@ impl Args {
 
 impl CliSession {
     pub async fn entry_point() -> Result<(), CliError> {
-        let cli_session = CliSession::try_from_args(env::args())?;
+        let cli_session = CliSession::try_from_args(CliArgs::try_parse()?)?;
         Ok(cli_session.run().await?)
     }
     pub fn session_context(&self) -> &SessionContext {
         &self.ctx
     }
-    pub fn try_from_args(args: impl Iterator<Item = String>) -> Result<Self, CliError> {
+    pub fn try_from_args(args: CliArgs) -> Result<Self, CliError> {
         env_logger::init();
-        let args = Args::try_parse_from(args)?;
 
         if !args.quiet {
             println!("DataFusion CLI v{DATAFUSION_CLI_VERSION}");
@@ -358,7 +357,7 @@ impl CliSession {
 
 /// Get the session configuration based on the provided arguments
 /// and environment settings.
-fn get_session_config(args: &Args) -> Result<SessionConfig, DataFusionError> {
+fn get_session_config(args: &CliArgs) -> Result<SessionConfig, DataFusionError> {
     // Read options from environment variables and merge with command line options
     let mut config_options = ConfigOptions::from_env()?;
 
