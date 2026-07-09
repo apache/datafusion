@@ -636,15 +636,7 @@ fn case_conversion_ascii_array<O: OffsetSizeTrait>(
     let values = Buffer::from_vec(converted);
 
     // Shift offsets from `start`-based to 0-based so they index into `values`.
-    let offsets = if start == 0 {
-        string_array.offsets().clone()
-    } else {
-        let s = O::usize_as(start);
-        let rebased: Vec<O> = value_offsets.iter().map(|&o| o - s).collect();
-        // SAFETY: subtracting a constant from monotonic offsets preserves
-        // monotonicity, and `start` is the minimum offset, so no underflow.
-        unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(rebased)) }
-    };
+    let offsets = string_array.offsets().clone().subtract(*string_array.offsets()[0]);
 
     let nulls = string_array.nulls().cloned();
     // SAFETY: offsets are monotonic and in-bounds for `values`; nulls

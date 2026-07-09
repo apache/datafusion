@@ -217,17 +217,7 @@ fn initcap_ascii_array<T: OffsetSizeTrait>(
     }
 
     let values = Buffer::from_vec(out);
-    let out_offsets = if first_offset == 0 {
-        offsets.clone()
-    } else {
-        // For sliced arrays, we need to rebase the offsets to reflect that the
-        // output only contains the bytes in the visible slice.
-        let rebased_offsets = offsets
-            .iter()
-            .map(|offset| T::usize_as(offset.as_usize() - first_offset))
-            .collect::<Vec<_>>();
-        OffsetBuffer::<T>::new(rebased_offsets.into())
-    };
+    let out_offsets = offsets.clone().subtract(*offsets[0]);
 
     // SAFETY: ASCII case conversion preserves byte length, so the original
     // string boundaries are preserved. `out_offsets` is either identical to
