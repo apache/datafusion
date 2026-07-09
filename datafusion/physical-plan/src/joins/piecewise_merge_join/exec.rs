@@ -352,9 +352,8 @@ impl PiecewiseMergeJoinExec {
         let streamed_schema = streamed.schema();
 
         // Create output schema for the join
-        let schema = Arc::new(
-            build_join_schema(&buffered_schema, &streamed_schema, &join_type, false).0,
-        );
+        let schema =
+            Arc::new(build_join_schema(&buffered_schema, &streamed_schema, &join_type).0);
         let cache = Self::compute_properties(
             &buffered,
             &streamed,

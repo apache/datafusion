@@ -39,6 +39,7 @@ use crate::stream::EmptyRecordBatchStream;
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
     hash_utils::create_hashes,
+    joins::SharedBitmapBuilder,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
         StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
@@ -47,7 +48,7 @@ use crate::{
     },
 };
 
-use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, UInt32Array, UInt64Array};
+use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -519,9 +520,11 @@ impl HashJoinStream {
             hashes_buffer,
             probe_indices_buffer: Vec::with_capacity(batch_size),
             build_indices_buffer: Vec::with_capacity(batch_size),
-            null_mark_hashes_buffer: Vec::with_capacity(batch_size),
-            null_mark_probe_indices_buffer: Vec::with_capacity(batch_size),
-            null_mark_build_indices_buffer: Vec::with_capacity(batch_size),
+            // Left unallocated: only correlated null-aware LeftMark joins ever
+            // use these, and they grow them on first use.
+            null_mark_hashes_buffer: Vec::new(),
+            null_mark_probe_indices_buffer: Vec::new(),
+            null_mark_build_indices_buffer: Vec::new(),
             right_side_ordered,
             build_report: BuildReportHandle::new(partition, mode, build_accumulator),
             mode,
@@ -1158,8 +1161,6 @@ fn mark_null_candidates_for_probe_batch(
         return Ok(());
     }
 
-    let mut null_bitmap = build_side.left_data.null_indices_bitmap().lock();
-
     // Case 1: build rows with a NULL value key are UNKNOWN as soon as any
     // probe row shares their correlation scope.
     if let Some(null_value_scope_map) = null_value_scope_map {
@@ -1179,7 +1180,7 @@ fn mark_null_candidates_for_probe_batch(
             // The map indexes only the NULL-valued build rows; translate its
             // positions back to row indices in the full build batch.
             |position| build_indices.value(position as usize),
-            &mut null_bitmap,
+            build_side.left_data.null_indices_bitmap(),
         )?;
     }
 
@@ -1205,7 +1206,7 @@ fn mark_null_candidates_for_probe_batch(
             probe_indices_buffer,
             build_indices_buffer,
             |position| position,
-            &mut null_bitmap,
+            build_side.left_data.null_indices_bitmap(),
         )?;
     }
 
@@ -1216,6 +1217,10 @@ fn mark_null_candidates_for_probe_batch(
 /// `probe_scope_values` and sets the bit of every matched build row in
 /// `null_bitmap`, translating matched map positions through
 /// `map_position_to_build_row`.
+///
+/// `null_bitmap` is shared across probe partitions, so the lock is taken per
+/// chunk and held only for the bit writes: hashing and the hash-map lookup
+/// stay outside the critical section.
 #[expect(clippy::too_many_arguments)]
 fn scan_scope_matches_into_bitmap(
     scope_map: &dyn JoinHashMapType,
@@ -1226,7 +1231,7 @@ fn scan_scope_matches_into_bitmap(
     probe_indices_buffer: &mut Vec<u32>,
     build_indices_buffer: &mut Vec<u64>,
     map_position_to_build_row: impl Fn(u64) -> u64,
-    null_bitmap: &mut BooleanBufferBuilder,
+    null_bitmap: &SharedBitmapBuilder,
 ) -> Result<()> {
     let mut offset = (0, None);
     loop {
@@ -1243,10 +1248,13 @@ fn scan_scope_matches_into_bitmap(
             build_indices_buffer,
         )?;
 
-        for build_idx in build_indices.iter() {
-            let build_idx =
-                build_idx.expect("scope lookup should produce non-null build indices");
-            null_bitmap.set_bit(map_position_to_build_row(build_idx) as usize, true);
+        if !build_indices.is_empty() {
+            let mut null_bitmap = null_bitmap.lock();
+            for build_idx in build_indices.iter() {
+                let build_idx = build_idx
+                    .expect("scope lookup should produce non-null build indices");
+                null_bitmap.set_bit(map_position_to_build_row(build_idx) as usize, true);
+            }
         }
 
         let Some(next_offset) = next_offset else {

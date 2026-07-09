@@ -234,7 +234,7 @@ impl SymmetricHashJoinExec {
 
         // Build the join schema from the left and right schemas:
         let (schema, column_indices) =
-            build_join_schema(&left_schema, &right_schema, join_type, false);
+            build_join_schema(&left_schema, &right_schema, join_type);
 
         // Initialize the random state for the join operation:
         let random_state = RandomState::with_seed(0);
