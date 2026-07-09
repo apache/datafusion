@@ -303,10 +303,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// This DOES NOT return `Poll::Pending` as soon as the first uninitiated partition returns `Poll::Pending`
     /// so we can continue to initialize the remaining partitions
     fn initialize_all_partitions(&mut self, cx: &mut Context) -> Poll<Result<()>> {
-        // Once all partitions have set their corresponding cursors for the loser tree,
-        // we skip the following block. Until then, this function may be called multiple
-        // times and can return Poll::Pending if any partition returns Poll::Pending.
-
         assert_eq!(
             self.loser_tree.len(),
             0,
@@ -319,6 +315,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             let partition_idx = self.uninitiated_partitions[idx];
             match self.maybe_poll_stream(cx, partition_idx) {
                 Poll::Ready(Err(e)) => {
+                    self.done = true;
                     return Poll::Ready(Err(e));
                 }
                 Poll::Pending => {
