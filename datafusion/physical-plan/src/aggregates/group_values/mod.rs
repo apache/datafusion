@@ -23,10 +23,69 @@ use arrow::array::types::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::array::{ArrayRef, downcast_primitive};
-use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit};
 use datafusion_common::Result;
+use std::sync::Arc;
 
 use datafusion_expr::EmitTo;
+
+pub(crate) fn group_value_output_schema(schema: &Schema) -> SchemaRef {
+    Arc::new(Schema::new(
+        schema
+            .fields()
+            .iter()
+            .map(|field| group_value_output_field(field.as_ref()))
+            .collect::<Vec<_>>(),
+    ))
+}
+
+pub(crate) fn group_value_output_field(field: &Field) -> FieldRef {
+    Arc::new(
+        Field::new(
+            field.name(),
+            group_value_output_data_type(field.data_type()),
+            field.is_nullable(),
+        )
+        .with_metadata(field.metadata().clone()),
+    )
+}
+
+fn group_value_output_data_type(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::Dictionary(_, value_type) => DataType::Dictionary(
+            Box::new(DataType::UInt64),
+            Box::new(group_value_output_data_type(value_type)),
+        ),
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(|field| group_value_output_field(field.as_ref()))
+                .collect::<Vec<_>>()
+                .into(),
+        ),
+        DataType::List(field) => DataType::List(group_value_output_field(field.as_ref())),
+        DataType::LargeList(field) => {
+            DataType::LargeList(group_value_output_field(field.as_ref()))
+        }
+        DataType::ListView(field) => {
+            DataType::ListView(group_value_output_field(field.as_ref()))
+        }
+        DataType::LargeListView(field) => {
+            DataType::LargeListView(group_value_output_field(field.as_ref()))
+        }
+        DataType::FixedSizeList(field, size) => {
+            DataType::FixedSizeList(group_value_output_field(field.as_ref()), *size)
+        }
+        DataType::Map(field, sorted) => {
+            DataType::Map(group_value_output_field(field.as_ref()), *sorted)
+        }
+        DataType::RunEndEncoded(run_ends, values) => DataType::RunEndEncoded(
+            Arc::clone(run_ends),
+            group_value_output_field(values.as_ref()),
+        ),
+        _ => data_type.clone(),
+    }
+}
 
 pub mod multi_group_by;
 

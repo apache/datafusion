@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{GroupValues, group_value_output_schema};
 use arrow::array::{
     Array, ArrayRef, ListArray, PrimitiveArray, RunArray, StructArray,
     downcast_run_end_index,
@@ -83,6 +83,7 @@ pub struct GroupValuesRows {
 }
 
 impl GroupValuesRows {
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         // Print a debugging message, so it is clear when the (slower) fallback
         // GroupValuesRows is used.
@@ -102,8 +103,9 @@ impl GroupValuesRows {
         let starting_data_capacity = 64 * starting_rows_capacity;
         let rows_buffer =
             row_converter.empty_rows(starting_rows_capacity, starting_data_capacity);
+        let output_schema = group_value_output_schema(schema.as_ref());
         Ok(Self {
-            schema,
+            schema: output_schema,
             row_converter,
             map,
             map_size: 0,
@@ -330,5 +332,56 @@ fn dictionary_encode_if_necessary(
         }
         (DataType::RunEndEncoded(_, _), _) => Ok(cast(array.as_ref(), expected)?),
         (_, _) => Ok(Arc::<dyn Array>::clone(array)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{DictionaryArray, StringArray, StringDictionaryBuilder};
+    use arrow::datatypes::{Field, Schema, UInt8Type, UInt64Type};
+
+    #[test]
+    fn dict_uint8_utf8_257_groups_emit_promotes_key_type() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "k",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+
+        let mut group_values = GroupValuesRows::try_new(Arc::clone(&schema))?;
+        let mut groups = vec![];
+        for i in 0u32..257 {
+            let mut builder = StringDictionaryBuilder::<UInt8Type>::new();
+            builder.append_value(format!("group_{i}"));
+            let array: ArrayRef = Arc::new(builder.finish());
+            group_values.intern(&[array], &mut groups)?;
+        }
+
+        assert_eq!(group_values.len(), 257);
+        let arrays = group_values.emit(EmitTo::All)?;
+        assert_eq!(arrays.len(), 1);
+        assert_eq!(arrays[0].len(), 257);
+        assert_eq!(
+            arrays[0].data_type(),
+            &DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8))
+        );
+
+        let dictionary = arrays[0]
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt64Type>>()
+            .unwrap();
+        let values = dictionary
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        for row in 0..257 {
+            let key = dictionary.keys().value(row) as usize;
+            assert_eq!(values.value(key), format!("group_{row}"));
+        }
+
+        Ok(())
     }
 }
