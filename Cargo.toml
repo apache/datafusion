@@ -113,6 +113,7 @@ arrow-ipc = { version = "59.1.0", default-features = false, features = [
 ] }
 arrow-ord = { version = "59.1.0", default-features = false }
 arrow-schema = { version = "59.1.0", default-features = false }
+async-fn-stream = "0.3"
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
