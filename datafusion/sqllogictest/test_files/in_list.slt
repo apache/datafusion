@@ -214,6 +214,25 @@ match true true true true true true true true
 no_match false false false false false false false false
 nulls NULL NULL NULL NULL NULL NULL NULL NULL
 
+# NOT IN without NULL list values returns false for matches and true for non-matches.
+query TBBBBBBBB
+SELECT
+  label,
+  i8 NOT IN (3, 4, 5, 6, 11),
+  u8 NOT IN (3, 4, 5, 6, 11),
+  i16 NOT IN (3, 258, 4097, 16385, 11),
+  u16 NOT IN (3, 258, 4097, 16385, 11),
+  i32 NOT IN (3, 258, 66051, 16909060, 11),
+  u32 NOT IN (3, 258, 66051, 16909060, 11),
+  i64 NOT IN (3, 258, 66051, 16909060, 11),
+  u64 NOT IN (3, 258, 66051, 16909060, 11)
+FROM in_list_ints_nullable
+ORDER BY label
+----
+match false false false false false false false false
+no_match true true true true true true true true
+nulls NULL NULL NULL NULL NULL NULL NULL NULL
+
 # Null IN list values return true for matches and NULL for non-matches.
 query TBBBBBBBB
 SELECT
@@ -233,6 +252,83 @@ match true true true true true true true true
 no_match NULL NULL NULL NULL NULL NULL NULL NULL
 nulls NULL NULL NULL NULL NULL NULL NULL NULL
 
+# Null IN list values return false for matches and NULL for non-matches with NOT IN.
+query TBBBBBBBB
+SELECT
+  label,
+  i8 NOT IN (NULL, 3, 4, 5, 11),
+  u8 NOT IN (NULL, 3, 4, 5, 11),
+  i16 NOT IN (NULL, 3, 258, 4097, 11),
+  u16 NOT IN (NULL, 3, 258, 4097, 11),
+  i32 NOT IN (NULL, 3, 258, 66051, 11),
+  u32 NOT IN (NULL, 3, 258, 66051, 11),
+  i64 NOT IN (NULL, 3, 258, 66051, 11),
+  u64 NOT IN (NULL, 3, 258, 66051, 11)
+FROM in_list_ints_nullable
+ORDER BY label
+----
+match false false false false false false false false
+no_match NULL NULL NULL NULL NULL NULL NULL NULL
+nulls NULL NULL NULL NULL NULL NULL NULL NULL
+
 # Cleanup
 statement ok
 DROP TABLE in_list_ints_nullable
+
+####
+## Float IN List Specializations
+####
+
+statement ok
+CREATE TABLE in_list_floats AS
+SELECT
+  label,
+  arrow_cast(value, 'Float16') AS f16,
+  arrow_cast(value, 'Float32') AS f32,
+  arrow_cast(value, 'Float64') AS f64
+FROM (VALUES
+  ('match', 11.0),
+  ('no_match', 7.0),
+  ('nulls', NULL)
+) AS t(label, value);
+
+# Five element IN lists cover the specialized Float16/32/64 paths.
+query TTBBB
+SELECT
+  'Float16',
+  label,
+  f16 IN (arrow_cast(3.0,  'Float16'), arrow_cast(4.0, 'Float16'), arrow_cast(5.0, 'Float16'), arrow_cast(6.0, 'Float16'), arrow_cast(11.0, 'Float16')),
+  f16 IN (arrow_cast(NULL, 'Float16'), arrow_cast(3.0, 'Float16'), arrow_cast(4.0, 'Float16'), arrow_cast(5.0, 'Float16'), arrow_cast(11.0, 'Float16')),
+  f16 IN (arrow_cast(3.0,  'Float16'), arrow_cast(4.0, 'Float16'), arrow_cast(5.0, 'Float16'), arrow_cast(6.0, 'Float16'), arrow_cast(8.0,  'Float16'))
+FROM in_list_floats
+UNION ALL
+SELECT
+  'Float32',
+  label,
+  f32 IN (arrow_cast(3.0,  'Float32'), arrow_cast(4.0, 'Float32'), arrow_cast(5.0, 'Float32'), arrow_cast(6.0, 'Float32'), arrow_cast(11.0, 'Float32')),
+  f32 IN (arrow_cast(NULL, 'Float32'), arrow_cast(3.0, 'Float32'), arrow_cast(4.0, 'Float32'), arrow_cast(5.0, 'Float32'), arrow_cast(11.0, 'Float32')),
+  f32 IN (arrow_cast(3.0,  'Float32'), arrow_cast(4.0, 'Float32'), arrow_cast(5.0, 'Float32'), arrow_cast(6.0, 'Float32'), arrow_cast(8.0,  'Float32'))
+FROM in_list_floats
+UNION ALL
+SELECT
+  'Float64',
+  label,
+  f64 IN (arrow_cast(3.0,  'Float64'), arrow_cast(4.0, 'Float64'), arrow_cast(5.0, 'Float64'), arrow_cast(6.0, 'Float64'), arrow_cast(11.0, 'Float64')),
+  f64 IN (arrow_cast(NULL, 'Float64'), arrow_cast(3.0, 'Float64'), arrow_cast(4.0, 'Float64'), arrow_cast(5.0, 'Float64'), arrow_cast(11.0, 'Float64')),
+  f64 IN (arrow_cast(3.0,  'Float64'), arrow_cast(4.0, 'Float64'), arrow_cast(5.0, 'Float64'), arrow_cast(6.0, 'Float64'), arrow_cast(8.0,  'Float64'))
+FROM in_list_floats
+ORDER BY 1, 2
+----
+Float16 match true true false
+Float16 no_match false NULL false
+Float16 nulls NULL NULL NULL
+Float32 match true true false
+Float32 no_match false NULL false
+Float32 nulls NULL NULL NULL
+Float64 match true true false
+Float64 no_match false NULL false
+Float64 nulls NULL NULL NULL
+
+# Cleanup
+statement ok
+DROP TABLE in_list_floats

@@ -31,8 +31,8 @@ use datafusion_expr::EmitTo;
 use crate::InputOrderMode;
 use crate::PhysicalExpr;
 use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
-use crate::aggregates::row_hash::create_group_accumulator;
 use crate::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
     evaluate_group_by,

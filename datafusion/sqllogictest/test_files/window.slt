@@ -272,8 +272,8 @@ logical_plan
 16)------------------EmptyRelation: rows=1
 physical_plan
 01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
-02)--SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[b@0 as b, max(d.a)@1 as max_a]
+02)--ProjectionExec: expr=[b@0 as b, max(d.a)@1 as max_a]
+03)----SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[max(d.a)]
 05)--------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[max(d.a)], ordering_mode=Sorted
@@ -2261,8 +2261,9 @@ physical_plan
 06)----------ProjectionExec: expr=[c2@1 as c2, c8@2 as c8, c9@3 as c9, c1_alias@4 as c1_alias, sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING@5 as sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING, sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@6 as sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING]
 07)------------BoundedWindowAggExec: wdw=[sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 08)--------------WindowAggExec: wdw=[sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-09)----------------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, c9@3 ASC NULLS LAST, c8@2 ASC NULLS LAST], preserve_partitioning=[false]
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c8, c9, c1@0 as c1_alias], file_type=csv, has_header=true
+09)----------------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c8@2 as c8, c9@3 as c9, c1@0 as c1_alias]
+10)------------------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, c9@3 ASC NULLS LAST, c8@2 ASC NULLS LAST], preserve_partitioning=[false]
+11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c8, c9], file_type=csv, has_header=true
 
 query IIIII
 SELECT c9,
@@ -2408,8 +2409,8 @@ logical_plan
 03)----WindowAggr: windowExpr=[[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: aggregate_test_100 projection=[c9]
 physical_plan
-01)SortExec: TopK(fetch=5), expr=[rn1@1 DESC], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[c9@0 as c9, row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn1]
+01)ProjectionExec: expr=[c9@0 as c9, row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn1]
+02)--SortExec: TopK(fetch=5), expr=[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 DESC], preserve_partitioning=[false]
 03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: expr=[c9@0 DESC], preserve_partitioning=[false]
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
@@ -5485,7 +5486,7 @@ order by c1, c2, rank;
 query TT
 explain select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5501,8 +5502,8 @@ logical_plan
 06)----------TableScan: t1 projection=[c1, c2]
 physical_plan
 01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank1@2 ASC NULLS LAST, rank2@3 ASC NULLS LAST]
-02)--SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank1@2 ASC NULLS LAST, rank2@3 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank1, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rank2]
+02)--ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank1, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rank2]
+03)----SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 ASC NULLS LAST, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 ASC NULLS LAST], preserve_partitioning=[true]
 04)------BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 05)--------SortExec: expr=[c2@1 ASC NULLS LAST, c1@0 ASC NULLS LAST], preserve_partitioning=[true]
 06)----------RepartitionExec: partitioning=Hash([c2@1, c1@0], 2), input_partitions=2
@@ -5516,7 +5517,7 @@ physical_plan
 query IIII
 select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5533,7 +5534,7 @@ order by c1, c2, rank1, rank2;
 query TT
 explain select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5549,8 +5550,8 @@ logical_plan
 06)----------TableScan: t1 projection=[c1, c2]
 physical_plan
 01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank1@2 ASC NULLS LAST, rank2@3 ASC NULLS LAST]
-02)--SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank1@2 ASC NULLS LAST, rank2@3 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank1, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rank2]
+02)--ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank1, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rank2]
+03)----SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 ASC NULLS LAST, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 ASC NULLS LAST], preserve_partitioning=[true]
 04)------BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 05)--------SortExec: expr=[c2@1 ASC NULLS LAST, c1@0 ASC NULLS LAST], preserve_partitioning=[true]
 06)----------RepartitionExec: partitioning=Hash([c2@1, c1@0], 2), input_partitions=2
@@ -5563,7 +5564,7 @@ physical_plan
 query IIII
 select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -6085,7 +6086,6 @@ physical_plan
 04)------SortPreservingMergeExec: [c1@2 ASC NULLS LAST, c2@3 ASC NULLS LAST], fetch=5
 05)--------SortExec: TopK(fetch=5), expr=[c1@2 ASC NULLS LAST, c2@3 ASC NULLS LAST], preserve_partitioning=[true]
 06)----------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-0.csv, WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-1.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-2.csv, WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-3.csv]]}, projection=[c2@1 >= 2 as __common_expr_1, c2@1 >= 2 AND c2@1 < 4 AND c1@0 > 0 as __common_expr_2, c1, c2], file_type=csv, has_header=false
-
 
 # FILTER filters out some rows
 query IIIII??
