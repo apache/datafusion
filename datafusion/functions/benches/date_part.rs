@@ -32,14 +32,14 @@ use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::datetime::date_part;
-use rand::Rng;
-use rand::rngs::ThreadRng;
+use rand::prelude::StdRng;
+use rand::{Rng, SeedableRng};
 
 const BATCH_SIZE: usize = 1000;
 const TS_BOUND: i64 = 2_006_463_600;
 const SEC_DAY: i64 = 86_400;
 
-fn generate_timestamp_ns_array(rng: &mut ThreadRng) -> TimestampNanosecondArray {
+fn generate_timestamp_ns_array(rng: &mut StdRng) -> TimestampNanosecondArray {
     TimestampNanosecondArray::from(
         (0..BATCH_SIZE)
             .map(|_| rng.random_range(0..TS_BOUND * 1_000_000_000))
@@ -47,7 +47,7 @@ fn generate_timestamp_ns_array(rng: &mut ThreadRng) -> TimestampNanosecondArray 
     )
 }
 
-fn generate_timestamp_us_array(rng: &mut ThreadRng) -> TimestampMicrosecondArray {
+fn generate_timestamp_us_array(rng: &mut StdRng) -> TimestampMicrosecondArray {
     TimestampMicrosecondArray::from(
         (0..BATCH_SIZE)
             .map(|_| rng.random_range(0..TS_BOUND * 1_000_000))
@@ -55,7 +55,7 @@ fn generate_timestamp_us_array(rng: &mut ThreadRng) -> TimestampMicrosecondArray
     )
 }
 
-fn generate_timestamp_ms_array(rng: &mut ThreadRng) -> TimestampMillisecondArray {
+fn generate_timestamp_ms_array(rng: &mut StdRng) -> TimestampMillisecondArray {
     TimestampMillisecondArray::from(
         (0..BATCH_SIZE)
             .map(|_| rng.random_range(0..TS_BOUND * 1_000))
@@ -63,7 +63,7 @@ fn generate_timestamp_ms_array(rng: &mut ThreadRng) -> TimestampMillisecondArray
     )
 }
 
-fn generate_timestamp_s_array(rng: &mut ThreadRng) -> TimestampSecondArray {
+fn generate_timestamp_s_array(rng: &mut StdRng) -> TimestampSecondArray {
     TimestampSecondArray::from(
         (0..BATCH_SIZE)
             .map(|_| rng.random_range(0..TS_BOUND))
@@ -80,7 +80,7 @@ fn generate_date32_array(rng: &mut StdRng) -> Date32Array {
     )
 }
 
-fn generate_date64_array(rng: &mut ThreadRng) -> Date64Array {
+fn generate_date64_array(rng: &mut StdRng) -> Date64Array {
     Date64Array::from(
         (0..BATCH_SIZE)
             .map(|_| rng.random_range(0..TS_BOUND * 1_000))
@@ -88,7 +88,7 @@ fn generate_date64_array(rng: &mut ThreadRng) -> Date64Array {
     )
 }
 
-fn generate_time32_second_array(rng: &mut ThreadRng) -> Time32SecondArray {
+fn generate_time32_second_array(rng: &mut StdRng) -> Time32SecondArray {
     Time32SecondArray::from(
         (0..BATCH_SIZE)
             .map(|_| rng.random_range(0..SEC_DAY as i32))
@@ -96,7 +96,7 @@ fn generate_time32_second_array(rng: &mut ThreadRng) -> Time32SecondArray {
     )
 }
 
-fn generate_time32_millisecond_array(rng: &mut ThreadRng) -> Time32MillisecondArray {
+fn generate_time32_millisecond_array(rng: &mut StdRng) -> Time32MillisecondArray {
     Time32MillisecondArray::from(
         (0..BATCH_SIZE)
             .map(|_| rng.random_range(0..(SEC_DAY * 1_000) as i32))
@@ -104,7 +104,7 @@ fn generate_time32_millisecond_array(rng: &mut ThreadRng) -> Time32MillisecondAr
     )
 }
 
-fn generate_time64_microsecond_array(rng: &mut ThreadRng) -> Time64MicrosecondArray {
+fn generate_time64_microsecond_array(rng: &mut StdRng) -> Time64MicrosecondArray {
     Time64MicrosecondArray::from(
         (0..BATCH_SIZE)
             .map(|_| rng.random_range(0..SEC_DAY * 1_000_000))
@@ -112,7 +112,7 @@ fn generate_time64_microsecond_array(rng: &mut ThreadRng) -> Time64MicrosecondAr
     )
 }
 
-fn generate_time64_nanosecond_array(rng: &mut ThreadRng) -> Time64NanosecondArray {
+fn generate_time64_nanosecond_array(rng: &mut StdRng) -> Time64NanosecondArray {
     Time64NanosecondArray::from(
         (0..BATCH_SIZE)
             .map(|_| rng.random_range(0..SEC_DAY * 1_000_000_000))
@@ -129,7 +129,7 @@ fn generate_interval_year_month_array(rng: &mut StdRng) -> IntervalYearMonthArra
     )
 }
 
-fn generate_interval_day_time_array(rng: &mut ThreadRng) -> IntervalDayTimeArray {
+fn generate_interval_day_time_array(rng: &mut StdRng) -> IntervalDayTimeArray {
     IntervalDayTimeArray::from(
         (0..BATCH_SIZE)
             .map(|_| IntervalDayTime {
@@ -140,7 +140,7 @@ fn generate_interval_day_time_array(rng: &mut ThreadRng) -> IntervalDayTimeArray
     )
 }
 
-fn generate_interval_mdn_array(rng: &mut ThreadRng) -> IntervalMonthDayNanoArray {
+fn generate_interval_mdn_array(rng: &mut StdRng) -> IntervalMonthDayNanoArray {
     IntervalMonthDayNanoArray::from(
         (0..BATCH_SIZE)
             .map(|_| IntervalMonthDayNano {
@@ -152,7 +152,7 @@ fn generate_interval_mdn_array(rng: &mut ThreadRng) -> IntervalMonthDayNanoArray
     )
 }
 
-fn generate_duration_nanosecond_array(rng: &mut ThreadRng) -> DurationNanosecondArray {
+fn generate_duration_nanosecond_array(rng: &mut StdRng) -> DurationNanosecondArray {
     DurationNanosecondArray::from(
         (0..BATCH_SIZE)
             .map(|_| rng.random_range(0..TS_BOUND * 1_000_000_000))
@@ -195,7 +195,7 @@ fn bench_date_part(
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let mut rng = rand::rng();
+    let mut rng = StdRng::seed_from_u64(42);
 
     let ts_s = Arc::new(generate_timestamp_s_array(&mut rng)) as ArrayRef;
     let ts_ms = Arc::new(generate_timestamp_ms_array(&mut rng)) as ArrayRef;
