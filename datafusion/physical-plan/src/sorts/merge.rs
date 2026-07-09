@@ -18,13 +18,12 @@
 //! Merge that deals with an arbitrary size of streaming inputs.
 //! This is an order-preserving merge.
 
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::future::poll_fn;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use crate::SendableRecordBatchStream;
-use crate::metrics::{BaselineMetrics, RecordOutput};
+use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::BatchBuilder;
 use crate::sorts::cursor::{Cursor, CursorValues};
 use crate::sorts::stream::PartitionedStream;
@@ -32,16 +31,16 @@ use crate::stream::RecordBatchStreamAdapter;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 
-use async_fn_stream::{try_fn_stream, TryStreamEmitter};
+use genawaiter::sync::{Co, Gen};
 
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
 type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
 
 /// Merges a stream of sorted cursors and record batches into a single sorted stream
-// #[derive(Debug)]
+#[derive(Debug)]
 pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     in_progress: BatchBuilder,
 
@@ -140,27 +139,9 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
 
     /// number of rows produced
     produced: usize,
-
-    /// This vector contains the indices of the partitions that have not started emitting yet.
-    uninitiated_partitions: Vec<usize>,
-
-    emitter: TryStreamEmitter<RecordBatch, DataFusionError>,
 }
 
-// TODO - fix the debug not showing all the properties now
-impl<C: CursorValues> Debug for SortPreservingMergeStream<C> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SortPreservingMergeStream")
-            .field("current_reset_epoch", &self.current_reset_epoch)
-            .field("prev_cursors", &self.prev_cursors)
-            .field("fetch", &self.fetch)
-            .field("produced", &self.produced)
-            .field("uninitiated_partitions", &self.uninitiated_partitions)
-            .finish()
-    }
-}
-
-impl<C: CursorValues + Sync + Send> SortPreservingMergeStream<C> {
+impl<C: CursorValues> SortPreservingMergeStream<C> {
     pub(crate) fn new(
         streams: CursorStream<C>,
         schema: SchemaRef,
@@ -169,7 +150,6 @@ impl<C: CursorValues + Sync + Send> SortPreservingMergeStream<C> {
         fetch: Option<usize>,
         reservation: MemoryReservation,
         enable_round_robin_tie_breaker: bool,
-        emitter: TryStreamEmitter<RecordBatch, DataFusionError>
     ) -> Self {
         let stream_count = streams.partitions();
 
@@ -188,24 +168,26 @@ impl<C: CursorValues + Sync + Send> SortPreservingMergeStream<C> {
             batch_size,
             fetch,
             produced: 0,
-            uninitiated_partitions: (0..stream_count).collect(),
             enable_round_robin_tie_breaker,
-            emitter,
         }
     }
 
-    pub(crate) fn create(streams: CursorStream<C>,
-                         schema: SchemaRef,
-                         metrics: BaselineMetrics,
-                         batch_size: usize,
-                         fetch: Option<usize>,
-                         reservation: MemoryReservation,
-                         enable_round_robin_tie_breaker: bool) -> SendableRecordBatchStream where C: 'static {
-
+    pub(crate) fn create(
+        streams: CursorStream<C>,
+        schema: SchemaRef,
+        metrics: BaselineMetrics,
+        batch_size: usize,
+        fetch: Option<usize>,
+        reservation: MemoryReservation,
+        enable_round_robin_tie_breaker: bool,
+    ) -> SendableRecordBatchStream
+    where
+        C: 'static,
+    {
         let schema_clone = Arc::clone(&schema);
 
-        let stream = try_fn_stream(|emitter| async move {
-            let s = SortPreservingMergeStream::new(
+        let stream = Gen::new(|co| async move {
+            let mut s = SortPreservingMergeStream::new(
                 streams,
                 schema,
                 metrics,
@@ -213,10 +195,12 @@ impl<C: CursorValues + Sync + Send> SortPreservingMergeStream<C> {
                 fetch,
                 reservation,
                 enable_round_robin_tie_breaker,
-                emitter
             );
 
-            s.run().await
+            // An error aborts the stream: yield it as the final item, then stop.
+            if let Err(e) = s.run(&co).await {
+                co.yield_(Err(e)).await;
+            }
         });
 
         Box::pin(RecordBatchStreamAdapter::new(schema_clone, stream))
@@ -248,7 +232,7 @@ impl<C: CursorValues + Sync + Send> SortPreservingMergeStream<C> {
         result
     }
 
-    async fn run(mut self) -> Result<()> {
+    async fn run(&mut self, co: &Co<Result<RecordBatch>>) -> Result<()> {
         // Prime the first batch of every partition, then build the loser tree.
         // With yield support this is a plain sequential loop — no need to track
         // `uninitiated_partitions` across re-entrant polls, and a `Pending`
@@ -285,7 +269,7 @@ impl<C: CursorValues + Sync + Send> SortPreservingMergeStream<C> {
             if self.in_progress.len() >= self.batch_size {
                 if let Some(batch) = self.emit_in_progress_batch()? {
                     drop(timer);
-                    self.emitter.emit(batch).await;
+                    co.yield_(Ok(batch)).await;
                     timer = elapsed_compute.timer();
                 }
             }
@@ -309,7 +293,7 @@ impl<C: CursorValues + Sync + Send> SortPreservingMergeStream<C> {
         // only a partial batch. Each iteration emits another partial batch until
         // `in_progress` is fully drained, so nothing is silently dropped.
         while let Some(batch) = self.emit_in_progress_batch()? {
-            self.emitter.emit(batch).await;
+            co.yield_(Ok(batch)).await;
         }
         Ok(())
     }
@@ -567,6 +551,7 @@ mod tests {
         MemoryConsumer, MemoryPool, UnboundedMemoryPool,
     };
     use std::cmp::Ordering;
+    use std::task::{Context, Poll};
 
     #[derive(Debug)]
     struct EmptyPartitionedStream;

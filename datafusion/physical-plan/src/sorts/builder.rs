@@ -124,11 +124,6 @@ impl BatchBuilder {
         self.indices.is_empty()
     }
 
-    /// Returns the schema of this [`BatchBuilder`]
-    pub fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-
     /// Try to interleave all columns using the given index slice.
     fn try_interleave_columns(
         &self,

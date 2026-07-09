@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use super::work_table::{ReservedBatches, WorkTable};
 use crate::aggregates::group_values::{GroupValues, new_group_values};
@@ -28,9 +29,8 @@ use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
-use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
 };
 use arrow::array::{BooleanArray, BooleanBuilder};
@@ -45,8 +45,7 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
-use async_fn_stream::try_fn_stream;
-use futures::StreamExt;
+use futures::{Stream, StreamExt, ready};
 
 /// Recursive query execution plan.
 ///
@@ -199,14 +198,14 @@ impl ExecutionPlan for RecursiveQueryExec {
 
         let static_stream = self.static_term.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-        RecursiveQueryStream::build(
+        Ok(Box::pin(RecursiveQueryStream::new(
             context,
             Arc::clone(&self.work_table),
             Arc::clone(&self.recursive_term),
             static_stream,
             self.is_distinct,
             baseline_metrics,
-        )
+        )?))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -260,6 +259,14 @@ struct RecursiveQueryStream {
     work_table: Arc<WorkTable>,
     /// The dynamic part (recursive term) as is (without being executed)
     recursive_term: Arc<dyn ExecutionPlan>,
+    /// The static part (static term) as a stream. If the processing of this
+    /// part is completed, then it will be None.
+    static_stream: Option<SendableRecordBatchStream>,
+    /// The dynamic part (recursive term) as a stream. If the processing of this
+    /// part has not started yet, or has been completed, then it will be None.
+    recursive_stream: Option<SendableRecordBatchStream>,
+    /// The schema of the output.
+    schema: SchemaRef,
     /// In-memory buffer for storing a copy of the current results. Will be
     /// cleared after each iteration.
     buffer: Vec<RecordBatch>,
@@ -272,93 +279,87 @@ struct RecursiveQueryStream {
 }
 
 impl RecursiveQueryStream {
-    /// Build the recursive-query output as a linear async generator.
-    ///
-    /// A recursive CTE is inherently iterative: emit the static term, then run
-    /// the recursive term repeatedly — each iteration feeding the previous
-    /// iteration's rows back through the work table — until an iteration
-    /// produces no new rows. Expressed with `try_fn_stream`, that description is
-    /// the code (see the algorithm doc above): a `while` over the static stream
-    /// followed by a `loop` of recursive iterations, `emitter.emit`-ing every
-    /// batch. State that must survive across iterations (buffer, reservation,
-    /// dedup, metrics) lives on `self`, captured by the async body — the two
-    /// `Option` sub-stream fields and the hand-rolled poll state machine are
-    /// gone.
-    fn build(
+    /// Create a new recursive query stream
+    fn new(
         task_context: Arc<TaskContext>,
         work_table: Arc<WorkTable>,
         recursive_term: Arc<dyn ExecutionPlan>,
         static_stream: SendableRecordBatchStream,
         is_distinct: bool,
         baseline_metrics: BaselineMetrics,
-    ) -> Result<SendableRecordBatchStream> {
+    ) -> Result<Self> {
         let schema = static_stream.schema();
         let reservation =
             MemoryConsumer::new("RecursiveQuery").register(task_context.memory_pool());
         let distinct_deduplicator = is_distinct
             .then(|| DistinctDeduplicator::new(Arc::clone(&schema), &task_context))
             .transpose()?;
-
-        let state = Self {
+        Ok(Self {
             task_context,
             work_table,
             recursive_term,
+            static_stream: Some(static_stream),
+            recursive_stream: None,
+            schema,
             buffer: vec![],
             reservation,
             distinct_deduplicator,
             baseline_metrics,
-        };
-
-        let stream = try_fn_stream(|emitter| async move {
-            let mut state = state;
-            let mut static_stream = static_stream;
-
-            // Static term: forward and buffer every batch.
-            while let Some(batch) = static_stream.next().await {
-                emitter.emit(state.push_batch(batch?)?).await;
-            }
-
-            // Recursive term: iterate until an iteration produces no new rows.
-            loop {
-                let buffered_rows: usize =
-                    state.buffer.iter().map(|b| b.num_rows()).sum();
-                if buffered_rows == 0 {
-                    return Ok(());
-                }
-
-                // Feed the previous iteration's rows into the work table.
-                state.work_table.update(ReservedBatches::new(
-                    std::mem::take(&mut state.buffer),
-                    state.reservation.take(),
-                ));
-
-                // We always (re-)execute partition 0; downstream plans should
-                // not expect any partitioning.
-                let recursive_plan =
-                    reset_plan_states(Arc::clone(&state.recursive_term))?;
-                let mut recursive_stream =
-                    recursive_plan.execute(0, Arc::clone(&state.task_context))?;
-                while let Some(batch) = recursive_stream.next().await {
-                    emitter.emit(state.push_batch(batch?)?).await;
-                }
-            }
-        });
-
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        })
     }
 
-    /// Deduplicate (when `DISTINCT`), account for memory, buffer a copy for the
-    /// next iteration's work table, record output metrics, and return the batch.
-    fn push_batch(&mut self, mut batch: RecordBatch) -> Result<RecordBatch> {
+    /// Push a clone of the given batch to the in memory buffer, and then return
+    /// a poll with it.
+    fn push_batch(
+        mut self: std::pin::Pin<&mut Self>,
+        mut batch: RecordBatch,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        let baseline_metrics = self.baseline_metrics.clone();
+
         if let Some(deduplicator) = &mut self.distinct_deduplicator {
-            let _timer_guard = self.baseline_metrics.elapsed_compute().timer();
+            let _timer_guard = baseline_metrics.elapsed_compute().timer();
             batch = deduplicator.deduplicate(&batch)?;
         }
 
-        self.reservation.try_grow(batch.get_array_memory_size())?;
+        if let Err(e) = self.reservation.try_grow(batch.get_array_memory_size()) {
+            return Poll::Ready(Some(Err(e)));
+        }
         self.buffer.push(batch.clone());
-        (&batch).record_output(&self.baseline_metrics);
-        Ok(batch)
+        (&batch).record_output(&baseline_metrics);
+        Poll::Ready(Some(Ok(batch)))
+    }
+
+    /// Start polling for the next iteration, will be called either after the static term
+    /// is completed or another term is completed. It will follow the algorithm above on
+    /// to check whether the recursion has ended.
+    fn poll_next_iteration(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        let total_length = self
+            .buffer
+            .iter()
+            .fold(0, |acc, batch| acc + batch.num_rows());
+
+        if total_length == 0 {
+            return Poll::Ready(None);
+        }
+
+        // Update the work table with the current buffer
+        let reserved_batches = ReservedBatches::new(
+            std::mem::take(&mut self.buffer),
+            self.reservation.take(),
+        );
+        self.work_table.update(reserved_batches);
+
+        // We always execute (and re-execute iteratively) the first partition.
+        // Downstream plans should not expect any partitioning.
+        let partition = 0;
+
+        let recursive_plan = reset_plan_states(Arc::clone(&self.recursive_term))?;
+        self.recursive_stream =
+            Some(recursive_plan.execute(partition, Arc::clone(&self.task_context))?);
+        self.poll_next(cx)
     }
 }
 
@@ -386,6 +387,48 @@ fn assign_work_table(
     .data()
 }
 
+impl Stream for RecursiveQueryStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if let Some(static_stream) = &mut self.static_stream {
+            // While the static term's stream is available, we'll be forwarding the batches from it (also
+            // saving them for the initial iteration of the recursive term).
+            let batch_result = ready!(static_stream.poll_next_unpin(cx));
+            match &batch_result {
+                None => {
+                    // Once this is done, we can start running the setup for the recursive term.
+                    self.static_stream = None;
+                    self.poll_next_iteration(cx)
+                }
+                Some(Ok(batch)) => self.push_batch(batch.clone()),
+                _ => Poll::Ready(batch_result),
+            }
+        } else if let Some(recursive_stream) = &mut self.recursive_stream {
+            let batch_result = ready!(recursive_stream.poll_next_unpin(cx));
+            match batch_result {
+                None => {
+                    self.recursive_stream = None;
+                    self.poll_next_iteration(cx)
+                }
+                Some(Ok(batch)) => self.push_batch(batch),
+                _ => Poll::Ready(batch_result),
+            }
+        } else {
+            Poll::Ready(None)
+        }
+    }
+}
+
+impl RecordBatchStream for RecursiveQueryStream {
+    /// Get the schema
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
 
 /// Deduplicator based on a hash table.
 struct DistinctDeduplicator {

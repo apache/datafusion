@@ -477,17 +477,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f4de21c0feef7e5a556e51af767c953f0501f7f300ba785cc99c47bdc8081a50"
 
 [[package]]
-name = "async-fn-stream"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4ba0c4baf81a0d8ab31618ffa3ae29ceeb970a6d0d82f76130753462e39d0ea"
-dependencies = [
- "futures-util",
- "pin-project-lite",
- "smallvec",
-]
-
-[[package]]
 name = "async-recursion"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2462,7 +2451,6 @@ dependencies = [
  "arrow-ipc",
  "arrow-ord",
  "arrow-schema",
- "async-fn-stream",
  "async-trait",
  "bytes",
  "criterion",
@@ -2480,6 +2468,7 @@ dependencies = [
  "datafusion-proto-common",
  "datafusion-proto-models",
  "futures",
+ "genawaiter",
  "half",
  "hashbrown 0.17.1",
  "indexmap 2.14.0",
@@ -3183,6 +3172,22 @@ dependencies = [
  "pbjson-build 0.9.0",
  "prost-build",
 ]
+
+[[package]]
+name = "genawaiter"
+version = "0.99.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c86bd0361bcbde39b13475e6e36cb24c329964aa2611be285289d1e4b751c1a0"
+dependencies = [
+ "futures-core",
+ "genawaiter-macro",
+]
+
+[[package]]
+name = "genawaiter-macro"
+version = "0.99.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b32dfe1fdfc0bbde1f22a5da25355514b5e450c33a6af6770884c8750aedfbc"
 
 [[package]]
 name = "generic-array"

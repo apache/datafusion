@@ -64,7 +64,7 @@ arrow-data = { workspace = true }
 arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
-async-fn-stream = { workspace = true }
+genawaiter = { workspace = true, features = ["futures03"] }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 datafusion-common = { workspace = true }
