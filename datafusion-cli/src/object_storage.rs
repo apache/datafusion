@@ -679,7 +679,7 @@ mod tests {
         },
     };
     #[cfg(unix)]
-    use std::{ffi::OsString, fs, path::PathBuf, process};
+    use std::{ffi::OsString, fs};
     #[cfg(unix)]
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -854,7 +854,10 @@ mod tests {
     async fn s3_object_store_reuses_fetched_credentials_until_expiry() -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
 
-        let test_dir = unique_temp_dir("datafusion-s3-credential-cache")?;
+        let test_dir_guard = tempfile::Builder::new()
+            .prefix("datafusion-s3-credential-cache")
+            .tempdir()?;
+        let test_dir = test_dir_guard.path();
         let count_path = test_dir.join("credential_process_count");
         let process_path = test_dir.join("credential_process.sh");
         let config_path = test_dir.join("config");
@@ -983,18 +986,6 @@ JSON
                 }
             }
         }
-    }
-
-    #[cfg(unix)]
-    fn unique_temp_dir(prefix: &str) -> Result<PathBuf> {
-        let nanos = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", process::id()));
-        fs::create_dir_all(&path)?;
-        Ok(path)
     }
 
     #[tokio::test]
