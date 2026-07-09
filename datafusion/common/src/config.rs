@@ -746,6 +746,15 @@ config_namespace! {
         /// chunked by row count.
         pub target_batch_size_bytes: Option<usize>, default = None
 
+        /// When `target_batch_size_bytes` is unset and the memory pool has a finite
+        /// limit, derive a byte-size target for batches automatically from the pool's
+        /// per-partition share, so queries whose batches are large relative to the
+        /// memory budget re-chunk them (and can complete) instead of failing with
+        /// ResourcesExhausted. Has no effect when there is no memory limit (nothing
+        /// to protect: batches pass through untouched) or when
+        /// `target_batch_size_bytes` is set explicitly.
+        pub adaptive_target_batch_size: bool, default = true
+
         /// A perfect hash join (see `HashJoinExec` for more details) will be considered
         /// if the range of keys (max - min) on the build side is < this threshold.
         /// This provides a fast path for joins with very small key ranges,

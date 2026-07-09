@@ -24,7 +24,7 @@ use std::sync::{Arc, OnceLock};
 
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_plan::batch_normalizer::{
-    BatchNormalizerMetrics, BatchNormalizerStream,
+    BatchNormalizerMetrics, BatchNormalizerStream, effective_target_batch_size_bytes,
 };
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, SchedulingType,
@@ -416,11 +416,7 @@ impl ExecutionPlan for DataSourceExec {
         // With a byte target configured, normalize output batches by both
         // row count and in-memory size (splitting oversized batches and
         // coalescing small ones); otherwise only split by row count.
-        let target_batch_size_bytes = context
-            .session_config()
-            .options()
-            .execution
-            .target_batch_size_bytes;
+        let target_batch_size_bytes = effective_target_batch_size_bytes(&context);
         if let Some(target_bytes) = target_batch_size_bytes {
             log::debug!(
                 "Batch normalization enabled for partition {partition}: \

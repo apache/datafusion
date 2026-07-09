@@ -395,11 +395,8 @@ impl GroupedHashAggregateStream {
         let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
         let batch_size = context.session_config().batch_size();
-        let target_batch_size_bytes = context
-            .session_config()
-            .options()
-            .execution
-            .target_batch_size_bytes;
+        let target_batch_size_bytes =
+            crate::batch_normalizer::effective_target_batch_size_bytes(context);
         let input = agg.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);

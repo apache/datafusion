@@ -59,7 +59,8 @@ use arrow::compute::{BatchCoalescer, take_record_batch};
 use arrow::datatypes::{ByteViewType, SchemaRef};
 use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{Result, assert_or_internal_err};
-use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+use datafusion_execution::memory_pool::MemoryLimit;
+use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use futures::{Stream, StreamExt};
 
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
@@ -84,6 +85,63 @@ const WASTE_RATIO: usize = 2;
 /// compacting every such batch costs a copy per batch for no benefit (the
 /// batches die immediately in streaming pipelines).
 const MIN_WASTE_BYTES: usize = 1024 * 1024;
+
+/// Divisor applied to the per-partition share of a finite memory pool to
+/// derive an adaptive byte target: `pool_size / target_partitions /
+/// ADAPTIVE_TARGET_DIVISOR`.
+///
+/// The margin covers what each partition's operators need per batch beyond
+/// the batch itself: an external sort reserves ~2x a batch's size to buffer
+/// it, its spill merge reserves ~4x the largest spilled batch per stream
+/// (with a read-ahead of 2), and the final sort-preserving merge buffers
+/// batches from every stream concurrently. /16 keeps several such batches
+/// per partition comfortably inside the partition's fair share, empirically
+/// turning "ResourcesExhausted on oversized batches" into completed queries
+/// without shrinking batches so far that per-batch overhead dominates.
+pub const ADAPTIVE_TARGET_DIVISOR: usize = 16;
+
+/// Adaptive targeting only activates when the derived target reaches this
+/// minimum (i.e. the pool holds at least 16MiB per partition). Below it the
+/// pool is too small for re-chunking to change the outcome, so behavior is
+/// left exactly as with no target -- this also keeps carefully-constructed
+/// small-pool OOM scenarios (e.g. in tests) unchanged.
+pub const MIN_ADAPTIVE_TARGET_BYTES: usize = 1024 * 1024;
+
+/// Ceiling for the adaptive byte target. Batches beyond ~16MiB buy no
+/// per-batch-overhead amortization, and empirically the sort/merge machinery
+/// under a tight memory limit is only reliably stable when spilled batches
+/// stay at or below this size; a larger pool share is headroom, not an
+/// invitation for bigger batches.
+pub const MAX_ADAPTIVE_TARGET_BYTES: usize = 16 * 1024 * 1024;
+
+/// Resolve the effective byte-size target for batches under this task
+/// context:
+///
+/// 1. An explicit `datafusion.execution.target_batch_size_bytes` always wins.
+/// 2. Otherwise, if `datafusion.execution.adaptive_target_batch_size` is on
+///    and the memory pool reports a finite limit, the target is derived from
+///    the per-partition share of the pool (see [`ADAPTIVE_TARGET_DIVISOR`]).
+///    With no memory limit there is nothing to protect, so no target is set
+///    and batches are never split or copied.
+/// 3. `None` otherwise: batches are chunked by row count only.
+pub fn effective_target_batch_size_bytes(context: &TaskContext) -> Option<usize> {
+    let options = context.session_config().options();
+    if let Some(target) = options.execution.target_batch_size_bytes {
+        return Some(target);
+    }
+    if !options.execution.adaptive_target_batch_size {
+        return None;
+    }
+    match context.memory_pool().memory_limit() {
+        MemoryLimit::Finite(pool_size) => {
+            let partitions = options.execution.target_partitions.max(1);
+            let target = pool_size / partitions / ADAPTIVE_TARGET_DIVISOR;
+            (target >= MIN_ADAPTIVE_TARGET_BYTES)
+                .then(|| target.min(MAX_ADAPTIVE_TARGET_BYTES))
+        }
+        _ => None,
+    }
+}
 
 /// Metrics for [`BatchNormalizer`]
 #[derive(Debug, Clone, Default)]
@@ -561,6 +619,70 @@ mod tests {
 
     fn logical_size(batch: &RecordBatch) -> usize {
         logical_batch_size(batch).unwrap()
+    }
+
+    // === adaptive target ===
+
+    #[test]
+    fn adaptive_target_from_memory_limit() {
+        use datafusion_execution::TaskContext;
+        use datafusion_execution::config::SessionConfig;
+        use datafusion_execution::memory_pool::{FairSpillPool, GreedyMemoryPool};
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+        let ctx_with =
+            |pool: Option<Arc<dyn datafusion_execution::memory_pool::MemoryPool>>,
+             target: Option<usize>,
+             adaptive: bool,
+             partitions: usize| {
+                let mut config = SessionConfig::new().with_target_partitions(partitions);
+                config.options_mut().execution.target_batch_size_bytes = target;
+                config.options_mut().execution.adaptive_target_batch_size = adaptive;
+                let mut rt = RuntimeEnvBuilder::new();
+                if let Some(pool) = pool {
+                    rt = rt.with_memory_pool(pool);
+                }
+                TaskContext::default()
+                    .with_session_config(config)
+                    .with_runtime(Arc::new(rt.build().unwrap()))
+            };
+
+        // no limit, no explicit target -> disabled
+        let ctx = ctx_with(None, None, true, 8);
+        assert_eq!(effective_target_batch_size_bytes(&ctx), None);
+
+        // finite pool -> pool_size / partitions / ADAPTIVE_TARGET_DIVISOR
+        let pool: Arc<dyn datafusion_execution::memory_pool::MemoryPool> =
+            Arc::new(FairSpillPool::new(2 * 1024 * 1024 * 1024));
+        let ctx = ctx_with(Some(Arc::clone(&pool)), None, true, 8);
+        assert_eq!(
+            effective_target_batch_size_bytes(&ctx),
+            Some(2 * 1024 * 1024 * 1024 / 8 / ADAPTIVE_TARGET_DIVISOR)
+        );
+
+        // explicit target always wins
+        let ctx = ctx_with(Some(Arc::clone(&pool)), Some(123456), true, 8);
+        assert_eq!(effective_target_batch_size_bytes(&ctx), Some(123456));
+
+        // adaptive disabled -> None even with a finite pool
+        let ctx = ctx_with(Some(Arc::clone(&pool)), None, false, 8);
+        assert_eq!(effective_target_batch_size_bytes(&ctx), None);
+
+        // huge pool / few partitions -> clamped to the 16MiB ceiling
+        let pool: Arc<dyn datafusion_execution::memory_pool::MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(64 * 1024 * 1024 * 1024));
+        let ctx = ctx_with(Some(pool), None, true, 4);
+        assert_eq!(
+            effective_target_batch_size_bytes(&ctx),
+            Some(MAX_ADAPTIVE_TARGET_BYTES)
+        );
+
+        // pool too small for the minimum target -> adaptive stays off so
+        // small-pool behavior (and crafted OOM scenarios) is unchanged
+        let pool: Arc<dyn datafusion_execution::memory_pool::MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(64 * 1024 * 1024));
+        let ctx = ctx_with(Some(pool), None, true, 512);
+        assert_eq!(effective_target_batch_size_bytes(&ctx), None);
     }
 
     // === pass through ===

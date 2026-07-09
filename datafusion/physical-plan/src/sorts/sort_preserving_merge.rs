@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use crate::batch_normalizer::effective_target_batch_size_bytes;
 use crate::common::spawn_buffered;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
@@ -363,13 +364,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     .with_expressions(&self.expr)
                     .with_metrics(BaselineMetrics::new(&self.metrics, partition))
                     .with_batch_size(context.session_config().batch_size())
-                    .with_batch_size_bytes(
-                        context
-                            .session_config()
-                            .options()
-                            .execution
-                            .target_batch_size_bytes,
-                    )
+                    .with_batch_size_bytes(effective_target_batch_size_bytes(&context))
                     .with_fetch(self.fetch)
                     .with_reservation(reservation)
                     .with_round_robin_tie_breaker(self.enable_round_robin_repartition)

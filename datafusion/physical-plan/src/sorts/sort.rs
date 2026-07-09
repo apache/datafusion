@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use crate::batch_normalizer::effective_target_batch_size_bytes;
 use crate::common::spawn_buffered;
 use crate::execution_plan::{
     Boundedness, CardinalityEffect, EmissionType, has_same_children_properties,
@@ -1403,7 +1404,7 @@ impl ExecutionPlan for SortExec {
                     input.schema(),
                     self.expr.clone(),
                     context.session_config().batch_size(),
-                    execution_options.target_batch_size_bytes,
+                    effective_target_batch_size_bytes(&context),
                     execution_options.sort_spill_reservation_bytes,
                     execution_options.sort_in_place_threshold_bytes,
                     context.session_config().spill_compression(),
