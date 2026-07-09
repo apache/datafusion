@@ -28,7 +28,7 @@ use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::BatchBuilder;
 use crate::sorts::cursor::{Cursor, CursorValues};
 use crate::sorts::stream::PartitionedStream;
-use crate::stream::RecordBatchStreamAdapter;
+use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -198,7 +198,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             }
         });
 
-        Box::pin(RecordBatchStreamAdapter::new(schema_clone, stream).with_metrics(cloned_metrics))
+        let stream = Box::pin(RecordBatchStreamAdapter::new(schema_clone, stream));
+
+        Box::pin(ObservedStream::new(stream, cloned_metrics, None))
     }
 
     /// If the stream at the given index is not exhausted, and the last cursor for the
