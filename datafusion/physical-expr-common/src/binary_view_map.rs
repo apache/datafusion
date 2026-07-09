@@ -277,9 +277,6 @@ where
 
         let input_has_buffers = !values.data_buffers().is_empty();
         self.input_view_to_payload.clear();
-        let mut num_cache_lookups = 0usize;
-        let mut num_cache_hits = 0usize;
-        let mut num_cache_inserts = 0usize;
         for i in 0..values.len() {
             let view_u128 = input_views[i];
             let hash = self.hashes_buffer[i];
@@ -305,7 +302,6 @@ where
 
             let cached_payload = if input_has_buffers && len > 12 {
                 let input_buffer_location = Self::buffer_location(view_u128);
-                num_cache_lookups += 1;
                 self.input_view_to_payload
                     .raw_entry()
                     .from_hash(hash, |cached_location| {
@@ -317,7 +313,6 @@ where
             };
 
             if let Some(payload) = cached_payload {
-                num_cache_hits += 1;
                 observe_payload_fn(payload);
                 continue;
             }
@@ -370,7 +365,6 @@ where
                                 input_buffer_location,
                                 payload,
                             );
-                            num_cache_inserts += 1;
                         }
                     }
                 }
@@ -411,16 +405,6 @@ where
             };
             observe_payload_fn(payload);
         }
-
-        dbg!((
-            "ArrowBytesViewMap::input_view_cache",
-            values.len(),
-            num_cache_lookups,
-            num_cache_hits,
-            num_cache_inserts,
-            self.input_view_to_payload.len(),
-            self.input_view_to_payload.capacity(),
-        ));
     }
 
     #[inline(always)]
