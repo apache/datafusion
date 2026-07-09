@@ -53,6 +53,14 @@ pub struct ParquetFileMetrics {
     pub limit_pruned_row_groups: PruningMetrics,
     /// Number of row groups pruned by statistics
     pub row_groups_pruned_statistics: PruningMetrics,
+    /// Number of row groups pruned at runtime by a dynamic predicate
+    /// (e.g. the threshold expression a TopK `SortExec` pushes down).
+    ///
+    /// Unlike [`Self::row_groups_pruned_statistics`], which is decided once
+    /// at access-plan time, this counter reflects row groups that survived
+    /// the initial pruning but were proved unreachable mid-scan after the
+    /// dynamic filter tightened.
+    pub row_groups_pruned_dynamic_filter: Count,
     /// Total number of bytes scanned
     pub bytes_scanned: Count,
     /// Total rows filtered out by predicates pushed into parquet scan
@@ -198,6 +206,11 @@ impl ParquetFileMetrics {
             .with_category(MetricCategory::Rows)
             .gauge("predicate_cache_records", partition);
 
+        let row_groups_pruned_dynamic_filter = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::Summary)
+            .counter("row_groups_pruned_dynamic_filter", partition);
+
         Self {
             files_ranges_pruned_statistics,
             predicate_evaluation_errors,
@@ -217,6 +230,7 @@ impl ParquetFileMetrics {
             scan_efficiency_ratio,
             predicate_cache_inner_records,
             predicate_cache_records,
+            row_groups_pruned_dynamic_filter,
         }
     }
 
@@ -241,6 +255,25 @@ impl ParquetFileMetrics {
             .with_type(MetricType::Summary)
             .with_category(MetricCategory::Rows)
             .counter("page_index_pages_skipped_by_fully_matched", partition);
+        count.add(n);
+    }
+
+    /// Record that page index I/O was skipped because row-group statistics
+    /// already proved page index could not prune further.
+    pub(crate) fn add_page_index_load_skipped(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        filename: &str,
+        n: usize,
+    ) {
+        if n == 0 {
+            return;
+        }
+
+        let count = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::Summary)
+            .counter("page_index_load_skipped", partition);
         count.add(n);
     }
 }

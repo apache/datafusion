@@ -496,6 +496,49 @@ The ClickBench[1] benchmarks are widely cited in the industry and
 focus on grouping / aggregation / filtering. This runner uses the
 scripts and queries from [2].
 
+The runner applies two ClickBench-specific setup steps automatically:
+
+- ClickBench stores `EventDate` as `UInt16` days since `1970-01-01`.
+  The runner registers the parquet data as `hits_raw`, then creates a
+  `hits` view that casts `EventDate` through `INTEGER` to `DATE` for the
+  benchmark queries.
+- The source partitioned ClickBench dataset stores string columns without
+  the `string` Parquet logical type annotation. For partitioned runs, the
+  runner enables the parquet `binary_as_string` option so those columns
+  are read as strings.
+
+If you set up ClickBench manually through SQL, use the same `EventDate`
+view pattern:
+
+```sql
+CREATE EXTERNAL TABLE hits_raw
+STORED AS PARQUET
+LOCATION 'benchmarks/data/hits.parquet';
+
+CREATE VIEW hits AS
+SELECT * EXCEPT ("EventDate"),
+       CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
+FROM hits_raw;
+```
+
+For the partitioned dataset, use `benchmarks/data/hits_partitioned` and
+add `OPTIONS ('binary_as_string' 'true')` to the external table statement.
+
+From the repository root, download data and run the default ClickBench
+queries against the single parquet file:
+
+```shell
+./benchmarks/bench.sh data clickbench_1
+./benchmarks/bench.sh run clickbench_1
+```
+
+Or run against the partitioned dataset:
+
+```shell
+./benchmarks/bench.sh data clickbench_partitioned
+./benchmarks/bench.sh run clickbench_partitioned
+```
+
 [1]: https://github.com/ClickHouse/ClickBench
 [2]: https://github.com/ClickHouse/ClickBench/tree/main/datafusion
 
@@ -558,7 +601,15 @@ Test performance of end-to-end sort SQL queries. (While the `Sort` benchmark foc
 
 Sort integration benchmark runs whole table sort queries on TPCH `lineitem` table, with different characteristics. For example, different number of sort keys, different sort key cardinality, different number of payload columns, etc.
 
-If the TPCH tables have been converted as sorted on their first column (see [Sorted Conversion](#sorted-conversion)), you can use the `--sorted` flag to indicate that the input data is pre-sorted, allowing DataFusion to leverage that order during query execution.
+The `--sorted` flag does not sort or rewrite the input files. It declares that the `lineitem` Parquet input is already sorted ascending by its first column (`l_orderkey`). DataFusion can then leverage that ordering during query execution.
+
+To generate the expected TPC-H SF=1 Parquet input for this benchmark, run:
+
+```bash
+./bench.sh data tpch
+```
+
+For the `lineitem` table used by `sort-tpch`, this uses `tpchgen-cli` to generate Parquet data that is already ordered by `l_orderkey`. If you use a different input directory, only pass `--sorted` when the `lineitem` files already have that ordering.
 
 Additionally, an optional `--limit` flag is available for the sort benchmark. When specified, this flag appends a `LIMIT n` clause to the SQL query, effectively converting the query into a TopK query. Combining the `--sorted` and `--limit` options enables benchmarking of TopK queries on pre-sorted inputs.
 
@@ -578,7 +629,7 @@ See [`sort_tpch.rs`](src/sort_tpch.rs) for more details.
  cargo run --release --bin dfbench -- sort-tpch -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json' --query 2
 ```
 
-3. Run all queries as TopK queries on presorted data:
+3. Run all queries as TopK queries on already sorted data:
 
 ```bash
  cargo run --release --bin dfbench -- sort-tpch --sorted --limit 10 -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json'
@@ -597,6 +648,14 @@ In addition, topk_tpch is available from the bench.sh script:
 ```bash
 ./bench.sh run topk_tpch
 ```
+
+To benchmark TopK queries on TPC-H `lineitem` input ordered by `l_orderkey`, use:
+
+```bash
+./bench.sh run topk_sorted_tpch
+```
+
+This runs `dfbench sort-tpch --sorted --limit 100` through the benchmark script, using `--sorted` to declare the existing `l_orderkey` ordering.
 
 ## IMDB
 

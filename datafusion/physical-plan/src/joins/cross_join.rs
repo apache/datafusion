@@ -31,6 +31,7 @@ use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs,
 };
+use crate::statistics::StatisticsArgs;
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
@@ -371,11 +372,14 @@ impl ExecutionPlan for CrossJoinExec {
         }
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        // Get the all partitions statistics of the left
-        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
-        let right_stats =
-            Arc::unwrap_or_clone(self.right.partition_statistics(partition)?);
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        // Left side is always broadcast, so it always needs overall stats
+        let left_stats =
+            Arc::unwrap_or_clone(args.compute_child_statistics(&self.left, None)?);
+        // Right side is partitioned, so it needs per-partition stats
+        let right_stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.right, args.partition())?,
+        );
 
         Ok(Arc::new(stats_cartesian_product(left_stats, right_stats)))
     }

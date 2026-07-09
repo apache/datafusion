@@ -24,6 +24,7 @@ use std::task::{Context, Poll};
 use super::utils::create_schema;
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::statistics::StatisticsArgs;
 use crate::stream::EmptyRecordBatchStream;
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -243,7 +244,7 @@ impl ExecutionPlan for WindowAggExec {
         if self.partition_keys().is_empty() {
             vec![Distribution::SinglePartition]
         } else {
-            vec![Distribution::HashPartitioned(self.partition_keys())]
+            vec![Distribution::KeyPartitioned(self.partition_keys())]
         }
     }
 
@@ -280,9 +281,10 @@ impl ExecutionPlan for WindowAggExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let input_stat =
-            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let input_stat = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.input, args.partition())?,
+        );
         let win_cols = self.window_expr.len();
         let input_cols = self.input.schema().fields().len();
         // TODO stats: some windowing function will maintain invariants such as min, max...

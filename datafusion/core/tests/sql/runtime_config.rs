@@ -23,11 +23,15 @@ use std::time::Duration;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::context::TaskContext;
 use datafusion::prelude::SessionConfig;
-use datafusion_execution::cache::DefaultListFilesCache;
-use datafusion_execution::cache::cache_manager::CacheManagerConfig;
-use datafusion_execution::cache::file_statistics_cache::DefaultFileStatisticsCache;
+use datafusion_execution::cache::cache_manager::{
+    CacheManagerConfig, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
+    DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
+};
+use datafusion_execution::cache::default_cache::DefaultCache;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_plan::common::collect;
+
+use crate::helper::plan_metrics::plan_spill_count;
 
 #[tokio::test]
 async fn test_memory_limit_with_spill() {
@@ -55,8 +59,7 @@ async fn test_memory_limit_with_spill() {
     let stream = plan.execute(0, task_ctx).unwrap();
 
     let _results = collect(stream).await;
-    let metrics = plan.metrics().unwrap();
-    let spill_count = metrics.spill_count().unwrap();
+    let spill_count = plan_spill_count(plan.as_ref());
     assert!(spill_count > 0, "Expected spills but none occurred");
 }
 
@@ -85,8 +88,7 @@ async fn test_no_spill_with_adequate_memory() {
     let stream = plan.execute(0, task_ctx).unwrap();
 
     let _results = collect(stream).await;
-    let metrics = plan.metrics().unwrap();
-    let spill_count = metrics.spill_count().unwrap();
+    let spill_count = plan_spill_count(plan.as_ref());
     assert_eq!(spill_count, 0, "Expected no spills but some occurred");
 }
 
@@ -113,7 +115,7 @@ async fn test_multiple_configs() {
     assert!(result.is_ok(), "Should not fail due to memory limit");
 
     let state = ctx.state();
-    let batch_size = state.config().options().execution.batch_size;
+    let batch_size = state.config().options().execution.batch_size.get();
     assert_eq!(batch_size, 2048);
 }
 
@@ -226,6 +228,34 @@ async fn test_max_temp_directory_size_enforcement() {
 }
 
 #[tokio::test]
+async fn test_max_spill_merge_fan_in_runtime_config() {
+    let ctx = SessionContext::new();
+
+    ctx.sql("SET datafusion.runtime.max_spill_merge_fan_in = '8'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(ctx.runtime_env().disk_manager.max_spill_merge_fan_in(), 8);
+
+    ctx.sql("RESET datafusion.runtime.max_spill_merge_fan_in")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(ctx.runtime_env().disk_manager.max_spill_merge_fan_in(), 0);
+
+    let error = ctx
+        .sql("SET datafusion.runtime.max_spill_merge_fan_in = '-1'")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Failed to parse non-negative integer"));
+}
+
+#[tokio::test]
 async fn test_test_metadata_cache_limit() {
     let ctx = SessionContext::new();
 
@@ -260,7 +290,8 @@ async fn test_test_metadata_cache_limit() {
 
 #[tokio::test]
 async fn test_list_files_cache_limit() {
-    let list_files_cache = Arc::new(DefaultListFilesCache::default());
+    let list_files_cache =
+        Arc::new(DefaultCache::new(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT));
 
     let rt = RuntimeEnvBuilder::new()
         .with_cache_manager(
@@ -303,7 +334,8 @@ async fn test_list_files_cache_limit() {
 
 #[tokio::test]
 async fn test_list_files_cache_ttl() {
-    let list_files_cache = Arc::new(DefaultListFilesCache::default());
+    let list_files_cache =
+        Arc::new(DefaultCache::new(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT));
 
     let rt = RuntimeEnvBuilder::new()
         .with_cache_manager(
@@ -347,7 +379,8 @@ async fn test_list_files_cache_ttl() {
 
 #[tokio::test]
 async fn test_file_statistics_cache_limit() {
-    let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+    let file_statistics_cache =
+        Arc::new(DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT));
 
     let rt = RuntimeEnvBuilder::new()
         .with_cache_manager(

@@ -473,6 +473,10 @@ impl Partitioning {
 
     /// Returns how this [`Partitioning`] satisfies the partitioning scheme mandated
     /// by the `required` [`Distribution`].
+    #[expect(
+        deprecated,
+        reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+    )]
     pub fn satisfaction(
         &self,
         required: &Distribution,
@@ -484,11 +488,14 @@ impl Partitioning {
             Distribution::SinglePartition if self.partition_count() == 1 => {
                 PartitioningSatisfaction::Exact
             }
-            // When partition count is 1, hash requirement is satisfied.
-            Distribution::HashPartitioned(_) if self.partition_count() == 1 => {
+            // When partition count is 1, key partitioning is satisfied.
+            Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_)
+                if self.partition_count() == 1 =>
+            {
                 PartitioningSatisfaction::Exact
             }
-            Distribution::HashPartitioned(required_exprs) => match self {
+            Distribution::HashPartitioned(required_exprs)
+            | Distribution::KeyPartitioned(required_exprs) => match self {
                 // Here we do not check the partition count for hash partitioning and assumes the partition count
                 // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
                 // then we need to have the partition count and hash functions validation.
@@ -593,11 +600,19 @@ pub enum Distribution {
     UnspecifiedDistribution,
     /// A single partition is required
     SinglePartition,
+    /// Deprecated historical name for [`Distribution::KeyPartitioned`].
+    /// See <https://github.com/apache/datafusion/issues/23236> for details.
+    #[deprecated(since = "55.0.0", note = "Use Distribution::KeyPartitioned")]
+    HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
     /// Requires children to be distributed in such a way that the same
     /// values of the keys end up in the same partition
-    HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
+    KeyPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
+#[expect(
+    deprecated,
+    reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+)]
 impl Distribution {
     /// Creates a `Partitioning` that satisfies this `Distribution`
     pub fn create_partitioning(self, partition_count: usize) -> Partitioning {
@@ -606,13 +621,17 @@ impl Distribution {
                 Partitioning::UnknownPartitioning(partition_count)
             }
             Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
-            Distribution::HashPartitioned(expr) => {
+            Distribution::HashPartitioned(expr) | Distribution::KeyPartitioned(expr) => {
                 Partitioning::Hash(expr, partition_count)
             }
         }
     }
 }
 
+#[expect(
+    deprecated,
+    reason = "HashPartitioned display is preserved during the KeyPartitioned migration"
+)]
 impl Display for Distribution {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -620,6 +639,9 @@ impl Display for Distribution {
             Distribution::SinglePartition => write!(f, "SinglePartition"),
             Distribution::HashPartitioned(exprs) => {
                 write!(f, "HashPartitioned[{}])", format_physical_expr_list(exprs))
+            }
+            Distribution::KeyPartitioned(exprs) => {
+                write!(f, "KeyPartitioned[{}])", format_physical_expr_list(exprs))
             }
         }
     }
@@ -689,11 +711,11 @@ mod tests {
             Partitioning::Hash(self.cols(indices), partition_count)
         }
 
-        fn hash_distribution(
+        fn key_distribution(
             &self,
             indices: impl IntoIterator<Item = usize>,
         ) -> Distribution {
-            Distribution::HashPartitioned(self.cols(indices))
+            Distribution::KeyPartitioned(self.cols(indices))
         }
 
         fn range_sort_expr(
@@ -746,6 +768,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        deprecated,
+        reason = "test intentionally covers deprecated HashPartitioned compatibility"
+    )]
     fn partitioning_satisfy_distribution() -> Result<()> {
         let fixture = PartitioningTestFixture::new(vec![
             ("column_1", DataType::Int64),
@@ -755,7 +781,8 @@ mod tests {
         let distribution_types = vec![
             Distribution::UnspecifiedDistribution,
             Distribution::SinglePartition,
-            fixture.hash_distribution([0, 1]),
+            Distribution::HashPartitioned(fixture.cols([0, 1])),
+            fixture.key_distribution([0, 1]),
         ];
 
         let single_partition = Partitioning::UnknownPartitioning(1);
@@ -790,11 +817,34 @@ mod tests {
                 Distribution::SinglePartition => {
                     assert_eq!(result, (true, false, false, false, false))
                 }
-                Distribution::HashPartitioned(_) => {
+                Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_) => {
                     assert_eq!(result, (true, false, false, true, false))
                 }
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    #[expect(
+        deprecated,
+        reason = "test intentionally covers deprecated HashPartitioned compatibility"
+    )]
+    fn deprecated_hash_partitioned_matches_key_partitioned() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let partitioning = fixture.hash_partitioning([0, 1], 4);
+        let hash_distribution = Distribution::HashPartitioned(fixture.cols([0, 1]));
+        let key_distribution = fixture.key_distribution([0, 1]);
+
+        assert_eq!(
+            partitioning.satisfaction(&hash_distribution, &fixture.eq_properties, false),
+            partitioning.satisfaction(&key_distribution, &fixture.eq_properties, false)
+        );
+        assert_eq!(
+            hash_distribution.create_partitioning(4),
+            key_distribution.create_partitioning(4)
+        );
 
         Ok(())
     }
@@ -805,37 +855,37 @@ mod tests {
 
         let test_cases = vec![
             (
-                "Hash([a]) vs Hash([a, b])",
+                "KeyPartitioned([a, b]) satisfied by Hash([a])",
                 fixture.hash_partitioning([0], 4),
-                fixture.hash_distribution([0, 1]),
+                fixture.key_distribution([0, 1]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a]) vs Hash([a, b, c])",
+                "KeyPartitioned([a, b, c]) satisfied by Hash([a])",
                 fixture.hash_partitioning([0], 4),
-                fixture.hash_distribution([0, 1, 2]),
+                fixture.key_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a, b]) vs Hash([a, b, c])",
+                "KeyPartitioned([a, b, c]) satisfied by Hash([a, b])",
                 fixture.hash_partitioning([0, 1], 4),
-                fixture.hash_distribution([0, 1, 2]),
+                fixture.key_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([b]) vs Hash([a, b, c])",
+                "KeyPartitioned([a, b, c]) satisfied by Hash([b])",
                 fixture.hash_partitioning([1], 4),
-                fixture.hash_distribution([0, 1, 2]),
+                fixture.key_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([b, a]) vs Hash([a, b, c])",
+                "KeyPartitioned([a, b, c]) satisfied by Hash([b, a])",
                 fixture.hash_partitioning([1, 0], 4),
-                fixture.hash_distribution([0, 1, 2]),
+                fixture.key_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -866,23 +916,23 @@ mod tests {
 
         let test_cases = vec![
             (
-                "Hash([a, b]) vs Hash([a])",
+                "KeyPartitioned([a]) satisfied by Hash([a, b])",
                 fixture.hash_partitioning([0, 1], 4),
-                fixture.hash_distribution([0]),
+                fixture.key_distribution([0]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a, b, c]) vs Hash([a])",
+                "KeyPartitioned([a]) satisfied by Hash([a, b, c])",
                 fixture.hash_partitioning([0, 1, 2], 4),
-                fixture.hash_distribution([0]),
+                fixture.key_distribution([0]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a, b, c]) vs Hash([a, b])",
+                "KeyPartitioned([a, b]) satisfied by Hash([a, b, c])",
                 fixture.hash_partitioning([0, 1, 2], 4),
-                fixture.hash_distribution([0, 1]),
+                fixture.key_distribution([0, 1]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -912,9 +962,9 @@ mod tests {
         let fixture = PartitioningTestFixture::int64(&["a", "b", "c"])?;
 
         let test_cases = vec![(
-            "Partial overlap: Hash([a, c]) vs Hash([a, b])",
+            "Partial overlap: KeyPartitioned([a, b]) satisfied by Hash([a, c])",
             fixture.hash_partitioning([0, 2], 4),
-            fixture.hash_distribution([0, 1]),
+            fixture.key_distribution([0, 1]),
             PartitioningSatisfaction::NotSatisfied,
             PartitioningSatisfaction::NotSatisfied,
         )];
@@ -944,16 +994,16 @@ mod tests {
 
         let test_cases = vec![
             (
-                "Hash([a]) vs Hash([b, c])",
+                "KeyPartitioned([b, c]) satisfied by Hash([a])",
                 fixture.hash_partitioning([0], 4),
-                fixture.hash_distribution([1, 2]),
+                fixture.key_distribution([1, 2]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a, b]) vs Hash([c])",
+                "KeyPartitioned([c]) satisfied by Hash([a, b])",
                 fixture.hash_partitioning([0, 1], 4),
-                fixture.hash_distribution([2]),
+                fixture.key_distribution([2]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -984,16 +1034,16 @@ mod tests {
 
         let test_cases = vec![
             (
-                "Hash([a, b]) vs Hash([a, b])",
+                "KeyPartitioned([a, b]) satisfied by Hash([a, b])",
                 fixture.hash_partitioning([0, 1], 4),
-                fixture.hash_distribution([0, 1]),
+                fixture.key_distribution([0, 1]),
                 PartitioningSatisfaction::Exact,
                 PartitioningSatisfaction::Exact,
             ),
             (
-                "Hash([a]) vs Hash([a])",
+                "KeyPartitioned([a]) satisfied by Hash([a])",
                 fixture.hash_partitioning([0], 4),
-                fixture.hash_distribution([0]),
+                fixture.key_distribution([0]),
                 PartitioningSatisfaction::Exact,
                 PartitioningSatisfaction::Exact,
             ),
@@ -1025,23 +1075,23 @@ mod tests {
 
         let test_cases = vec![
             (
-                "Hash([unknown]) vs Hash([a, b])",
+                "KeyPartitioned([a, b]) satisfied by Hash([unknown])",
                 Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
-                fixture.hash_distribution([0, 1]),
+                fixture.key_distribution([0, 1]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a, b]) vs Hash([unknown])",
+                "KeyPartitioned([unknown]) satisfied by Hash([a, b])",
                 fixture.hash_partitioning([0, 1], 4),
-                Distribution::HashPartitioned(vec![Arc::clone(&unknown)]),
+                Distribution::KeyPartitioned(vec![Arc::clone(&unknown)]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([unknown]) vs Hash([unknown])",
+                "KeyPartitioned([unknown]) satisfied by Hash([unknown])",
                 Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
-                Distribution::HashPartitioned(vec![Arc::clone(&unknown)]),
+                Distribution::KeyPartitioned(vec![Arc::clone(&unknown)]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -1072,23 +1122,23 @@ mod tests {
 
         let test_cases = vec![
             (
-                "Hash([]) vs Hash([a])",
+                "KeyPartitioned([a]) satisfied by Hash([])",
                 Partitioning::Hash(vec![], 4),
-                fixture.hash_distribution([0]),
+                fixture.key_distribution([0]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a]) vs Hash([])",
+                "KeyPartitioned([]) satisfied by Hash([a])",
                 fixture.hash_partitioning([0], 4),
-                Distribution::HashPartitioned(vec![]),
+                Distribution::KeyPartitioned(vec![]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([]) vs Hash([])",
+                "KeyPartitioned([]) satisfied by Hash([])",
                 Partitioning::Hash(vec![], 4),
-                Distribution::HashPartitioned(vec![]),
+                Distribution::KeyPartitioned(vec![]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -1410,7 +1460,7 @@ mod tests {
         let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
         let range_partitioning =
             fixture.range_partitioning([0, 1], vec![int_split_point([10, 100])]);
-        let required = fixture.hash_distribution([0, 1]);
+        let required = fixture.key_distribution([0, 1]);
 
         assert_eq!(
             range_partitioning.satisfaction(&required, &fixture.eq_properties, false),

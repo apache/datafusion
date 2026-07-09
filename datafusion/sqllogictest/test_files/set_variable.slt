@@ -104,12 +104,12 @@ statement ok
 set datafusion.catalog.information_schema = true
 
 statement ok
-SET datafusion.execution.batch_size to 0
+SET datafusion.execution.batch_size to 310104
 
 query TT
 SHOW datafusion.execution.batch_size
 ----
-datafusion.execution.batch_size 0
+datafusion.execution.batch_size 310104
 
 statement ok
 SET datafusion.execution.batch_size to '1'
@@ -382,7 +382,7 @@ statement error DataFusion error: Invalid or Unsupported Configuration: Config v
 RESET datafusion.execution.batches_size
 
 # reset invalid variable - extra suffix on valid field
-statement error DataFusion error: Invalid or Unsupported Configuration: Config field is a scalar usize and does not have nested field "bar"
+statement error DataFusion error: Invalid or Unsupported Configuration: Config field batch_size is a scalar ConfigNonZeroUsize and does not have nested field "bar"
 RESET datafusion.execution.batch_size.bar
 
 #############################################
@@ -611,6 +611,18 @@ SHOW datafusion.runtime.max_temp_directory_size
 ----
 datafusion.runtime.max_temp_directory_size 10G
 
+# Test SET and SHOW runtime.max_spill_merge_fan_in
+statement ok
+SET datafusion.runtime.max_spill_merge_fan_in = '16'
+
+query TT
+SHOW datafusion.runtime.max_spill_merge_fan_in
+----
+datafusion.runtime.max_spill_merge_fan_in 16
+
+statement ok
+RESET datafusion.runtime.max_spill_merge_fan_in
+
 # Test SET and SHOW runtime.file_statistics_cache_limit
 statement ok
 SET datafusion.runtime.file_statistics_cache_limit = '42M'
@@ -669,6 +681,7 @@ SELECT name FROM information_schema.df_settings WHERE name LIKE 'datafusion.runt
 datafusion.runtime.file_statistics_cache_limit
 datafusion.runtime.list_files_cache_limit
 datafusion.runtime.list_files_cache_ttl
+datafusion.runtime.max_spill_merge_fan_in
 datafusion.runtime.max_temp_directory_size
 datafusion.runtime.memory_limit
 datafusion.runtime.metadata_cache_limit
@@ -706,6 +719,10 @@ SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551555s'
 
 statement error DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins \* 60 \+ secs' when setting 'datafusion\.runtime\.list_files_cache_ttl'
 SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551556s'
+
+# Set invalid value and ensures error
+statement error DataFusion error: Invalid or Unsupported Configuration: value must be greater than 0
+SET datafusion.execution.batch_size = 0
 
 # Config reset
 statement ok

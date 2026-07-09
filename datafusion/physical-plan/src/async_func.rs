@@ -208,7 +208,7 @@ impl ExecutionPlan for AsyncFuncExec {
             input_stream,
             batch_coalescer: LimitedBatchCoalescer::new(
                 Arc::clone(&self.input.schema()),
-                config_options_ref.execution.batch_size,
+                config_options_ref.execution.batch_size.get(),
                 None,
             ),
         };

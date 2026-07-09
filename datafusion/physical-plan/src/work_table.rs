@@ -29,6 +29,7 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
+use crate::statistics::StatisticsArgs;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_datafusion_err};
@@ -227,7 +228,7 @@ impl ExecutionPlan for WorkTableExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
+    fn statistics_with_args(&self, _args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         Ok(Arc::new(Statistics::new_unknown(&self.schema())))
     }
 
