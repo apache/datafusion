@@ -38,6 +38,7 @@ use rand::{Rng, SeedableRng};
 const BATCH_SIZE: usize = 1000;
 const TS_BOUND: i64 = 2_006_463_600;
 const SEC_DAY: i64 = 86_400;
+const DAYS_SINCE_EPOCH: i64 = TS_BOUND / SEC_DAY;
 
 fn generate_timestamp_ns_array(rng: &mut StdRng) -> TimestampNanosecondArray {
     TimestampNanosecondArray::from(
@@ -72,18 +73,19 @@ fn generate_timestamp_s_array(rng: &mut StdRng) -> TimestampSecondArray {
 }
 
 fn generate_date32_array(rng: &mut StdRng) -> Date32Array {
-    let days_since_epoch = (TS_BOUND as i32) / SEC_DAY as i32;
+    // Provide days since epoch
     Date32Array::from(
         (0..BATCH_SIZE)
-            .map(|_| rng.random_range(0..days_since_epoch))
+            .map(|_| rng.random_range(0..DAYS_SINCE_EPOCH as i32))
             .collect::<Vec<_>>(),
     )
 }
 
 fn generate_date64_array(rng: &mut StdRng) -> Date64Array {
+    // Provide milliseconds since epoch aligned to day boundaries
     Date64Array::from(
         (0..BATCH_SIZE)
-            .map(|_| rng.random_range(0..TS_BOUND * 1_000))
+            .map(|_| rng.random_range(0..DAYS_SINCE_EPOCH) * SEC_DAY * 1_000)
             .collect::<Vec<_>>(),
     )
 }
