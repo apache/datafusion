@@ -593,8 +593,8 @@ mod tests {
     use datafusion_execution::memory_pool::{
         MemoryConsumer, MemoryPool, UnboundedMemoryPool,
     };
+    use futures::task::noop_waker_ref;
     use std::cmp::Ordering;
-    use std::task::{Context, Poll};
 
     #[derive(Debug)]
     struct EmptyPartitionedStream;
@@ -636,11 +636,8 @@ mod tests {
         }
     }
 
-    /// The merge loop's terminal drain (`while let Some(b) = emit()? { send }`)
-    /// relies on `emit_in_progress_batch` returning buffered rows and then
-    /// `None` once empty. This exercises that primitive directly.
     #[test]
-    fn test_emit_drains_buffered_rows() {
+    fn test_done_drains_buffered_rows() {
         let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
         let reservation = MemoryConsumer::new("test").register(&pool);
@@ -661,13 +658,19 @@ mod tests {
                 .unwrap();
         stream.in_progress.push_batch(0, batch).unwrap();
         stream.in_progress.push_row(0);
+        stream.done = true;
+        stream.drain_in_progress_on_done = true;
 
-        let batch = stream
-            .emit_in_progress_batch()
-            .unwrap()
-            .expect("buffered row should be emitted");
-        assert_eq!(batch.num_rows(), 1);
+        let waker = noop_waker_ref();
+        let mut cx = Context::from_waker(waker);
+
+        match stream.poll_next_inner(&mut cx) {
+            Poll::Ready(Some(Ok(batch))) => assert_eq!(batch.num_rows(), 1),
+            other => {
+                panic!("expected buffered rows to be drained after done, got {other:?}")
+            }
+        }
         assert!(stream.in_progress.is_empty());
-        assert!(stream.emit_in_progress_batch().unwrap().is_none());
+        assert!(matches!(stream.poll_next_inner(&mut cx), Poll::Ready(None)));
     }
 }
