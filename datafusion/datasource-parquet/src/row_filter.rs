@@ -68,20 +68,16 @@
 use std::sync::Arc;
 
 use arrow::array::BooleanArray;
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
-use datafusion_functions::core::file_row_index::FileRowIndexFunc;
-use datafusion_functions::core::getfield::GetFieldFunc;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::file::metadata::ParquetMetaData;
 
 use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_physical_expr::ScalarFunctionExpr;
-use datafusion_physical_expr::expressions::{Column, Literal};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
@@ -90,8 +86,8 @@ use datafusion_physical_plan::metrics;
 use super::ParquetFileMetrics;
 use super::supported_predicates::supports_list_predicates;
 use crate::projection_read_plan::{
-    ParquetReadPlan, StructFieldAccess, build_filter_schema, leaf_indices_for_roots,
-    resolve_struct_field_leaves,
+    ParquetReadPlan, PushdownChecker, PushdownColumns, build_filter_schema,
+    leaf_indices_for_roots, resolve_struct_field_leaves,
 };
 
 /// A "compiled" predicate passed to `ParquetRecordBatchStream` to perform
@@ -230,276 +226,6 @@ impl FilterCandidateBuilder {
             ),
         )
     }
-}
-
-/// Traverses a `PhysicalExpr` tree to determine if any column references would
-/// prevent the expression from being pushed down to the parquet decoder.
-///
-/// An expression cannot be pushed down if it references:
-/// - Unsupported nested columns (whole struct references or list fields that are
-///   not covered by the supported predicate set)
-/// - Columns that don't exist in the file schema
-///
-/// Struct field access via `get_field` is supported when the resolved leaf type
-/// is primitive (e.g. `get_field(struct_col, 'field') > 5`).
-pub(crate) struct PushdownChecker<'schema> {
-    /// Does the expression require any non-primitive columns (like structs)?
-    non_primitive_columns: bool,
-    /// Does the expression reference any columns not present in the file schema?
-    projected_columns: bool,
-    /// Does the expression references a ScalarUDF that requires some rewrite
-    /// and therefore can't be pushed down into the row-filter.
-    has_unpushable_udfs: bool,
-    /// Indices into the file schema of columns required to evaluate the expression.
-    /// Does not include struct columns accessed via `get_field`.
-    required_columns: Vec<usize>,
-    /// Struct field accesses via `get_field`.
-    struct_field_accesses: Vec<StructFieldAccess>,
-    /// Whether nested list columns are supported by the predicate semantics.
-    allow_list_columns: bool,
-    /// The Arrow schema of the parquet file.
-    file_schema: &'schema Schema,
-}
-
-impl<'schema> PushdownChecker<'schema> {
-    pub(crate) fn new(file_schema: &'schema Schema, allow_list_columns: bool) -> Self {
-        Self {
-            non_primitive_columns: false,
-            projected_columns: false,
-            has_unpushable_udfs: false,
-            required_columns: Vec::new(),
-            struct_field_accesses: Vec::new(),
-            allow_list_columns,
-            file_schema,
-        }
-    }
-
-    /// Checks whether a struct's root column exists in the file schema and, if so,
-    /// records its index so the entire struct is decoded for filter evaluation.
-    ///
-    /// This is called when we see a `get_field` expression that resolves to a
-    /// primitive leaf type. We only need the *root* column index because the
-    /// Parquet reader decodes all leaves of a struct together.
-    ///
-    /// # Example
-    ///
-    /// Given file schema `{a: Int32, s: Struct(foo: Utf8, bar: Int64)}` and the
-    /// expression `get_field(s, 'foo') = 'hello'`:
-    ///
-    /// - `column_name` = `"s"` (the root struct column)
-    /// - `file_schema.index_of("s")` returns `1`
-    /// - We push `1` into `required_columns`
-    /// - Return `None` (no issue — traversal continues in the caller)
-    ///
-    /// If `"s"` is not in the file schema (e.g. a projected-away column), we set
-    /// `projected_columns = true` and return `Jump` to skip the subtree.
-    fn check_struct_field_column(
-        &mut self,
-        column_name: &str,
-        field_path: Vec<String>,
-    ) -> Option<TreeNodeRecursion> {
-        let Ok(idx) = self.file_schema.index_of(column_name) else {
-            self.projected_columns = true;
-            return Some(TreeNodeRecursion::Jump);
-        };
-
-        self.struct_field_accesses.push(StructFieldAccess {
-            root_index: idx,
-            field_path,
-        });
-
-        None
-    }
-
-    fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
-        let idx = match self.file_schema.index_of(column_name) {
-            Ok(idx) => idx,
-            Err(_) => {
-                // Column does not exist in the file schema, so we can't push this down.
-                self.projected_columns = true;
-                return Some(TreeNodeRecursion::Jump);
-            }
-        };
-
-        // Duplicates are handled by dedup() in into_sorted_columns()
-        self.required_columns.push(idx);
-        let data_type = self.file_schema.field(idx).data_type();
-
-        if DataType::is_nested(data_type) {
-            self.handle_nested_type(data_type)
-        } else {
-            None
-        }
-    }
-
-    /// Determines whether a nested data type can be pushed down to Parquet decoding.
-    ///
-    /// Returns `Some(TreeNodeRecursion::Jump)` if the nested type prevents pushdown,
-    /// `None` if the type is supported and pushdown can continue.
-    fn handle_nested_type(&mut self, data_type: &DataType) -> Option<TreeNodeRecursion> {
-        if self.is_nested_type_supported(data_type) {
-            None
-        } else {
-            // Block pushdown for unsupported nested types:
-            // - Structs (regardless of predicate support)
-            // - Lists without supported predicates
-            self.non_primitive_columns = true;
-            Some(TreeNodeRecursion::Jump)
-        }
-    }
-
-    /// Checks if a nested data type is supported for list column pushdown.
-    ///
-    /// List columns are only supported if:
-    /// 1. The data type is a list variant (List, LargeList, or FixedSizeList)
-    /// 2. The expression contains supported list predicates (e.g., array_has_all)
-    fn is_nested_type_supported(&self, data_type: &DataType) -> bool {
-        let is_list = matches!(
-            data_type,
-            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
-        );
-        self.allow_list_columns && is_list
-    }
-
-    #[inline]
-    fn prevents_pushdown(&self) -> bool {
-        self.non_primitive_columns || self.projected_columns || self.has_unpushable_udfs
-    }
-
-    /// Consumes the checker and returns sorted, deduplicated column indices
-    /// wrapped in a `PushdownColumns` struct.
-    ///
-    /// This method sorts the column indices and removes duplicates. The sort
-    /// is required because downstream code relies on column indices being in
-    /// ascending order for correct schema projection.
-    pub(crate) fn into_sorted_columns(mut self) -> PushdownColumns {
-        self.required_columns.sort_unstable();
-        self.required_columns.dedup();
-        PushdownColumns {
-            required_columns: self.required_columns,
-            struct_field_accesses: self.struct_field_accesses,
-        }
-    }
-}
-
-impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
-    type Node = Arc<dyn PhysicalExpr>;
-
-    fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-        // Handle struct field access like `s['foo']['bar'] > 10`.
-        //
-        // DataFusion represents nested field access as `get_field(Column("s"), "foo")`
-        // (or chained: `get_field(get_field(Column("s"), "foo"), "bar")`).
-        //
-        // We intercept the outermost `get_field` on the way *down* the tree so
-        // the visitor never reaches the raw `Column("s")` node. Without this,
-        // `check_single_column` would see that `s` is a Struct and reject it.
-        //
-        // The strategy:
-        //   1. Match `get_field` whose first arg is a `Column` (the struct root).
-        //   2. Check that the *resolved* return type is primitive — meaning we've
-        //      drilled all the way to a leaf (e.g. `s['foo']` → Utf8).
-        //   3. Record the root column index via `check_struct_field_column` and
-        //      return `Jump` to skip visiting the children (the Column and the
-        //      literal field-name args), since we've already handled them.
-        //
-        // If the return type is still nested (e.g. `s['nested_struct']` → Struct),
-        // we fall through and let normal traversal continue, which will
-        // eventually reject the expression when it hits the struct Column.
-        if let Some(func) =
-            ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(node.as_ref())
-        {
-            let args = func.args();
-
-            if let Some(column) = args.first().and_then(|a| a.downcast_ref::<Column>()) {
-                // for Map columns, get_field performs a runtime key lookup rather than a
-                // schema-level field access so the entire Map column must be read,
-                // we skip the struct field optimization and defer to normal Column traversal
-                let is_map_column = self
-                    .file_schema
-                    .index_of(column.name())
-                    .ok()
-                    .map(|idx| {
-                        matches!(
-                            self.file_schema.field(idx).data_type(),
-                            DataType::Map(_, _)
-                        )
-                    })
-                    .unwrap_or(false);
-
-                let return_type = func.return_type();
-
-                if !is_map_column
-                    && (!DataType::is_nested(return_type)
-                        || self.is_nested_type_supported(return_type))
-                {
-                    // try to resolve all field name arguments to strinrg literals
-                    // if any argument is not a string literal, we can not determine the exact
-                    // leaf path so we fall back to reading the entire struct root column
-                    let field_path = args[1..]
-                        .iter()
-                        .map(|arg| {
-                            arg.downcast_ref::<Literal>().and_then(|lit| {
-                                lit.value().try_as_str().flatten().map(|s| s.to_string())
-                            })
-                        })
-                        .collect();
-
-                    match field_path {
-                        Some(path) => {
-                            if let Some(recursion) =
-                                self.check_struct_field_column(column.name(), path)
-                            {
-                                return Ok(recursion);
-                            }
-                        }
-                        None => {
-                            // Could not resolve field path — fall back to
-                            // reading the entire struct root column.
-                            if let Some(recursion) =
-                                self.check_single_column(column.name())
-                            {
-                                return Ok(recursion);
-                            }
-                        }
-                    }
-
-                    return Ok(TreeNodeRecursion::Jump);
-                }
-            }
-        }
-
-        if let Some(column) = node.downcast_ref::<Column>()
-            && let Some(recursion) = self.check_single_column(column.name())
-        {
-            return Ok(recursion);
-        }
-
-        if ScalarFunctionExpr::try_downcast_func::<FileRowIndexFunc>(node.as_ref())
-            .is_some()
-        {
-            self.has_unpushable_udfs = true;
-            return Ok(TreeNodeRecursion::Jump);
-        }
-
-        Ok(TreeNodeRecursion::Continue)
-    }
-}
-
-/// Describes the nested column behavior for filter pushdown.
-///
-/// This enum makes explicit the different states a predicate can be in
-/// with respect to nested column handling during Parquet decoding.
-/// Result of checking which columns are required for filter pushdown.
-#[derive(Debug)]
-pub(crate) struct PushdownColumns {
-    /// Sorted, unique column indices into the file schema required to evaluate
-    /// the filter expression. Must be in ascending order for correct schema
-    /// projection matching. Does not include struct columns accessed via `get_field`.
-    pub(crate) required_columns: Vec<usize>,
-    /// Struct field accesses via `get_field`. Each entry records the root struct
-    /// column index and the field path being accessed.
-    pub(crate) struct_field_accesses: Vec<StructFieldAccess>,
 }
 
 /// Checks if a given expression can be pushed down to the parquet decoder.
@@ -823,7 +549,7 @@ impl<'a> RowFilterGenerator<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use arrow::datatypes::Fields;
+    use arrow::datatypes::{DataType, Fields};
     use datafusion_common::ScalarValue;
 
     use arrow::array::{
@@ -838,6 +564,7 @@ mod test {
     use datafusion_functions_nested::expr_fn::{
         array_has, array_has_all, array_has_any, make_array,
     };
+    use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_expr_adapter::{
         DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory,
