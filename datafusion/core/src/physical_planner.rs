@@ -458,7 +458,11 @@ impl DefaultPhysicalPlanner {
 
             if links.is_empty() {
                 return self
-                    .create_initial_plan_inner(logical_plan, session_state)
+                    .create_initial_plan_inner(
+                        logical_plan,
+                        session_state,
+                        session_state.execution_props(),
+                    )
                     .await;
             }
 
@@ -472,13 +476,12 @@ impl DefaultPhysicalPlanner {
             // context rather than in `ExecutionProps`. It's here because
             // `create_physical_expr` only receives `&ExecutionProps`.
             let results = ScalarSubqueryResults::new(links.len());
-            let mut owned = session_state.clone();
-            owned.execution_props_mut().subquery_indexes = index_map;
-            owned.execution_props_mut().subquery_results = results.clone();
-            let session_state = Cow::Owned(owned);
+            let mut props = session_state.execution_props().clone();
+            props.subquery_indexes = index_map;
+            props.subquery_results = results.clone();
 
             let plan = self
-                .create_initial_plan_inner(logical_plan, &session_state)
+                .create_initial_plan_inner(logical_plan, session_state, &props)
                 .await?;
             Ok(Arc::new(ScalarSubqueryExec::new(plan, links, results)))
         })
@@ -490,6 +493,7 @@ impl DefaultPhysicalPlanner {
         &self,
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
+        props: &ExecutionProps,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // DFS the tree to flatten it into a Vec.
         // This will allow us to build the Physical Plan from the leaves up
@@ -540,9 +544,9 @@ impl DefaultPhysicalPlanner {
         let max_concurrency = planning_concurrency.min(flat_tree_leaf_indices.len());
 
         // Spawning tasks which will traverse leaf up to the root.
-        let tasks = flat_tree_leaf_indices
-            .into_iter()
-            .map(|index| self.task_helper(index, Arc::clone(&flat_tree), session_state));
+        let tasks = flat_tree_leaf_indices.into_iter().map(|index| {
+            self.task_helper(index, Arc::clone(&flat_tree), session_state, props)
+        });
         let mut outputs = futures::stream::iter(tasks)
             .buffer_unordered(max_concurrency)
             .try_collect::<Vec<_>>()
@@ -570,6 +574,7 @@ impl DefaultPhysicalPlanner {
         leaf_starter_index: usize,
         flat_tree: Arc<Vec<LogicalNode<'a>>>,
         session_state: &'a SessionState,
+        props: &ExecutionProps,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // We always start with a leaf, so can ignore status and pass empty children
         let mut node = flat_tree.get(leaf_starter_index).ok_or_else(|| {
@@ -582,6 +587,7 @@ impl DefaultPhysicalPlanner {
                 node.node,
                 session_state,
                 ChildrenContainer::None,
+                props,
             )
             .await?;
         let mut current_index = leaf_starter_index;
@@ -599,6 +605,7 @@ impl DefaultPhysicalPlanner {
                             node.node,
                             session_state,
                             ChildrenContainer::One(plan),
+                            props,
                         )
                         .await?;
                 }
@@ -634,7 +641,12 @@ impl DefaultPhysicalPlanner {
                     let children = children.into_iter().map(|epc| epc.plan).collect();
                     let children = ChildrenContainer::Multiple(children);
                     plan = self
-                        .map_logical_node_to_physical(node.node, session_state, children)
+                        .map_logical_node_to_physical(
+                            node.node,
+                            session_state,
+                            children,
+                            props,
+                        )
                         .await?;
                 }
             }
@@ -650,8 +662,8 @@ impl DefaultPhysicalPlanner {
         node: &LogicalPlan,
         session_state: &SessionState,
         children: ChildrenContainer,
+        execution_props: &ExecutionProps,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let execution_props = session_state.execution_props();
         let exec_node: Arc<dyn ExecutionPlan> = match node {
             // Leaves (no children)
             LogicalPlan::TableScan(scan) => {
