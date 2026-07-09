@@ -593,7 +593,7 @@ mod tests {
     use datafusion_execution::memory_pool::{
         MemoryConsumer, MemoryPool, UnboundedMemoryPool,
     };
-    use futures::task::noop_waker_ref;
+    use futures::TryStreamExt;
     use std::cmp::Ordering;
 
     #[derive(Debug)]
@@ -636,8 +636,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_done_drains_buffered_rows() {
+    #[tokio::test]
+    async fn test_done_drains_buffered_rows() {
         let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
         let reservation = MemoryConsumer::new("test").register(&pool);
@@ -653,24 +653,20 @@ mod tests {
             true,
         );
 
+        // Simulate rows left buffered in `in_progress` (as happens when
+        // `build_record_batch` emits a partial batch on offset overflow). With
+        // an empty input stream the merge loop breaks immediately, so the only
+        // way these rows reach the consumer is the generator's final drain loop.
         let batch =
             RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))])
                 .unwrap();
         stream.in_progress.push_batch(0, batch).unwrap();
         stream.in_progress.push_row(0);
-        stream.done = true;
-        stream.drain_in_progress_on_done = true;
 
-        let waker = noop_waker_ref();
-        let mut cx = Context::from_waker(waker);
+        // Drive the actual stream and confirm the buffered row is drained.
+        let batches: Vec<RecordBatch> = stream.into_stream().try_collect().await.unwrap();
 
-        match stream.poll_next_inner(&mut cx) {
-            Poll::Ready(Some(Ok(batch))) => assert_eq!(batch.num_rows(), 1),
-            other => {
-                panic!("expected buffered rows to be drained after done, got {other:?}")
-            }
-        }
-        assert!(stream.in_progress.is_empty());
-        assert!(matches!(stream.poll_next_inner(&mut cx), Poll::Ready(None)));
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 1);
     }
 }
