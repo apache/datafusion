@@ -271,6 +271,9 @@ pub(super) struct ParquetMorselizer {
     pub enable_bloom_filter: bool,
     /// Should row group pruning be applied
     pub enable_row_group_stats_pruning: bool,
+    /// Should projected nested columns read through a narrowing cast be
+    /// clipped to the leaves the cast retains
+    pub nested_projection_pruning: bool,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
     /// Optional timezone applied to INT96-coerced timestamps. When `Some`, the
@@ -445,6 +448,7 @@ struct PreparedParquetOpen {
     enable_page_index: bool,
     enable_bloom_filter: bool,
     enable_row_group_stats_pruning: bool,
+    nested_projection_pruning: bool,
     limit: Option<usize>,
     coerce_int96: Option<TimeUnit>,
     coerce_int96_tz: Option<Arc<str>>,
@@ -844,6 +848,7 @@ impl ParquetMorselizer {
             enable_page_index: self.enable_page_index,
             enable_bloom_filter: self.enable_bloom_filter,
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+            nested_projection_pruning: self.nested_projection_pruning,
             limit: self.limit,
             coerce_int96: self.coerce_int96,
             coerce_int96_tz: self.coerce_int96_tz.clone(),
@@ -1384,6 +1389,7 @@ impl RowGroupsPrunedParquetOpen {
             reader_metadata.parquet_schema(),
             &prepared.output_schema,
             prepared.virtual_state.as_deref(),
+            prepared.nested_projection_pruning,
         )?;
 
         let (decoder, rg_plan) = {
@@ -1750,6 +1756,7 @@ mod test {
         enable_page_index: bool,
         enable_bloom_filter: bool,
         enable_row_group_stats_pruning: bool,
+        nested_projection_pruning: bool,
         coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
@@ -1858,6 +1865,7 @@ mod test {
                 enable_page_index: false,
                 enable_bloom_filter: false,
                 enable_row_group_stats_pruning: false,
+                nested_projection_pruning: true,
                 coerce_int96: None,
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
@@ -2026,6 +2034,7 @@ mod test {
                 enable_page_index: self.enable_page_index,
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+                nested_projection_pruning: self.nested_projection_pruning,
                 coerce_int96: self.coerce_int96,
                 // End-to-end coercion behavior (including timezone) is
                 // covered by parquet.slt. No opener-level test currently

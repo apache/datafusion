@@ -912,6 +912,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             pushdown_filters: value.pushdown_filters,
             reorder_filters: value.reorder_filters,
             force_filter_selections: value.force_filter_selections,
+            nested_projection_pruning: value.nested_projection_pruning,
             data_pagesize_limit: value.data_pagesize_limit as u64,
             write_batch_size: value.write_batch_size as u64,
             writer_version: value.writer_version.to_string(),

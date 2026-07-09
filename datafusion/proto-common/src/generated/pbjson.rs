@@ -6388,6 +6388,9 @@ impl serde::Serialize for ParquetOptions {
         if self.bloom_filter_on_read {
             len += 1;
         }
+        if self.nested_projection_pruning {
+            len += 1;
+        }
         if self.bloom_filter_on_write {
             len += 1;
         }
@@ -6501,6 +6504,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.bloom_filter_on_read {
             struct_ser.serialize_field("bloomFilterOnRead", &self.bloom_filter_on_read)?;
+        }
+        if self.nested_projection_pruning {
+            struct_ser.serialize_field("nestedProjectionPruning", &self.nested_projection_pruning)?;
         }
         if self.bloom_filter_on_write {
             struct_ser.serialize_field("bloomFilterOnWrite", &self.bloom_filter_on_write)?;
@@ -6673,6 +6679,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maximumBufferedRecordBatchesPerStream",
             "bloom_filter_on_read",
             "bloomFilterOnRead",
+            "nested_projection_pruning",
+            "nestedProjectionPruning",
             "bloom_filter_on_write",
             "bloomFilterOnWrite",
             "schema_force_view_types",
@@ -6732,6 +6740,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             MaximumParallelRowGroupWriters,
             MaximumBufferedRecordBatchesPerStream,
             BloomFilterOnRead,
+            NestedProjectionPruning,
             BloomFilterOnWrite,
             SchemaForceViewTypes,
             BinaryAsString,
@@ -6788,6 +6797,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "maximumParallelRowGroupWriters" | "maximum_parallel_row_group_writers" => Ok(GeneratedField::MaximumParallelRowGroupWriters),
                             "maximumBufferedRecordBatchesPerStream" | "maximum_buffered_record_batches_per_stream" => Ok(GeneratedField::MaximumBufferedRecordBatchesPerStream),
                             "bloomFilterOnRead" | "bloom_filter_on_read" => Ok(GeneratedField::BloomFilterOnRead),
+                            "nestedProjectionPruning" | "nested_projection_pruning" => Ok(GeneratedField::NestedProjectionPruning),
                             "bloomFilterOnWrite" | "bloom_filter_on_write" => Ok(GeneratedField::BloomFilterOnWrite),
                             "schemaForceViewTypes" | "schema_force_view_types" => Ok(GeneratedField::SchemaForceViewTypes),
                             "binaryAsString" | "binary_as_string" => Ok(GeneratedField::BinaryAsString),
@@ -6842,6 +6852,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut maximum_parallel_row_group_writers__ = None;
                 let mut maximum_buffered_record_batches_per_stream__ = None;
                 let mut bloom_filter_on_read__ = None;
+                let mut nested_projection_pruning__ = None;
                 let mut bloom_filter_on_write__ = None;
                 let mut schema_force_view_types__ = None;
                 let mut binary_as_string__ = None;
@@ -6951,6 +6962,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 return Err(serde::de::Error::duplicate_field("bloomFilterOnRead"));
                             }
                             bloom_filter_on_read__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NestedProjectionPruning => {
+                            if nested_projection_pruning__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nestedProjectionPruning"));
+                            }
+                            nested_projection_pruning__ = Some(map_.next_value()?);
                         }
                         GeneratedField::BloomFilterOnWrite => {
                             if bloom_filter_on_write__.is_some() {
@@ -7106,6 +7123,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     maximum_parallel_row_group_writers: maximum_parallel_row_group_writers__.unwrap_or_default(),
                     maximum_buffered_record_batches_per_stream: maximum_buffered_record_batches_per_stream__.unwrap_or_default(),
                     bloom_filter_on_read: bloom_filter_on_read__.unwrap_or_default(),
+                    nested_projection_pruning: nested_projection_pruning__.unwrap_or_default(),
                     bloom_filter_on_write: bloom_filter_on_write__.unwrap_or_default(),
                     schema_force_view_types: schema_force_view_types__.unwrap_or_default(),
                     binary_as_string: binary_as_string__.unwrap_or_default(),

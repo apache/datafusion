@@ -45,7 +45,7 @@ use parquet::arrow::ProjectionMask;
 use parquet::schema::types::SchemaDescriptor;
 
 use crate::opener::{VirtualColumnsState, append_fields};
-use crate::row_filter::build_projection_read_plan;
+use crate::projection_read_plan::build_projection_read_plan;
 
 /// Per-file decoder projection: the [`ProjectionMask`] installed on the
 /// parquet decoder, plus the per-batch transform that maps the decoder's
@@ -84,6 +84,7 @@ impl DecoderProjection {
         parquet_schema: &SchemaDescriptor,
         output_schema: &SchemaRef,
         virtual_state: Option<&VirtualColumnsState>,
+        nested_projection_pruning: bool,
     ) -> Result<Self> {
         // Virtual columns are produced by the reader separately from the
         // projection mask, so strip them from the expressions we feed into
@@ -101,6 +102,7 @@ impl DecoderProjection {
             projection_for_read_plan.expr_iter(),
             physical_file_schema,
             parquet_schema,
+            nested_projection_pruning,
         );
 
         // The reader produces projected file columns followed by any virtual
