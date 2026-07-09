@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait};
-use arrow::buffer::{Buffer, OffsetBuffer};
+use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
 
 use crate::strings::{GenericStringArrayBuilder, StringViewArrayBuilder};
@@ -217,7 +217,7 @@ fn initcap_ascii_array<T: OffsetSizeTrait>(
     }
 
     let values = Buffer::from_vec(out);
-    let out_offsets = offsets.clone().subtract(*offsets[0]);
+    let out_offsets = offsets.clone().subtract(offsets[0]);
 
     // SAFETY: ASCII case conversion preserves byte length, so the original
     // string boundaries are preserved. `out_offsets` is either identical to

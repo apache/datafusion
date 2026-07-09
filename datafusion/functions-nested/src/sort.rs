@@ -471,7 +471,7 @@ fn take_by_indices<OffsetSize: OffsetSizeTrait>(
 fn rebase_offsets<OffsetSize: OffsetSizeTrait>(
     offsets: &OffsetBuffer<OffsetSize>,
 ) -> OffsetBuffer<OffsetSize> {
-    offsets.clone().subtract(*offsets[0])
+    offsets.clone().subtract(offsets[0])
 }
 
 fn order_desc(modifier: &str) -> Result<bool> {

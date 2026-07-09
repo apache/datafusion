@@ -1236,7 +1236,7 @@ pub fn adjust_offsets_for_slice<O: OffsetSizeTrait>(
 ) -> OffsetBuffer<O> {
     let offsets = list.offsets();
 
-    offsets.clone().subtract(*offsets[0])
+    offsets.clone().subtract(offsets[0])
 }
 
 /// For lists and large lists, truncates the sublist of null values
