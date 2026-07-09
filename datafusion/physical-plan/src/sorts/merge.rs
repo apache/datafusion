@@ -21,6 +21,7 @@
 use std::fmt::Debug;
 use std::future::poll_fn;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use crate::SendableRecordBatchStream;
 use crate::metrics::BaselineMetrics;
@@ -209,20 +210,31 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// If the stream at the given index is not exhausted, and the last cursor for the
     /// stream is finished, poll the stream for the next RecordBatch and create a new
     /// cursor for the stream from the returned result
-    async fn maybe_poll_stream(&mut self, idx: usize) -> Result<()> {
+    fn maybe_poll_stream(
+        &mut self,
+        cx: &mut Context<'_>,
+        idx: usize,
+    ) -> Poll<Result<()>> {
         if self.cursors[idx].is_some() {
             // Cursor is not finished - don't need a new RecordBatch yet
-            return Ok(());
+            return Poll::Ready(Ok(()));
         }
 
-        match poll_fn(|cx| self.streams.poll_next(cx, idx)).await {
-            None => Ok(()),
-            Some(Err(e)) => Err(e),
+        match futures::ready!(self.streams.poll_next(cx, idx)) {
+            None => Poll::Ready(Ok(())),
+            Some(Err(e)) => Poll::Ready(Err(e)),
             Some(Ok((cursor, batch))) => {
                 self.cursors[idx] = Some(Cursor::new(cursor));
-                self.in_progress.push_batch(idx, batch)
+                Poll::Ready(self.in_progress.push_batch(idx, batch))
             }
         }
+    }
+
+    /// If the stream at the given index is not exhausted, and the last cursor for the
+    /// stream is finished, poll the stream for the next RecordBatch and create a new
+    /// cursor for the stream from the returned result
+    async fn poll_stream_and_wait(&mut self, idx: usize) -> Result<()> {
+        poll_fn(|cx| self.maybe_poll_stream(cx, idx)).await
     }
 
     fn emit_in_progress_batch(&mut self) -> Result<Option<RecordBatch>> {
@@ -234,14 +246,25 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
     async fn run(&mut self, co: &Co<Result<RecordBatch>>) -> Result<()> {
         // Prime the first batch of every partition, then build the loser tree.
-        // With yield support this is a plain sequential loop — no need to track
-        // `uninitiated_partitions` across re-entrant polls, and a `Pending`
-        // upstream simply suspends here instead of unwinding the whole call.
+        // Poll *all* not-yet-ready inputs on each wakeup (rather than awaiting
+        // them one at a time) so their upstream pipelines start concurrently —
+        // a single sequential `await` would serialize startup, since many
+        // streams only begin their background work on first poll.
         // An error aborts the stream immediately; buffered rows are dropped, so
         // no data is emitted after an `Err`.
-        for partition_idx in 0..self.cursors.len() {
-            self.maybe_poll_stream(partition_idx).await?;
-        }
+        let mut uninitiated_partitions =
+            (0..self.streams.partitions()).collect::<Vec<_>>();
+
+        poll_fn(|cx| self.initialize_all_partitions(&mut uninitiated_partitions, cx))
+            .await?;
+
+        assert_eq!(uninitiated_partitions.len(), 0);
+
+        // If there are no more uninitiated partitions, set up the loser tree and continue
+        // to the next phase.
+
+        // Claim the memory for the uninitiated partitions
+        drop(uninitiated_partitions);
         self.init_loser_tree();
 
         // NB timer records time taken on drop; we drop it around `.await`s so
@@ -279,7 +302,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             let winner = self.loser_tree[0];
             if self.cursors[winner].is_none() {
                 drop(timer);
-                self.maybe_poll_stream(winner).await?;
+                self.poll_stream_and_wait(winner).await?;
                 timer = elapsed_compute.timer();
             }
             self.update_loser_tree();
@@ -296,6 +319,59 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             co.yield_(Ok(batch)).await;
         }
         Ok(())
+    }
+
+    fn initialize_all_partitions(
+        &mut self,
+        uninitiated_partitions: &mut Vec<usize>,
+        cx: &mut Context,
+    ) -> Poll<Result<()>> {
+        // Once all partitions have set their corresponding cursors for the loser tree,
+        // we skip the following block. Until then, this function may be called multiple
+        // times and can return Poll::Pending if any partition returns Poll::Pending.
+
+        assert_eq!(
+            self.loser_tree.len(),
+            0,
+            "loser tree must be empty when initializing"
+        );
+
+        // Manual indexing since we're iterating over the vector and shrinking it in the loop
+        let mut idx = 0;
+        while idx < uninitiated_partitions.len() {
+            let partition_idx = uninitiated_partitions[idx];
+            match self.maybe_poll_stream(cx, partition_idx) {
+                Poll::Ready(Err(e)) => {
+                    return Poll::Ready(Err(e));
+                }
+                Poll::Pending => {
+                    // The polled stream is pending which means we're already set up to
+                    // be woken when necessary
+                    // Try the next stream
+                    idx += 1;
+                }
+                _ => {
+                    // The polled stream is ready
+                    // Remove it from uninitiated_partitions
+                    // Don't bump idx here, since a new element will have taken its
+                    // place which we'll try in the next loop iteration
+                    // swap_remove will change the partition poll order, but that shouldn't
+                    // make a difference since we're waiting for all streams to be ready.
+                    uninitiated_partitions.swap_remove(idx);
+                }
+            }
+        }
+
+        if uninitiated_partitions.is_empty() {
+            Poll::Ready(Ok(()))
+        } else {
+            // There are still uninitiated partitions so return pending.
+            // We only get here if we've polled all uninitiated streams and at least one of them
+            // returned pending itself. That means we will be woken as soon as one of the
+            // streams would like to be polled again.
+            // There is no need to reschedule ourselves eagerly.
+            Poll::Pending
+        }
     }
 
     /// For the given partition, updates the poll count. If the current value is the same
