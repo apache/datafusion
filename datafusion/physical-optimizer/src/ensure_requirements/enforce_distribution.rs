@@ -629,11 +629,10 @@ fn expected_expr_positions(
     let mut current = current.to_vec();
     for expr in expected.iter() {
         // Find the position of the expected expr in the current expressions
-        if let Some(expected_position) = current.iter().position(|e| e.eq(expr)) {
+        {
+            let expected_position = current.iter().position(|e| e.eq(expr))?;
             current[expected_position] = Arc::new(NoOp::new());
             indexes.push(expected_position);
-        } else {
-            return None;
         }
     }
     Some(indexes)

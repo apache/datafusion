@@ -2539,7 +2539,7 @@ mod tests {
         let ctx = SessionContext::new_with_state(session_state).enable_url_table();
         let result = plan_and_collect(
             &ctx,
-            format!("select c_name from '{}' limit 3;", &url).as_str(),
+            format!("select c_name from '{url}' limit 3;").as_str(),
         )
         .await?;
 

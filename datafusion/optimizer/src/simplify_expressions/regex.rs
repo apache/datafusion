@@ -398,7 +398,8 @@ fn lower_alt(
     let mut accu: Option<Expr> = None;
 
     for part in alts {
-        if let Some(expr) = lower_simple(mode, left, part, string_scalar) {
+        {
+            let expr = lower_simple(mode, left, part, string_scalar)?;
             accu = match accu {
                 Some(accu) => {
                     if mode.not {
@@ -409,8 +410,6 @@ fn lower_alt(
                 }
                 None => Some(expr),
             };
-        } else {
-            return None;
         }
     }
 
