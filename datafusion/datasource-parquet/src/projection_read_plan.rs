@@ -271,9 +271,9 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
                     && (!DataType::is_nested(return_type)
                         || self.is_nested_type_supported(return_type))
                 {
-                    // try to resolve all field name arguments to strinrg literals
-                    // if any argument is not a string literal, we can not determine the exact
-                    // leaf path so we fall back to reading the entire struct root column
+                    // if any field name argument is not a string literal we cannot
+                    // determine the exact leaf path, so we fall back to reading the
+                    // entire struct root column
                     let field_path = args[1..]
                         .iter()
                         .map(|arg| {
@@ -477,7 +477,6 @@ where
     // schema has no group columns (Struct, Map, etc.); when group columns
     // exist, their children become separate leaves and shift all subsequent
     // leaf indices.
-    // Struct columns are unsupported.
     let root_set: BTreeSet<_> = root_indices.into_iter().collect();
 
     (0..schema_descr.num_columns())
@@ -739,7 +738,7 @@ mod test {
             ),
         );
 
-        // all3 Parquet leaves should be in the projection mask
+        // all 3 Parquet leaves should be in the projection mask
         let expected_mask = ProjectionMask::leaves(schema_descr, [0, 1, 2]);
         assert_eq!(read_plan.projection_mask, expected_mask,);
     }
