@@ -898,6 +898,66 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_merge_byte_bounded_output_releases_view_buffers() {
+        use crate::spill::get_record_batch_memory_size;
+        use crate::stream::RecordBatchStreamAdapter;
+        use arrow::array::StringViewArray;
+        use datafusion_execution::memory_pool::{MemoryPool, UnboundedMemoryPool};
+
+        // Utf8View inputs: arrow's interleave copies views but shares the
+        // underlying data buffers, so without a GC pass every merged output
+        // batch would pin all source batches -- inflating retained size (and
+        // therefore downstream memory reservations) by orders of magnitude.
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Utf8View,
+            false,
+        )]));
+        let source_size = 200 * 1024; // ~200KiB per source batch
+        let make_stream = |offset: usize| -> SendableRecordBatchStream {
+            let s = StringViewArray::from_iter_values(
+                (0..200).map(|i| format!("{:0>1024}", 2 * i + offset)),
+            );
+            let batch =
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s)]).unwrap();
+            Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&schema),
+                futures::stream::iter(vec![Ok(batch)]),
+            ))
+        };
+
+        let exprs: LexOrdering =
+            [PhysicalSortExpr::new_default(col("s", &schema).unwrap())].into();
+        let target_bytes = 32 * 1024;
+
+        let merged = StreamingMergeBuilder::new()
+            .with_streams(vec![make_stream(0), make_stream(1)])
+            .with_schema(Arc::clone(&schema))
+            .with_expressions(&exprs)
+            .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+            .with_batch_size(8192)
+            .with_batch_size_bytes(Some(target_bytes))
+            .with_reservation({
+                let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+                MemoryConsumer::new("test").register(&pool)
+            })
+            .build()
+            .unwrap();
+
+        let batches = common::collect(merged).await.unwrap();
+        assert!(batches.len() > 1);
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 400);
+        for batch in &batches {
+            assert!(
+                get_record_batch_memory_size(batch) < source_size,
+                "merged batch retains {} bytes -- it is pinning the source \
+                 batches' view data buffers",
+                get_record_batch_memory_size(batch)
+            );
+        }
+    }
+
     // Split the provided record batch into multiple batch_size record batches
     fn split_batch(sorted: &RecordBatch, batch_size: usize) -> Vec<RecordBatch> {
         let batches = sorted.num_rows().div_ceil(batch_size);

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::spill::get_record_batch_memory_size;
+use crate::spill::{gc_view_arrays, get_record_batch_memory_size};
 use arrow::array::ArrayRef;
 use arrow::compute::interleave;
 use arrow::datatypes::SchemaRef;
@@ -232,7 +232,17 @@ impl BatchBuilder {
             self.reservation.shrink(self.reservation.size() - target);
         }
 
-        RecordBatch::try_new(Arc::clone(&self.schema), columns).map_err(Into::into)
+        let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
+        if self.target_bytes.is_some() {
+            // `interleave` copies view-array views but shares their data
+            // buffers, so a byte-targeted output batch would otherwise pin
+            // every source batch it draws from -- inflating its retained
+            // size (and downstream memory reservations) far past the
+            // target. GC when the waste is real; no-op otherwise. Row-only
+            // mode (target unset) keeps today's behavior byte-for-byte.
+            return gc_view_arrays(&batch);
+        }
+        Ok(batch)
     }
 
     /// Drains the in_progress row indexes, and builds a new RecordBatch from them

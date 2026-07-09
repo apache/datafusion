@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
-use crate::spill::get_record_batch_memory_size;
+use crate::spill::{gc_view_arrays, get_record_batch_memory_size};
 use crate::{EmptyRecordBatchStream, SendableRecordBatchStream};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{Array, UInt32Array};
@@ -312,6 +312,9 @@ pub(crate) struct IncrementalSortIterator {
     batch: RecordBatch,
     expressions: LexOrdering,
     batch_size: usize,
+    /// When byte-targeted, GC view arrays in each chunk: `take` shares view
+    /// data buffers, so an un-GC'd chunk would pin the whole parent batch
+    gc_views: bool,
     indices: Option<UInt32Array>,
     cursor: usize,
 }
@@ -340,6 +343,7 @@ impl IncrementalSortIterator {
             batch,
             expressions,
             batch_size,
+            gc_views: target_bytes.is_some(),
             cursor: 0,
             indices: None,
         }
@@ -383,6 +387,14 @@ impl Iterator for IncrementalSortIterator {
                 let new_batch = match take_record_batch(&self.batch, &new_batch_indices) {
                     Ok(batch) => batch,
                     Err(e) => return Some(Err(e.into())),
+                };
+                let new_batch = if self.gc_views {
+                    match gc_view_arrays(&new_batch) {
+                        Ok(batch) => batch,
+                        Err(e) => return Some(Err(e)),
+                    }
+                } else {
+                    new_batch
                 };
 
                 self.cursor += batch_size;

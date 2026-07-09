@@ -2953,6 +2953,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_sort_batch_chunked_byte_target_releases_view_buffers() -> Result<()> {
+        use arrow::array::StringViewArray;
+        // take() on view arrays shares data buffers; chunked sort output
+        // must GC them or each chunk pins the whole parent batch
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Utf8View,
+            false,
+        )]));
+        let s = StringViewArray::from_iter_values(
+            (0..100).rev().map(|i| format!("{i:0>1024}")),
+        );
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s)])?;
+        let parent_size = get_record_batch_memory_size(&batch);
+
+        let expressions: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("s", 0)))].into();
+        let result_batches =
+            sort_batch_chunked(&batch, &expressions, 1000, Some(8 * 1024))?;
+        assert!(result_batches.len() > 1);
+        for chunk in &result_batches {
+            assert!(
+                get_record_batch_memory_size(chunk) < parent_size / 2,
+                "chunk retains {} bytes of the parent's view data buffers",
+                get_record_batch_memory_size(chunk)
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_sort_exec_byte_bounded_output() -> Result<()> {
         use arrow::array::StringArray;
         // Multiple wide-row input batches; with target_batch_size_bytes set,
