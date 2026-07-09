@@ -589,6 +589,13 @@ fn infer_join_predicates(
 
     let join_type = join.join_type;
 
+    // Null-aware anti joins implement NOT IN semantics, where NULLs on the
+    // right side affect the result. Inferring predicates across the join can
+    // incorrectly filter those NULLs.
+    if join_type == JoinType::LeftAnti && join.null_aware {
+        return Ok(vec![]);
+    }
+
     let mut inferred_predicates = InferredPredicates::new(join_type);
 
     infer_join_predicates_from_predicates(
