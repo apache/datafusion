@@ -598,7 +598,6 @@ mod tests {
     }
 
     // All bits false: every row must be skipped; accessing any lhs/rhs index would panic.
-    #[cfg(debug_assertions)]
     #[test]
     fn test_vectorized_equal_to_skips_false_rows() {
         let mut builder =
