@@ -25,8 +25,7 @@ use arrow::array::{
 };
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
-use datafusion_common::hash_utils::RandomState;
-use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::hash_utils::{HashValue, RandomState};
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::fmt::Debug;
 use std::hash::BuildHasher;
@@ -258,29 +257,15 @@ where
         OP: FnMut(V),
         B: ByteViewType,
     {
-        // step 1: compute hashes
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(values.len(), 0);
-        create_hashes([values], &self.random_state, batch_hashes)
-            // hash is supported for all types and create_hashes only
-            // returns errors for unsupported types
-            .unwrap();
-
-        // step 2: insert each value into the set, if not already present
         let values = values.as_byte_view::<B>();
 
         // Get raw views buffer for direct comparison
         let input_views = values.views();
 
-        // Ensure lengths are equivalent
-        assert_eq!(values.len(), self.hashes_buffer.len());
-
         let input_has_buffers = !values.data_buffers().is_empty();
         self.input_view_to_payload.clear();
         for i in 0..values.len() {
             let view_u128 = input_views[i];
-            let hash = self.hashes_buffer[i];
 
             // handle null value via validity bitmap check
             if values.is_null(i) {
@@ -318,6 +303,8 @@ where
                 observe_payload_fn(payload);
                 continue;
             }
+
+            let hash = self.hash_value::<B>(view_u128, len, values, i);
 
             // Check if value already exists
             let maybe_payload = {
@@ -422,6 +409,22 @@ where
     #[inline(always)]
     fn hash_buffer_location(location: u64, random_state: &RandomState) -> u64 {
         random_state.hash_one(location)
+    }
+
+    #[inline(always)]
+    fn hash_value<B: ByteViewType>(
+        &self,
+        view: u128,
+        len: u32,
+        array: &GenericByteViewArray<B>,
+        row: usize,
+    ) -> u64 {
+        if len <= 12 || array.data_buffers().is_empty() {
+            view.hash_one(&self.random_state)
+        } else {
+            let value: &[u8] = unsafe { array.value_unchecked(row).as_ref() };
+            value.hash_one(&self.random_state)
+        }
     }
 
     #[inline(always)]
