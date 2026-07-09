@@ -956,10 +956,7 @@ fn with_extra_columns(batches: PartitionedBatches, n: usize) -> PartitionedBatch
         .map(|_| rng.random_range(0..generators.len()))
         .collect::<Vec<_>>();
 
-    let mut generator = DataGenerator {
-        input_size: 1,
-        rng,
-    };
+    let mut generator = DataGenerator { input_size: 1, rng };
 
     batches
         .into_iter()
