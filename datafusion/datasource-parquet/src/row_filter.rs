@@ -86,8 +86,7 @@ use datafusion_physical_plan::metrics;
 use super::ParquetFileMetrics;
 use super::supported_predicates::supports_list_predicates;
 use crate::projection_read_plan::{
-    ParquetReadPlan, PushdownChecker, PushdownColumns, build_filter_schema,
-    leaf_indices_for_roots, resolve_struct_field_leaves,
+    ParquetReadPlan, PushdownChecker, PushdownColumns, assemble_read_plan,
 };
 
 /// A "compiled" predicate passed to `ParquetRecordBatchStream` to perform
@@ -269,38 +268,16 @@ pub(crate) fn build_parquet_read_plan(
         return Ok(None);
     };
 
-    let root_indices = &required_columns.required_columns;
-
-    let mut leaf_indices =
-        leaf_indices_for_roots(root_indices.iter().copied(), schema_descr);
-
-    let struct_leaf_indices = resolve_struct_field_leaves(
+    let (read_plan, leaf_indices) = assemble_read_plan(
+        &required_columns.required_columns,
         &required_columns.struct_field_accesses,
         file_schema,
         schema_descr,
     );
-    leaf_indices.extend_from_slice(&struct_leaf_indices);
-    leaf_indices.sort_unstable();
-    leaf_indices.dedup();
 
     let required_bytes = size_of_columns(&leaf_indices, metadata)?;
 
-    let projection_mask =
-        ProjectionMask::leaves(schema_descr, leaf_indices.iter().copied());
-
-    let projected_schema = build_filter_schema(
-        file_schema,
-        root_indices,
-        &required_columns.struct_field_accesses,
-    );
-
-    Ok(Some((
-        ParquetReadPlan {
-            projection_mask,
-            projected_schema,
-        },
-        required_bytes,
-    )))
+    Ok(Some((read_plan, required_bytes)))
 }
 
 /// Checks if a predicate expression can be pushed down to the parquet decoder.
