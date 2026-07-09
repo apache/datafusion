@@ -209,10 +209,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
     }
 
-    async fn poll_stream_and_wait(&mut self, idx: usize) -> Result<()> {
-        poll_fn(|cx| self.maybe_poll_stream(cx, idx)).await
-    }
-
     fn emit_in_progress_batch(&mut self) -> Result<Option<RecordBatch>> {
         let rows_before = self.in_progress.len();
         let result = self.in_progress.build_record_batch();
@@ -262,16 +258,17 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 timer = elapsed_compute.timer();
             }
 
-            // Adjust the loser tree if necessary, returning control if needed
             let winner = self.loser_tree[0];
             // Fast path: skip the `maybe_poll_stream` call (and its `Poll`
             // plumbing) unless the winner's cursor is exhausted and needs a
             // fresh batch — it is live for almost every row.
             if self.cursors[winner].is_none() {
                 drop(timer);
-                self.poll_stream_and_wait(winner).await?;
+                poll_fn(|cx| self.maybe_poll_stream(cx, winner)).await?;
                 timer = elapsed_compute.timer();
             }
+
+            // Adjusting the loser tree if necessary
             self.update_loser_tree();
         }
 
