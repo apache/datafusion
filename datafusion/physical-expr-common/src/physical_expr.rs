@@ -519,12 +519,18 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
 /// `datafusion-proto`, which is what lets `physical-expr-common` stay free
 /// of `datafusion-proto` as a dep.
 ///
-/// More specialized helpers (e.g. encoding UDFs/UDAFs/UDWFs through the
-/// extension codec) can be added to the context as expressions migrate;
-/// today they're not required because the encoder forwards to the existing
-/// codec via the proto converter.
+/// Beyond child-expression encoding, the context exposes *capabilities* of
+/// the serialization layer through generic, fully-typed accessors — see
+/// [`proto_encode::PhysicalExprEncodeCtx::encode_function`], which routes
+/// function objects (e.g. `datafusion_expr::ScalarUDF`) through the layer's
+/// extension codec. Those function types live *above* this crate in the
+/// dependency graph, so the accessors are generic over the requested type
+/// and the dispatch trait carries a type-erased channel internally; call
+/// sites never see the erasure. Which types a layer supports is part of its
+/// contract — requesting an unsupported one returns an error naming it.
 #[cfg(feature = "proto")]
 pub mod proto_encode {
+    use std::any::Any;
     use std::sync::Arc;
 
     use datafusion_common::Result;
@@ -574,6 +580,29 @@ pub mod proto_encode {
                 .map(|expr| self.encode_child(expr))
                 .collect()
         }
+
+        /// Serialize a function object through the serialization layer's
+        /// extension codec, returning the opaque payload for the node's
+        /// `fun_definition`-style field — `None` when the function can be
+        /// resolved by name alone on the decoding side (the common case for
+        /// built-in and registered functions).
+        ///
+        /// Which function types the layer supports is part of its contract:
+        /// `datafusion-proto` supports `datafusion_expr::ScalarUDF` (with
+        /// aggregate/window UDFs to follow as those expressions migrate).
+        /// Requesting an unsupported type returns an error naming it. Call
+        /// sites are fully typed — e.g. `ctx.encode_function(&*self.fun)`
+        /// with `fun: Arc<ScalarUDF>` — because the generic carries the type
+        /// across the internal erased channel; function types cannot be
+        /// named in this crate directly, as they live above it in the
+        /// dependency graph.
+        pub fn encode_function<F: Any + Send + Sync>(
+            &self,
+            function: &F,
+        ) -> Result<Option<Vec<u8>>> {
+            self.encoder
+                .encode_function_erased(function, std::any::type_name::<F>())
+        }
     }
 
     /// Internal dispatch trait. Implementors live in `datafusion-proto` and
@@ -583,6 +612,52 @@ pub mod proto_encode {
     pub trait PhysicalExprEncode {
         /// Encode an expression to a protobuf node.
         fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode>;
+
+        /// Erased channel behind [`PhysicalExprEncodeCtx::encode_function`].
+        ///
+        /// Implementations downcast `function` to each function type they
+        /// support (e.g. `datafusion_expr::ScalarUDF` routed through
+        /// `PhysicalExtensionCodec::try_encode_udf`) and error — naming
+        /// `type_name` — for the rest. The default supports none, so
+        /// encoders that never see function-bearing expressions need not
+        /// implement it.
+        ///
+        /// # Why the `dyn Any` erasure
+        ///
+        /// This is the one spot where the typed public API
+        /// ([`PhysicalExprEncodeCtx::encode_function<F>`]) degrades to
+        /// `&dyn Any`, and the reason is a hard crate-graph constraint rather
+        /// than a style choice.
+        ///
+        /// The function types that need special serialization — `ScalarUDF`
+        /// (and, as they migrate, `AggregateUDF` / `WindowUDF`) — are defined
+        /// in `datafusion-expr`. `datafusion-expr` **depends on** this crate
+        /// (`datafusion-physical-expr-common`) for `Arc<dyn PhysicalExpr>` in
+        /// its UDAF/UDWF APIs, so this crate sits *below* `datafusion-expr` in
+        /// the dependency graph and cannot name `ScalarUDF` in a signature
+        /// without forming a cycle. A compile-time-typed dispatch method would
+        /// require exactly that name, so the trip across this internal trait
+        /// erases to `dyn Any`. `datafusion-proto` sits above both crates,
+        /// can name the concrete types, and downcasts back on the far side —
+        /// which is why the erasure is confined here and never leaks into the
+        /// typed [`PhysicalExprEncodeCtx::encode_function<F>`] call sites.
+        ///
+        /// The only way to make this typed at compile time would be to move
+        /// `ScalarUDF` below this crate, which its logical half (`simplify`,
+        /// `call`, `preimage`, all of which reference physical exprs) rules
+        /// out. See #22430 / the epic in #22418 for the full discussion.
+        ///
+        /// [`PhysicalExprEncodeCtx::encode_function<F>`]: PhysicalExprEncodeCtx::encode_function
+        fn encode_function_erased(
+            &self,
+            _function: &(dyn Any + Send + Sync),
+            type_name: &'static str,
+        ) -> Result<Option<Vec<u8>>> {
+            datafusion_common::internal_err!(
+                "this serialization layer does not support encoding function \
+                 objects (requested `{type_name}`)"
+            )
+        }
     }
 }
 
@@ -611,10 +686,12 @@ pub mod proto_encode {
 /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
 #[cfg(feature = "proto")]
 pub mod proto_decode {
+    use std::any::{Any, TypeId};
     use std::sync::Arc;
 
     use arrow::datatypes::Schema;
     use datafusion_common::Result;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_proto_models::protobuf::PhysicalExprNode;
 
     use super::PhysicalExpr;
@@ -733,6 +810,49 @@ pub mod proto_decode {
         {
             nodes.into_iter().map(|node| self.decode(node)).collect()
         }
+
+        /// Resolve a function object from its name and the payload written
+        /// by [`encode_function`] on the encoding side (`None` if none was
+        /// written). The inverse of [`encode_function`]; the same contract
+        /// applies — which function types the deserialization layer supports
+        /// is part of its contract, and requesting an unsupported one
+        /// returns an error naming it.
+        ///
+        /// `datafusion-proto` resolves `datafusion_expr::ScalarUDF` by
+        /// preferring the codec for explicit payloads and falling back to
+        /// the session's function registry (then the codec with an empty
+        /// payload) for by-name references. Call sites are fully typed:
+        ///
+        /// ```ignore
+        /// let udf: Arc<ScalarUDF> = ctx.decode_function(&node.name, node.fun_definition.as_deref())?;
+        /// ```
+        ///
+        /// [`encode_function`]: super::proto_encode::PhysicalExprEncodeCtx::encode_function
+        pub fn decode_function<F: Any + Send + Sync>(
+            &self,
+            name: &str,
+            payload: Option<&[u8]>,
+        ) -> Result<Arc<F>> {
+            let type_name = std::any::type_name::<F>();
+            self.decoder
+                .decode_function_erased(name, payload, TypeId::of::<F>(), type_name)?
+                .downcast::<F>()
+                .map_err(|_| {
+                    datafusion_common::internal_datafusion_err!(
+                        "deserialization layer resolved function '{name}' to a \
+                         value that is not a `{type_name}`"
+                    )
+                })
+        }
+
+        /// Session configuration for expressions that carry it (e.g.
+        /// `ScalarFunctionExpr`). Errors when the deserialization layer has
+        /// no session — deliberately not defaulted to
+        /// [`ConfigOptions::default`], which would silently detach a decoded
+        /// expression from the session's actual configuration.
+        pub fn config_options(&self) -> Result<Arc<ConfigOptions>> {
+            self.decoder.config_options()
+        }
     }
 
     /// Unwrap a required non-expression proto field.
@@ -774,6 +894,47 @@ pub mod proto_decode {
             node: &PhysicalExprNode,
             schema: &Schema,
         ) -> Result<Arc<dyn PhysicalExpr>>;
+
+        /// Erased channel behind [`PhysicalExprDecodeCtx::decode_function`].
+        ///
+        /// Implementations route on `requested` (the [`TypeId`] of the
+        /// function type the caller asked for, e.g.
+        /// `datafusion_expr::ScalarUDF`) and must return a value of exactly
+        /// that type — [`PhysicalExprDecodeCtx::decode_function`] verifies
+        /// the downcast and turns a mismatch into an internal error. Error
+        /// messages should name `type_name`. The default supports no
+        /// function types, so decoders that never see function-bearing
+        /// expressions need not implement it.
+        ///
+        /// The `dyn Any` erasure here exists for the same crate-graph reason
+        /// as on the encode side — see
+        /// [`PhysicalExprEncode::encode_function_erased`] for the full
+        /// explanation of the circular-dependency constraint.
+        ///
+        /// [`PhysicalExprEncode::encode_function_erased`]: super::proto_encode::PhysicalExprEncode::encode_function_erased
+        fn decode_function_erased(
+            &self,
+            name: &str,
+            _payload: Option<&[u8]>,
+            _requested: TypeId,
+            type_name: &'static str,
+        ) -> Result<Arc<dyn Any + Send + Sync>> {
+            datafusion_common::internal_err!(
+                "this deserialization layer does not support resolving \
+                 function objects (requested `{type_name}` for '{name}')"
+            )
+        }
+
+        /// Session configuration handed to decoded expressions that carry
+        /// it. The default errors: a layer without a session must opt in
+        /// explicitly rather than silently substituting
+        /// [`ConfigOptions::default`].
+        fn config_options(&self) -> Result<Arc<ConfigOptions>> {
+            datafusion_common::internal_err!(
+                "this deserialization layer does not provide session \
+                 configuration"
+            )
+        }
     }
 }
 
