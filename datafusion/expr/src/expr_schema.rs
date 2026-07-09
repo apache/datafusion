@@ -366,7 +366,12 @@ impl ExprSchemable for Expr {
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. } => Ok(false),
             Expr::SetComparison(_) => Ok(true),
-            Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
+            Expr::InSubquery(InSubquery { expr, subquery, .. }) => {
+                let expr_nullable = expr.nullable(input_schema)?;
+                let subquery_nullable = subquery.subquery.schema().field(0).is_nullable();
+
+                Ok(expr_nullable | subquery_nullable)
+            }
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
             }
