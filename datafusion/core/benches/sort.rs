@@ -68,10 +68,10 @@
 
 use std::sync::Arc;
 
-use arrow::array::StringViewArray;
+use arrow::array::{ArrayRef, StringViewArray, StringViewBuilder};
 use arrow::{
-    array::{DictionaryArray, Float64Array, Int64Array, StringArray},
-    datatypes::{DataType, Field, Int32Type, Schema},
+    array::{Array, DictionaryArray, Float64Array, Int64Array, StringArray},
+    datatypes::{Field, Int32Type, Schema},
     record_batch::RecordBatch,
 };
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -92,8 +92,8 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures::StreamExt;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
 use rand::seq::SliceRandom;
+use rand::{Rng, SeedableRng};
 use tokio::runtime::Runtime;
 
 /// Total number of streams to divide each input into
@@ -122,22 +122,12 @@ enum DataProfile {
 }
 
 impl DataProfile {
-    fn label(self) -> &'static str {
-        match self {
-            DataProfile::Sorted => "sorted",
-            DataProfile::Unsorted => "unsorted",
-            DataProfile::NearlySorted => "nearly sorted",
-        }
-    }
-
     /// Arrange `v` (whose initial order is irrelevant) into this profile.
     fn apply<T: Ord>(self, mut v: Vec<T>) -> Vec<T> {
         let mut rng = StdRng::seed_from_u64(99);
         match self {
             DataProfile::Sorted => v.sort_unstable(),
-            DataProfile::Unsorted => {
-                v.shuffle(&mut rng)
-            }
+            DataProfile::Unsorted => v.shuffle(&mut rng),
             DataProfile::NearlySorted => {
                 v.sort_unstable();
                 let n = v.len();
@@ -161,15 +151,6 @@ enum Cardinality {
     Low,
     /// Minimal overlap: full-range i64 and random strings (~no duplicates).
     High,
-}
-
-impl Cardinality {
-    fn label(self) -> &'static str {
-        match self {
-            Cardinality::Low => "low card",
-            Cardinality::High => "high card",
-        }
-    }
 }
 
 type PartitionedBatches = Vec<Vec<RecordBatch>>;
@@ -760,10 +741,10 @@ impl DataGenerator {
     }
 
     /// Create sorted values of high  cardinality (~ no duplicates) utf8 values
-    fn utf8_high_cardinality_values(&mut self) -> Vec<Option<String>> {
+    fn utf8_high_cardinality_values(&mut self) -> Vec<Option<Arc<str>>> {
         // make random strings
         let mut input = (0..self.input_size)
-            .map(|_| Some(self.random_string()))
+            .map(|_| Some(self.random_string().into()))
             .collect::<Vec<_>>();
 
         input.sort_unstable();
@@ -791,15 +772,11 @@ impl DataGenerator {
         }
     }
 
-    /// utf8 values with the given cardinality, unified to `Arc<str>`.
+    /// utf8 values with the given cardinality.
     fn utf8_values_by(&mut self, card: Cardinality) -> Vec<Option<Arc<str>>> {
         match card {
             Cardinality::Low => self.utf8_low_cardinality_values(),
-            Cardinality::High => self
-                .utf8_high_cardinality_values()
-                .into_iter()
-                .map(|o| o.map(Arc::from))
-                .collect(),
+            Cardinality::High => self.utf8_high_cardinality_values(),
         }
     }
 }
@@ -932,12 +909,58 @@ fn mixed_tuple_axis(
     with_extra_columns(batches, extra)
 }
 
-/// Append `n` extra non-sort-key `Int64` payload columns
+/// Append `n` extra non-sort-key payload columns to every batch, split across i64, string, string view and dictionary
 fn with_extra_columns(batches: PartitionedBatches, n: usize) -> PartitionedBatches {
     if n == 0 {
         return batches;
     }
     let mut rng = StdRng::seed_from_u64(7);
+
+    type Generator = Box<dyn Fn(&mut DataGenerator) -> ArrayRef>;
+
+    let generators: Vec<Generator> = vec![
+        Box::new(|data_gen: &mut DataGenerator| {
+            let arr = Int64Array::from_iter_values(data_gen.i64_values());
+
+            Arc::new(arr)
+        }),
+        Box::new(|data_gen: &mut DataGenerator| {
+            let values = data_gen.utf8_low_cardinality_values();
+            let arr: StringArray = values.iter().map(|item| item.as_deref()).collect();
+
+            Arc::new(arr)
+        }),
+        Box::new(|data_gen: &mut DataGenerator| {
+            let values = data_gen.utf8_low_cardinality_values();
+            let mut builder =
+                StringViewBuilder::with_capacity(values.len()).with_deduplicate_strings();
+            for v in values {
+                builder.append_option(v.as_deref());
+            }
+
+            let arr = builder.finish();
+
+            Arc::new(arr)
+        }),
+        Box::new(|data_gen: &mut DataGenerator| {
+            let values = data_gen.utf8_low_cardinality_values();
+
+            let arr: DictionaryArray<Int32Type> =
+                values.iter().map(|item| item.as_deref()).collect();
+
+            Arc::new(arr)
+        }),
+    ];
+
+    let generator_index = (0..n)
+        .map(|_| rng.random_range(0..generators.len()))
+        .collect::<Vec<_>>();
+
+    let mut generator = DataGenerator {
+        input_size: 1 as u64,
+        rng,
+    };
+
     batches
         .into_iter()
         .map(|stream| {
@@ -948,17 +971,20 @@ fn with_extra_columns(batches: PartitionedBatches, n: usize) -> PartitionedBatch
                     let mut fields =
                         batch.schema().fields().iter().cloned().collect::<Vec<_>>();
                     let mut columns = batch.columns().to_vec();
-                    for i in 0..n {
-                        let arr = Int64Array::from_iter_values(
-                            (0..num_rows).map(|_| rng.random::<i64>()),
-                        );
-                        columns.push(Arc::new(arr) as _);
+                    generator.input_size = num_rows as u64;
+
+                    for (col_index, gen_index) in generator_index.iter().enumerate() {
+                        let gen_fn = &generators[*gen_index];
+
+                        let array = gen_fn(&mut generator);
                         fields.push(Arc::new(Field::new(
-                            format!("{}{i}", EXTRA_COLUMN_NAME_PREFIX),
-                            DataType::Int64,
-                            false,
+                            format!("{EXTRA_COLUMN_NAME_PREFIX}{col_index}"),
+                            array.data_type().clone(),
+                            array.logical_null_count() > 0,
                         )));
+                        columns.push(array);
                     }
+
                     RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
                 })
                 .collect()
