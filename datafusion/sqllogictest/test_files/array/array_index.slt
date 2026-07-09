@@ -153,11 +153,11 @@ select make_array(1, 2, 3)[-3:-1], make_array(1.0, 2.0, 3.0)[-3:-1], make_array(
 ----
 [1, 2, 3] [1.0, 2.0, 3.0] []
 
-# TODO: support complex index
 # multiple index with columns #4 (complex index)
-# query III
-# select make_array(1, 2, 3)[2 + 1 - 1:10], make_array(1.0, 2.0, 3.0)[2 | 2:10], make_array('h', 'e', 'l', 'l', 'o')[6 ^ 6:10];
-# ----
+query ???
+select make_array(1, 2, 3)[2 + 1 - 1:10], make_array(1.0, 2.0, 3.0)[(2 | 2):10], make_array('h', 'e', 'l', 'l', 'o')[6 ^ 6:10];
+----
+[2, 3] [2.0, 3.0] [h, e, l, l, o]
 
 # multiple index with columns #1 (positive index)
 query ???

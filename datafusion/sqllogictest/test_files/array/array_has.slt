@@ -41,10 +41,14 @@ select array_has([1, null, 2], 3),
 false false
 
 #TODO: array_has_all and array_has_any cannot handle NULL
-query error array_has does not support type 'Null'
+query BB
 select array_has_any([], null),
-       array_has_any([1, 2, 3], null),
-       array_has_all([], null),
+       array_has_any([1, 2, 3], null);
+----
+NULL NULL
+
+query error array_has does not support type 'Null'
+select array_has_all([], null),
        array_has_all([1, 2, 3], null);
 
 query BBBBBBBBBBBB
