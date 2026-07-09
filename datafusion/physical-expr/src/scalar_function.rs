@@ -349,6 +349,86 @@ impl PhysicalExpr for ScalarFunctionExpr {
             self.args.iter().map(|arg| arg.placement()).collect();
         self.fun.placement(&arg_placements)
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
+                protobuf::PhysicalScalarUdfNode {
+                    name: self.name.clone(),
+                    args: ctx.encode_children_expressions(&self.args)?,
+                    // Typed capability of the serialization layer; carries
+                    // the codec's opaque payload (`None` = resolvable by
+                    // name alone).
+                    fun_definition: ctx.encode_function(self.fun.as_ref())?,
+                    return_type: Some(self.return_type().try_into()?),
+                    nullable: self.nullable(),
+                    return_field_name: self.return_field.name().to_string(),
+                },
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ScalarFunctionExpr {
+    /// Reconstruct a [`ScalarFunctionExpr`] from its protobuf representation.
+    ///
+    /// Takes the whole [`PhysicalExprNode`] so the decode signature matches
+    /// other migrated expressions and can inspect outer-node metadata if
+    /// needed in the future. The embedded [`ScalarUDF`] is resolved through
+    /// [`PhysicalExprDecodeCtx::decode_function`] (payload-first, then
+    /// by-name — the deserialization layer defines the lookup), and the
+    /// session configuration comes from
+    /// [`PhysicalExprDecodeCtx::config_options`].
+    ///
+    /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    /// [`PhysicalExprDecodeCtx::decode_function`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::decode_function
+    /// [`PhysicalExprDecodeCtx::config_options`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::config_options
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use arrow::datatypes::Field;
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_physical_expr_common::physical_expr::proto_decode::require_proto_field;
+        use datafusion_proto_models::protobuf;
+
+        let scalar_udf = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::ScalarUdf,
+            "ScalarFunctionExpr",
+        );
+
+        let udf: Arc<ScalarUDF> =
+            ctx.decode_function(&scalar_udf.name, scalar_udf.fun_definition.as_deref())?;
+        let args = ctx.decode_children_expressions(&scalar_udf.args)?;
+        let return_type = require_proto_field(
+            scalar_udf.return_type.as_ref(),
+            "ScalarFunctionExpr",
+            "return_type",
+        )?;
+        let return_field =
+            Field::new(&scalar_udf.return_field_name, return_type.try_into()?, true)
+                .into();
+
+        Ok(Arc::new(
+            ScalarFunctionExpr::new(
+                &scalar_udf.name,
+                udf,
+                args,
+                return_field,
+                ctx.config_options()?,
+            )
+            .with_nullable(scalar_udf.nullable),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -424,5 +504,447 @@ mod tests {
         assert!(!stable_expr.is_volatile_node());
         let stable_arc: Arc<dyn PhysicalExpr> = Arc::new(stable_expr);
         assert!(!is_volatile(&stable_arc));
+    }
+}
+
+/// Tests for the `try_to_proto` / `try_from_proto` hooks.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use std::any::{Any, TypeId};
+    use std::cell::Cell;
+
+    use super::*;
+    use crate::expressions::Column;
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use arrow::datatypes::Field;
+    use datafusion_common::internal_err;
+    use datafusion_expr::Signature;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::{
+        PhysicalExprDecode, PhysicalExprDecodeCtx,
+    };
+    use datafusion_physical_expr_common::physical_expr::proto_encode::{
+        PhysicalExprEncode, PhysicalExprEncodeCtx,
+    };
+    use datafusion_proto_models::datafusion_common::ArrowType;
+    use datafusion_proto_models::protobuf::{
+        PhysicalExprNode, PhysicalScalarUdfNode, physical_expr_node,
+    };
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestUdf {
+        signature: Signature,
+    }
+
+    impl ScalarUDFImpl for TestUdf {
+        fn name(&self) -> &str {
+            "test_udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int32)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(42))))
+        }
+    }
+
+    fn test_udf() -> Arc<ScalarUDF> {
+        Arc::new(ScalarUDF::from(TestUdf {
+            signature: Signature::uniform(
+                1,
+                vec![DataType::Int32],
+                Volatility::Immutable,
+            ),
+        }))
+    }
+
+    /// A `ScalarFunctionExpr` calling [`test_udf`] over one `Int32` column,
+    /// type-erased so `try_to_proto` is exercised exactly as the serializer
+    /// calls it (through `dyn PhysicalExpr`).
+    fn scalar_fn_fixture() -> Arc<dyn PhysicalExpr> {
+        Arc::new(ScalarFunctionExpr::new(
+            "test_udf",
+            test_udf(),
+            vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>],
+            Field::new("test_udf", DataType::Int32, true).into(),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
+    fn int32_arrow_type() -> ArrowType {
+        (&DataType::Int32).try_into().unwrap()
+    }
+
+    /// Build a `ScalarUdf` proto node with the given fields.
+    fn scalar_udf_node(
+        args: Vec<PhysicalExprNode>,
+        return_type: Option<ArrowType>,
+        nullable: bool,
+        fun_definition: Option<Vec<u8>>,
+    ) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::ScalarUdf(
+                PhysicalScalarUdfNode {
+                    name: "test_udf".to_string(),
+                    args,
+                    fun_definition,
+                    return_type,
+                    nullable,
+                    return_field_name: "test_udf".to_string(),
+                },
+            )),
+        }
+    }
+
+    /// Encoder stub layering function-codec behavior over a [`StubEncoder`]
+    /// for child expressions: emits `payload` for every function object, or
+    /// fails when `fail` is set.
+    struct FnStubEncoder {
+        inner: StubEncoder,
+        payload: Option<Vec<u8>>,
+        fail: bool,
+    }
+
+    impl FnStubEncoder {
+        fn ok() -> Self {
+            Self {
+                inner: StubEncoder::ok(),
+                payload: None,
+                fail: false,
+            }
+        }
+    }
+
+    impl PhysicalExprEncode for FnStubEncoder {
+        fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode> {
+            self.inner.encode(expr)
+        }
+
+        fn encode_function_erased(
+            &self,
+            _function: &(dyn Any + Send + Sync),
+            _type_name: &'static str,
+        ) -> Result<Option<Vec<u8>>> {
+            if self.fail {
+                return internal_err!("function codec encode failure");
+            }
+            Ok(self.payload.clone())
+        }
+    }
+
+    /// Decoder stub layering function-codec + session-config behavior over a
+    /// [`StubDecoder`] for child expressions. Resolves every function name to
+    /// [`test_udf`] (recording the payload it was handed) and returns default
+    /// `ConfigOptions`.
+    struct FnStubDecoder {
+        inner: StubDecoder,
+        seen_payload: Cell<Option<Option<Vec<u8>>>>,
+    }
+
+    impl FnStubDecoder {
+        fn ok() -> Self {
+            Self {
+                inner: StubDecoder::ok(),
+                seen_payload: Cell::new(None),
+            }
+        }
+
+        fn failing_on(call: usize) -> Self {
+            Self {
+                inner: StubDecoder::failing_on(call),
+                seen_payload: Cell::new(None),
+            }
+        }
+    }
+
+    impl PhysicalExprDecode for FnStubDecoder {
+        fn decode(
+            &self,
+            node: &PhysicalExprNode,
+            schema: &Schema,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            self.inner.decode(node, schema)
+        }
+
+        fn decode_function_erased(
+            &self,
+            _name: &str,
+            payload: Option<&[u8]>,
+            requested: TypeId,
+            type_name: &'static str,
+        ) -> Result<Arc<dyn Any + Send + Sync>> {
+            assert_eq!(
+                requested,
+                TypeId::of::<ScalarUDF>(),
+                "unexpected function type requested: {type_name}"
+            );
+            self.seen_payload.set(Some(payload.map(|p| p.to_vec())));
+            Ok(test_udf() as _)
+        }
+
+        fn config_options(&self) -> Result<Arc<ConfigOptions>> {
+            Ok(Arc::new(ConfigOptions::default()))
+        }
+    }
+
+    /// Decoder whose function resolution fails, to exercise error
+    /// propagation; child decoding must not be reached.
+    struct FailingFnDecoder;
+
+    impl PhysicalExprDecode for FailingFnDecoder {
+        fn decode(
+            &self,
+            _node: &PhysicalExprNode,
+            _schema: &Schema,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            unreachable!("child decoding must not be reached")
+        }
+
+        fn decode_function_erased(
+            &self,
+            _name: &str,
+            _payload: Option<&[u8]>,
+            _requested: TypeId,
+            _type_name: &'static str,
+        ) -> Result<Arc<dyn Any + Send + Sync>> {
+            internal_err!("function codec decode failure")
+        }
+    }
+
+    /// Decoder that violates the `decode_function_erased` contract by
+    /// returning a value of the wrong type, to exercise the ctx's downcast
+    /// guard.
+    struct WrongTypeFnDecoder;
+
+    impl PhysicalExprDecode for WrongTypeFnDecoder {
+        fn decode(
+            &self,
+            _node: &PhysicalExprNode,
+            _schema: &Schema,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            unreachable!("child decoding must not be reached")
+        }
+
+        fn decode_function_erased(
+            &self,
+            _name: &str,
+            _payload: Option<&[u8]>,
+            _requested: TypeId,
+            _type_name: &'static str,
+        ) -> Result<Arc<dyn Any + Send + Sync>> {
+            Ok(Arc::new("not a scalar udf") as _)
+        }
+    }
+
+    #[test]
+    fn try_to_proto_encodes_scalar_function_expr() {
+        let expr = scalar_fn_fixture();
+        let encoder = FnStubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = expr
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("ScalarFunctionExpr must serialize itself");
+
+        assert_eq!(node.expr_id, None);
+        let Some(physical_expr_node::ExprType::ScalarUdf(udf_node)) = node.expr_type
+        else {
+            panic!("expected ScalarUdf node");
+        };
+        assert_eq!(udf_node.name, "test_udf");
+        assert_eq!(udf_node.args, vec![column_node("child")]);
+        assert_eq!(udf_node.fun_definition, None);
+        assert_eq!(udf_node.return_type, Some(int32_arrow_type()));
+        assert!(udf_node.nullable);
+        assert_eq!(udf_node.return_field_name, "test_udf");
+    }
+
+    #[test]
+    fn try_to_proto_includes_codec_payload() {
+        let expr = scalar_fn_fixture();
+        let encoder = FnStubEncoder {
+            payload: Some(vec![1, 2, 3]),
+            ..FnStubEncoder::ok()
+        };
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = expr.try_to_proto(&ctx).unwrap().unwrap();
+        let Some(physical_expr_node::ExprType::ScalarUdf(udf_node)) = node.expr_type
+        else {
+            panic!("expected ScalarUdf node");
+        };
+        assert_eq!(udf_node.fun_definition, Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn try_to_proto_propagates_child_encode_error() {
+        let expr = scalar_fn_fixture();
+        let encoder = FnStubEncoder {
+            inner: StubEncoder::failing_on(1),
+            ..FnStubEncoder::ok()
+        };
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let err = expr.try_to_proto(&ctx).unwrap_err();
+        assert!(err.to_string().contains("stub encode failure"), "{err}");
+    }
+
+    #[test]
+    fn try_to_proto_propagates_function_encode_error() {
+        let expr = scalar_fn_fixture();
+        let encoder = FnStubEncoder {
+            fail: true,
+            ..FnStubEncoder::ok()
+        };
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let err = expr.try_to_proto(&ctx).unwrap_err();
+        assert!(
+            err.to_string().contains("function codec encode failure"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn try_from_proto_decodes_scalar_function_expr() {
+        let node = scalar_udf_node(
+            vec![column_node("a")],
+            Some(int32_arrow_type()),
+            false,
+            Some(vec![7]),
+        );
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let decoder = FnStubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = ScalarFunctionExpr::try_from_proto(&node, &ctx).unwrap();
+        let expr = decoded
+            .downcast_ref::<ScalarFunctionExpr>()
+            .expect("expected a ScalarFunctionExpr");
+
+        assert_eq!(expr.name(), "test_udf");
+        assert_eq!(expr.fun().name(), "test_udf");
+        assert_eq!(expr.args().len(), 1);
+        assert_eq!(expr.return_type(), &DataType::Int32);
+        assert!(!expr.nullable());
+        // The deserialization layer must receive the wire payload verbatim.
+        assert_eq!(decoder.seen_payload.take(), Some(Some(vec![7])));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_scalar_udf_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &UnreachableDecoder);
+
+        let err = ScalarFunctionExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("PhysicalExprNode is not a ScalarFunctionExpr"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_return_type() {
+        let node = scalar_udf_node(vec![column_node("a")], None, true, None);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let decoder = FnStubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = ScalarFunctionExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("missing required field 'return_type'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn try_from_proto_propagates_child_decode_error() {
+        let node =
+            scalar_udf_node(vec![column_node("a")], Some(int32_arrow_type()), true, None);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let decoder = FnStubDecoder::failing_on(1);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = ScalarFunctionExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(err.to_string().contains("stub decode failure"), "{err}");
+    }
+
+    #[test]
+    fn try_from_proto_propagates_function_decode_error() {
+        let node =
+            scalar_udf_node(vec![column_node("a")], Some(int32_arrow_type()), true, None);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &FailingFnDecoder);
+
+        let err = ScalarFunctionExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            err.to_string().contains("function codec decode failure"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn try_from_proto_guards_against_wrong_function_type() {
+        let node =
+            scalar_udf_node(vec![column_node("a")], Some(int32_arrow_type()), true, None);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &WrongTypeFnDecoder);
+
+        let err = ScalarFunctionExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            err.to_string().contains("is not a"),
+            "expected the ctx downcast guard to fire: {err}"
+        );
+    }
+
+    #[test]
+    fn try_from_proto_errors_without_session_config() {
+        // A decoder that resolves functions but provides no session must
+        // fail loudly rather than silently substituting default config.
+        struct NoConfigDecoder;
+
+        impl PhysicalExprDecode for NoConfigDecoder {
+            fn decode(
+                &self,
+                node: &PhysicalExprNode,
+                schema: &Schema,
+            ) -> Result<Arc<dyn PhysicalExpr>> {
+                StubDecoder::ok().decode(node, schema)
+            }
+
+            fn decode_function_erased(
+                &self,
+                _name: &str,
+                _payload: Option<&[u8]>,
+                _requested: TypeId,
+                _type_name: &'static str,
+            ) -> Result<Arc<dyn Any + Send + Sync>> {
+                Ok(test_udf() as _)
+            }
+        }
+
+        let node =
+            scalar_udf_node(vec![column_node("a")], Some(int32_arrow_type()), true, None);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &NoConfigDecoder);
+
+        let err = ScalarFunctionExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("does not provide session configuration"),
+            "{err}"
+        );
     }
 }

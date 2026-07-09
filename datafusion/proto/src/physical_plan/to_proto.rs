@@ -30,10 +30,10 @@ use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
-use datafusion_expr::WindowFrame;
+use datafusion_expr::{ScalarUDF, WindowFrame};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
-use datafusion_physical_expr::{HigherOrderFunctionExpr, ScalarFunctionExpr};
+use datafusion_physical_expr::HigherOrderFunctionExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
@@ -269,6 +269,26 @@ impl datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprE
         self.proto_converter
             .physical_expr_to_proto(expr, self.codec)
     }
+
+    fn encode_function_erased(
+        &self,
+        function: &(dyn std::any::Any + Send + Sync),
+        type_name: &'static str,
+    ) -> Result<Option<Vec<u8>>> {
+        // Function types supported by this serialization layer. Aggregate
+        // and window UDFs can be added here when their expressions migrate
+        // to `try_to_proto`.
+        if let Some(udf) = function.downcast_ref::<ScalarUDF>() {
+            let mut buf = Vec::new();
+            self.codec.try_encode_udf(udf, &mut buf)?;
+            Ok((!buf.is_empty()).then_some(buf))
+        } else {
+            internal_err!(
+                "PhysicalExtensionCodec-backed encoding supports `ScalarUDF` \
+                 function objects, got `{type_name}`"
+            )
+        }
+    }
 }
 
 /// Serialize a `PhysicalExpr` to default protobuf representation.
@@ -299,26 +319,7 @@ pub fn serialize_physical_expr_with_converter(
         return Ok(node);
     }
 
-    if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
-        let mut buf = Vec::new();
-        codec.try_encode_udf(expr.fun(), &mut buf)?;
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
-                protobuf::PhysicalScalarUdfNode {
-                    name: expr.name().to_string(),
-                    args: serialize_physical_exprs(expr.args(), codec, proto_converter)?,
-                    fun_definition: (!buf.is_empty()).then_some(buf),
-                    return_type: Some(expr.return_type().try_into()?),
-                    nullable: expr.nullable(),
-                    return_field_name: expr
-                        .return_field(&Schema::empty())?
-                        .name()
-                        .to_string(),
-                },
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
+    if let Some(expr) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
         let mut buf = Vec::new();
         codec.try_encode_higher_order_function(expr.fun(), &mut buf)?;
         Ok(protobuf::PhysicalExprNode {

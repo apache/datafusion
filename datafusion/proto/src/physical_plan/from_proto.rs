@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::compute::SortOptions;
-use arrow::datatypes::{Field, Schema};
+use arrow::datatypes::Schema;
 use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
 use datafusion_common::{
@@ -40,9 +40,9 @@ use datafusion_datasource_json::file_format::JsonSink;
 use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
-use datafusion_expr::WindowFunctionDefinition;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::SubqueryIndex;
+use datafusion_expr::{ScalarUDF, WindowFunctionDefinition};
 use datafusion_physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
@@ -309,36 +309,7 @@ pub fn parse_physical_expr_with_converter(
         ExprType::Case(_) => CaseExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Cast(_) => CastExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::TryCast(_) => TryCastExpr::try_from_proto(proto, &decode_ctx)?,
-        ExprType::ScalarUdf(e) => {
-            let udf = match &e.fun_definition {
-                Some(buf) => ctx.codec().try_decode_udf(&e.name, buf)?,
-                None => ctx
-                    .task_ctx()
-                    .udf(e.name.as_str())
-                    .or_else(|_| ctx.codec().try_decode_udf(&e.name, &[]))?,
-            };
-            let scalar_fun_def = Arc::clone(&udf);
-
-            let args = parse_physical_exprs(&e.args, ctx, input_schema, proto_converter)?;
-
-            let config_options = Arc::clone(ctx.task_ctx().session_config().options());
-
-            Arc::new(
-                ScalarFunctionExpr::new(
-                    e.name.as_str(),
-                    scalar_fun_def,
-                    args,
-                    Field::new(
-                        &e.return_field_name,
-                        convert_required!(e.return_type)?,
-                        true,
-                    )
-                    .into(),
-                    config_options,
-                )
-                .with_nullable(e.nullable),
-            )
-        }
+        ExprType::ScalarUdf(_) => ScalarFunctionExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::HigherOrderUdf(e) => {
             let func = match &e.fun_definition {
                 Some(buf) => {
@@ -828,6 +799,41 @@ impl datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprD
     ) -> Result<Arc<dyn PhysicalExpr>> {
         self.proto_converter
             .proto_to_physical_expr(node, schema, self.ctx)
+    }
+
+    fn decode_function_erased(
+        &self,
+        name: &str,
+        payload: Option<&[u8]>,
+        requested: std::any::TypeId,
+        type_name: &'static str,
+    ) -> Result<Arc<dyn std::any::Any + Send + Sync>> {
+        // Function types supported by this deserialization layer. Aggregate
+        // and window UDFs can be added here when their expressions migrate
+        // to `try_from_proto`.
+        if requested == std::any::TypeId::of::<ScalarUDF>() {
+            let udf = match payload {
+                // An explicit payload always goes to the extension codec.
+                Some(buf) => self.ctx.codec().try_decode_udf(name, buf)?,
+                // By-name references prefer the session's function registry,
+                // falling back to the codec with an empty payload.
+                None => self
+                    .ctx
+                    .task_ctx()
+                    .udf(name)
+                    .or_else(|_| self.ctx.codec().try_decode_udf(name, &[]))?,
+            };
+            Ok(udf as Arc<dyn std::any::Any + Send + Sync>)
+        } else {
+            Err(internal_datafusion_err!(
+                "PhysicalExtensionCodec-backed decoding supports `ScalarUDF` \
+                 function objects, got `{type_name}` for '{name}'"
+            ))
+        }
+    }
+
+    fn config_options(&self) -> Result<Arc<datafusion_common::config::ConfigOptions>> {
+        Ok(Arc::clone(self.ctx.task_ctx().session_config().options()))
     }
 }
 
