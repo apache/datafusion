@@ -27,6 +27,7 @@
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion::catalog::TableProvider;
 use datafusion::prelude::{
     CsvReadOptions, JsonReadOptions, ParquetReadOptions, SessionContext,
 };
@@ -38,6 +39,7 @@ use futures::stream::BoxStream;
 use insta::assert_snapshot;
 use object_store::memory::InMemory;
 use object_store::path::Path;
+use object_store::prefix::PrefixStore;
 use object_store::{
     CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload,
     ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload,
@@ -1068,10 +1070,6 @@ async fn two_prefixed_stores_coexist_under_one_authority() {
 /// silently reading every path from the first store would drop/duplicate rows.
 #[tokio::test]
 async fn multi_path_table_spanning_two_stores_is_rejected() {
-    use datafusion::catalog::TableProvider;
-    use datafusion_catalog_listing::ListingTableConfig;
-    use object_store::prefix::PrefixStore;
-
     let ctx = SessionContext::new();
     ctx.runtime_env().register_object_store(
         &Url::parse("mem://bucket/userA/repo1").unwrap(),
@@ -1109,10 +1107,6 @@ async fn multi_path_table_spanning_two_stores_is_rejected() {
 /// to its store-relative prefix.
 #[tokio::test]
 async fn multi_path_table_spanning_one_prefixed_store_is_accepted() {
-    use datafusion::catalog::TableProvider;
-    use datafusion_catalog_listing::ListingTableConfig;
-    use object_store::prefix::PrefixStore;
-
     let ctx = SessionContext::new();
     ctx.runtime_env().register_object_store(
         &Url::parse("mem://bucket/user/repo").unwrap(),
