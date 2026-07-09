@@ -34,8 +34,9 @@ use std::sync::Arc;
 
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
-    add_sort_above_with_check, is_coalesce_partitions, is_repartition,
-    is_sort_preserving_merge,
+    add_sort_above_with_check, aggregate_can_reuse_range_partitioning,
+    is_coalesce_partitions, is_repartition, is_sort_preserving_merge,
+    range_partitioning_satisfies_key_partitioning,
 };
 
 use arrow::compute::SortOptions;
@@ -698,72 +699,47 @@ fn add_roundrobin_on_top(
     }
 }
 
-/// Adds a hash repartition operator:
-/// - to increase parallelism, and/or
-/// - to satisfy requirements of the subsequent operators.
-///
-/// Repartition(Hash) is added on top of operator `input`.
-///
-/// # Arguments
-///
-/// * `input`: Current node.
-/// * `hash_exprs`: Stores Physical Exprs that are used during hashing.
-/// * `n_target`: desired target partition number, if partition number of the
-///   current executor is less than this value. Partition number will be increased.
-/// * `allow_subset_satisfy_partitioning`: Whether to allow subset partitioning logic in satisfaction checks.
-///   Set to `false` for partitioned hash joins to ensure exact hash matching.
-///
-/// # Returns
-///
-/// A [`Result`] object that contains new execution plan where the desired
-/// distribution is satisfied by adding a Hash repartition.
-fn add_hash_on_top(
-    input: DistributionContext,
-    hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
-    n_target: usize,
+// TODO: remove this private helper once Range generally satisfies
+// KeyPartitioned requirements through Partitioning::satisfaction.
+// See <https://github.com/apache/datafusion/issues/23266>.
+//
+// Partial aggregates do not require key partitioning, but they preserve their
+// input partitioning for the final aggregate. Until Range satisfies
+// KeyPartitioned generally, this check keeps preserve_file_partitions from
+// inserting RoundRobin between a reusable Range input and the partial aggregate.
+fn partial_aggregate_preserves_reusable_partitioning(
+    plan: &Arc<dyn ExecutionPlan>,
+    child: &Arc<dyn ExecutionPlan>,
     allow_subset_satisfy_partitioning: bool,
-) -> Result<DistributionContext> {
-    // Early return if hash repartition is unnecessary
-    // `RepartitionExec: partitioning=Hash([...], 1), input_partitions=1` is unnecessary.
-    if n_target == 1 && input.plan.output_partitioning().partition_count() == 1 {
-        return Ok(input);
-    }
-
-    let dist = Distribution::HashPartitioned(hash_exprs);
-    let satisfaction = input.plan.output_partitioning().satisfaction(
-        &dist,
-        input.plan.equivalence_properties(),
-        allow_subset_satisfy_partitioning,
-    );
-
-    // Add hash repartitioning when:
-    // - When subset satisfaction is enabled (current >= threshold): only repartition if not satisfied
-    // - When below threshold (current < threshold): repartition if expressions don't match OR to increase parallelism
-    let needs_repartition = if allow_subset_satisfy_partitioning {
-        !satisfaction.is_satisfied()
-    } else {
-        !satisfaction.is_satisfied()
-            || n_target > input.plan.output_partitioning().partition_count()
+) -> bool {
+    let Some(aggregate) = plan.downcast_ref::<AggregateExec>() else {
+        return false;
     };
-
-    if needs_repartition {
-        // When there is an existing ordering, we preserve ordering during
-        // repartition. This will be rolled back in the future if any of the
-        // following conditions is true:
-        // - Preserving ordering is not helpful in terms of satisfying ordering
-        //   requirements.
-        // - Usage of order preserving variants is not desirable (per the flag
-        //   `config.optimizer.prefer_existing_sort`).
-        let partitioning = dist.create_partitioning(n_target);
-        let repartition =
-            RepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
-                .with_preserve_order();
-        let plan = Arc::new(repartition) as _;
-
-        return Ok(DistributionContext::new(plan, true, vec![input]));
+    if aggregate.mode() != &AggregateMode::Partial
+        || aggregate.group_expr().is_empty()
+        || aggregate.group_expr().has_grouping_set()
+    {
+        return false;
     }
 
-    Ok(input)
+    let group_exprs = aggregate.group_expr().input_exprs();
+    let output_partitioning = child.output_partitioning();
+    let eq_properties = child.equivalence_properties();
+    let key_distribution = Distribution::KeyPartitioned(group_exprs.clone());
+
+    output_partitioning
+        .satisfaction(
+            &key_distribution,
+            eq_properties,
+            allow_subset_satisfy_partitioning,
+        )
+        .is_satisfied()
+        || range_partitioning_satisfies_key_partitioning(
+            output_partitioning,
+            &group_exprs,
+            eq_properties,
+            allow_subset_satisfy_partitioning,
+        )
 }
 
 /// Adds a [`SortPreservingMergeExec`] or a [`CoalescePartitionsExec`] operator
@@ -1000,6 +976,10 @@ struct RepartitionRequirementStatus {
 ///     hash_necessary: true
 /// }
 /// ```
+#[expect(
+    deprecated,
+    reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+)]
 fn get_repartition_requirement_status(
     plan: &Arc<dyn ExecutionPlan>,
     batch_size: usize,
@@ -1023,7 +1003,10 @@ fn get_repartition_requirement_status(
             Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
             Precision::Absent => true,
         };
-        let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
+        let is_hash = matches!(
+            requirement,
+            Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_)
+        );
         // Hash re-partitioning is necessary when the input has more than one
         // partitions:
         let multi_partitions = child.output_partitioning().partition_count() > 1;
@@ -1065,6 +1048,10 @@ fn get_repartition_requirement_status(
 /// This function is intended to be used in a bottom up traversal, as it
 /// can first repartition (or newly partition) at the datasources -- these
 /// source partitions may be later repartitioned with additional data exchange operators.
+#[expect(
+    deprecated,
+    reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+)]
 pub fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,
@@ -1185,27 +1172,21 @@ pub fn ensure_distribution(
                 hash_necessary,
             },
         )| {
-            let increases_partition_count =
-                child.plan.output_partitioning().partition_count() < target_partitions;
-
-            let add_roundrobin = enable_round_robin
-                // Operator benefits from partitioning (e.g. filter):
-                && roundrobin_beneficial
-                && roundrobin_beneficial_stats
-                // Unless partitioning increases the partition count, it is not beneficial:
-                && increases_partition_count;
-
             // Allow subset satisfaction when:
             // 1. Current partition count >= threshold
             // 2. Not a partitioned join since must use exact hash matching for joins
             // 3. Not a grouping set aggregate (requires exact hash including __grouping_id)
             let current_partitions = child.plan.output_partitioning().partition_count();
+            let preserve_file_partition_threshold_met =
+                config.optimizer.preserve_file_partitions > 0
+                    && current_partitions >= config.optimizer.preserve_file_partitions;
 
             // Check if the hash partitioning requirement includes __grouping_id column.
             // Grouping set aggregates (ROLLUP, CUBE, GROUPING SETS) require exact hash
             // partitioning on all group columns including __grouping_id to ensure partial
             // aggregates from different partitions are correctly combined.
-            let requires_grouping_id = matches!(&requirement, Distribution::HashPartitioned(exprs)
+            let requires_grouping_id = matches!(&requirement,
+                Distribution::HashPartitioned(exprs) | Distribution::KeyPartitioned(exprs)
                 if exprs.iter().any(|expr| {
                     (expr.as_ref() as &dyn Any)
                         .downcast_ref::<Column>()
@@ -1219,10 +1200,28 @@ pub fn ensure_distribution(
                 // partitioning to the optimizer. Respect it when the only
                 // reason to repartition would be to increase partition count
                 // beyond the preserved file-group count.
-                || (config.optimizer.preserve_file_partitions > 0
+                || (preserve_file_partition_threshold_met
                     && current_partitions < target_partitions))
                 && !is_partitioned_join
                 && !requires_grouping_id;
+
+            let increases_partition_count = current_partitions < target_partitions;
+
+            let preserve_partial_aggregate_partitioning =
+                preserve_file_partition_threshold_met
+                    && partial_aggregate_preserves_reusable_partitioning(
+                        &plan,
+                        &child.plan,
+                        allow_subset_satisfy_partitioning,
+                    );
+
+            let add_roundrobin = enable_round_robin
+                // Operator benefits from partitioning (e.g. filter):
+                && roundrobin_beneficial
+                && roundrobin_beneficial_stats
+                // Unless partitioning increases the partition count, it is not beneficial:
+                && increases_partition_count
+                && !preserve_partial_aggregate_partitioning;
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
@@ -1243,16 +1242,61 @@ pub fn ensure_distribution(
                 Distribution::SinglePartition => {
                     child = add_merge_on_top(child, removed_fetch);
                 }
-                Distribution::HashPartitioned(exprs) => {
+                Distribution::HashPartitioned(exprs)
+                | Distribution::KeyPartitioned(exprs) => {
+                    let child_partitions =
+                        child.plan.output_partitioning().partition_count();
+                    let distribution_satisfied = child
+                        .plan
+                        .output_partitioning()
+                        .satisfaction(
+                            &requirement,
+                            child.plan.equivalence_properties(),
+                            allow_subset_satisfy_partitioning,
+                        )
+                        .is_satisfied();
+                    let range_satisfied_for_aggregate =
+                        aggregate_can_reuse_range_partitioning(&plan)
+                            && range_partitioning_satisfies_key_partitioning(
+                                child.plan.output_partitioning(),
+                                exprs,
+                                child.plan.equivalence_properties(),
+                                allow_subset_satisfy_partitioning,
+                            );
+
+                    let partitioning_satisfied =
+                        distribution_satisfied || range_satisfied_for_aggregate;
+
+                    // When subset satisfaction is enabled, preserve an
+                    // already-satisfying partitioning. Otherwise, hash
+                    // repartition may also increase parallelism.
+                    let needs_hash_repartition = if allow_subset_satisfy_partitioning {
+                        !partitioning_satisfied
+                    } else {
+                        !partitioning_satisfied || target_partitions > child_partitions
+                    };
+                    let should_add_hash_repartition =
+                        hash_necessary && needs_hash_repartition;
+
                     // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
                     // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
-                    if hash_necessary {
-                        child = add_hash_on_top(
-                            child,
-                            exprs.to_vec(),
-                            target_partitions,
-                            allow_subset_satisfy_partitioning,
-                        )?;
+                    if should_add_hash_repartition {
+                        // When there is an existing ordering, we preserve ordering during
+                        // repartition. This will be rolled back in the future if any of the
+                        // following conditions is true:
+                        // - Preserving ordering is not helpful in terms of satisfying ordering
+                        //   requirements.
+                        // - Usage of order preserving variants is not desirable (per the flag
+                        //   `config.optimizer.prefer_existing_sort`).
+                        let partitioning = Distribution::KeyPartitioned(exprs.to_vec())
+                            .create_partitioning(target_partitions);
+                        let repartition = RepartitionExec::try_new(
+                            Arc::clone(&child.plan),
+                            partitioning,
+                        )?
+                        .with_preserve_order();
+                        let plan = Arc::new(repartition) as _;
+                        child = DistributionContext::new(plan, true, vec![child]);
                     }
                 }
                 Distribution::UnspecifiedDistribution => {
@@ -1310,7 +1354,9 @@ pub fn ensure_distribution(
                 // no ordering requirement
                 match requirement {
                     // Operator requires specific distribution.
-                    Distribution::SinglePartition | Distribution::HashPartitioned(_) => {
+                    Distribution::SinglePartition
+                    | Distribution::HashPartitioned(_)
+                    | Distribution::KeyPartitioned(_) => {
                         // If the parent doesn't maintain input order, preserving
                         // ordering is pointless. However, if it does maintain
                         // input order, we keep order-preserving variants so

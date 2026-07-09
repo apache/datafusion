@@ -496,6 +496,49 @@ The ClickBench[1] benchmarks are widely cited in the industry and
 focus on grouping / aggregation / filtering. This runner uses the
 scripts and queries from [2].
 
+The runner applies two ClickBench-specific setup steps automatically:
+
+- ClickBench stores `EventDate` as `UInt16` days since `1970-01-01`.
+  The runner registers the parquet data as `hits_raw`, then creates a
+  `hits` view that casts `EventDate` through `INTEGER` to `DATE` for the
+  benchmark queries.
+- The source partitioned ClickBench dataset stores string columns without
+  the `string` Parquet logical type annotation. For partitioned runs, the
+  runner enables the parquet `binary_as_string` option so those columns
+  are read as strings.
+
+If you set up ClickBench manually through SQL, use the same `EventDate`
+view pattern:
+
+```sql
+CREATE EXTERNAL TABLE hits_raw
+STORED AS PARQUET
+LOCATION 'benchmarks/data/hits.parquet';
+
+CREATE VIEW hits AS
+SELECT * EXCEPT ("EventDate"),
+       CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
+FROM hits_raw;
+```
+
+For the partitioned dataset, use `benchmarks/data/hits_partitioned` and
+add `OPTIONS ('binary_as_string' 'true')` to the external table statement.
+
+From the repository root, download data and run the default ClickBench
+queries against the single parquet file:
+
+```shell
+./benchmarks/bench.sh data clickbench_1
+./benchmarks/bench.sh run clickbench_1
+```
+
+Or run against the partitioned dataset:
+
+```shell
+./benchmarks/bench.sh data clickbench_partitioned
+./benchmarks/bench.sh run clickbench_partitioned
+```
+
 [1]: https://github.com/ClickHouse/ClickBench
 [2]: https://github.com/ClickHouse/ClickBench/tree/main/datafusion
 

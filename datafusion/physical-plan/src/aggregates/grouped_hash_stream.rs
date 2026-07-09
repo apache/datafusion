@@ -132,6 +132,16 @@ enum OutOfMemoryMode {
 
 /// HashTable based Grouping Aggregator
 ///
+/// # Development Note
+///
+/// This implementation is being incrementally refactored. See the tracking issue
+/// for details.
+///
+/// New features and improvements should go directly into the new implementation.
+/// Please coordinate through the tracking issue.
+///
+/// Issue: <https://github.com/apache/datafusion/issues/22710>
+///
 /// # Design Goals
 ///
 /// This structure is designed so that updating the aggregates can be
@@ -1403,7 +1413,7 @@ mod tests {
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
 
-    // Migrated to PartialHashAggregateStream coverage in hash_aggregate.rs;
+    // Migrated to PartialHashAggregateStream coverage in hash_stream.rs;
     // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {
@@ -1511,9 +1521,8 @@ mod tests {
         Ok(())
     }
 
-    // TODO: migrate to PartialHashAggregateStream when it supports
-    // InputOrderMode::PartiallySorted; kept here for the legacy
-    // GroupedHashAggregateStream implementation.
+    // Migrated to OrderedPartialAggregateStream coverage in aggregates/mod.rs;
+    // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_emit_early_with_partially_sorted() -> Result<()> {
         // Reproducer for #20445: EmitEarly with PartiallySorted panics in
