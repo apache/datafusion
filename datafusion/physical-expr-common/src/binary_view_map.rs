@@ -407,7 +407,7 @@ where
 
     #[inline(always)]
     fn buffer_location(view: u128) -> u64 {
-        ((view >> 64) as u64) << 32 | ((view >> 96) as u64)
+        (view >> 64) as u64
     }
 
     #[inline(always)]
