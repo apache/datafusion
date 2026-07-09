@@ -160,7 +160,7 @@ impl<C: CursorValues> Debug for SortPreservingMergeStream<C> {
     }
 }
 
-impl<C: CursorValues> SortPreservingMergeStream<C> {
+impl<C: CursorValues + Sync + Send> SortPreservingMergeStream<C> {
     pub(crate) fn new(
         streams: CursorStream<C>,
         schema: SchemaRef,
@@ -200,7 +200,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                          batch_size: usize,
                          fetch: Option<usize>,
                          reservation: MemoryReservation,
-                         enable_round_robin_tie_breaker: bool,) -> SendableRecordBatchStream {
+                         enable_round_robin_tie_breaker: bool) -> SendableRecordBatchStream where C: 'static {
 
         let schema_clone = Arc::clone(&schema);
 

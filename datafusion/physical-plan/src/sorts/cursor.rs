@@ -16,6 +16,7 @@
 // under the License.
 
 use std::cmp::Ordering;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -32,7 +33,7 @@ use datafusion_execution::memory_pool::MemoryReservation;
 ///
 /// This is a trait as there are several specialized implementations, such as for
 /// single columns or for normalized multi column keys ([`Rows`])
-pub trait CursorValues {
+pub trait CursorValues: Debug + Sync + Send {
     fn len(&self) -> usize;
 
     /// Returns true if `l[l_idx] == r[r_idx]`
@@ -302,6 +303,7 @@ impl<T: ArrowNativeTypeOp> CursorValues for PrimitiveValues<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct ByteArrayValues<T: OffsetSizeTrait> {
     offsets: OffsetBuffer<T>,
     values: Buffer,
