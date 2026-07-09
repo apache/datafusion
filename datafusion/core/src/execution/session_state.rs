@@ -286,6 +286,10 @@ impl Session for SessionState {
         &self.physical_optimizers.rules
     }
 
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        self.statistics_registry.as_ref()
+    }
+
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
         &self.scalar_functions
     }

@@ -42,7 +42,7 @@ use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::protobuf::LogicalExprNode;
-use datafusion_session::{PhysicalOptimizerRule, Session};
+use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
 use prost::Message;
 
 use stabby::str::Str as SStr;
@@ -553,6 +553,12 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
             _ => None,
         });
     table_options
+}
+
+impl PhysicalOptimizerContext for ForeignSession {
+    fn config_options(&self) -> &ConfigOptions {
+        self.config.options()
+    }
 }
 
 #[async_trait]

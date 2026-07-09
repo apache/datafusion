@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::PhysicalOptimizerRule;
+use crate::{PhysicalOptimizerContext, PhysicalOptimizerRule};
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigOptions, TableOptions};
 use datafusion_common::{DFSchema, Result};
@@ -27,6 +27,7 @@ use datafusion_expr::registry::ExtensionTypeRegistryRef;
 use datafusion_expr::{
     AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
 };
+use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 use parking_lot::{Mutex, RwLock};
 use std::any::Any;
@@ -87,6 +88,11 @@ pub trait Session: Send + Sync {
 
     /// Return the physical optimizers
     fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>];
+
+    /// Return the statistics registry for physical optimizer rules.
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        None
+    }
 
     /// Creates a physical [`ExecutionPlan`] plan from a [`LogicalPlan`].
     ///
@@ -154,6 +160,16 @@ pub trait Session: Send + Sync {
 }
 
 /// Create a new task context instance from Session
+impl PhysicalOptimizerContext for dyn Session + '_ {
+    fn config_options(&self) -> &ConfigOptions {
+        Session::config_options(self)
+    }
+
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        Session::statistics_registry(self)
+    }
+}
+
 impl From<&dyn Session> for TaskContext {
     fn from(state: &dyn Session) -> Self {
         let task_id = None;
