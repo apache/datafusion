@@ -241,6 +241,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     }
 
     async fn run(&mut self, co: &Co<Result<RecordBatch>>) -> Result<()> {
+        // This vector contains the indices of the partitions that have not started emitting yet.
         let mut uninitiated_partitions =
             (0..self.streams.partitions()).collect::<Vec<_>>();
 
