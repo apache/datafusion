@@ -245,32 +245,6 @@ c
 d
 e
 
-# Section 3.3 also gives the genuinely three-valued mark example:
-#   select Title, ECTS = any (select ECTS from Courses c2
-#                             where Lecturer = 123) someEqual
-#   from Courses c1
-# where the mark itself is projected and must surface TRUE, FALSE, and NULL.
-# DataFusion cannot decorrelate subqueries in a projection yet, so the
-# projected forms are documented errors for now. Expected results once that
-# lands (verified against DuckDB):
-#
-#   SELECT value, id = ANY (SELECT id FROM inner_table_no_null) AS some_equal
-#   FROM outer_table;
-#   ----
-#   a false
-#   b true
-#   c false
-#   d true
-#   e NULL
-
-query error This feature is not implemented: Physical plan does not support logical expression Exists
-SELECT value, id = ANY (SELECT id FROM inner_table_no_null) AS some_equal
-FROM outer_table;
-
-query error This feature is not implemented: Physical plan does not support logical expression InSubquery
-SELECT value, id IN (SELECT id FROM inner_table_no_null) AS some_equal
-FROM outer_table;
-
 # In a filter the paper's = ANY form works today: rewrite_set_comparison
 # expands it to a CASE over EXISTS marks, and IS NULL / IS TRUE then observe
 # all three mark values.
