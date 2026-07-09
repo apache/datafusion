@@ -63,7 +63,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
-datafusion-proto = { workspace = true }
+datafusion-proto = { workspace = true, default-features = false }
 datafusion-proto-common = { workspace = true }
 datafusion-session = { workspace = true }
 futures = { workspace = true }
@@ -83,9 +83,11 @@ datafusion-functions-window = { workspace = true }
 doc-comment = { workspace = true }
 
 [features]
+default = ["parquet"]
 integration-tests = [
     "datafusion-functions",
     "datafusion-functions-aggregate",
     "datafusion-functions-table",
     "datafusion-functions-window",
 ]
+parquet = ["datafusion-proto/parquet"]

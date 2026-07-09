@@ -22,13 +22,13 @@ use std::sync::Arc;
 
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
-    hash_aggregate::{FinalHashAggregateStream, PartialHashAggregateStream},
-    no_grouping::AggregateStream,
+    aggregate_stream::AggregateStream,
+    grouped_hash_stream::GroupedHashAggregateStream,
+    grouped_topk_stream::GroupedTopKAggregateStream,
+    hash_stream::{FinalHashAggregateStream, PartialHashAggregateStream},
     ordered_final_stream::OrderedFinalAggregateStream,
     ordered_partial_stream::OrderedPartialAggregateStream,
     partial_reduce_stream::PartialReduceHashAggregateStream,
-    row_hash::GroupedHashAggregateStream,
-    topk_stream::GroupedTopKAggregateStream,
 };
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::filter_pushdown::{
@@ -76,17 +76,17 @@ use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
 mod aggregate_hash_table;
+mod aggregate_stream;
 pub mod group_values;
-mod hash_aggregate;
-mod no_grouping;
+mod grouped_hash_stream;
+mod grouped_topk_stream;
+mod hash_stream;
 pub mod order;
 mod ordered_final_stream;
 mod ordered_partial_stream;
 mod partial_reduce_stream;
-mod row_hash;
 mod skip_partial;
 mod topk;
-mod topk_stream;
 
 /// Returns true if TopK aggregation data structures support the provided key and value types.
 ///
@@ -3199,7 +3199,7 @@ mod tests {
         let aggregates_v0: Vec<Arc<AggregateFunctionExpr>> =
             vec![Arc::new(test_median_agg_expr(Arc::clone(&input_schema))?)];
 
-        // use fast-path in `row_hash.rs`.
+        // use fast-path in `grouped_hash_stream.rs`.
         let aggregates_v2: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
             AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
                 .schema(Arc::clone(&input_schema))

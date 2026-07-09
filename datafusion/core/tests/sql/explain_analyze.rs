@@ -774,8 +774,8 @@ async fn test_physical_plan_display_indent() {
         actual,
         @r"
     SortPreservingMergeExec: [the_min@2 DESC], fetch=10
-      SortExec: TopK(fetch=10), expr=[the_min@2 DESC], preserve_partitioning=[true]
-        ProjectionExec: expr=[c1@0 as c1, max(aggregate_test_100.c12)@1 as max(aggregate_test_100.c12), min(aggregate_test_100.c12)@2 as the_min]
+      ProjectionExec: expr=[c1@0 as c1, max(aggregate_test_100.c12)@1 as max(aggregate_test_100.c12), min(aggregate_test_100.c12)@2 as the_min]
+        SortExec: TopK(fetch=10), expr=[min(aggregate_test_100.c12)@2 DESC], preserve_partitioning=[true]
           AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]
             RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000
               AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]

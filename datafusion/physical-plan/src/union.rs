@@ -130,9 +130,7 @@ impl UnionExec {
                 // The schema of the inputs and the union schema is consistent when:
                 // - They have the same number of fields, and
                 // - Their fields have same types at the same indices.
-                // Here, we know that schemas are consistent and the call below can
-                // not return an error.
-                let cache = Self::compute_properties(&inputs, schema).unwrap();
+                let cache = Self::compute_properties(&inputs, schema)?;
                 Ok(Arc::new(UnionExec {
                     inputs,
                     metrics: ExecutionPlanMetricsSet::new(),
