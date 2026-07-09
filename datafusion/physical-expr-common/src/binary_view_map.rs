@@ -144,7 +144,7 @@ where
     /// buffer that stores hash values (reused across batches to save allocations)
     hashes_buffer: Vec<u64>,
     /// Maps input buffer locations to payloads for repeated physical views in one batch.
-    input_view_to_payload: datafusion_common::HashMap<u64, V>,
+    input_view_to_payload: hashbrown::hash_table::HashTable<(u64, V, u64)>,
     /// `(payload, null_index)` for the 'null' value, if any
     /// NOTE null_index is the logical index in the final array, not the index
     /// in the buffer
@@ -303,11 +303,10 @@ where
             let cached_payload = if input_has_buffers && len > 12 {
                 let input_buffer_location = Self::buffer_location(view_u128);
                 self.input_view_to_payload
-                    .raw_entry()
-                    .from_hash(hash, |cached_location| {
-                        *cached_location == input_buffer_location
+                    .find(hash, |(cached_location, _, cached_hash)| {
+                        *cached_hash == hash && *cached_location == input_buffer_location
                     })
-                    .map(|(_, payload)| *payload)
+                    .map(|(_, payload, _)| *payload)
             } else {
                 None
             };
@@ -352,19 +351,18 @@ where
             let payload = if let Some(payload) = maybe_payload {
                 if input_has_buffers && len > 12 {
                     let input_buffer_location = Self::buffer_location(view_u128);
-                    match self
-                        .input_view_to_payload
-                        .raw_entry_mut()
-                        .from_hash(hash, |cached_location| {
-                            *cached_location == input_buffer_location
-                        }) {
-                        hashbrown::hash_map::RawEntryMut::Occupied(_) => {}
-                        hashbrown::hash_map::RawEntryMut::Vacant(entry) => {
-                            entry.insert_hashed_nocheck(
-                                hash,
-                                input_buffer_location,
-                                payload,
-                            );
+                    let entry = self.input_view_to_payload.entry(
+                        hash,
+                        |(cached_location, _, cached_hash)| {
+                            *cached_hash == hash
+                                && *cached_location == input_buffer_location
+                        },
+                        |(_, _, cached_hash)| *cached_hash,
+                    );
+                    match entry {
+                        hashbrown::hash_table::Entry::Occupied(_) => {}
+                        hashbrown::hash_table::Entry::Vacant(entry) => {
+                            entry.insert((input_buffer_location, payload, hash));
                         }
                     }
                 }
@@ -409,8 +407,7 @@ where
 
     #[inline(always)]
     fn buffer_location(view: u128) -> u64 {
-        let byte_view = ByteView::from(view);
-        u64::from(byte_view.buffer_index) << 32 | u64::from(byte_view.offset)
+        ((view >> 64) as u64) << 32 | ((view >> 96) as u64)
     }
 
     #[inline(always)]
@@ -573,7 +570,7 @@ where
             + completed_size
             + nulls_size
             + self.hashes_buffer.allocated_size()
-            + self.input_view_to_payload.capacity() * size_of::<(u128, V)>()
+            + self.input_view_to_payload.capacity() * size_of::<(u64, V, u64)>()
     }
 }
 
