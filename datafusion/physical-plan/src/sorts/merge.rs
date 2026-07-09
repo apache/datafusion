@@ -153,6 +153,23 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
 
     /// This vector contains the indices of the partitions that have not started emitting yet.
     uninitiated_partitions: Vec<usize>,
+
+    /// Which input streams are fully exhausted (their `poll_next` returned `None`)
+    stream_exhausted: Vec<bool>,
+
+    /// Number of `true` entries in `stream_exhausted`
+    num_exhausted_streams: usize,
+
+    /// When every stream but one is exhausted there is nothing left to merge
+    /// against: the surviving stream's index is recorded here and its
+    /// batches are forwarded as is (skipping the loser tree entirely).
+    ///
+    /// Only enabled when `fetch` is `None`.
+    passthrough_stream: Option<usize>,
+
+    /// The not-yet-merged tail of the surviving stream's current batch,
+    /// emitted once before forwarding the stream itself.
+    passthrough_remainder: Option<RecordBatch>,
 }
 
 impl<C: CursorValues> SortPreservingMergeStream<C> {
@@ -186,6 +203,10 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             produced: 0,
             uninitiated_partitions: (0..stream_count).collect(),
             enable_round_robin_tie_breaker,
+            stream_exhausted: vec![false; stream_count],
+            num_exhausted_streams: 0,
+            passthrough_stream: None,
+            passthrough_remainder: None,
         }
     }
 
@@ -203,7 +224,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
 
         match futures::ready!(self.streams.poll_next(cx, idx)) {
-            None => Poll::Ready(Ok(())),
+            None => {
+                if !self.stream_exhausted[idx] {
+                    self.stream_exhausted[idx] = true;
+                    self.num_exhausted_streams += 1;
+                }
+                Poll::Ready(Ok(()))
+            }
             Some(Err(e)) => Poll::Ready(Err(e)),
             Some(Ok((cursor, batch))) => {
                 self.cursors[idx] = Some(Cursor::new(cursor));
@@ -236,6 +263,11 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             }
             return Poll::Ready(None);
         }
+
+        if self.passthrough_stream.is_some() {
+            return self.poll_passthrough(cx);
+        }
+
         // Once all partitions have set their corresponding cursors for the loser tree,
         // we skip the following block. Until then, this function may be called multiple
         // times and can return Poll::Pending if any partition returns Poll::Pending.
@@ -307,6 +339,29 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                     }
                 }
                 self.update_loser_tree();
+
+                // If every stream but the winner is exhausted there is nothing left to merge against
+                // switch to forwarding the winner's remaining data as is.
+                // TODO - support fetch in passthrough
+                if self.fetch.is_none()
+                    && self.num_exhausted_streams + 1 == self.cursors.len()
+                {
+                    let winner = self.loser_tree[0];
+                    if self.cursors[winner].is_some() {
+                        // Rows of the winner's current batch that were not merged yet
+                        // everything before them is already in `in_progress`,
+                        // and everything after them is still in the stream, so ordering is preserved.
+                        self.passthrough_remainder =
+                            self.in_progress.remaining_rows_of(winner);
+                        // No comparisons happen in passthrough mode:
+                        // drop both cursors so the cursor stream's reusable row buffers are free for the batches still converted
+                        // while being forwarded (RowCursorStream keeps only two per stream)
+                        self.prev_cursors[winner] = None;
+                        self.cursors[winner] = None;
+                        self.passthrough_stream = Some(winner);
+                        return self.poll_passthrough(cx);
+                    }
+                }
             }
 
             let stream_idx = self.loser_tree[0];
@@ -324,6 +379,52 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             }
 
             return Poll::Ready(self.emit_in_progress_batch().transpose());
+        }
+    }
+
+    /// Drains the stream once only one input stream is left:
+    /// first the rows already merged into `in_progress`, then the not-yet-merged tail of the
+    /// surviving stream's current batch, then its batches forwarded as is.
+    fn poll_passthrough(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        let stream_idx = self
+            .passthrough_stream
+            .expect("passthrough stream must be set");
+
+        // 1. Drain the in-progress batch if we have any
+        //
+        // The in-progress might not be full batch size,
+        // but in order for us to passthrough the stream without doing additional computation
+        // we are ok with emitting a partial batch now.
+        if !self.in_progress.is_empty() {
+            return Poll::Ready(self.emit_in_progress_batch().transpose());
+        }
+
+        // 2. Emitting the remainder of the stream's current batch
+        // Not doing copy or concat to avoid allocating a new batch
+        if let Some(remainder) = self.passthrough_remainder.take() {
+            self.produced += remainder.num_rows();
+            return Poll::Ready(Some(Ok(remainder)));
+        }
+
+        // 3. Everything buffered was emitted, so release the buffered batches
+        // and their memory reservation since we now no longer hold on to any memory
+        // no need to reserve memory
+        self.in_progress.release_buffered_batches();
+
+        // 4. Forwarding the stream's remaining batches as is
+        match futures::ready!(self.streams.poll_next(cx, stream_idx)) {
+            None => Poll::Ready(None),
+            Some(Err(e)) => {
+                self.done = true;
+                Poll::Ready(Some(Err(e)))
+            }
+            Some(Ok((_, batch))) => {
+                self.produced += batch.num_rows();
+                Poll::Ready(Some(Ok(batch)))
+            }
         }
     }
 

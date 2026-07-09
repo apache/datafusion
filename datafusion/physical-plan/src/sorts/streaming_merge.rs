@@ -265,3 +265,122 @@ impl<'a> StreamingMergeBuilder<'a> {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::collect;
+    use crate::memory::MemoryStream;
+    use arrow::array::{Int32Array, RecordBatch};
+    use arrow::datatypes::Int32Type;
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::metrics::ExecutionPlanMetricsSet;
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_sort_preserving_merge_stream_with_one_stream_larger_than_other() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "sort_key",
+            DataType::Int32,
+            false,
+        )]));
+
+        let data_left = [
+            Int32Array::from(vec![1, 3, 5, 7, 9]),
+            Int32Array::from(vec![11, 13, 15, 17, 19]),
+            Int32Array::from(vec![21, 23, 25, 27, 29]),
+            Int32Array::from(vec![31, 33, 35, 37, 39]),
+            Int32Array::from(vec![41, 43, 45, 47, 49]),
+        ];
+
+        let data_right = [
+            Int32Array::from(vec![0, 2, 4, 6, 8]),
+            Int32Array::from(vec![9, 10, 11, 12, 13]),
+        ];
+
+        for fetch in [
+            None,
+            Some(2),
+            Some(10),
+            Some(13),
+            Some(17),
+            Some(20),
+            Some(25),
+            Some(30),
+        ]
+        .iter()
+        {
+            let data_left_stream = MemoryStream::try_new(
+                data_left
+                    .iter()
+                    .map(|a| {
+                        RecordBatch::try_new(
+                            Arc::clone(&schema),
+                            vec![Arc::new(a.clone())],
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>(),
+                Arc::clone(&schema),
+                None,
+            )
+            .unwrap();
+
+            let data_right_stream = MemoryStream::try_new(
+                data_right
+                    .iter()
+                    .map(|a| {
+                        RecordBatch::try_new(
+                            Arc::clone(&schema),
+                            vec![Arc::new(a.clone())],
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>(),
+                Arc::clone(&schema),
+                None,
+            )
+            .unwrap();
+
+            let merged_sort = StreamingMergeBuilder::new()
+                .with_streams(vec![
+                    Box::pin(data_left_stream),
+                    Box::pin(data_right_stream),
+                ])
+                .with_batch_size(5)
+                .with_schema(Arc::clone(&schema))
+                .with_reservation({
+                    let mem_pool: Arc<dyn MemoryPool> =
+                        Arc::new(UnboundedMemoryPool::default());
+
+                    MemoryConsumer::new("merge stream mock memory").register(&mem_pool)
+                })
+                .with_expressions(
+                    &([
+                        PhysicalSortExpr::new_default(col("sort_key", &schema).unwrap())
+                            .asc(),
+                    ]
+                    .into()),
+                )
+                .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+                .with_fetch(*fetch)
+                .build()
+                .unwrap();
+
+            let output = collect(merged_sort).await.unwrap();
+            let sorted_output = output
+                .into_iter()
+                .flat_map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
+                .collect::<Vec<_>>();
+
+            let expected = vec![
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 10, 11, 11, 12, 13, 13, 15, 17, 19, 21,
+                23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49,
+            ];
+
+            assert_eq!(sorted_output, &expected[0..fetch.unwrap_or(expected.len())]);
+        }
+    }
+}
