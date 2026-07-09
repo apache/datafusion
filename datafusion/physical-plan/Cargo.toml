@@ -64,7 +64,6 @@ arrow-data = { workspace = true }
 arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
-genawaiter = { workspace = true, features = ["futures03"] }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 datafusion-common = { workspace = true }
@@ -79,6 +78,7 @@ datafusion-physical-expr-common = { workspace = true }
 datafusion-proto-common = { workspace = true, optional = true }
 datafusion-proto-models = { workspace = true, optional = true }
 futures = { workspace = true }
+genawaiter = { workspace = true, features = ["futures03"] }
 half = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }

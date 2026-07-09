@@ -113,7 +113,6 @@ arrow-ipc = { version = "59.1.0", default-features = false, features = [
 ] }
 arrow-ord = { version = "59.1.0", default-features = false }
 arrow-schema = { version = "59.1.0", default-features = false }
-genawaiter = {version = "0.99.1", default-features = false}
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
@@ -160,6 +159,7 @@ datafusion-session = { path = "datafusion/session", version = "54.0.0" }
 datafusion-spark = { path = "datafusion/spark", version = "54.0.0" }
 datafusion-sql = { path = "datafusion/sql", version = "54.0.0" }
 datafusion-substrait = { path = "datafusion/substrait", version = "54.0.0" }
+genawaiter = { version = "0.99.1", default-features = false }
 
 doc-comment = "0.3"
 env_logger = "0.11"
