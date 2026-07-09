@@ -54,7 +54,8 @@ macro_rules! merge_helper {
             $fetch,
             $reservation,
             $enable_round_robin_tie_breaker,
-        ).into_stream());
+        )
+        .into_stream());
     }};
 }
 
@@ -262,6 +263,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             fetch,
             reservation,
             enable_round_robin_tie_breaker,
-        ).into_stream())
+        )
+        .into_stream())
     }
 }
