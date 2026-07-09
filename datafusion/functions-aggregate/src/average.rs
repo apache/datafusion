@@ -128,11 +128,17 @@ impl Default for Avg {
 
 fn avg_sum_data_type(data_type: &DataType) -> DataType {
     match data_type {
-        DataType::Decimal32(_, scale) => {
-            DataType::Decimal64(DECIMAL64_MAX_PRECISION, *scale)
+        DataType::Decimal32(precision, scale) => {
+            Decimal32Type::avg_sum_data_type(*precision, *scale)
         }
-        DataType::Decimal64(_, scale) => {
-            DataType::Decimal128(DECIMAL128_MAX_PRECISION, *scale)
+        DataType::Decimal64(precision, scale) => {
+            Decimal64Type::avg_sum_data_type(*precision, *scale)
+        }
+        DataType::Decimal128(precision, scale) => {
+            Decimal128Type::avg_sum_data_type(*precision, *scale)
+        }
+        DataType::Decimal256(precision, scale) => {
+            Decimal256Type::avg_sum_data_type(*precision, *scale)
         }
         data_type => data_type.clone(),
     }
@@ -233,48 +239,42 @@ impl AggregateUDFImpl for Avg {
             match (&data_type, acc_args.return_type()) {
                 (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
                 (
-                    Decimal32(_sum_precision, sum_scale),
+                    Decimal32(input_precision, sum_scale),
                     Decimal32(target_precision, target_scale),
-                ) => Ok(Box::new(DecimalAvgAccumulator::<
-                    Decimal32Type,
-                    Decimal64Type,
-                >::new(
+                ) => decimal_avg_accumulator::<Decimal32Type>(
+                    *input_precision,
                     *sum_scale,
-                    DECIMAL64_MAX_PRECISION,
                     *target_precision,
                     *target_scale,
-                ))),
+                ),
                 (
-                    Decimal64(_sum_precision, sum_scale),
+                    Decimal64(input_precision, sum_scale),
                     Decimal64(target_precision, target_scale),
-                ) => Ok(Box::new(DecimalAvgAccumulator::<
-                    Decimal64Type,
-                    Decimal128Type,
-                >::new(
+                ) => decimal_avg_accumulator::<Decimal64Type>(
+                    *input_precision,
                     *sum_scale,
-                    DECIMAL128_MAX_PRECISION,
                     *target_precision,
                     *target_scale,
-                ))),
+                ),
                 (
-                    Decimal128(sum_precision, sum_scale),
+                    Decimal128(input_precision, sum_scale),
                     Decimal128(target_precision, target_scale),
-                ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal128Type>::new(
+                ) => decimal_avg_accumulator::<Decimal128Type>(
+                    *input_precision,
                     *sum_scale,
-                    *sum_precision,
                     *target_precision,
                     *target_scale,
-                ))),
+                ),
 
                 (
-                    Decimal256(sum_precision, sum_scale),
+                    Decimal256(input_precision, sum_scale),
                     Decimal256(target_precision, target_scale),
-                ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal256Type>::new(
+                ) => decimal_avg_accumulator::<Decimal256Type>(
+                    *input_precision,
                     *sum_scale,
-                    *sum_precision,
                     *target_precision,
                     *target_scale,
-                ))),
+                ),
 
                 (Duration(time_unit), Duration(result_unit)) => {
                     Ok(Box::new(DurationAvgAccumulator {
@@ -367,103 +367,46 @@ impl AggregateUDFImpl for Avg {
                 )))
             }
             (
-                Decimal32(_sum_precision, sum_scale),
+                Decimal32(input_precision, sum_scale),
                 Decimal32(target_precision, target_scale),
-            ) => {
-                let decimal_averager = DecimalAverager::<Decimal64Type>::try_new(
-                    *sum_scale,
-                    *target_precision,
-                    *target_scale,
-                )?;
-
-                let avg_fn = move |sum: i64, count: u64| {
-                    let avg = decimal_averager.avg(sum, count as i64)?;
-                    if let Ok(avg) = i32::try_from(avg) {
-                        Ok(avg)
-                    } else {
-                        exec_err!("Arithmetic Overflow in AvgAccumulator")
-                    }
-                };
-
-                Ok(Box::new(AvgGroupsAccumulator::<
-                    Decimal32Type,
-                    _,
-                    Decimal64Type,
-                >::new(
-                    avg_sum_data_type(data_type),
-                    args.return_field.data_type(),
-                    avg_fn,
-                )))
-            }
+            ) => decimal_avg_groups_accumulator::<Decimal32Type>(
+                *input_precision,
+                *sum_scale,
+                *target_precision,
+                *target_scale,
+                args.return_field.data_type(),
+            ),
             (
-                Decimal64(_sum_precision, sum_scale),
+                Decimal64(input_precision, sum_scale),
                 Decimal64(target_precision, target_scale),
-            ) => {
-                let decimal_averager = DecimalAverager::<Decimal128Type>::try_new(
-                    *sum_scale,
-                    *target_precision,
-                    *target_scale,
-                )?;
-
-                let avg_fn = move |sum: i128, count: u64| {
-                    let avg = decimal_averager.avg(sum, count as i128)?;
-                    if let Ok(avg) = i64::try_from(avg) {
-                        Ok(avg)
-                    } else {
-                        exec_err!("Arithmetic Overflow in AvgAccumulator")
-                    }
-                };
-
-                Ok(Box::new(AvgGroupsAccumulator::<
-                    Decimal64Type,
-                    _,
-                    Decimal128Type,
-                >::new(
-                    avg_sum_data_type(data_type),
-                    args.return_field.data_type(),
-                    avg_fn,
-                )))
-            }
+            ) => decimal_avg_groups_accumulator::<Decimal64Type>(
+                *input_precision,
+                *sum_scale,
+                *target_precision,
+                *target_scale,
+                args.return_field.data_type(),
+            ),
             (
-                Decimal128(_sum_precision, sum_scale),
+                Decimal128(input_precision, sum_scale),
                 Decimal128(target_precision, target_scale),
-            ) => {
-                let decimal_averager = DecimalAverager::<Decimal128Type>::try_new(
-                    *sum_scale,
-                    *target_precision,
-                    *target_scale,
-                )?;
-
-                let avg_fn =
-                    move |sum: i128, count: u64| decimal_averager.avg(sum, count as i128);
-
-                Ok(Box::new(AvgGroupsAccumulator::<Decimal128Type, _>::new(
-                    data_type.clone(),
-                    args.return_field.data_type(),
-                    avg_fn,
-                )))
-            }
+            ) => decimal_avg_groups_accumulator::<Decimal128Type>(
+                *input_precision,
+                *sum_scale,
+                *target_precision,
+                *target_scale,
+                args.return_field.data_type(),
+            ),
 
             (
-                Decimal256(_sum_precision, sum_scale),
+                Decimal256(input_precision, sum_scale),
                 Decimal256(target_precision, target_scale),
-            ) => {
-                let decimal_averager = DecimalAverager::<Decimal256Type>::try_new(
-                    *sum_scale,
-                    *target_precision,
-                    *target_scale,
-                )?;
-
-                let avg_fn = move |sum: i256, count: u64| {
-                    decimal_averager.avg(sum, i256::from_usize(count as usize).unwrap())
-                };
-
-                Ok(Box::new(AvgGroupsAccumulator::<Decimal256Type, _>::new(
-                    data_type.clone(),
-                    args.return_field.data_type(),
-                    avg_fn,
-                )))
-            }
+            ) => decimal_avg_groups_accumulator::<Decimal256Type>(
+                *input_precision,
+                *sum_scale,
+                *target_precision,
+                *target_scale,
+                args.return_field.data_type(),
+            ),
 
             (Duration(time_unit), Duration(_result_unit)) => {
                 let avg_fn = move |sum: i64, count: u64| Ok(sum / count as i64);
@@ -504,11 +447,13 @@ impl AggregateUDFImpl for Avg {
                 }
             }
 
-            _ => not_impl_err!(
-                "AvgGroupsAccumulator for ({} --> {})",
-                &data_type,
-                args.return_field.data_type()
-            ),
+            (dt, return_type) => {
+                not_impl_err!(
+                    "AvgGroupsAccumulator for ({} --> {}) not supported",
+                    dt,
+                    return_type
+                )
+            }
         }
     }
 
@@ -523,6 +468,141 @@ impl AggregateUDFImpl for Avg {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+trait DecimalAvgWidening:
+    DecimalType + ArrowNumericType + Debug + Send + Sync + 'static
+where
+    Self::Native: Into<<Self::Sum as ArrowPrimitiveType>::Native>,
+{
+    type Sum: DecimalType + ArrowNumericType + Debug + Send + Sync + 'static;
+
+    fn sum_precision(input_precision: u8) -> u8;
+
+    fn output_from_sum(
+        value: <Self::Sum as ArrowPrimitiveType>::Native,
+    ) -> Result<Self::Native>;
+
+    fn avg_sum_data_type(input_precision: u8, scale: i8) -> DataType {
+        Self::Sum::TYPE_CONSTRUCTOR(Self::sum_precision(input_precision), scale)
+    }
+}
+
+type DecimalAvgSumNative<T> =
+    <<T as DecimalAvgWidening>::Sum as ArrowPrimitiveType>::Native;
+type DecimalAvgNative<T> = <T as ArrowPrimitiveType>::Native;
+type DecimalAvgFn<T> = Box<
+    dyn Fn(DecimalAvgSumNative<T>, u64) -> Result<DecimalAvgNative<T>>
+        + Send
+        + Sync
+        + 'static,
+>;
+
+impl DecimalAvgWidening for Decimal32Type {
+    type Sum = Decimal64Type;
+
+    fn sum_precision(_input_precision: u8) -> u8 {
+        DECIMAL64_MAX_PRECISION
+    }
+
+    fn output_from_sum(value: i64) -> Result<i32> {
+        decimal_avg_try_from(value)
+    }
+}
+
+impl DecimalAvgWidening for Decimal64Type {
+    type Sum = Decimal128Type;
+
+    fn sum_precision(_input_precision: u8) -> u8 {
+        DECIMAL128_MAX_PRECISION
+    }
+
+    fn output_from_sum(value: i128) -> Result<i64> {
+        decimal_avg_try_from(value)
+    }
+}
+
+impl DecimalAvgWidening for Decimal128Type {
+    type Sum = Decimal256Type;
+
+    fn sum_precision(_input_precision: u8) -> u8 {
+        DECIMAL256_MAX_PRECISION
+    }
+
+    fn output_from_sum(value: i256) -> Result<i128> {
+        decimal_avg_i256_to_i128(value)
+    }
+}
+
+impl DecimalAvgWidening for Decimal256Type {
+    type Sum = Decimal256Type;
+
+    fn sum_precision(input_precision: u8) -> u8 {
+        input_precision
+    }
+
+    fn output_from_sum(value: i256) -> Result<i256> {
+        Ok(value)
+    }
+}
+
+fn decimal_avg_fn<T>(
+    sum_scale: i8,
+    target_precision: u8,
+    target_scale: i8,
+) -> Result<DecimalAvgFn<T>>
+where
+    T: DecimalAvgWidening,
+    T::Native: Into<<T::Sum as ArrowPrimitiveType>::Native>,
+{
+    let avg_fn = avg_decimal_with_wider_sum::<T::Sum, T::Native>(
+        sum_scale,
+        target_precision,
+        target_scale,
+        T::output_from_sum,
+    )?;
+    Ok(Box::new(avg_fn))
+}
+
+fn decimal_avg_accumulator<T>(
+    input_precision: u8,
+    sum_scale: i8,
+    target_precision: u8,
+    target_scale: i8,
+) -> Result<Box<dyn Accumulator>>
+where
+    T: DecimalAvgWidening,
+    T::Native: Into<<T::Sum as ArrowPrimitiveType>::Native>,
+{
+    let avg_fn = decimal_avg_fn::<T>(sum_scale, target_precision, target_scale)?;
+
+    Ok(Box::new(DecimalAvgAccumulator::<T, T::Sum, _>::new(
+        sum_scale,
+        T::sum_precision(input_precision),
+        target_precision,
+        target_scale,
+        avg_fn,
+    )))
+}
+
+fn decimal_avg_groups_accumulator<T>(
+    input_precision: u8,
+    sum_scale: i8,
+    target_precision: u8,
+    target_scale: i8,
+    return_type: &DataType,
+) -> Result<Box<dyn GroupsAccumulator>>
+where
+    T: DecimalAvgWidening,
+    T::Native: Into<<T::Sum as ArrowPrimitiveType>::Native>,
+{
+    let avg_fn = decimal_avg_fn::<T>(sum_scale, target_precision, target_scale)?;
+
+    Ok(Box::new(AvgGroupsAccumulator::<T, _, T::Sum>::new(
+        T::avg_sum_data_type(input_precision, sum_scale),
+        return_type,
+        avg_fn,
+    )))
 }
 
 /// An accumulator to compute the average
@@ -597,12 +677,12 @@ impl Accumulator for AvgAccumulator {
 /// `I` is the input (and output) decimal type. `S` is a possibly wider decimal
 /// type used to accumulate the sum so the running total does not overflow
 /// (e.g. `Decimal32` values are summed as `Decimal64`).
-#[derive(Debug)]
-struct DecimalAvgAccumulator<I, S = I>
+struct DecimalAvgAccumulator<I, S, F>
 where
     I: DecimalType + ArrowNumericType + Debug,
     S: DecimalType + ArrowNumericType + Debug,
     I::Native: Into<S::Native>,
+    F: Fn(S::Native, u64) -> Result<I::Native>,
 {
     sum: Option<S::Native>,
     count: u64,
@@ -610,20 +690,86 @@ where
     sum_precision: u8,
     target_precision: u8,
     target_scale: i8,
+    avg_fn: F,
     _phantom: PhantomData<I>,
 }
 
-impl<I, S> DecimalAvgAccumulator<I, S>
+fn decimal_avg_try_from<S, I>(value: S) -> Result<I>
+where
+    I: TryFrom<S>,
+{
+    if let Ok(value) = I::try_from(value) {
+        Ok(value)
+    } else {
+        exec_err!("Arithmetic Overflow in AvgAccumulator")
+    }
+}
+
+fn decimal_avg_i256_to_i128(value: i256) -> Result<i128> {
+    if let Some(value) = value.to_i128() {
+        Ok(value)
+    } else {
+        exec_err!("Arithmetic Overflow in AvgAccumulator")
+    }
+}
+
+/// Builds a function to calculate the average of a decimal sum
+/// using a [DecimalAverager] that uses `S` to store the intermediate sum
+fn avg_decimal_with_wider_sum<S, O>(
+    sum_scale: i8,
+    target_precision: u8,
+    target_scale: i8,
+    output_fn: impl Fn(S::Native) -> Result<O> + Send + Sync + 'static,
+) -> Result<impl Fn(S::Native, u64) -> Result<O> + Send + Sync + 'static>
+where
+    S: DecimalType,
+{
+    let decimal_averager =
+        DecimalAverager::<S>::try_new(sum_scale, target_precision, target_scale)?;
+
+    Ok(move |sum, count| {
+        let count = usize::try_from(count).ok().and_then(S::Native::from_usize);
+        let Some(count) = count else {
+            return exec_err!("Arithmetic Overflow in AvgAccumulator");
+        };
+
+        let avg = decimal_averager.avg(sum, count)?;
+        output_fn(avg)
+    })
+}
+
+impl<I, S, F> Debug for DecimalAvgAccumulator<I, S, F>
 where
     I: DecimalType + ArrowNumericType + Debug,
     S: DecimalType + ArrowNumericType + Debug,
     I::Native: Into<S::Native>,
+    F: Fn(S::Native, u64) -> Result<I::Native>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecimalAvgAccumulator")
+            .field("sum", &self.sum)
+            .field("count", &self.count)
+            .field("sum_scale", &self.sum_scale)
+            .field("sum_precision", &self.sum_precision)
+            .field("target_precision", &self.target_precision)
+            .field("target_scale", &self.target_scale)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<I, S, F> DecimalAvgAccumulator<I, S, F>
+where
+    I: DecimalType + ArrowNumericType + Debug,
+    S: DecimalType + ArrowNumericType + Debug,
+    I::Native: Into<S::Native>,
+    F: Fn(S::Native, u64) -> Result<I::Native>,
 {
     fn new(
         sum_scale: i8,
         sum_precision: u8,
         target_precision: u8,
         target_scale: i8,
+        avg_fn: F,
     ) -> Self {
         Self {
             sum: None,
@@ -632,6 +778,7 @@ where
             sum_precision,
             target_precision,
             target_scale,
+            avg_fn,
             _phantom: PhantomData,
         }
     }
@@ -656,12 +803,12 @@ where
     sum
 }
 
-impl<I, S> Accumulator for DecimalAvgAccumulator<I, S>
+impl<I, S, F> Accumulator for DecimalAvgAccumulator<I, S, F>
 where
     I: DecimalType + ArrowNumericType + Debug,
     S: DecimalType + ArrowNumericType + Debug,
     I::Native: Into<S::Native>,
-    S::Native: TryInto<I::Native>,
+    F: Fn(S::Native, u64) -> Result<I::Native> + Send + Sync + 'static,
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<I>();
@@ -681,21 +828,7 @@ where
         let v = if self.count == 0 {
             None
         } else {
-            self.sum
-                .map(|v| {
-                    let avg = DecimalAverager::<S>::try_new(
-                        self.sum_scale,
-                        self.target_precision,
-                        self.target_scale,
-                    )?
-                    .avg(v, S::Native::from_usize(self.count as usize).unwrap())?;
-                    if let Ok(avg) = avg.try_into() {
-                        Ok(avg)
-                    } else {
-                        exec_err!("Arithmetic Overflow in AvgAccumulator")
-                    }
-                })
-                .transpose()?
+            self.sum.map(|v| (self.avg_fn)(v, self.count)).transpose()?
         };
 
         ScalarValue::new_primitive::<I>(
@@ -1174,7 +1307,9 @@ mod tests {
         const ROWS: usize = 21_476;
         const DECIMAL32_VALUE: i32 = 99_999;
         const DECIMAL64_ROWS: usize = 92_235;
-        const DECIMAL64_VALUE: i64 = 99_999_999_999;
+        const DECIMAL64_VALUE: i64 = 99_999_999_999_999;
+        const DECIMAL128_ROWS: usize = 21_476;
+        const DECIMAL128_VALUE: i128 = 9_999_999_999_999_999_999_999_999_999_999_999;
 
         Ok(vec![
             AvgCase {
@@ -1198,21 +1333,21 @@ mod tests {
                 name: "decimal64",
                 values: Arc::new(
                     Decimal64Array::from(vec![Some(DECIMAL64_VALUE); DECIMAL64_ROWS])
-                        .with_precision_and_scale(11, 0)?,
+                        .with_precision_and_scale(14, 0)?,
                 ),
-                return_type: DataType::Decimal64(15, 4),
+                return_type: DataType::Decimal64(18, 4),
                 sum_type: DataType::Decimal128(38, 0),
-                expected: ScalarValue::Decimal64(Some(DECIMAL64_VALUE * 10_000), 15, 4),
+                expected: ScalarValue::Decimal64(Some(DECIMAL64_VALUE * 10_000), 18, 4),
             },
             AvgCase {
                 name: "decimal128",
                 values: Arc::new(
-                    Decimal128Array::from(vec![10_i128, 20_i128])
-                        .with_precision_and_scale(20, 0)?,
+                    Decimal128Array::from(vec![Some(DECIMAL128_VALUE); DECIMAL128_ROWS])
+                        .with_precision_and_scale(34, 0)?,
                 ),
-                return_type: DataType::Decimal128(24, 4),
-                sum_type: DataType::Decimal128(20, 0),
-                expected: ScalarValue::Decimal128(Some(150_000), 24, 4),
+                return_type: DataType::Decimal128(38, 4),
+                sum_type: DataType::Decimal256(76, 0),
+                expected: ScalarValue::Decimal128(Some(DECIMAL128_VALUE * 10_000), 38, 4),
             },
             AvgCase {
                 name: "decimal256",

@@ -1300,3 +1300,21 @@ from (
 ) t;
 ----
 99999 Decimal32(9, 4)
+
+query RT
+select avg(d), arrow_typeof(avg(d))
+from (
+    select arrow_cast('99999999999999', 'Decimal64(14, 0)') as d
+    from generate_series(1, 92235)
+) t;
+----
+99999999999999 Decimal64(18, 4)
+
+query RT
+select avg(d), arrow_typeof(avg(d))
+from (
+    select arrow_cast('9999999999999999999999999999999999', 'Decimal128(34, 0)') as d
+    from generate_series(1, 21476)
+) t;
+----
+9999999999999999999999999999999999 Decimal128(38, 4)
