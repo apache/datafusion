@@ -26,7 +26,10 @@ use datafusion::{
 };
 use object_store::ObjectStore;
 
-use crate::object_storage::{AwsOptions, GcpOptions};
+#[cfg(feature = "s3")]
+use crate::object_storage::AwsOptions;
+#[cfg(feature = "gcs")]
+use crate::object_storage::GcpOptions;
 
 #[async_trait::async_trait]
 /// The CLI session context trait provides a way to have a session context that can be used with datafusion's CLI code.
@@ -74,11 +77,13 @@ impl CliSessionContext for SessionContext {
 
     fn register_table_options_extension_from_scheme(&self, scheme: &str) {
         match scheme {
+            #[cfg(feature = "s3")]
             // For Amazon S3 or Alibaba Cloud OSS
             "s3" | "oss" | "cos" => {
                 // Register AWS specific table options in the session context:
                 self.register_table_options_extension(AwsOptions::default())
             }
+            #[cfg(feature = "gcs")]
             // For Google Cloud Storage
             "gs" | "gcs" => {
                 // Register GCP specific table options in the session context:

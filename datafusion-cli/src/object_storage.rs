@@ -20,500 +20,553 @@ pub(crate) mod stdin;
 
 pub use stdin::{StdinCarriesCommands, is_stdin_location};
 
-use async_trait::async_trait;
-use aws_config::BehaviorVersion;
-use aws_credential_types::provider::{
-    ProvideCredentials, SharedCredentialsProvider, error::CredentialsError,
-};
 use datafusion::{
-    common::{
-        config::ConfigEntry, config::ConfigExtension, config::ConfigField,
-        config::ExtensionOptions, config::TableOptions, config::Visit, config_err,
-        exec_datafusion_err, exec_err,
-    },
+    common::{config::TableOptions, exec_datafusion_err},
     error::{DataFusionError, Result},
     execution::context::SessionState,
 };
-use log::debug;
-use object_store::{
-    ClientOptions, CredentialProvider,
-    Error::Generic,
-    ObjectStore,
-    aws::{AmazonS3Builder, AmazonS3ConfigKey, AwsCredential},
-    gcp::GoogleCloudStorageBuilder,
-    http::HttpBuilder,
-};
-use std::{
-    any::Any,
-    error::Error,
-    fmt::{Debug, Display},
-    sync::Arc,
-};
+use datafusion_common::exec_err;
+use object_store::ObjectStore;
+use std::sync::Arc;
 use url::Url;
 
-#[cfg(not(test))]
-use object_store::aws::resolve_bucket_region;
+#[cfg(feature = "s3")]
+mod s3 {
+    use async_trait::async_trait;
+    use log::debug;
+    use object_store::{
+        ClientOptions, CredentialProvider,
+        aws::{AmazonS3Builder, AmazonS3ConfigKey, AwsCredential},
+    };
+    use std::any::Any;
+    use std::error::Error;
+    use std::fmt::Display;
+    use std::sync::Arc;
 
-// Provide a local mock when running tests so we don't make network calls
-#[cfg(test)]
-async fn resolve_bucket_region(
-    _bucket: &str,
-    _client_options: &ClientOptions,
-) -> object_store::Result<String> {
-    Ok("eu-central-1".to_string())
-}
+    use {
+        aws_config::BehaviorVersion,
+        aws_credential_types::provider::{
+            ProvideCredentials, SharedCredentialsProvider, error::CredentialsError,
+        },
+    };
 
-pub async fn get_s3_object_store_builder(
-    url: &Url,
-    aws_options: &AwsOptions,
-    resolve_region: bool,
-) -> Result<AmazonS3Builder> {
-    // Box the inner future to reduce the future size of this async function,
-    // which is deeply nested in the CLI's async call chain.
-    Box::pin(get_s3_object_store_builder_inner(
-        url,
-        aws_options,
-        resolve_region,
-    ))
-    .await
-}
+    use crate::object_storage::get_bucket_name;
+    use datafusion_common::config::{
+        ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, Visit,
+    };
+    use datafusion_common::{DataFusionError, config_err};
+    use object_store::Error::Generic;
+    #[cfg(not(test))]
+    use object_store::aws::resolve_bucket_region;
+    use url::Url;
 
-async fn get_s3_object_store_builder_inner(
-    url: &Url,
-    aws_options: &AwsOptions,
-    resolve_region: bool,
-) -> Result<AmazonS3Builder> {
-    let AwsOptions {
-        access_key_id,
-        secret_access_key,
-        session_token,
-        region,
-        endpoint,
-        allow_http,
-        skip_signature,
-    } = aws_options;
+    // Provide a local mock when running tests so we don't make network calls
+    #[cfg(test)]
+    async fn resolve_bucket_region(
+        _bucket: &str,
+        _client_options: &ClientOptions,
+    ) -> object_store::Result<String> {
+        Ok("eu-central-1".to_string())
+    }
 
-    let bucket_name = get_bucket_name(url)?;
-    let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket_name);
+    pub async fn get_s3_object_store_builder(
+        url: &Url,
+        aws_options: &AwsOptions,
+        resolve_region: bool,
+    ) -> Result<AmazonS3Builder, DataFusionError> {
+        // Box the inner future to reduce the future size of this async function,
+        // which is deeply nested in the CLI's async call chain.
+        Box::pin(get_s3_object_store_builder_inner(
+            url,
+            aws_options,
+            resolve_region,
+        ))
+        .await
+    }
 
-    if let (Some(access_key_id), Some(secret_access_key)) =
-        (access_key_id, secret_access_key)
-    {
-        debug!("Using explicitly provided S3 access_key_id and secret_access_key");
-        builder = builder
-            .with_access_key_id(access_key_id)
-            .with_secret_access_key(secret_access_key);
-
-        if let Some(session_token) = session_token {
-            builder = builder.with_token(session_token);
-        }
-    } else {
-        debug!("Using AWS S3 SDK to determine credentials");
-        let CredentialsFromConfig {
+    async fn get_s3_object_store_builder_inner(
+        url: &Url,
+        aws_options: &AwsOptions,
+        resolve_region: bool,
+    ) -> datafusion_common::Result<AmazonS3Builder> {
+        let AwsOptions {
+            access_key_id,
+            secret_access_key,
+            session_token,
             region,
-            credentials,
-        } = CredentialsFromConfig::try_new().await?;
+            endpoint,
+            allow_http,
+            skip_signature,
+        } = aws_options;
+
+        let bucket_name = get_bucket_name(url)?;
+        let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket_name);
+
+        if let (Some(access_key_id), Some(secret_access_key)) =
+            (access_key_id, secret_access_key)
+        {
+            debug!("Using explicitly provided S3 access_key_id and secret_access_key");
+            builder = builder
+                .with_access_key_id(access_key_id)
+                .with_secret_access_key(secret_access_key);
+
+            if let Some(session_token) = session_token {
+                builder = builder.with_token(session_token);
+            }
+        } else {
+            debug!("Using AWS S3 SDK to determine credentials");
+            let CredentialsFromConfig {
+                region,
+                credentials,
+            } = CredentialsFromConfig::try_new().await?;
+            if let Some(region) = region {
+                builder = builder.with_region(region);
+            }
+            if let Some(credentials) = credentials {
+                let credentials = Arc::new(S3CredentialProvider { credentials });
+                builder = builder.with_credentials(credentials);
+            } else {
+                debug!("No credentials found, defaulting to skip signature ");
+                builder = builder.with_skip_signature(true);
+            }
+        }
+
         if let Some(region) = region {
             builder = builder.with_region(region);
         }
-        if let Some(credentials) = credentials {
-            let credentials = Arc::new(S3CredentialProvider { credentials });
-            builder = builder.with_credentials(credentials);
-        } else {
-            debug!("No credentials found, defaulting to skip signature ");
-            builder = builder.with_skip_signature(true);
-        }
-    }
 
-    if let Some(region) = region {
-        builder = builder.with_region(region);
-    }
-
-    // If the region is not set or auto_detect_region is true, resolve the region.
-    if builder
-        .get_config_value(&AmazonS3ConfigKey::Region)
-        .is_none()
-        || resolve_region
-    {
-        let region = resolve_bucket_region(bucket_name, &ClientOptions::new()).await?;
-        builder = builder.with_region(region);
-    }
-
-    if let Some(endpoint) = endpoint {
-        // Make a nicer error if the user hasn't allowed http and the endpoint
-        // is http as the default message is "URL scheme is not allowed"
-        if let Ok(endpoint_url) = Url::try_from(endpoint.as_str())
-            && !matches!(allow_http, Some(true))
-            && endpoint_url.scheme() == "http"
+        // If the region is not set or auto_detect_region is true, resolve the region.
+        if builder
+            .get_config_value(&AmazonS3ConfigKey::Region)
+            .is_none()
+            || resolve_region
         {
-            return config_err!(
-                "Invalid endpoint: {endpoint}. \
+            let region =
+                resolve_bucket_region(bucket_name, &ClientOptions::new()).await?;
+            builder = builder.with_region(region);
+        }
+
+        if let Some(endpoint) = endpoint {
+            // Make a nicer error if the user hasn't allowed http and the endpoint
+            // is http as the default message is "URL scheme is not allowed"
+            if let Ok(endpoint_url) = Url::try_from(endpoint.as_str())
+                && !matches!(allow_http, Some(true))
+                && endpoint_url.scheme() == "http"
+            {
+                return config_err!(
+                    "Invalid endpoint: {endpoint}. \
                 HTTP is not allowed for S3 endpoints. \
                 To allow HTTP, set 'aws.allow_http' to true"
-            );
+                );
+            }
+
+            builder = builder.with_endpoint(endpoint);
         }
 
-        builder = builder.with_endpoint(endpoint);
+        if let Some(allow_http) = allow_http {
+            builder = builder.with_allow_http(*allow_http);
+        }
+
+        if let Some(skip_signature) = skip_signature {
+            builder = builder.with_skip_signature(*skip_signature);
+        }
+
+        Ok(builder)
     }
 
-    if let Some(allow_http) = allow_http {
-        builder = builder.with_allow_http(*allow_http);
+    /// Credentials from the AWS SDK
+    struct CredentialsFromConfig {
+        region: Option<String>,
+        credentials: Option<SharedCredentialsProvider>,
     }
 
-    if let Some(skip_signature) = skip_signature {
-        builder = builder.with_skip_signature(*skip_signature);
+    impl CredentialsFromConfig {
+        /// Attempt find AWS S3 credentials via the AWS SDK
+        pub async fn try_new() -> datafusion_common::Result<Self> {
+            let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
+            let region = config.region().map(|r| r.to_string());
+
+            let credentials = config
+                .credentials_provider()
+                .ok_or_else(|| {
+                    DataFusionError::ObjectStore(Box::new(Generic {
+                        store: "S3",
+                        source: "Failed to get S3 credentials aws_config".into(),
+                    }))
+                })?
+                .clone();
+
+            // The credential provider is lazy, so it does not fetch credentials
+            // until they are needed. To ensure that the credentials are valid,
+            // we can call `provide_credentials` here.
+            let credentials = match credentials.provide_credentials().await {
+                Ok(_) => Some(credentials),
+                Err(CredentialsError::CredentialsNotLoaded(_)) => {
+                    debug!("Could not use AWS SDK to get credentials");
+                    None
+                }
+                // other errors like `CredentialsError::InvalidConfiguration`
+                // should be returned to the user so they can be fixed
+                Err(e) => {
+                    // Pass back underlying error to the user, including underlying source
+                    let source_message = if let Some(source) = e.source() {
+                        format!(": {source}")
+                    } else {
+                        String::new()
+                    };
+
+                    let message = format!(
+                        "Error getting credentials from provider: {e}{source_message}",
+                    );
+
+                    return Err(DataFusionError::ObjectStore(Box::new(Generic {
+                        store: "S3",
+                        source: message.into(),
+                    })));
+                }
+            };
+            Ok(Self {
+                region,
+                credentials,
+            })
+        }
     }
 
-    Ok(builder)
-}
+    #[derive(Debug)]
+    struct S3CredentialProvider {
+        credentials: SharedCredentialsProvider,
+    }
 
-/// Credentials from the AWS SDK
-struct CredentialsFromConfig {
-    region: Option<String>,
-    credentials: Option<SharedCredentialsProvider>,
-}
+    #[async_trait]
+    impl CredentialProvider for S3CredentialProvider {
+        type Credential = AwsCredential;
 
-impl CredentialsFromConfig {
-    /// Attempt find AWS S3 credentials via the AWS SDK
-    pub async fn try_new() -> Result<Self> {
-        let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
-        let region = config.region().map(|r| r.to_string());
+        async fn get_credential(&self) -> object_store::Result<Arc<Self::Credential>> {
+            let creds =
+                self.credentials
+                    .provide_credentials()
+                    .await
+                    .map_err(|e| Generic {
+                        store: "S3",
+                        source: Box::new(e),
+                    })?;
+            Ok(Arc::new(AwsCredential {
+                key_id: creds.access_key_id().to_string(),
+                secret_key: creds.secret_access_key().to_string(),
+                token: creds.session_token().map(ToString::to_string),
+            }))
+        }
+    }
 
-        let credentials = config
-            .credentials_provider()
-            .ok_or_else(|| {
-                DataFusionError::ObjectStore(Box::new(Generic {
-                    store: "S3",
-                    source: "Failed to get S3 credentials aws_config".into(),
-                }))
-            })?
-            .clone();
+    pub fn get_oss_object_store_builder(
+        url: &Url,
+        aws_options: &AwsOptions,
+    ) -> datafusion_common::Result<AmazonS3Builder> {
+        get_object_store_builder(url, aws_options, true)
+    }
 
-        // The credential provider is lazy, so it does not fetch credentials
-        // until they are needed. To ensure that the credentials are valid,
-        // we can call `provide_credentials` here.
-        let credentials = match credentials.provide_credentials().await {
-            Ok(_) => Some(credentials),
-            Err(CredentialsError::CredentialsNotLoaded(_)) => {
-                debug!("Could not use AWS SDK to get credentials");
-                None
+    pub fn get_cos_object_store_builder(
+        url: &Url,
+        aws_options: &AwsOptions,
+    ) -> datafusion_common::Result<AmazonS3Builder> {
+        get_object_store_builder(url, aws_options, false)
+    }
+
+    fn get_object_store_builder(
+        url: &Url,
+        aws_options: &AwsOptions,
+        virtual_hosted_style_request: bool,
+    ) -> datafusion_common::Result<AmazonS3Builder> {
+        let bucket_name = get_bucket_name(url)?;
+        let mut builder = AmazonS3Builder::from_env()
+            .with_virtual_hosted_style_request(virtual_hosted_style_request)
+            .with_bucket_name(bucket_name)
+            // oss/cos don't care about the "region" field
+            .with_region("do_not_care");
+
+        if let (Some(access_key_id), Some(secret_access_key)) =
+            (&aws_options.access_key_id, &aws_options.secret_access_key)
+        {
+            builder = builder
+                .with_access_key_id(access_key_id)
+                .with_secret_access_key(secret_access_key);
+        }
+
+        if let Some(endpoint) = &aws_options.endpoint {
+            builder = builder.with_endpoint(endpoint);
+        }
+
+        Ok(builder)
+    }
+
+    /// This struct encapsulates AWS options one uses when setting up object storage.
+    #[derive(Default, Debug, Clone)]
+    pub struct AwsOptions {
+        /// Access Key ID
+        pub access_key_id: Option<String>,
+        /// Secret Access Key
+        pub secret_access_key: Option<String>,
+        /// Session token
+        pub session_token: Option<String>,
+        /// AWS Region
+        pub region: Option<String>,
+        /// OSS or COS Endpoint
+        pub endpoint: Option<String>,
+        /// Allow HTTP (otherwise will always use https)
+        pub allow_http: Option<bool>,
+        /// Do not fetch credentials and do not sign requests
+        ///
+        /// This can be useful when interacting with public S3 buckets that deny
+        /// authorized requests
+        pub skip_signature: Option<bool>,
+    }
+
+    impl ExtensionOptions for AwsOptions {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+
+        fn cloned(&self) -> Box<dyn ExtensionOptions> {
+            Box::new(self.clone())
+        }
+
+        fn set(&mut self, key: &str, value: &str) -> datafusion_common::Result<()> {
+            let (_key, aws_key) = key.split_once('.').unwrap_or((key, ""));
+            let (key, rem) = aws_key.split_once('.').unwrap_or((aws_key, ""));
+            match key {
+                "access_key_id" => {
+                    self.access_key_id.set(rem, value)?;
+                }
+                "secret_access_key" => {
+                    self.secret_access_key.set(rem, value)?;
+                }
+                "session_token" => {
+                    self.session_token.set(rem, value)?;
+                }
+                "region" => {
+                    self.region.set(rem, value)?;
+                }
+                "oss" | "cos" | "endpoint" => {
+                    self.endpoint.set(rem, value)?;
+                }
+                "allow_http" => {
+                    self.allow_http.set(rem, value)?;
+                }
+                "skip_signature" | "nosign" => {
+                    self.skip_signature.set(rem, value)?;
+                }
+                _ => {
+                    return config_err!(
+                        "Config value \"{}\" not found on AwsOptions",
+                        rem
+                    );
+                }
             }
-            // other errors like `CredentialsError::InvalidConfiguration`
-            // should be returned to the user so they can be fixed
-            Err(e) => {
-                // Pass back underlying error to the user, including underlying source
-                let source_message = if let Some(source) = e.source() {
-                    format!(": {source}")
-                } else {
-                    String::new()
-                };
+            Ok(())
+        }
 
-                let message = format!(
-                    "Error getting credentials from provider: {e}{source_message}",
-                );
+        fn entries(&self) -> Vec<ConfigEntry> {
+            struct Visitor(Vec<ConfigEntry>);
 
-                return Err(DataFusionError::ObjectStore(Box::new(Generic {
-                    store: "S3",
-                    source: message.into(),
-                })));
+            impl Visit for Visitor {
+                fn some<V: Display>(
+                    &mut self,
+                    key: &str,
+                    value: V,
+                    description: &'static str,
+                ) {
+                    self.0.push(ConfigEntry {
+                        key: key.to_string(),
+                        value: Some(value.to_string()),
+                        description,
+                    })
+                }
+
+                fn none(&mut self, key: &str, description: &'static str) {
+                    self.0.push(ConfigEntry {
+                        key: key.to_string(),
+                        value: None,
+                        description,
+                    })
+                }
             }
-        };
-        Ok(Self {
-            region,
-            credentials,
-        })
+
+            let mut v = Visitor(vec![]);
+            self.access_key_id.visit(&mut v, "access_key_id", "");
+            self.secret_access_key
+                .visit(&mut v, "secret_access_key", "");
+            self.session_token.visit(&mut v, "session_token", "");
+            self.region.visit(&mut v, "region", "");
+            self.endpoint.visit(&mut v, "endpoint", "");
+            self.allow_http.visit(&mut v, "allow_http", "");
+            v.0
+        }
+    }
+
+    impl ConfigExtension for AwsOptions {
+        const PREFIX: &'static str = "aws";
     }
 }
 
-#[derive(Debug)]
-struct S3CredentialProvider {
-    credentials: SharedCredentialsProvider,
-}
+#[cfg(feature = "s3")]
+pub use s3::*;
 
-#[async_trait]
-impl CredentialProvider for S3CredentialProvider {
-    type Credential = AwsCredential;
+#[cfg(feature = "gcs")]
+mod gcs {
+    use crate::object_storage::get_bucket_name;
+    use datafusion_common::config::{
+        ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, Visit,
+    };
+    use datafusion_common::config_err;
+    use object_store::gcp::GoogleCloudStorageBuilder;
+    use std::any::Any;
+    use std::fmt::Display;
+    use url::Url;
 
-    async fn get_credential(&self) -> object_store::Result<Arc<Self::Credential>> {
-        let creds =
-            self.credentials
-                .provide_credentials()
-                .await
-                .map_err(|e| Generic {
-                    store: "S3",
-                    source: Box::new(e),
-                })?;
-        Ok(Arc::new(AwsCredential {
-            key_id: creds.access_key_id().to_string(),
-            secret_key: creds.secret_access_key().to_string(),
-            token: creds.session_token().map(ToString::to_string),
-        }))
+    pub fn get_gcs_object_store_builder(
+        url: &Url,
+        gs_options: &GcpOptions,
+    ) -> datafusion_common::Result<GoogleCloudStorageBuilder> {
+        let bucket_name = get_bucket_name(url)?;
+        let mut builder =
+            GoogleCloudStorageBuilder::from_env().with_bucket_name(bucket_name);
+
+        if let Some(service_account_path) = &gs_options.service_account_path {
+            builder = builder.with_service_account_path(service_account_path);
+        }
+
+        if let Some(service_account_key) = &gs_options.service_account_key {
+            builder = builder.with_service_account_key(service_account_key);
+        }
+
+        if let Some(application_credentials_path) =
+            &gs_options.application_credentials_path
+        {
+            builder = builder.with_application_credentials(application_credentials_path);
+        }
+
+        Ok(builder)
+    }
+
+    /// This struct encapsulates GCP options one uses when setting up object storage.
+    #[derive(Debug, Clone, Default)]
+    pub struct GcpOptions {
+        /// Service account path
+        pub service_account_path: Option<String>,
+        /// Service account key
+        pub service_account_key: Option<String>,
+        /// Application credentials path
+        pub application_credentials_path: Option<String>,
+    }
+
+    impl ExtensionOptions for GcpOptions {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+
+        fn cloned(&self) -> Box<dyn ExtensionOptions> {
+            Box::new(self.clone())
+        }
+
+        fn set(&mut self, key: &str, value: &str) -> datafusion_common::Result<()> {
+            let (_key, rem) = key.split_once('.').unwrap_or((key, ""));
+            match rem {
+                "service_account_path" => {
+                    self.service_account_path.set(rem, value)?;
+                }
+                "service_account_key" => {
+                    self.service_account_key.set(rem, value)?;
+                }
+                "application_credentials_path" => {
+                    self.application_credentials_path.set(rem, value)?;
+                }
+                _ => {
+                    return config_err!(
+                        "Config value \"{}\" not found on GcpOptions",
+                        rem
+                    );
+                }
+            }
+            Ok(())
+        }
+
+        fn entries(&self) -> Vec<ConfigEntry> {
+            struct Visitor(Vec<ConfigEntry>);
+
+            impl Visit for Visitor {
+                fn some<V: Display>(
+                    &mut self,
+                    key: &str,
+                    value: V,
+                    description: &'static str,
+                ) {
+                    self.0.push(ConfigEntry {
+                        key: key.to_string(),
+                        value: Some(value.to_string()),
+                        description,
+                    })
+                }
+
+                fn none(&mut self, key: &str, description: &'static str) {
+                    self.0.push(ConfigEntry {
+                        key: key.to_string(),
+                        value: None,
+                        description,
+                    })
+                }
+            }
+
+            let mut v = Visitor(vec![]);
+            self.service_account_path
+                .visit(&mut v, "service_account_path", "");
+            self.service_account_key
+                .visit(&mut v, "service_account_key", "");
+            self.application_credentials_path.visit(
+                &mut v,
+                "application_credentials_path",
+                "",
+            );
+            v.0
+        }
+    }
+
+    impl ConfigExtension for GcpOptions {
+        const PREFIX: &'static str = "gcp";
     }
 }
 
-pub fn get_oss_object_store_builder(
-    url: &Url,
-    aws_options: &AwsOptions,
-) -> Result<AmazonS3Builder> {
-    get_object_store_builder(url, aws_options, true)
+#[cfg(feature = "gcs")]
+pub use gcs::*;
+
+#[cfg(feature = "http")]
+mod http {
+    use object_store::ClientOptions;
+    use object_store::http::HttpBuilder;
+    use url::Url;
+
+    pub fn get_http_object_store_builder(url: &Url) -> HttpBuilder {
+        HttpBuilder::new()
+            .with_client_options(ClientOptions::new().with_allow_http(true))
+            .with_url(url.origin().ascii_serialization())
+    }
 }
 
-pub fn get_cos_object_store_builder(
-    url: &Url,
-    aws_options: &AwsOptions,
-) -> Result<AmazonS3Builder> {
-    get_object_store_builder(url, aws_options, false)
-}
+#[cfg(feature = "http")]
+use http::*;
 
-fn get_object_store_builder(
-    url: &Url,
-    aws_options: &AwsOptions,
-    virtual_hosted_style_request: bool,
-) -> Result<AmazonS3Builder> {
-    let bucket_name = get_bucket_name(url)?;
-    let mut builder = AmazonS3Builder::from_env()
-        .with_virtual_hosted_style_request(virtual_hosted_style_request)
-        .with_bucket_name(bucket_name)
-        // oss/cos don't care about the "region" field
-        .with_region("do_not_care");
-
-    if let (Some(access_key_id), Some(secret_access_key)) =
-        (&aws_options.access_key_id, &aws_options.secret_access_key)
-    {
-        builder = builder
-            .with_access_key_id(access_key_id)
-            .with_secret_access_key(secret_access_key);
-    }
-
-    if let Some(endpoint) = &aws_options.endpoint {
-        builder = builder.with_endpoint(endpoint);
-    }
-
-    Ok(builder)
-}
-
-pub fn get_gcs_object_store_builder(
-    url: &Url,
-    gs_options: &GcpOptions,
-) -> Result<GoogleCloudStorageBuilder> {
-    let bucket_name = get_bucket_name(url)?;
-    let mut builder = GoogleCloudStorageBuilder::from_env().with_bucket_name(bucket_name);
-
-    if let Some(service_account_path) = &gs_options.service_account_path {
-        builder = builder.with_service_account_path(service_account_path);
-    }
-
-    if let Some(service_account_key) = &gs_options.service_account_key {
-        builder = builder.with_service_account_key(service_account_key);
-    }
-
-    if let Some(application_credentials_path) = &gs_options.application_credentials_path {
-        builder = builder.with_application_credentials(application_credentials_path);
-    }
-
-    Ok(builder)
-}
-
+#[cfg(any(feature = "s3", feature = "gcs"))]
 fn get_bucket_name(url: &Url) -> Result<&str> {
     url.host_str().ok_or_else(|| {
         exec_datafusion_err!("Not able to parse bucket name from url: {}", url.as_str())
     })
-}
-
-/// This struct encapsulates AWS options one uses when setting up object storage.
-#[derive(Default, Debug, Clone)]
-pub struct AwsOptions {
-    /// Access Key ID
-    pub access_key_id: Option<String>,
-    /// Secret Access Key
-    pub secret_access_key: Option<String>,
-    /// Session token
-    pub session_token: Option<String>,
-    /// AWS Region
-    pub region: Option<String>,
-    /// OSS or COS Endpoint
-    pub endpoint: Option<String>,
-    /// Allow HTTP (otherwise will always use https)
-    pub allow_http: Option<bool>,
-    /// Do not fetch credentials and do not sign requests
-    ///
-    /// This can be useful when interacting with public S3 buckets that deny
-    /// authorized requests
-    pub skip_signature: Option<bool>,
-}
-
-impl ExtensionOptions for AwsOptions {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn cloned(&self) -> Box<dyn ExtensionOptions> {
-        Box::new(self.clone())
-    }
-
-    fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let (_key, aws_key) = key.split_once('.').unwrap_or((key, ""));
-        let (key, rem) = aws_key.split_once('.').unwrap_or((aws_key, ""));
-        match key {
-            "access_key_id" => {
-                self.access_key_id.set(rem, value)?;
-            }
-            "secret_access_key" => {
-                self.secret_access_key.set(rem, value)?;
-            }
-            "session_token" => {
-                self.session_token.set(rem, value)?;
-            }
-            "region" => {
-                self.region.set(rem, value)?;
-            }
-            "oss" | "cos" | "endpoint" => {
-                self.endpoint.set(rem, value)?;
-            }
-            "allow_http" => {
-                self.allow_http.set(rem, value)?;
-            }
-            "skip_signature" | "nosign" => {
-                self.skip_signature.set(rem, value)?;
-            }
-            _ => {
-                return config_err!("Config value \"{}\" not found on AwsOptions", rem);
-            }
-        }
-        Ok(())
-    }
-
-    fn entries(&self) -> Vec<ConfigEntry> {
-        struct Visitor(Vec<ConfigEntry>);
-
-        impl Visit for Visitor {
-            fn some<V: Display>(
-                &mut self,
-                key: &str,
-                value: V,
-                description: &'static str,
-            ) {
-                self.0.push(ConfigEntry {
-                    key: key.to_string(),
-                    value: Some(value.to_string()),
-                    description,
-                })
-            }
-
-            fn none(&mut self, key: &str, description: &'static str) {
-                self.0.push(ConfigEntry {
-                    key: key.to_string(),
-                    value: None,
-                    description,
-                })
-            }
-        }
-
-        let mut v = Visitor(vec![]);
-        self.access_key_id.visit(&mut v, "access_key_id", "");
-        self.secret_access_key
-            .visit(&mut v, "secret_access_key", "");
-        self.session_token.visit(&mut v, "session_token", "");
-        self.region.visit(&mut v, "region", "");
-        self.endpoint.visit(&mut v, "endpoint", "");
-        self.allow_http.visit(&mut v, "allow_http", "");
-        v.0
-    }
-}
-
-impl ConfigExtension for AwsOptions {
-    const PREFIX: &'static str = "aws";
-}
-
-/// This struct encapsulates GCP options one uses when setting up object storage.
-#[derive(Debug, Clone, Default)]
-pub struct GcpOptions {
-    /// Service account path
-    pub service_account_path: Option<String>,
-    /// Service account key
-    pub service_account_key: Option<String>,
-    /// Application credentials path
-    pub application_credentials_path: Option<String>,
-}
-
-impl ExtensionOptions for GcpOptions {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn cloned(&self) -> Box<dyn ExtensionOptions> {
-        Box::new(self.clone())
-    }
-
-    fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let (_key, rem) = key.split_once('.').unwrap_or((key, ""));
-        match rem {
-            "service_account_path" => {
-                self.service_account_path.set(rem, value)?;
-            }
-            "service_account_key" => {
-                self.service_account_key.set(rem, value)?;
-            }
-            "application_credentials_path" => {
-                self.application_credentials_path.set(rem, value)?;
-            }
-            _ => {
-                return config_err!("Config value \"{}\" not found on GcpOptions", rem);
-            }
-        }
-        Ok(())
-    }
-
-    fn entries(&self) -> Vec<ConfigEntry> {
-        struct Visitor(Vec<ConfigEntry>);
-
-        impl Visit for Visitor {
-            fn some<V: Display>(
-                &mut self,
-                key: &str,
-                value: V,
-                description: &'static str,
-            ) {
-                self.0.push(ConfigEntry {
-                    key: key.to_string(),
-                    value: Some(value.to_string()),
-                    description,
-                })
-            }
-
-            fn none(&mut self, key: &str, description: &'static str) {
-                self.0.push(ConfigEntry {
-                    key: key.to_string(),
-                    value: None,
-                    description,
-                })
-            }
-        }
-
-        let mut v = Visitor(vec![]);
-        self.service_account_path
-            .visit(&mut v, "service_account_path", "");
-        self.service_account_key
-            .visit(&mut v, "service_account_key", "");
-        self.application_credentials_path.visit(
-            &mut v,
-            "application_credentials_path",
-            "",
-        );
-        v.0
-    }
-}
-
-impl ConfigExtension for GcpOptions {
-    const PREFIX: &'static str = "gcp";
 }
 
 pub(crate) async fn get_object_store(
@@ -524,6 +577,7 @@ pub(crate) async fn get_object_store(
     resolve_region: bool,
 ) -> Result<Arc<dyn ObjectStore>, DataFusionError> {
     let store: Arc<dyn ObjectStore> = match scheme {
+        #[cfg(feature = "s3")]
         "s3" => {
             let Some(options) = table_options.extensions.get::<AwsOptions>() else {
                 return exec_err!(
@@ -534,6 +588,7 @@ pub(crate) async fn get_object_store(
                 get_s3_object_store_builder(url, options, resolve_region).await?;
             Arc::new(builder.build()?)
         }
+        #[cfg(feature = "s3")]
         "oss" => {
             let Some(options) = table_options.extensions.get::<AwsOptions>() else {
                 return exec_err!(
@@ -543,6 +598,7 @@ pub(crate) async fn get_object_store(
             let builder = get_oss_object_store_builder(url, options)?;
             Arc::new(builder.build()?)
         }
+        #[cfg(feature = "s3")]
         "cos" => {
             let Some(options) = table_options.extensions.get::<AwsOptions>() else {
                 return exec_err!(
@@ -552,6 +608,7 @@ pub(crate) async fn get_object_store(
             let builder = get_cos_object_store_builder(url, options)?;
             Arc::new(builder.build()?)
         }
+        #[cfg(feature = "gcs")]
         "gs" | "gcs" => {
             let Some(options) = table_options.extensions.get::<GcpOptions>() else {
                 return exec_err!(
@@ -561,12 +618,11 @@ pub(crate) async fn get_object_store(
             let builder = get_gcs_object_store_builder(url, options)?;
             Arc::new(builder.build()?)
         }
-        "http" | "https" => Arc::new(
-            HttpBuilder::new()
-                .with_client_options(ClientOptions::new().with_allow_http(true))
-                .with_url(url.origin().ascii_serialization())
-                .build()?,
-        ),
+        #[cfg(feature = "http")]
+        "http" | "https" => {
+            let builder = get_http_object_store_builder(url);
+            Arc::new(builder.build()?)
+        }
         _ if scheme == stdin::StdinUtils::SCHEME => {
             stdin::StdinUtils::get_or_create(state, url).await?
         }
