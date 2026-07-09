@@ -653,40 +653,38 @@ mod tests {
         }
     }
 
-    // TODO - uncomment this test
-    //
-    // /// The merge loop's terminal drain (`while let Some(b) = emit()? { send }`)
-    // /// relies on `emit_in_progress_batch` returning buffered rows and then
-    // /// `None` once empty. This exercises that primitive directly.
-    // #[test]
-    // fn test_emit_drains_buffered_rows() {
-    //     let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
-    //     let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-    //     let reservation = MemoryConsumer::new("test").register(&pool);
-    //     let metrics = ExecutionPlanMetricsSet::new();
-    //
-    //     let mut stream = SortPreservingMergeStream::<DummyValues>::create(
-    //         Box::new(EmptyPartitionedStream),
-    //         Arc::clone(&schema),
-    //         BaselineMetrics::new(&metrics, 0),
-    //         16,
-    //         Some(1),
-    //         reservation,
-    //         true,
-    //     );
-    //
-    //     let batch =
-    //         RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))])
-    //             .unwrap();
-    //     stream.in_progress.push_batch(0, batch).unwrap();
-    //     stream.in_progress.push_row(0);
-    //
-    //     let batch = stream
-    //         .emit_in_progress_batch()
-    //         .unwrap()
-    //         .expect("buffered row should be emitted");
-    //     assert_eq!(batch.num_rows(), 1);
-    //     assert!(stream.in_progress.is_empty());
-    //     assert!(stream.emit_in_progress_batch().unwrap().is_none());
-    // }
+    /// The merge loop's terminal drain (`while let Some(b) = emit()? { send }`)
+    /// relies on `emit_in_progress_batch` returning buffered rows and then
+    /// `None` once empty. This exercises that primitive directly.
+    #[test]
+    fn test_emit_drains_buffered_rows() {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation = MemoryConsumer::new("test").register(&pool);
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let mut stream = SortPreservingMergeStream::<DummyValues>::new(
+            Box::new(EmptyPartitionedStream),
+            Arc::clone(&schema),
+            BaselineMetrics::new(&metrics, 0),
+            16,
+            Some(1),
+            reservation,
+            true,
+        );
+
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))])
+                .unwrap();
+        stream.in_progress.push_batch(0, batch).unwrap();
+        stream.in_progress.push_row(0);
+
+        let batch = stream
+            .emit_in_progress_batch()
+            .unwrap()
+            .expect("buffered row should be emitted");
+        assert_eq!(batch.num_rows(), 1);
+        assert!(stream.in_progress.is_empty());
+        assert!(stream.emit_in_progress_batch().unwrap().is_none());
+    }
 }
