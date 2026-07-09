@@ -293,8 +293,8 @@ fn test_projection_over_multi_partition_sort_limit() {
     assert_ensure_requirements_plan!(limit, @r"
     GlobalLimitExec: skip=0, fetch=21
       SortPreservingMergeExec: [a@0 DESC]
-        SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
-          ProjectionExec: expr=[a@0 as a, b@1 as b]
+        ProjectionExec: expr=[a@0 as a, b@1 as b]
+          SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
             MockMultiPartitionExec
     ");
 }
@@ -580,8 +580,8 @@ fn test_sort_pushdown_through_projection_adds_spm() {
     assert_ensure_requirements_plan!(output_req, @r"
     OutputRequirementExec: order_by=[(a@0, desc)], dist_by=SinglePartition
       SortPreservingMergeExec: [a@0 DESC], fetch=21
-        SortExec: TopK(fetch=21), expr=[a@0 DESC], preserve_partitioning=[true]
-          ProjectionExec: expr=[a@0 as a, b@1 as b]
+        ProjectionExec: expr=[a@0 as a, b@1 as b]
+          SortExec: TopK(fetch=21), expr=[a@0 DESC], preserve_partitioning=[true]
             MockMultiPartitionExec
     ");
 }

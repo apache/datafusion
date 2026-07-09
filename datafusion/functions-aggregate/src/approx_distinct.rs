@@ -25,7 +25,8 @@ use arrow::array::{
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type,
-    Decimal128Type, Decimal256Type, Field, FieldRef, Int32Type, Int64Type,
+    Decimal128Type, Decimal256Type, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Field, FieldRef, Int32Type, Int64Type,
     IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
@@ -781,10 +782,23 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Decimal256(_, _) => {
                 Box::new(NumericHLLAccumulator::<Decimal256Type>::new())
             }
+            DataType::Duration(TimeUnit::Second) => {
+                Box::new(NumericHLLAccumulator::<DurationSecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                Box::new(NumericHLLAccumulator::<DurationMillisecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                Box::new(NumericHLLAccumulator::<DurationMicrosecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                Box::new(NumericHLLAccumulator::<DurationNanosecondType>::new())
+            }
             DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
             | DataType::Binary
+            | DataType::BinaryView
             | DataType::LargeBinary => Box::new(HLLAccumulator::new()),
             DataType::Null => {
                 Box::new(NoopAccumulator::new(ScalarValue::UInt64(Some(0))))
@@ -848,10 +862,12 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
+            | DataType::Duration(_)
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
             | DataType::Binary
+            | DataType::BinaryView
             | DataType::LargeBinary
     )
 }
