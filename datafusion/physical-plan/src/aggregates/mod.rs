@@ -3529,6 +3529,8 @@ mod tests {
 | 2 |
 +---+
 ");
+
+        Ok(())
     }
 
     fn single_test_aggregate() -> Result<AggregateExec> {
