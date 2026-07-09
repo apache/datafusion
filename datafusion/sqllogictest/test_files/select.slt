@@ -1577,9 +1577,9 @@ physical_plan
 03)----RepartitionExec: partitioning=Hash([c2@0], 2), input_partitions=2
 04)------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[count(Int64(1))]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------ProjectionExec: expr=[c2@0 as c2]
-07)------------SortExec: TopK(fetch=4), expr=[c1@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[false]
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c1], file_type=csv, has_header=true
+06)----------ProjectionExec: expr=[c2@1 as c2]
+07)------------SortExec: TopK(fetch=4), expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[false]
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2], file_type=csv, has_header=true
 
 # FilterExec can track equality of non-column expressions.
 # plan below shouldn't have a SortExec because given column 'a' is ordered.
@@ -1968,7 +1968,7 @@ SELECT COUNT(*) FROM t0 AS tt0 WHERE (4==(3/0));
 
 # Config reset
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;
