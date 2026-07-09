@@ -918,9 +918,10 @@ SELECT map([column1, column1 * 10], ['x','y']) FROM (VALUES (1), (2), (3)) t;
 {3: x, 30: y}
 
 # tests for DISTINCT / GROUP BY / aggregation on map columns
+# https://github.com/apache/datafusion/issues/15428
 
 statement ok
-create table map_distinct_table as values
+CREATE TABLE map_distinct_table AS VALUES
   (MAP {'k1': 1, 'k2': 2}, 'a', 1),
   (MAP {'k1': 1, 'k2': 2}, 'a', 2),
   (MAP {'k1': 1, 'k2': 2}, 'b', 3),
@@ -939,7 +940,7 @@ NULL
 {k1: 3}
 {k1: NULL}
 
-# distinct on a map column with a limit (original reproducer from the issue)
+# exact reproducer from #15428: DISTINCT on a map column with LIMIT
 query ? rowsort
 SELECT DISTINCT column1 FROM map_distinct_table LIMIT 10;
 ----
@@ -979,6 +980,20 @@ NULL b 1
 {k1: 3} a 1
 {k1: NULL} b 1
 
+# empty maps compare equal under DISTINCT and are distinct from NULL
+query ? rowsort
+SELECT DISTINCT column1 FROM (VALUES (MAP {}), (MAP {}), (NULL)) t(column1);
+----
+NULL
+{}
+
+# HAVING clause with a map grouping key
+query ?I rowsort
+SELECT column1, COUNT(*) FROM map_distinct_table GROUP BY column1 HAVING COUNT(*) > 1;
+----
+NULL 3
+{k1: 1, k2: 2} 3
+
 # count and count distinct on a map column
 query II
 SELECT COUNT(column1), COUNT(DISTINCT column1) FROM map_distinct_table;
@@ -1007,7 +1022,7 @@ SELECT DISTINCT column1 FROM (SELECT MAP {'k1': 1, 'k2': 2} AS column1 UNION ALL
 {k2: 2, k1: 1}
 
 statement ok
-drop table map_distinct_table;
+DROP TABLE map_distinct_table;
 
 # distinct / group by on map columns read from parquet
 statement ok
@@ -1032,4 +1047,4 @@ POST 41
 PUT 25
 
 statement ok
-drop table map_data;
+DROP TABLE map_data;
