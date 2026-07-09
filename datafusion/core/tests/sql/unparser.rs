@@ -441,6 +441,33 @@ FROM
     cohort
 "#;
 
+const ISSUE_23317_HAVING_QUERY: &str = r#"
+SELECT
+    date_part('year', c.signup_date) AS signup_year,
+    count(DISTINCT cs.customer_id) AS customers
+FROM
+    "warehouse"."main"."sales" cs
+    JOIN "warehouse"."main"."customers" c USING (customer_id)
+GROUP BY
+    1
+HAVING
+    count(DISTINCT cs.customer_id) > 0
+"#;
+
+const ISSUE_23317_QUALIFY_QUERY: &str = r#"
+SELECT
+    date_part('year', c.signup_date) AS signup_year,
+    count(DISTINCT cs.customer_id) AS customers,
+    row_number() OVER (ORDER BY date_part('year', c.signup_date)) AS rn
+FROM
+    "warehouse"."main"."sales" cs
+    JOIN "warehouse"."main"."customers" c USING (customer_id)
+GROUP BY
+    1
+QUALIFY
+    rn = 1 AND count(DISTINCT cs.customer_id) > 0
+"#;
+
 fn issue_23317_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
@@ -467,6 +494,14 @@ fn issue_23317_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
+async fn assert_issue_23317_unparsed_sql_plans(
+    ctx: &SessionContext,
+    sql: &str,
+) -> Result<()> {
+    ctx.sql(sql).await?.into_optimized_plan()?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn optimized_duckdb_unparse_preserves_nested_aggregate_scope() -> Result<()> {
     let ctx = issue_23317_context()?;
@@ -474,6 +509,8 @@ async fn optimized_duckdb_unparse_preserves_nested_aggregate_scope() -> Result<(
     let dialect = DuckDBDialect::new();
     let unparser = Unparser::new(&dialect);
     let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
 
     assert!(
         sql.contains(concat!(
@@ -501,6 +538,8 @@ async fn optimized_duckdb_unparse_unqualifies_aggregate_input_projection() -> Re
     let unparser = Unparser::new(&dialect);
     let sql = unparser.plan_to_sql(&plan)?.to_string();
 
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
+
     assert!(
         sql.contains(
             r#"SELECT date_part('year', "signup_date") AS "signup_year", count(DISTINCT "customer_id") AS "customers", round(sum("total_revenue"), 2) AS "revenue" FROM ("#
@@ -510,6 +549,64 @@ async fn optimized_duckdb_unparse_unqualifies_aggregate_input_projection() -> Re
     assert!(
         !sql.contains(r#"date_part('year', "c"."signup_date") AS "signup_year""#),
         "derived aggregate must not reference out-of-scope alias c: {sql}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_having_unqualifies_agg_input() -> Result<()> {
+    let ctx = issue_23317_context()?;
+    assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
+
+    let plan = ctx
+        .sql(ISSUE_23317_HAVING_QUERY)
+        .await?
+        .into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
+
+    assert!(
+        sql.contains(r#"HAVING (count(DISTINCT "customer_id") > 0)"#),
+        "HAVING aggregate should resolve against the derived projection output: {sql}",
+    );
+    assert!(
+        !sql.contains(r#"count(DISTINCT "cs"."customer_id")"#),
+        "HAVING must not reference out-of-scope alias cs: {sql}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_qualify_unqualifies_agg_input() -> Result<()> {
+    let ctx = issue_23317_context()?;
+    assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
+
+    let plan = ctx
+        .sql(ISSUE_23317_QUALIFY_QUERY)
+        .await?
+        .into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
+
+    assert!(
+        sql.contains("QUALIFY"),
+        "expected QUALIFY clause in unparsed SQL: {sql}",
+    );
+    assert!(
+        sql.contains(r#"count(DISTINCT "customer_id") > 0"#),
+        "QUALIFY aggregate should resolve against the derived projection output: {sql}",
+    );
+    assert!(
+        !sql.contains(r#"count(DISTINCT "cs"."customer_id")"#),
+        "QUALIFY must not reference out-of-scope alias cs: {sql}",
     );
 
     Ok(())

@@ -1029,12 +1029,22 @@ impl Unparser<'_> {
                         unproject_window_exprs(filter.predicate.clone(), window)?;
                     if let Some(agg) = agg {
                         unprojected = unproject_agg_exprs(unprojected, agg, None)?;
+                        unprojected = Self::normalize_agg_input_columns(
+                            unprojected,
+                            agg,
+                            Self::contains_projection_before_relation(agg.input.as_ref()),
+                        )?;
                     }
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.qualify(Some(filter_expr));
                 } else if let Some(agg) = agg {
                     let unprojected =
                         unproject_agg_exprs(filter.predicate.clone(), agg, None)?;
+                    let unprojected = Self::normalize_agg_input_columns(
+                        unprojected,
+                        agg,
+                        Self::contains_projection_before_relation(agg.input.as_ref()),
+                    )?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
                 } else {
