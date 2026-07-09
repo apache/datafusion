@@ -198,7 +198,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 enable_round_robin_tie_breaker,
             );
 
-            // An error aborts the stream: yield it as the final item, then stop.
             if let Err(e) = s.run(&co).await {
                 co.yield_(Err(e)).await;
             }
@@ -230,9 +229,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
     }
 
-    /// If the stream at the given index is not exhausted, and the last cursor for the
-    /// stream is finished, poll the stream for the next RecordBatch and create a new
-    /// cursor for the stream from the returned result
     async fn poll_stream_and_wait(&mut self, idx: usize) -> Result<()> {
         poll_fn(|cx| self.maybe_poll_stream(cx, idx)).await
     }
@@ -245,13 +241,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     }
 
     async fn run(&mut self, co: &Co<Result<RecordBatch>>) -> Result<()> {
-        // Prime the first batch of every partition, then build the loser tree.
-        // Poll *all* not-yet-ready inputs on each wakeup (rather than awaiting
-        // them one at a time) so their upstream pipelines start concurrently —
-        // a single sequential `await` would serialize startup, since many
-        // streams only begin their background work on first poll.
-        // An error aborts the stream immediately; buffered rows are dropped, so
-        // no data is emitted after an `Err`.
         let mut uninitiated_partitions =
             (0..self.streams.partitions()).collect::<Vec<_>>();
 
@@ -267,24 +256,19 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         drop(uninitiated_partitions);
         self.init_loser_tree();
 
-        // NB timer records time taken on drop; we drop it around `.await`s so
-        // upstream/consumer wait time is not counted as compute.
+        // NB timer records time taken on drop, so there are no
+        // calls to `timer.done()` below.
         let elapsed_compute = self.metrics.elapsed_compute().clone();
         let mut timer = elapsed_compute.timer();
 
         loop {
-            // `loser_tree[0]` is the current, already-adjusted winner.
             let stream_idx = self.loser_tree[0];
             if !self.advance_cursors(stream_idx) {
-                // The overall minimum is exhausted, which only happens once
-                // every input is exhausted. We're done.
                 break;
             }
             self.in_progress.push_row(stream_idx);
 
-            // Stop sorting if the fetch limit has been reached. Remaining
-            // buffered rows (e.g. a partial batch left after overflow handling)
-            // are drained below.
+            // stop sorting if fetch has been reached
             if self.fetch_reached() {
                 break;
             }
@@ -297,9 +281,11 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 }
             }
 
-            // Refill the just-consumed winner (only if its cursor is exhausted —
-            // live for almost every row) and re-establish the tree top.
+            // Adjust the loser tree if necessary, returning control if needed
             let winner = self.loser_tree[0];
+            // Fast path: skip the `maybe_poll_stream` call (and its `Poll`
+            // plumbing) unless the winner's cursor is exhausted and needs a
+            // fresh batch — it is live for almost every row.
             if self.cursors[winner].is_none() {
                 drop(timer);
                 self.poll_stream_and_wait(winner).await?;
@@ -310,11 +296,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         drop(timer);
 
-        // Drain any buffered rows: the normal final partial batch, plus leftovers
-        // kept after a `fetch` stop or after `build_record_batch()` hit an i32
-        // offset overflow (e.g. combined string offsets exceed 2 GB) and emitted
-        // only a partial batch. Each iteration emits another partial batch until
-        // `in_progress` is fully drained, so nothing is silently dropped.
+        // When `build_record_batch()` hits an i32 offset overflow (e.g.
+        // combined string offsets exceed 2 GB), it emits a partial batch
+        // and keeps the remaining rows in `self.in_progress.indices`.
+        // Drain those leftover rows before terminating the stream,
+        // otherwise they would be silently dropped.
+        // Repeated overflows are fine — each poll emits another partial
+        // batch until `in_progress` is fully drained.
         while let Some(batch) = self.emit_in_progress_batch()? {
             co.yield_(Ok(batch)).await;
         }
