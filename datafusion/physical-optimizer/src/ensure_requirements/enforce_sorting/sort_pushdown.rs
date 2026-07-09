@@ -356,7 +356,20 @@ fn pushdown_requirement_to_children(
             return Ok(None);
         };
         match determine_children_requirement(&parent_required, &child_req, child_plan) {
-            RequirementsCompatibility::Satisfy => Ok(Some(vec![Some(child_req)])),
+            RequirementsCompatibility::Satisfy => {
+                // Window input requirements may be empty or constant-only.
+                // Such requirements do not guarantee the parent's output ordering, so
+                // keep the sort above the window unless the window output is known
+                // to satisfy it.
+                if !plan
+                    .equivalence_properties()
+                    .ordering_satisfy_requirement(parent_required.first().clone())?
+                {
+                    return Ok(None);
+                }
+
+                Ok(Some(vec![Some(child_req)]))
+            }
             RequirementsCompatibility::Compatible(adjusted) => {
                 // If parent requirements are more specific than output ordering
                 // of the window plan, then we can deduce that the parent expects
@@ -364,7 +377,7 @@ fn pushdown_requirement_to_children(
                 // that's the case, we block the pushdown of sort operation.
                 if !plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(parent_required.into_single())?
+                    .ordering_satisfy_requirement(parent_required.first().clone())?
                 {
                     return Ok(None);
                 }
@@ -469,15 +482,12 @@ fn pushdown_requirement_to_children(
         }
     } else if let Some(aggregate_exec) = plan.downcast_ref::<AggregateExec>() {
         handle_aggregate_pushdown(aggregate_exec, parent_required)
+    } else if let Some(projection_exec) = plan.downcast_ref::<ProjectionExec>() {
+        handle_projection_pushdown(projection_exec, &parent_required)
     } else if maintains_input_order.is_empty()
         || !maintains_input_order.iter().any(|o| *o)
         || plan.is::<RepartitionExec>()
         || plan.is::<FilterExec>()
-        // A `ProjectionExec` with a fetch is handled in the fetch branch above
-        // (it remaps the requirement through the projection's column mapping).
-        // Without a fetch we do not push a sort requirement through a
-        // projection (the sort is placed above it).
-        || plan.is::<ProjectionExec>()
         || pushdown_would_violate_requirements(&parent_required, plan.as_ref())
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
@@ -1040,6 +1050,45 @@ enum RequirementsCompatibility {
     Compatible(Option<OrderingRequirements>),
     /// Requirements not compatible
     NonCompatible,
+}
+
+/// Attempts to push parent ordering requirements through a [`ProjectionExec`].
+///
+/// This is safe when every required sort expression refers to a projected output
+/// column that is backed by a simple input column. In that case, the requirement
+/// can be remapped from the projection output schema to the projection input
+/// schema while preserving the original sort options.
+///
+/// For example, a parent requirement on `a@2` over:
+///
+/// ```text
+/// ProjectionExec: expr=[c@2 as c, b@1 as b, a@0 as a]
+/// ```
+///
+/// is remapped to a child requirement on `a@0`.
+///
+/// The implementation is intentionally conservative: computed projection
+/// expressions and non-column sort expressions are not pushed down. Returning
+/// `Ok(None)` leaves sorting above the projection, preserving correctness.
+fn handle_projection_pushdown(
+    projection_exec: &ProjectionExec,
+    parent_required: &OrderingRequirements,
+) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+    // Only push sorting through pure column projections. Source-dependent
+    // expressions must stay close enough to the scan to be rewritten
+    // by the source and cannot be evaluated by [`ProjectionExec`].
+    if projection_exec
+        .expr()
+        .iter()
+        .any(|expr| !expr.expr.is::<Column>())
+    {
+        return Ok(None);
+    }
+
+    Ok(
+        remap_requirement_through_projection(projection_exec, parent_required)
+            .map(|requirements| vec![Some(requirements)]),
+    )
 }
 
 #[cfg(test)]
