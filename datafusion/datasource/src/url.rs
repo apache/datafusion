@@ -581,6 +581,7 @@ mod tests {
     use datafusion_execution::object_store::{
         DefaultObjectStoreRegistry, ObjectStoreRegistry,
     };
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::registry::ExtensionTypeRegistryRef;
     use datafusion_expr::{
@@ -695,7 +696,6 @@ mod tests {
     }
 
     fn env_with(base: &str) -> Arc<RuntimeEnv> {
-        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
         let registry = DefaultObjectStoreRegistry::new();
         registry.register_store(
             &Url::parse(base).unwrap(),
@@ -978,8 +978,6 @@ mod tests {
     /// so we sort results before comparison.
     #[tokio::test]
     async fn test_cache_path_equivalence() -> Result<()> {
-        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-
         let store = MockObjectStore {
             in_mem: object_store::memory::InMemory::new(),
             forbidden_paths: vec![],
@@ -1084,8 +1082,6 @@ mod tests {
     /// Tests that prefix queries can be served from a cached full-table listing
     #[tokio::test]
     async fn test_cache_serves_partition_from_full_listing() -> Result<()> {
-        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-
         let store = MockObjectStore {
             in_mem: object_store::memory::InMemory::new(),
             forbidden_paths: vec![],

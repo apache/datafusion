@@ -245,8 +245,23 @@ impl Default for DefaultObjectStoreRegistry {
     }
 }
 
+/// Returns `url` with any embedded userinfo (username/password) removed.
+///
+/// Stores are matched on scheme + host + port only: credentials are not part
+/// of a store's identity, so a store registered at a credentialed URL must
+/// still resolve for a credential-less lookup on the same host, and vice versa.
+fn without_credentials(url: &Url) -> Url {
+    let mut stripped = url.clone();
+    // These only fail for schemes that cannot have a host (e.g. `data:`),
+    // which never applies to object store URLs.
+    let _ = stripped.set_username("");
+    let _ = stripped.set_password(None);
+    stripped
+}
+
 /// Splits `url` into its scheme+authority and non-empty path segments, the key
-/// under which a store is registered / matched.
+/// under which a store is registered / matched. `url` must already have had
+/// its credentials stripped by [`without_credentials`].
 fn registration_key(url: &Url) -> (String, Vec<String>) {
     let authority = url[..url::Position::AfterPort].to_string();
     let segments = url
@@ -256,6 +271,19 @@ fn registration_key(url: &Url) -> (String, Vec<String>) {
         .map(str::to_string)
         .collect();
     (authority, segments)
+}
+
+/// Returns `true` if some entry in `registered` is a path-segment prefix of
+/// `url`'s (under the same scheme+authority), i.e. `url` resolves to a
+/// registered store rather than requiring lazy creation. `url` must already
+/// have had its credentials stripped by [`without_credentials`].
+fn has_registered_match(registered: &HashSet<(String, Vec<String>)>, url: &Url) -> bool {
+    let (authority, segments) = registration_key(url);
+    registered.iter().any(|(reg_authority, reg_segments)| {
+        *reg_authority == authority
+            && reg_segments.len() <= segments.len()
+            && reg_segments.iter().zip(&segments).all(|(a, b)| a == b)
+    })
 }
 
 impl DefaultObjectStoreRegistry {
@@ -281,22 +309,6 @@ impl DefaultObjectStoreRegistry {
             registered: RwLock::new(HashSet::new()),
         }
     }
-
-    /// Returns `true` if some registered store's path is a prefix of `url`'s
-    /// (under the same scheme+authority), i.e. `url` resolves to a registered
-    /// store rather than requiring lazy creation.
-    fn has_registered_match(&self, url: &Url) -> bool {
-        let (authority, segments) = registration_key(url);
-        self.registered
-            .read()
-            .unwrap()
-            .iter()
-            .any(|(reg_authority, reg_segments)| {
-                *reg_authority == authority
-                    && reg_segments.len() <= segments.len()
-                    && reg_segments.iter().zip(&segments).all(|(a, b)| a == b)
-            })
-    }
 }
 
 impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
@@ -305,21 +317,28 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         url: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        self.registered
-            .write()
-            .unwrap()
-            .insert(registration_key(url));
-        self.inner.register(url.clone(), store)
+        let url = without_credentials(url);
+        // Hold the write lock across both the inner registration and the
+        // bookkeeping update: otherwise a concurrent `resolve` could observe
+        // `url` as "registered" (via `registered`) before the store is
+        // actually resolvable in `inner`, and fall through to `inner`'s
+        // ambient-environment fallback instead of finding the real store.
+        let mut registered = self.registered.write().unwrap();
+        let previous = self.inner.register(url.clone(), store);
+        registered.insert(registration_key(&url));
+        previous
     }
 
     fn deregister_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
-        let store = self.inner.deregister(url).ok_or_else(|| {
+        let url = without_credentials(url);
+        // See `register_store`: hold the write lock across both mutations so
+        // a concurrent `resolve` can't observe `url` as still registered after
+        // it has actually been removed from `inner`.
+        let mut registered = self.registered.write().unwrap();
+        let store = self.inner.deregister(&url).ok_or_else(|| {
             internal_datafusion_err!("Failed to deregister object store. No suitable object store found for {url}. See `RuntimeEnv::register_object_store`")
         })?;
-        self.registered
-            .write()
-            .unwrap()
-            .remove(&registration_key(url));
+        registered.remove(&registration_key(&url));
         Ok(store)
     }
 
@@ -328,15 +347,22 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     }
 
     fn resolve(&self, url: &Url) -> Result<(Arc<dyn ObjectStore>, Path)> {
-        // Reject unregistered URLs before the inner registry's lazy
-        // `parse_url_opts` fallback can create a store from the environment.
-        if !self.has_registered_match(url) {
+        let url = without_credentials(url);
+        // Hold the read lock across the registration check *and* the inner
+        // resolve call: otherwise a concurrent `register_store` could land in
+        // between, e.g. letting this call see "not yet registered" and fall
+        // through to `inner`'s ambient-environment fallback right as another
+        // thread finishes registering the real store, or a concurrent
+        // `deregister_store` could let this call see "still registered" for a
+        // store another thread just removed.
+        let registered = self.registered.read().unwrap();
+        if !has_registered_match(&registered, &url) {
             return Err(internal_datafusion_err!(
                 "No suitable object store found for {url}. See `RuntimeEnv::register_object_store`"
             ));
         }
         self.inner
-            .resolve(url)
+            .resolve(&url)
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 }
@@ -344,6 +370,10 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use object_store::memory::InMemory;
+    use object_store::prefix::PrefixStore;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread;
 
     #[test]
     fn test_object_store_url() {
@@ -384,9 +414,6 @@ mod tests {
 
     #[test]
     fn test_registry_resolves_prefixed_store() {
-        use object_store::memory::InMemory;
-        use object_store::prefix::PrefixStore;
-
         let registry = DefaultObjectStoreRegistry::new();
 
         // Register two stores under the SAME authority at different prefixes.
@@ -441,8 +468,6 @@ mod tests {
 
     #[test]
     fn test_registry_authority_only_store() {
-        use object_store::memory::InMemory;
-
         // A store registered by scheme+authority only serves the whole authority;
         // the full path is returned unchanged (the legacy behavior).
         let registry = DefaultObjectStoreRegistry::new();
@@ -458,8 +483,6 @@ mod tests {
 
     #[test]
     fn test_registry_rejects_unregistered_store() {
-        use object_store::memory::InMemory;
-
         let registry = DefaultObjectStoreRegistry::new();
 
         // An unregistered scheme+authority is a strict error: the registry must
@@ -505,5 +528,115 @@ mod tests {
                 .resolve(&Url::parse("s3://bucket/data/f.parquet").unwrap())
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_registry_ignores_credentials() {
+        // Credentials are not part of a store's identity: a store registered
+        // at a credentialed URL must resolve for a credential-less lookup on
+        // the same host, and a store registered without credentials must
+        // resolve for a lookup that includes them.
+        let registry = DefaultObjectStoreRegistry::new();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        registry.register_store(
+            &Url::parse("s3://username:password@host:123").unwrap(),
+            Arc::clone(&store),
+        );
+
+        let (resolved, _) = registry
+            .resolve(&Url::parse("s3://host:123/data/f.parquet").unwrap())
+            .unwrap();
+        assert!(Arc::ptr_eq(&resolved, &store));
+
+        let (resolved, _) = registry
+            .resolve(&Url::parse("s3://other:secret@host:123/data/f.parquet").unwrap())
+            .unwrap();
+        assert!(Arc::ptr_eq(&resolved, &store));
+
+        // Deregistering without credentials removes the store that was
+        // registered with them.
+        registry
+            .deregister_store(&Url::parse("s3://host:123").unwrap())
+            .unwrap();
+        assert!(
+            registry
+                .resolve(&Url::parse("s3://host:123/data/f.parquet").unwrap())
+                .is_err()
+        );
+    }
+
+    /// Regression test: `register_store`/`deregister_store` must update the
+    /// bookkeeping `registered` set and the inner registry as a single atomic
+    /// step. Before the fix, `register_store` marked a URL "registered" before
+    /// actually inserting the store into the inner registry, so a `resolve`
+    /// racing that window could see "registered" yet find no match in `inner`
+    /// and fall through to `inner`'s ambient-environment `parse_url_opts`
+    /// fallback, silently returning an unrelated, freshly-created store instead
+    /// of erroring or returning the real one.
+    ///
+    /// Uses the `memory://` scheme (host-less), which `parse_url_opts` can
+    /// synthesize with no credentials/config -- exactly the case that would
+    /// otherwise mask this race as a "success" rather than an error.
+    #[test]
+    fn test_registry_concurrent_resolve_never_observes_partial_registration() {
+        let registry = Arc::new(DefaultObjectStoreRegistry::new());
+        let url = Url::parse("memory:///tenant").unwrap();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let mismatches = Arc::new(AtomicUsize::new(0));
+
+        const ITERATIONS: usize = 5_000;
+        const READERS: usize = 4;
+
+        // Repeatedly registers and deregisters `store` at `url`.
+        let writer = {
+            let registry = Arc::clone(&registry);
+            let url = url.clone();
+            let store = Arc::clone(&store);
+            thread::spawn(move || {
+                for _ in 0..ITERATIONS {
+                    registry.register_store(&url, Arc::clone(&store));
+                    let _ = registry.deregister_store(&url);
+                }
+                // Leave it registered so the final sanity check below is stable.
+                registry.register_store(&url, store);
+            })
+        };
+
+        // Concurrently resolves `url`. Whenever a resolve succeeds, it must
+        // return exactly `store` -- never a different (e.g. environment
+        // fallback) store.
+        let readers: Vec<_> = (0..READERS)
+            .map(|_| {
+                let registry = Arc::clone(&registry);
+                let url = url.clone();
+                let expected = Arc::clone(&store);
+                let mismatches = Arc::clone(&mismatches);
+                thread::spawn(move || {
+                    for _ in 0..ITERATIONS {
+                        if let Ok((resolved, _)) = registry.resolve(&url)
+                            && !Arc::ptr_eq(&resolved, &expected)
+                        {
+                            mismatches.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        writer.join().unwrap();
+        for reader in readers {
+            reader.join().unwrap();
+        }
+
+        assert_eq!(
+            mismatches.load(Ordering::Relaxed),
+            0,
+            "resolve() returned a store other than the one explicitly \
+             registered: register_store/resolve are not atomic with respect \
+             to each other"
+        );
+        // Sanity: the registry converged to a consistent, resolvable state.
+        let (resolved, _) = registry.resolve(&url).unwrap();
+        assert!(Arc::ptr_eq(&resolved, &store));
     }
 }
