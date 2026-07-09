@@ -796,8 +796,13 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{and, col, lit, not, or, out_ref_col_with_metadata, when};
+    use crate::logical_plan::builder::LogicalTableSource;
+    use crate::{
+        LogicalPlanBuilder, and, col, in_subquery, lit, not, or,
+        out_ref_col_with_metadata, when,
+    };
 
+    use arrow::datatypes::Schema;
     use datafusion_common::{DFSchema, assert_or_internal_err};
 
     macro_rules! test_is_expr_nullable {
@@ -1190,6 +1195,64 @@ mod tests {
         fn field_from_column(&self, _col: &Column) -> Result<&FieldRef> {
             Ok(&self.field)
         }
+    }
+
+    /// A scan of `t`, whose single column `a` has the given nullability.
+    fn scan_t(a_nullable: bool) -> LogicalPlanBuilder {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, a_nullable)]);
+        let source = Arc::new(LogicalTableSource::new(Arc::new(schema)));
+        LogicalPlanBuilder::scan("t", source, None).unwrap()
+    }
+
+    #[test]
+    fn in_subquery_nullability() {
+        // `x IN (SELECT a FROM t)` evaluates to NULL when `x` is NULL, and when `x`
+        // matches no row while `a` contains a NULL. So it is nullable exactly when
+        // either the compared expression or the subquery's output column is.
+        let cases = [
+            (false, false, false),
+            (false, true, true),
+            (true, false, true),
+            (true, true, true),
+        ];
+
+        for (x_nullable, a_nullable, expected) in cases {
+            let subquery = scan_t(a_nullable)
+                .project(vec![col("a")])
+                .unwrap()
+                .build()
+                .unwrap();
+            let expr = in_subquery(col("x"), Arc::new(subquery));
+            let schema = MockExprSchema::new().with_nullable(x_nullable);
+
+            assert_eq!(expr.nullable(&schema).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn in_subquery_nullability_uses_subquery_output_schema() {
+        // `DISTINCT` carries no expressions of its own, but its output column is still
+        // nullable, so the `IN` expression must be nullable too.
+        let subquery = scan_t(true)
+            .project(vec![col("a")])
+            .unwrap()
+            .distinct()
+            .unwrap()
+            .build()
+            .unwrap();
+        let expr = in_subquery(col("x"), Arc::new(subquery));
+        assert!(expr.nullable(&MockExprSchema::new()).unwrap());
+
+        // A computed projection's expressions reference `t.a`, which does not appear in
+        // the subquery's output schema, so nullability must be read off that schema's
+        // single column rather than by resolving the projection's expressions against it.
+        let subquery = scan_t(false)
+            .project(vec![col("a") + lit(1)])
+            .unwrap()
+            .build()
+            .unwrap();
+        let expr = in_subquery(col("x"), Arc::new(subquery));
+        assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
     }
 
     #[test]
