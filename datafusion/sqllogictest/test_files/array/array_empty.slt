@@ -45,11 +45,10 @@ select empty(arrow_cast(make_array(), 'LargeList(Int64)'));
 ----
 true
 
-#TODO: https://github.com/apache/datafusion/issues/9158
-#query B
-#select empty(arrow_cast(make_array(), 'FixedSizeList(0, Null)'));
-#----
-#true
+query B
+select empty(arrow_cast(make_array(), 'FixedSizeList(0, Null)'));
+----
+true
 
 # empty scalar function #3
 query B
