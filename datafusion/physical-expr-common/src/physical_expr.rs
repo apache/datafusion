@@ -1453,3 +1453,91 @@ mod proto_helper_tests {
         ));
     }
 }
+
+/// Tests for the erroring defaults of the dispatch traits' capability
+/// channels: a serialization layer that implements only the required
+/// `encode`/`decode` must reject function-codec and session-config requests
+/// with errors naming the requested type, not panic or silently succeed.
+#[cfg(all(test, feature = "proto"))]
+mod proto_capability_default_tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::Schema;
+    use datafusion_common::{DataFusionError, Result};
+    use datafusion_proto_models::protobuf::PhysicalExprNode;
+
+    use crate::physical_expr::PhysicalExpr;
+    use crate::physical_expr::proto_decode::{PhysicalExprDecode, PhysicalExprDecodeCtx};
+    use crate::physical_expr::proto_encode::{PhysicalExprEncode, PhysicalExprEncodeCtx};
+
+    struct DefaultOnlyEncoder;
+
+    impl PhysicalExprEncode for DefaultOnlyEncoder {
+        fn encode(&self, _expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode> {
+            unreachable!("child encoding must not be reached")
+        }
+    }
+
+    struct DefaultOnlyDecoder;
+
+    impl PhysicalExprDecode for DefaultOnlyDecoder {
+        fn decode(
+            &self,
+            _node: &PhysicalExprNode,
+            _schema: &Schema,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            unreachable!("child decoding must not be reached")
+        }
+    }
+
+    /// Stands in for a function type (e.g. `ScalarUDF`) the layer was never
+    /// taught about.
+    #[derive(Debug)]
+    struct NotAFunction;
+
+    #[test]
+    fn encode_function_default_errors_naming_requested_type() {
+        let encoder = DefaultOnlyEncoder;
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let err = ctx.encode_function(&NotAFunction).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg)
+                if msg.contains("does not support encoding function objects")
+                    && msg.contains("NotAFunction")
+        ));
+    }
+
+    #[test]
+    fn decode_function_default_errors_naming_requested_type_and_name() {
+        let schema = Schema::empty();
+        let decoder = DefaultOnlyDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = ctx
+            .decode_function::<NotAFunction>("my_udf", None)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg)
+                if msg.contains("does not support resolving function objects")
+                    && msg.contains("NotAFunction")
+                    && msg.contains("'my_udf'")
+        ));
+    }
+
+    #[test]
+    fn config_options_default_errors() {
+        let schema = Schema::empty();
+        let decoder = DefaultOnlyDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = ctx.config_options().unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg)
+                if msg.contains("does not provide session configuration")
+        ));
+    }
+}
