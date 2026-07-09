@@ -161,10 +161,10 @@ fn general_map_extract_inner(
 
         match value_index {
             Some(index) => {
-                mutable.extend(0, start + index, start + index + 1);
+                mutable.try_extend(0, start + index, start + index + 1)?;
             }
             None => {
-                mutable.extend_nulls(1);
+                mutable.try_extend_nulls(1)?;
             }
         }
         offsets.push(offsets[row_index] + 1);
