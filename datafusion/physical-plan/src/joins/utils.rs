@@ -266,16 +266,11 @@ fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> 
 }
 
 /// Creates a schema for a join operation.
-/// The fields from the left side are first.
-///
-/// When `null_aware` is set, the `LeftMark`/`RightMark` `mark` column is made
-/// nullable so it can represent SQL UNKNOWN for null-aware `NOT IN` semantics.
-/// `null_aware` has no effect on non-mark join types.
+/// The fields from the left side are first
 pub fn build_join_schema(
     left: &Schema,
     right: &Schema,
     join_type: &JoinType,
-    null_aware: bool,
 ) -> (Schema, Vec<ColumnIndex>) {
     let left_fields = || {
         left.fields()
@@ -318,7 +313,8 @@ pub fn build_join_schema(
         JoinType::LeftSemi | JoinType::LeftAnti => left_fields().unzip(),
         JoinType::LeftMark => {
             let right_field = once((
-                Field::new("mark", DataType::Boolean, null_aware),
+                // Nullable: null-aware `LeftMark` joins use NULL for SQL UNKNOWN.
+                Field::new("mark", DataType::Boolean, true),
                 ColumnIndex {
                     index: 0,
                     side: JoinSide::None,
@@ -329,7 +325,8 @@ pub fn build_join_schema(
         JoinType::RightSemi | JoinType::RightAnti => right_fields().unzip(),
         JoinType::RightMark => {
             let left_field = once((
-                Field::new("mark", DataType::Boolean, null_aware),
+                // Nullable for symmetry with `LeftMark`; never actually NULL.
+                Field::new("mark", DataType::Boolean, true),
                 ColumnIndex {
                     index: 0,
                     side: JoinSide::None,
@@ -2857,7 +2854,7 @@ mod tests {
         ];
 
         for (left_in, right_in, join_type, left_out, right_out) in cases {
-            let (schema, _) = build_join_schema(left_in, right_in, &join_type, false);
+            let (schema, _) = build_join_schema(left_in, right_in, &join_type);
 
             let expected_fields = left_out
                 .fields()
@@ -4448,13 +4445,13 @@ mod tests {
             .with_metadata(HashMap::from([("key".to_string(), "right".to_string())]));
 
         let (join_schema, _) =
-            build_join_schema(&left_schema, &right_schema, &JoinType::Left, false);
+            build_join_schema(&left_schema, &right_schema, &JoinType::Left);
         assert_eq!(
             join_schema.metadata(),
             &HashMap::from([("key".to_string(), "left".to_string())])
         );
         let (join_schema, _) =
-            build_join_schema(&left_schema, &right_schema, &JoinType::Right, false);
+            build_join_schema(&left_schema, &right_schema, &JoinType::Right);
         assert_eq!(
             join_schema.metadata(),
             &HashMap::from([("key".to_string(), "right".to_string())])

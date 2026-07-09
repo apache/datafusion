@@ -66,7 +66,7 @@ use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
-use arrow::array::{ArrayRef, BooleanBufferBuilder, UInt64Array};
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, UInt64Array};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -525,7 +525,7 @@ impl HashJoinExecBuilder {
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
         let (join_schema, column_indices) =
-            build_join_schema(&left_schema, &right_schema, &join_type, null_aware);
+            build_join_schema(&left_schema, &right_schema, &join_type);
 
         let join_schema = Arc::new(join_schema);
 
@@ -2236,6 +2236,17 @@ async fn collect_left_input(
                 .iter()
                 .map(|values| Ok(arrow::compute::filter(values.as_ref(), &null_mask)?))
                 .collect::<Result<Vec<_>>>()?;
+
+            // `scope_values` and `build_indices` are retained for the lifetime
+            // of the join, so charge them to the reservation like the maps and
+            // bitmaps above.
+            let retained_size = build_indices.get_array_memory_size()
+                + scope_values
+                    .iter()
+                    .map(|values| values.get_array_memory_size())
+                    .sum::<usize>();
+            reservation.try_grow(retained_size)?;
+            metrics.build_mem_used.add(retained_size);
 
             let null_rows = build_indices.len();
             let mut map = new_join_hashmap(null_rows, &mut reservation, &metrics)?;
