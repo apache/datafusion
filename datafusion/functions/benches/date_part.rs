@@ -71,10 +71,11 @@ fn generate_timestamp_s_array(rng: &mut ThreadRng) -> TimestampSecondArray {
     )
 }
 
-fn generate_date32_array(rng: &mut ThreadRng) -> Date32Array {
+fn generate_date32_array(rng: &mut StdRng) -> Date32Array {
+    let days_since_epoch = (TS_BOUND as i32) / SEC_DAY as i32;
     Date32Array::from(
         (0..BATCH_SIZE)
-            .map(|_| rng.random_range(0..30_000))
+            .map(|_| rng.random_range(0..days_since_epoch))
             .collect::<Vec<_>>(),
     )
 }
@@ -82,7 +83,7 @@ fn generate_date32_array(rng: &mut ThreadRng) -> Date32Array {
 fn generate_date64_array(rng: &mut ThreadRng) -> Date64Array {
     Date64Array::from(
         (0..BATCH_SIZE)
-            .map(|_| rng.random_range(0i64..30_000))
+            .map(|_| rng.random_range(0..TS_BOUND * 1_000))
             .collect::<Vec<_>>(),
     )
 }
@@ -119,10 +120,11 @@ fn generate_time64_nanosecond_array(rng: &mut ThreadRng) -> Time64NanosecondArra
     )
 }
 
-fn generate_interval_year_month_array(rng: &mut ThreadRng) -> IntervalYearMonthArray {
+fn generate_interval_year_month_array(rng: &mut StdRng) -> IntervalYearMonthArray {
+    let years = 10;
     IntervalYearMonthArray::from(
         (0..BATCH_SIZE)
-            .map(|_| rng.random_range(0..1_200))
+            .map(|_| rng.random_range(0..12 * years))
             .collect::<Vec<_>>(),
     )
 }
@@ -142,7 +144,7 @@ fn generate_interval_mdn_array(rng: &mut ThreadRng) -> IntervalMonthDayNanoArray
     IntervalMonthDayNanoArray::from(
         (0..BATCH_SIZE)
             .map(|_| IntervalMonthDayNano {
-                months: rng.random_range(0..120),
+                months: rng.random_range(0..12),
                 days: rng.random_range(0..365),
                 nanoseconds: rng.random_range(0..SEC_DAY * 1_000_000_000),
             })
