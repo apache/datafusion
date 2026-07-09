@@ -217,6 +217,9 @@ fn initcap_ascii_array<T: OffsetSizeTrait>(
     }
 
     let values = Buffer::from_vec(out);
+
+    // Rebase offsets for sliced arrays to reflect that the
+    // output only contains the bytes in the visible slice.
     let out_offsets = offsets.clone().subtract(offsets[0]);
 
     // SAFETY: ASCII case conversion preserves byte length, so the original
