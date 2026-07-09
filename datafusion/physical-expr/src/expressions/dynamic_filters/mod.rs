@@ -88,10 +88,6 @@ pub struct DynamicFilterPhysicalExpr {
 /// `expression_id` lives here because it identifies the actual filter expression `expr`.
 /// Derived `DynamicFilterPhysicalExpr`s (e.g. via [`PhysicalExpr::with_new_children`]) are
 /// the same logical filter and must report the same `expression_id`.
-///
-/// **Warning:** exposed publicly solely so that proto (de)serialization in
-/// `datafusion-proto` can read and rebuild this state. Do not treat this type
-/// or its layout as a stable API.
 #[derive(Clone, Debug)]
 struct Inner {
     /// A unique identifier for the expression.
