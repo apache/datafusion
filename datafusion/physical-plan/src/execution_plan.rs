@@ -1967,6 +1967,86 @@ mod tests {
         }
     }
 
+    /// Test unary plan that does **not** override
+    /// `with_new_children_and_same_properties`. Used to verify the default
+    /// trait fallback still routes through `with_new_children` (which is
+    /// the semantics-preserving path for downstream / external
+    /// `ExecutionPlan` implementations that haven't opted into the
+    /// fast path yet).
+    #[derive(Debug, Clone)]
+    struct WithChildrenTestParentDefault {
+        input: Arc<dyn ExecutionPlan>,
+        cache: Arc<PlanProperties>,
+        recompute_calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl WithChildrenTestParentDefault {
+        fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+            let cache = Arc::new(PlanProperties::new(
+                EquivalenceProperties::new(Arc::new(Schema::empty())),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Final,
+                Boundedness::Bounded,
+            ));
+            Self {
+                input,
+                cache,
+                recompute_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    impl DisplayAs for WithChildrenTestParentDefault {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            unimplemented!()
+        }
+    }
+
+    impl ExecutionPlan for WithChildrenTestParentDefault {
+        fn name(&self) -> &'static str {
+            "WithChildrenTestParentDefault"
+        }
+        fn properties(&self) -> &Arc<PlanProperties> {
+            &self.cache
+        }
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![&self.input]
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            mut children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.recompute_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let new_input = children.swap_remove(0);
+            let cache = Arc::new(PlanProperties::new(
+                EquivalenceProperties::new(Arc::new(Schema::empty())),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Final,
+                Boundedness::Bounded,
+            ));
+            Ok(Arc::new(Self {
+                input: new_input,
+                cache,
+                recompute_calls: Arc::clone(&self.recompute_calls),
+            }))
+        }
+        // Intentionally does **not** override
+        // `with_new_children_and_same_properties` — relies on the trait
+        // default that falls back to `with_new_children`.
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+    }
+
     /// Cover the three short-circuit layers of
     /// [`with_new_children_if_necessary`].
     #[test]
@@ -2030,6 +2110,49 @@ mod tests {
         assert!(!Arc::ptr_eq(out.properties(), &orig_props));
         assert_eq!(parent.recompute_calls.load(Ordering::SeqCst), 1);
         assert_eq!(parent.fast_path_calls.load(Ordering::SeqCst), 1);
+
+        Ok(())
+    }
+
+    /// A plan that does not override `with_new_children_and_same_properties`
+    /// (per @kosiew's review on #23332) must still be routed through
+    /// `with_new_children` when the helper hits the "same properties"
+    /// branch. The default trait implementation forwards to
+    /// `with_new_children`, so downstream / external `ExecutionPlan`
+    /// implementations keep the semantics-preserving path.
+    #[test]
+    fn test_with_new_children_if_necessary_default_fallback() -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        let leaf_props = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(Arc::new(Schema::empty())),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ));
+        let leaf_a: Arc<dyn ExecutionPlan> =
+            Arc::new(WithChildrenTestLeaf::new(Arc::clone(&leaf_props)));
+        let leaf_b: Arc<dyn ExecutionPlan> =
+            Arc::new(WithChildrenTestLeaf::new(Arc::clone(&leaf_props)));
+        assert!(!Arc::ptr_eq(&leaf_a, &leaf_b));
+        assert!(Arc::ptr_eq(leaf_a.properties(), leaf_b.properties()));
+
+        let parent = Arc::new(WithChildrenTestParentDefault::new(Arc::clone(&leaf_a)));
+        let parent_dyn: Arc<dyn ExecutionPlan> = Arc::clone(&parent) as _;
+
+        // Distinct child Arc but same `PlanProperties` Arc — the helper
+        // enters the "same properties" branch and calls the trait method,
+        // whose default forwards to `with_new_children`.
+        let out = with_new_children_if_necessary(
+            Arc::clone(&parent_dyn),
+            vec![Arc::clone(&leaf_b)],
+        )?;
+        // `with_new_children` was invoked exactly once via the default.
+        assert_eq!(parent.recompute_calls.load(Ordering::SeqCst), 1);
+        // The returned plan has a freshly-recomputed `PlanProperties` Arc,
+        // so it differs from the parent's original cache. This confirms
+        // the fallback ran and did not short-circuit.
+        assert!(!Arc::ptr_eq(out.properties(), parent.properties()));
 
         Ok(())
     }
