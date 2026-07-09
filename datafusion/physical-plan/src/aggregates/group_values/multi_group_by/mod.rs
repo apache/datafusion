@@ -1089,12 +1089,13 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     );
     Ok(v.into_iter().next().unwrap())
 }
-/// Returns a comparison cost tier for `data_type` (1 = cheapest, 5 = most expensive).
+/// Returns a comparison cost tier for `data_type` (1 = cheapest, 3 = most expensive).
 /// Used to order columns in [`GroupValuesColumn::compare_order`] so cheap comparisons
 /// eliminate rows before expensive ones are evaluated.
 /// see <https://github.com/apache/datafusion/issues/23342>
 fn compare_tier(data_type: &DataType) -> u8 {
     match data_type {
+        // Fixed-width numeric types and booleans: single word comparison.
         DataType::Int8
         | DataType::Int16
         | DataType::Int32
@@ -1103,19 +1104,23 @@ fn compare_tier(data_type: &DataType) -> u8 {
         | DataType::UInt16
         | DataType::UInt32
         | DataType::UInt64
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Decimal128(_, _)
         | DataType::Date32
         | DataType::Date64
         | DataType::Time32(_)
         | DataType::Time64(_)
-        | DataType::Timestamp(_, _) => 1,
-        DataType::Float32 | DataType::Float64 => 2,
-        DataType::Decimal128(_, _) | DataType::Boolean => 3,
-        DataType::Utf8View | DataType::BinaryView => 4,
+        | DataType::Timestamp(_, _)
+        | DataType::Boolean => 1,
+        // Variable-length binary and string blobs. pointer chasing
         DataType::Utf8
         | DataType::LargeUtf8
         | DataType::Binary
-        | DataType::LargeBinary => 5,
-        _ => u8::MAX,
+        | DataType::LargeBinary
+        | DataType::Utf8View
+        | DataType::BinaryView => 2,
+        _ => 3,
     }
 }
 
