@@ -1063,10 +1063,8 @@ fn maybe_data_types(
             // attempt to coerce.
             // TODO: Replace with `can_cast_types` after failing cases are resolved
             // (they need new signature that returns exactly valid types instead of list of possible valid types).
-            {
-                let coerced_type = coerced_from(valid_type, current_type)?;
-                new_type.push(coerced_type)
-            }
+            let coerced_type = coerced_from(valid_type, current_type)?;
+            new_type.push(coerced_type)
         }
     }
     Some(new_type)

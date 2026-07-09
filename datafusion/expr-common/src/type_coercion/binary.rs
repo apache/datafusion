@@ -654,10 +654,8 @@ pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
             // For example,
             //  i64 and decimal(7, 2) are expect to get coerced type decimal(22, 2)
             //  numeric string ('1') and numeric (2) are expect to get coerced type numeric (1, 2)
-            {
-                let t = type_union_resolution_coercion(data_type, candidate_t)?;
-                candidate_type = Some(t);
-            }
+            let t = type_union_resolution_coercion(data_type, candidate_t)?;
+            candidate_type = Some(t);
         } else {
             candidate_type = Some(data_type.clone());
         }
@@ -742,13 +740,11 @@ fn type_union_resolution_coercion(
             ) -> Option<DataType> {
                 for rhs_field in rhs.iter() {
                     if lhs_field.name() == rhs_field.name() {
-                        {
-                            let t = type_union_resolution_coercion(
-                                lhs_field.data_type(),
-                                rhs_field.data_type(),
-                            )?;
-                            return Some(t);
-                        }
+                        let t = type_union_resolution_coercion(
+                            lhs_field.data_type(),
+                            rhs_field.data_type(),
+                        )?;
+                        return Some(t);
                     }
                 }
 

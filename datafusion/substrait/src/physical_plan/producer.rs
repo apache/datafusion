@@ -74,11 +74,9 @@ pub fn to_substrait_rel(
         let mut types = vec![];
 
         for field in file_config.file_schema().fields.iter() {
-            {
-                let t = to_substrait_type(field.data_type(), field.is_nullable())?;
-                names.push(field.name().clone());
-                types.push(t);
-            }
+            let t = to_substrait_type(field.data_type(), field.is_nullable())?;
+            names.push(field.name().clone());
+            types.push(t);
         }
 
         let type_info = Struct {

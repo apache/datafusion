@@ -398,19 +398,17 @@ fn lower_alt(
     let mut accu: Option<Expr> = None;
 
     for part in alts {
-        {
-            let expr = lower_simple(mode, left, part, string_scalar)?;
-            accu = match accu {
-                Some(accu) => {
-                    if mode.not {
-                        Some(accu.and(expr))
-                    } else {
-                        Some(accu.or(expr))
-                    }
+        let expr = lower_simple(mode, left, part, string_scalar)?;
+        accu = match accu {
+            Some(accu) => {
+                if mode.not {
+                    Some(accu.and(expr))
+                } else {
+                    Some(accu.or(expr))
                 }
-                None => Some(expr),
-            };
-        }
+            }
+            None => Some(expr),
+        };
     }
 
     Some(accu.expect("at least two alts"))

@@ -407,10 +407,8 @@ fn split_nth_finder<'a>(
     let bytes = string.as_bytes();
     let mut start = 0;
     for _ in 0..n {
-        {
-            let pos = finder.find(&bytes[start..])?;
-            start += pos + delim_len
-        }
+        let pos = finder.find(&bytes[start..])?;
+        start += pos + delim_len
     }
     match finder.find(&bytes[start..]) {
         Some(pos) => Some(&string[start..start + pos]),
@@ -430,10 +428,8 @@ fn rsplit_nth_finder<'a>(
     let bytes = string.as_bytes();
     let mut end = bytes.len();
     for _ in 0..n {
-        {
-            let pos = finder.rfind(&bytes[..end])?;
-            end = pos
-        }
+        let pos = finder.rfind(&bytes[..end])?;
+        end = pos
     }
     match finder.rfind(&bytes[..end]) {
         Some(pos) => Some(&string[pos + delim_len..end]),
