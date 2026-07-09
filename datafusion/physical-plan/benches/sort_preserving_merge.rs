@@ -21,14 +21,27 @@ use arrow::{
 };
 use arrow_schema::{SchemaRef, SortOptions};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use datafusion_execution::SendableRecordBatchStream;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, expressions::col};
 use datafusion_physical_plan::test::TestMemoryExec;
 use datafusion_physical_plan::{
-    collect, sorts::sort_preserving_merge::SortPreservingMergeExec,
+    collect, execute_stream, sorts::sort_preserving_merge::SortPreservingMergeExec,
 };
+use futures::StreamExt;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
+use std::hint::black_box;
 use std::sync::Arc;
+
+/// Consume the stream batch by batch, dropping each batch as it arrives
+/// instead of holding the whole result in memory like `collect` would
+async fn drain(mut stream: SendableRecordBatchStream) {
+    while let Some(batch) = stream.next().await {
+        black_box(batch.unwrap());
+    }
+}
 
 const BENCH_ROWS: usize = 1_000_000; // 1 million rows
 
@@ -193,5 +206,161 @@ fn bench_merge_sorted_preserving(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_merge_sorted_preserving);
+// ---------------------------------------------------------------------------
+// Benchmarks across data orderings (sorted / nearly sorted / reverse /
+// unsorted), sort key types (u64 / string / complex) and payload widths
+// (5 / 20 / 100 columns).
+// ---------------------------------------------------------------------------
+
+const NUM_PARTITIONS: usize = 4;
+const ROWS_PER_PARTITION: usize = 100_000;
+const BATCH_SIZE: usize = 8192;
+
+const ORDERINGS: [&str; 4] = ["sorted", "nearly_sorted", "reverse", "unsorted"];
+const KEY_TYPES: [&str; 3] = ["u64", "string", "complex"];
+const PAYLOAD_WIDTHS: [usize; 3] = [5, 20, 100];
+
+/// Generate the keys in their "arrival" order, before partitioning
+fn generate_keys(ordering: &str) -> Vec<u64> {
+    let n = (NUM_PARTITIONS * ROWS_PER_PARTITION) as u64;
+    let mut rng = StdRng::seed_from_u64(42);
+    match ordering {
+        "sorted" => (0..n).collect(),
+        "reverse" => (0..n).rev().collect(),
+        // Sorted except for ~1% of items misplaced to random positions
+        "nearly_sorted" => {
+            let mut keys: Vec<u64> = (0..n).collect();
+            for _ in 0..(n / 100) {
+                let a = rng.random_range(0..n as usize);
+                let b = rng.random_range(0..n as usize);
+                keys.swap(a, b);
+            }
+            keys
+        }
+        "unsorted" => (0..n).map(|_| rng.random_range(0..n)).collect(),
+        _ => unreachable!(),
+    }
+}
+
+/// Distribute the arrival sequence round-robin (a batch at a time) over the
+/// partitions, then sort each partition's keys, as SortExec would before a
+/// sort preserving merge
+fn partition_keys(keys: &[u64]) -> Vec<Vec<u64>> {
+    let mut partitions: Vec<Vec<u64>> = (0..NUM_PARTITIONS)
+        .map(|_| Vec::with_capacity(ROWS_PER_PARTITION))
+        .collect();
+    for (i, chunk) in keys.chunks(BATCH_SIZE).enumerate() {
+        partitions[i % NUM_PARTITIONS].extend_from_slice(chunk);
+    }
+    for partition in &mut partitions {
+        partition.sort_unstable();
+    }
+    partitions
+}
+
+fn key_columns(key_type: &str, keys: &[u64]) -> Vec<(String, ArrayRef)> {
+    let as_string = || {
+        Arc::new(StringArray::from_iter_values(
+            keys.iter().map(|k| format!("{k:012}")),
+        )) as ArrayRef
+    };
+    match key_type {
+        "u64" => vec![(
+            "key0".to_string(),
+            Arc::new(UInt64Array::from(keys.to_vec())) as _,
+        )],
+        "string" => vec![("key0".to_string(), as_string())],
+        // Two sort columns force the row-based (normalized key) cursor
+        "complex" => vec![
+            (
+                "key0".to_string(),
+                Arc::new(UInt64Array::from_iter_values(keys.iter().map(|k| k / 8))) as _,
+            ),
+            ("key1".to_string(), as_string()),
+        ],
+        _ => unreachable!(),
+    }
+}
+
+fn create_case(
+    ordering: &str,
+    key_type: &str,
+    payload_width: usize,
+) -> (Vec<Vec<RecordBatch>>, SchemaRef, LexOrdering) {
+    let partitions = partition_keys(&generate_keys(ordering))
+        .into_iter()
+        .map(|keys| {
+            keys.chunks(BATCH_SIZE)
+                .map(|chunk| {
+                    let mut columns = key_columns(key_type, chunk);
+                    // All payload columns share the same buffer, so wide
+                    // payloads don't blow up memory
+                    let payload = Arc::new(UInt64Array::from(chunk.to_vec())) as ArrayRef;
+                    for i in 0..payload_width {
+                        columns.push((format!("col{i}"), Arc::clone(&payload)));
+                    }
+                    RecordBatch::try_from_iter(columns).unwrap()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let schema = partitions[0][0].schema();
+    let sort_order = LexOrdering::new(
+        schema
+            .fields()
+            .iter()
+            .filter(|field| field.name().starts_with("key"))
+            .map(|field| {
+                PhysicalSortExpr::new(
+                    col(field.name(), &schema).unwrap(),
+                    SortOptions::default(),
+                )
+            }),
+    )
+    .unwrap();
+
+    (partitions, schema, sort_order)
+}
+
+fn bench_spm_data_patterns(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let task_ctx = Arc::new(TaskContext::default());
+
+    for ordering in ORDERINGS {
+        for key_type in KEY_TYPES {
+            for payload_width in PAYLOAD_WIDTHS {
+                let (partitions, schema, sort_order) =
+                    create_case(ordering, key_type, payload_width);
+
+                c.bench_function(
+                    &format!("spm/{ordering}/{key_type}/payload_{payload_width}"),
+                    |b| {
+                        b.iter(|| {
+                            let exec = TestMemoryExec::try_new_exec(
+                                &partitions,
+                                Arc::clone(&schema),
+                                None,
+                            )
+                            .unwrap();
+                            let merge = Arc::new(SortPreservingMergeExec::new(
+                                sort_order.clone(),
+                                exec,
+                            ));
+                            rt.block_on(drain(
+                                execute_stream(merge, Arc::clone(&task_ctx)).unwrap(),
+                            ))
+                        })
+                    },
+                );
+            }
+        }
+    }
+}
+
+criterion_group!(
+    benches,
+    bench_merge_sorted_preserving,
+    bench_spm_data_patterns
+);
 criterion_main!(benches);
