@@ -49,6 +49,13 @@ CREATE TABLE inner_corr_table(id INT, grp INT) AS VALUES
 (NULL, 1),
 (1, 2);
 
+# Every row has a NULL join key, so the full-key hash map is empty.
+statement ok
+CREATE TABLE outer_corr_all_null_keys(id INT, grp INT, value TEXT) AS VALUES
+(NULL, 1, 'd'),
+(NULL, 2, 'g'),
+(7, NULL, 'z');
+
 statement ok
 CREATE TABLE empty_table(id INT) AS
 SELECT *
@@ -160,6 +167,41 @@ WHERE (id NOT IN (
 )) IS TRUE;
 ----
 e
+
+# Regression test: the empty full-key map must not skip UNKNOWN marking.
+# `z` has a NULL scope key, so its subquery is empty and NOT IN is TRUE.
+query T rowsort
+SELECT value
+FROM outer_corr_all_null_keys
+WHERE (id NOT IN (
+  SELECT id
+  FROM inner_corr_table
+  WHERE inner_corr_table.grp = outer_corr_all_null_keys.grp
+)) IS NULL;
+----
+d
+g
+
+query T rowsort
+SELECT value
+FROM outer_corr_all_null_keys
+WHERE (id NOT IN (
+  SELECT id
+  FROM inner_corr_table
+  WHERE inner_corr_table.grp = outer_corr_all_null_keys.grp
+)) IS TRUE;
+----
+z
+
+query T rowsort
+SELECT value
+FROM outer_corr_all_null_keys
+WHERE (id NOT IN (
+  SELECT id
+  FROM inner_corr_table
+  WHERE inner_corr_table.grp = outer_corr_all_null_keys.grp
+)) IS FALSE;
+----
 
 # WHERE EXISTS in a disjunction, the motivating mark join example from
 # "The Complete Story of Joins (in HyPer)" (Neumann, Leis, Kemper; BTW 2017),

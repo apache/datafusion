@@ -796,6 +796,28 @@ impl HashJoinStream {
             }
         }
 
+        // For correlated null-aware LeftMark (`on[1..]` scope keys, hence
+        // values len > 1), record this batch's UNKNOWN candidates once, before
+        // the first chunked lookup (offset == (0, None)).
+        //
+        // Must precede the empty-build-map return below: an all-NULL-key build
+        // side has an empty full-key map but still needs UNKNOWN marks.
+        if self.null_aware
+            && self.join_type == JoinType::LeftMark
+            && state.values.len() > 1
+            && state.offset == (0, None)
+        {
+            mark_null_candidates_for_probe_batch(
+                build_side,
+                state,
+                &self.random_state,
+                self.batch_size,
+                &mut self.null_mark_hashes_buffer,
+                &mut self.null_mark_probe_indices_buffer,
+                &mut self.null_mark_build_indices_buffer,
+            )?;
+        }
+
         let is_empty = !build_side.left_data.has_matchable_build_rows();
 
         if is_empty {
@@ -811,25 +833,6 @@ impl HashJoinStream {
             self.state = HashJoinStreamState::FetchProbeBatch;
 
             return Ok(StatefulStreamResult::Continue);
-        }
-
-        // For correlated null-aware LeftMark (`on[1..]` scope keys, hence
-        // values len > 1), record this batch's UNKNOWN candidates once, before
-        // the first chunked lookup (offset == (0, None)).
-        if self.null_aware
-            && self.join_type == JoinType::LeftMark
-            && state.values.len() > 1
-            && state.offset == (0, None)
-        {
-            mark_null_candidates_for_probe_batch(
-                build_side,
-                state,
-                &self.random_state,
-                self.batch_size,
-                &mut self.null_mark_hashes_buffer,
-                &mut self.null_mark_probe_indices_buffer,
-                &mut self.null_mark_build_indices_buffer,
-            )?;
         }
 
         // get the matched by join keys indices
@@ -1168,7 +1171,6 @@ fn mark_null_candidates_for_probe_batch(
         hashes_buffer.resize(state.batch.num_rows(), 0);
         create_hashes(probe_scope_values, random_state, hashes_buffer)?;
 
-        let build_indices = &null_value_scope_map.build_indices;
         scan_scope_matches_into_bitmap(
             null_value_scope_map.map.as_ref(),
             &null_value_scope_map.scope_values,
@@ -1179,7 +1181,7 @@ fn mark_null_candidates_for_probe_batch(
             build_indices_buffer,
             // The map indexes only the NULL-valued build rows; translate its
             // positions back to row indices in the full build batch.
-            |position| build_indices.value(position as usize),
+            |position| null_value_scope_map.build_indices.value(position as usize),
             build_side.left_data.null_indices_bitmap(),
         )?;
     }
@@ -1217,10 +1219,6 @@ fn mark_null_candidates_for_probe_batch(
 /// `probe_scope_values` and sets the bit of every matched build row in
 /// `null_bitmap`, translating matched map positions through
 /// `map_position_to_build_row`.
-///
-/// `null_bitmap` is shared across probe partitions, so the lock is taken per
-/// chunk and held only for the bit writes: hashing and the hash-map lookup
-/// stay outside the critical section.
 #[expect(clippy::too_many_arguments)]
 fn scan_scope_matches_into_bitmap(
     scope_map: &dyn JoinHashMapType,
@@ -1250,6 +1248,7 @@ fn scan_scope_matches_into_bitmap(
 
         if !build_indices.is_empty() {
             let mut null_bitmap = null_bitmap.lock();
+
             for build_idx in build_indices.iter() {
                 let build_idx = build_idx
                     .expect("scope lookup should produce non-null build indices");
