@@ -489,7 +489,6 @@ impl NestedLoopJoinExec {
 
         Ok(plan)
     }
-
 }
 
 impl DisplayAs for NestedLoopJoinExec {

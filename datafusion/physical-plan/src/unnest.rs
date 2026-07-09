@@ -195,7 +195,6 @@ impl UnnestExec {
     pub fn options(&self) -> &UnnestOptions {
         &self.options
     }
-
 }
 
 impl DisplayAs for UnnestExec {

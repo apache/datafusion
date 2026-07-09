@@ -235,7 +235,6 @@ impl PartialSortExec {
             input.boundedness(),
         ))
     }
-
 }
 
 impl DisplayAs for PartialSortExec {

@@ -194,7 +194,6 @@ impl CrossJoinExec {
             &self.right.schema(),
         )
     }
-
 }
 
 /// Asynchronously collect the result of the left child

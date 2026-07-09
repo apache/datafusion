@@ -159,7 +159,6 @@ impl WindowAggExec {
                 .unwrap_or_else(Vec::new)
         }
     }
-
 }
 
 impl DisplayAs for WindowAggExec {

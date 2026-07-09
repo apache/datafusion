@@ -113,7 +113,6 @@ impl AsyncFuncExec {
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }
-
 }
 
 impl DisplayAs for AsyncFuncExec {

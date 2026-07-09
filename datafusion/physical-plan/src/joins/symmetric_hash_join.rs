@@ -360,7 +360,6 @@ impl SymmetricHashJoinExec {
         }
         Ok(false)
     }
-
 }
 
 impl DisplayAs for SymmetricHashJoinExec {

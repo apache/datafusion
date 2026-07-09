@@ -222,7 +222,6 @@ impl ProjectionExec {
         }
         Ok(alias_map)
     }
-
 }
 
 impl DisplayAs for ProjectionExec {

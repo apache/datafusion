@@ -250,7 +250,6 @@ impl BoundedWindowAggExec {
             total_byte_size: Precision::Absent,
         })
     }
-
 }
 
 impl DisplayAs for BoundedWindowAggExec {

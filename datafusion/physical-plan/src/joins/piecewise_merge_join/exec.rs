@@ -467,7 +467,6 @@ impl PiecewiseMergeJoinExec {
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         todo!()
     }
-
 }
 
 impl ExecutionPlan for PiecewiseMergeJoinExec {

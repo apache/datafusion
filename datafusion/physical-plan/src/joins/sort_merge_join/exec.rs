@@ -344,7 +344,6 @@ impl SortMergeJoinExec {
             reorder_output_after_swap(Arc::new(new_join), &left.schema(), &right.schema())
         }
     }
-
 }
 
 impl DisplayAs for SortMergeJoinExec {

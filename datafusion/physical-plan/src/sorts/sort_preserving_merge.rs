@@ -181,7 +181,6 @@ impl SortPreservingMergeExec {
         .with_evaluation_type(drive)
         .with_scheduling_type(scheduling)
     }
-
 }
 
 impl DisplayAs for SortPreservingMergeExec {

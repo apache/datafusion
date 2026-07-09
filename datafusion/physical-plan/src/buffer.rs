@@ -123,7 +123,6 @@ impl BufferExec {
     pub fn capacity(&self) -> usize {
         self.capacity
     }
-
 }
 
 impl DisplayAs for BufferExec {

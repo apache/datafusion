@@ -470,7 +470,6 @@ impl FilterExec {
             input.boundedness(),
         ))
     }
-
 }
 
 impl DisplayAs for FilterExec {
