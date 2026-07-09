@@ -486,6 +486,43 @@ to the main branch and are awaiting release in this version.</p>
 </pre></div>
 </div>
 </section>
+<section id="filescanconfig-partitioned-by-file-group-removed">
+<h3><code class="docutils literal notranslate"><span class="pre">FileScanConfig::partitioned_by_file_group</span></code> removed<a class="headerlink" href="#filescanconfig-partitioned-by-file-group-removed" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">FileScanConfig::partitioned_by_file_group</span></code> and
+<code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_partitioned_by_file_group(...)</span></code> have been removed.
+Use <code class="docutils literal notranslate"><span class="pre">FileScanConfig::output_partitioning</span></code> and
+<code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_output_partitioning(...)</span></code> instead.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who accessed <code class="docutils literal notranslate"><span class="pre">FileScanConfig::partitioned_by_file_group</span></code> directly.</p></li>
+<li><p>Users who called
+<code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_partitioned_by_file_group(true)</span></code>.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>If your file groups are organized by table partition column values, declare hash
+output partitioning over those partition columns:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_datasource</span><span class="p">::</span><span class="n">file_scan_config</span><span class="p">::{</span>
+<span class="w">    </span><span class="n">FileScanConfigBuilder</span><span class="p">,</span><span class="w"> </span><span class="n">output_partitioning_from_partition_fields</span><span class="p">,</span>
+<span class="p">};</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">output_partitioning</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">output_partitioning_from_partition_fields</span><span class="p">(</span>
+<span class="w">    </span><span class="n">source</span><span class="p">.</span><span class="n">table_schema</span><span class="p">().</span><span class="n">table_schema</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">source</span><span class="p">.</span><span class="n">table_schema</span><span class="p">().</span><span class="n">table_partition_cols</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">file_groups</span><span class="p">.</span><span class="n">len</span><span class="p">(),</span>
+<span class="p">);</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FileScanConfigBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">object_store_url</span><span class="p">,</span><span class="w"> </span><span class="n">source</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_file_groups</span><span class="p">(</span><span class="n">file_groups</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_output_partitioning</span><span class="p">(</span><span class="n">output_partitioning</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">output_partitioning_from_partition_fields</span></code> returns
+<code class="docutils literal notranslate"><span class="pre">Some(Partitioning::Hash(...))</span></code> when partition columns are present and <code class="docutils literal notranslate"><span class="pre">None</span></code>
+otherwise. If you construct the partitioning manually, pass
+<code class="docutils literal notranslate"><span class="pre">Some(Partitioning::Hash(partition_exprs,</span> <span class="pre">partition_count))</span></code> to
+<code class="docutils literal notranslate"><span class="pre">with_output_partitioning(...)</span></code>.</p>
+</section>
 <section id="user-spillfile-traits-instead-of-refcountedtempfile">
 <h3>User <code class="docutils literal notranslate"><span class="pre">SpillFile</span></code> traits instead of <a class="reference external" href="https://docs.rs/datafusion-execution/latest/datafusion_execution/disk_manager/struct.RefCountedTempFile.html"><code class="docutils literal notranslate"><span class="pre">RefCountedTempFile</span></code></a><a class="headerlink" href="#user-spillfile-traits-instead-of-refcountedtempfile" title="Link to this heading">#</a></h3>
 <p>Spill file APIs now use the <code class="docutils literal notranslate"><span class="pre">datafusion_execution::SpillFile</span></code> trait instead of
@@ -954,6 +991,7 @@ metadata and schema fingerprint match.</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-55-0-0">DataFusion 55.0.0</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframe-fill-null-now-borrows-its-arguments"><code class="docutils literal notranslate"><span class="pre">DataFrame::fill_null</span></code> now borrows its arguments</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filescanconfig-partitioned-by-file-group-removed"><code class="docutils literal notranslate"><span class="pre">FileScanConfig::partitioned_by_file_group</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#user-spillfile-traits-instead-of-refcountedtempfile">User <code class="docutils literal notranslate"><span class="pre">SpillFile</span></code> traits instead of <code class="docutils literal notranslate"><span class="pre">RefCountedTempFile</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dialect-available-replaced-by-dialect-available"><code class="docutils literal notranslate"><span class="pre">Dialect::AVAILABLE</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spill-record-batch-by-size-removed"><code class="docutils literal notranslate"><span class="pre">spill_record_batch_by_size</span></code> removed</a></li>
