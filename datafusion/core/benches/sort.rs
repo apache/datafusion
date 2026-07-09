@@ -957,7 +957,7 @@ fn with_extra_columns(batches: PartitionedBatches, n: usize) -> PartitionedBatch
         .collect::<Vec<_>>();
 
     let mut generator = DataGenerator {
-        input_size: 1 as u64,
+        input_size: 1,
         rng,
     };
 
