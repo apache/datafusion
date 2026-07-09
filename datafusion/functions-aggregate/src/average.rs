@@ -970,7 +970,11 @@ where
     }
 
     fn size(&self) -> usize {
-        self.counts.capacity() * size_of::<u64>()
-            + self.sums.capacity() * size_of::<T::Native>()
+    // Heap buffers
+    self.counts.capacity() * size_of::<u64>()
+        + self.sums.capacity() * size_of::<T::Native>()
+        // Vec struct overhead (ptr, len, cap) for each field
+        + size_of::<Vec<u64>>()
+        + size_of::<Vec<T::Native>>()
     }
 }
