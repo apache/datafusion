@@ -1034,8 +1034,7 @@ mod tests {
             let left_schema = left_child.schema();
             let right_schema = right_child.schema();
             let schema = Arc::new(
-                build_join_schema(left_schema, right_schema, &JoinType::Inner, false)
-                    .unwrap(),
+                build_join_schema(left_schema, right_schema, &JoinType::Inner).unwrap(),
             );
             Self {
                 exprs: vec![],

@@ -1883,8 +1883,8 @@ mod tests {
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
           Projection: customer.c_custkey, customer.c_name [c_custkey:Int64, c_name:Utf8]
-            Filter: __correlated_sq_1.mark OR customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, mark:Boolean]
-              LeftMark Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, mark:Boolean]
+            Filter: __correlated_sq_1.mark OR customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, mark:Boolean;N]
+              LeftMark Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, mark:Boolean;N]
                 TableScan: customer [c_custkey:Int64, c_name:Utf8]
                 SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
                   Projection: orders.o_custkey [o_custkey:Int64]
