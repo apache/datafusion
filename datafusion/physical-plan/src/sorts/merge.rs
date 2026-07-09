@@ -166,34 +166,17 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
     }
 
-    pub(crate) fn create(
-        streams: CursorStream<C>,
-        schema: SchemaRef,
-        metrics: BaselineMetrics,
-        batch_size: usize,
-        fetch: Option<usize>,
-        reservation: MemoryReservation,
-        enable_round_robin_tie_breaker: bool,
-    ) -> SendableRecordBatchStream
+    pub(crate) fn into_stream(self) -> SendableRecordBatchStream
     where
         C: 'static,
     {
-        let schema_clone = Arc::clone(&schema);
+        let schema_clone = Arc::clone(self.in_progress.schema());
 
-        let cloned_metrics = metrics.clone();
+        let cloned_metrics = self.metrics.clone();
 
+        let mut this = self;
         let stream = Gen::new(|co| async move {
-            let mut s = SortPreservingMergeStream::new(
-                streams,
-                schema,
-                metrics,
-                batch_size,
-                fetch,
-                reservation,
-                enable_round_robin_tie_breaker,
-            );
-
-            if let Err(e) = s.run(&co).await {
+            if let Err(e) = this.run(&co).await {
                 co.yield_(Err(e)).await;
             }
         });
@@ -271,12 +254,12 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 break;
             }
 
-            if self.in_progress.len() >= self.batch_size {
-                if let Some(batch) = self.emit_in_progress_batch()? {
-                    drop(timer);
-                    co.yield_(Ok(batch)).await;
-                    timer = elapsed_compute.timer();
-                }
+            if self.in_progress.len() >= self.batch_size
+                && let Some(batch) = self.emit_in_progress_batch()?
+            {
+                drop(timer);
+                co.yield_(Ok(batch)).await;
+                timer = elapsed_compute.timer();
             }
 
             // Adjust the loser tree if necessary, returning control if needed

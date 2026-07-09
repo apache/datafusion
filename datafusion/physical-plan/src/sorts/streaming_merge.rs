@@ -46,7 +46,7 @@ macro_rules! merge_helper {
     ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
         let streams =
             FieldCursorStream::<$t>::new($sort, $streams, $reservation.new_empty());
-        return Ok(SortPreservingMergeStream::create(
+        return Ok(SortPreservingMergeStream::new(
             Box::new(streams),
             $schema,
             $tracking_metrics,
@@ -54,7 +54,7 @@ macro_rules! merge_helper {
             $fetch,
             $reservation,
             $enable_round_robin_tie_breaker,
-        ));
+        ).into_stream());
     }};
 }
 
@@ -254,7 +254,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             streams,
             reservation.new_empty(),
         )?;
-        Ok(SortPreservingMergeStream::create(
+        Ok(SortPreservingMergeStream::new(
             Box::new(streams),
             schema,
             metrics,
@@ -262,6 +262,6 @@ impl<'a> StreamingMergeBuilder<'a> {
             fetch,
             reservation,
             enable_round_robin_tie_breaker,
-        ))
+        ).into_stream())
     }
 }
