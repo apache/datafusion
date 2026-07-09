@@ -9389,3 +9389,40 @@ SET datafusion.execution.target_partitions = 4;
 
 statement ok
 DROP TABLE hits_raw;
+
+# Regression: single_distinct_to_groupby must not rewrite a DISTINCT aggregate over
+# a constant. The constant GROUP BY key would be collapsed by
+# eliminate_group_by_constant into a global aggregate that emits a row on empty
+# input, giving wrong results. https://github.com/apache/datafusion/issues/23401
+statement ok
+CREATE TABLE t_const_distinct(x INT) AS VALUES (1), (2), (3);
+
+# Empty input (WHERE false): DISTINCT over a constant alongside a plain aggregate.
+query II
+SELECT MIN(DISTINCT 37), MAX(x) FROM t_const_distinct WHERE false;
+----
+NULL NULL
+
+query I
+SELECT COUNT(DISTINCT 5) FROM t_const_distinct WHERE false;
+----
+0
+
+query R
+SELECT AVG(DISTINCT -74) FROM t_const_distinct WHERE false;
+----
+NULL
+
+# Non-empty input still returns the single constant value / count.
+query II
+SELECT MIN(DISTINCT 37), MAX(x) FROM t_const_distinct;
+----
+37 3
+
+query I
+SELECT COUNT(DISTINCT 5) FROM t_const_distinct;
+----
+1
+
+statement ok
+DROP TABLE t_const_distinct;
