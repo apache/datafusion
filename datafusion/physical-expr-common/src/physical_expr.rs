@@ -519,10 +519,10 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
 /// `datafusion-proto`, which is what lets `physical-expr-common` stay free
 /// of `datafusion-proto` as a dep.
 ///
-/// More specialized helpers (e.g. encoding UDFs/UDAFs/UDWFs through the
-/// extension codec) can be added to the context as expressions migrate;
-/// today they're not required because the encoder forwards to the existing
-/// codec via the proto converter.
+/// More specialized helpers can be added to the context as expressions
+/// migrate; [`proto_encode::PhysicalExprEncodeCtx::encode_udf`] (routing
+/// scalar UDFs through the extension codec) is the first such helper —
+/// UDAFs/UDWFs will follow the same shape when their expressions migrate.
 #[cfg(feature = "proto")]
 pub mod proto_encode {
     use std::sync::Arc;
@@ -574,6 +574,23 @@ pub mod proto_encode {
                 .map(|expr| self.encode_child(expr))
                 .collect()
         }
+
+        /// Encode a scalar UDF through the registered extension codec,
+        /// returning the codec's opaque payload for the proto
+        /// `fun_definition` field — `None` when the codec wrote nothing
+        /// (built-in functions that decode by name alone).
+        ///
+        /// `udf` is type-erased: the concrete type must be
+        /// `datafusion_expr::ScalarUDF`. It cannot be named here because
+        /// `datafusion-expr` depends on this crate, so a typed signature
+        /// would create a dependency cycle; the encoder in
+        /// `datafusion-proto` downcasts and errors on any other type.
+        pub fn encode_udf(
+            &self,
+            udf: &(dyn std::any::Any + Send + Sync),
+        ) -> Result<Option<Vec<u8>>> {
+            self.encoder.encode_udf(udf)
+        }
     }
 
     /// Internal dispatch trait. Implementors live in `datafusion-proto` and
@@ -583,6 +600,17 @@ pub mod proto_encode {
     pub trait PhysicalExprEncode {
         /// Encode an expression to a protobuf node.
         fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode>;
+
+        /// Encode a scalar UDF (type-erased `datafusion_expr::ScalarUDF`;
+        /// see [`PhysicalExprEncodeCtx::encode_udf`]) into its opaque
+        /// `fun_definition` payload. The default errors so encoders that
+        /// never see UDF expressions need not implement it.
+        fn encode_udf(
+            &self,
+            _udf: &(dyn std::any::Any + Send + Sync),
+        ) -> Result<Option<Vec<u8>>> {
+            datafusion_common::internal_err!("this encoder does not support scalar UDFs")
+        }
     }
 }
 
@@ -733,6 +761,29 @@ pub mod proto_decode {
         {
             nodes.into_iter().map(|node| self.decode(node)).collect()
         }
+
+        /// Resolve a scalar UDF by name, preferring the opaque
+        /// `fun_definition` payload written by the encode-side extension
+        /// codec and falling back to the session's function registry.
+        ///
+        /// The returned value is type-erased: the concrete type is
+        /// `Arc<datafusion_expr::ScalarUDF>`. It cannot be named here
+        /// because `datafusion-expr` depends on this crate, so a typed
+        /// signature would create a dependency cycle; callers downcast with
+        /// [`Arc::downcast`].
+        pub fn decode_udf(
+            &self,
+            name: &str,
+            fun_definition: Option<&[u8]>,
+        ) -> Result<Arc<dyn std::any::Any + Send + Sync>> {
+            self.decoder.decode_udf(name, fun_definition)
+        }
+
+        /// Session configuration options for constructing expressions that
+        /// carry them (e.g. `ScalarFunctionExpr`).
+        pub fn config_options(&self) -> Arc<datafusion_common::config::ConfigOptions> {
+            self.decoder.config_options()
+        }
     }
 
     /// Unwrap a required non-expression proto field.
@@ -774,6 +825,26 @@ pub mod proto_decode {
             node: &PhysicalExprNode,
             schema: &Schema,
         ) -> Result<Arc<dyn PhysicalExpr>>;
+
+        /// Resolve a scalar UDF by name (type-erased
+        /// `Arc<datafusion_expr::ScalarUDF>`; see
+        /// [`PhysicalExprDecodeCtx::decode_udf`]). The default errors so
+        /// decoders that never see UDF expressions need not implement it.
+        fn decode_udf(
+            &self,
+            name: &str,
+            _fun_definition: Option<&[u8]>,
+        ) -> Result<Arc<dyn std::any::Any + Send + Sync>> {
+            datafusion_common::internal_err!(
+                "this decoder does not support scalar UDFs (attempted to decode '{name}')"
+            )
+        }
+
+        /// Session configuration options handed to decoded expressions. The
+        /// default returns fresh defaults for decoders without a session.
+        fn config_options(&self) -> Arc<datafusion_common::config::ConfigOptions> {
+            Arc::new(datafusion_common::config::ConfigOptions::default())
+        }
     }
 }
 

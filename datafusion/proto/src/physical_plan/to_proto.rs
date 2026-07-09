@@ -30,8 +30,7 @@ use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
-use datafusion_expr::WindowFrame;
-use datafusion_physical_expr::ScalarFunctionExpr;
+use datafusion_expr::{ScalarUDF, WindowFrame};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -269,6 +268,20 @@ impl datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprE
         self.proto_converter
             .physical_expr_to_proto(expr, self.codec)
     }
+
+    fn encode_udf(
+        &self,
+        udf: &(dyn std::any::Any + Send + Sync),
+    ) -> Result<Option<Vec<u8>>> {
+        // Type-erased at the trait to avoid a dependency cycle (see the
+        // trait docs); the concrete type is always `ScalarUDF`.
+        let udf = udf
+            .downcast_ref::<ScalarUDF>()
+            .ok_or_else(|| internal_datafusion_err!("encode_udf expects a ScalarUDF"))?;
+        let mut buf = Vec::new();
+        self.codec.try_encode_udf(udf, &mut buf)?;
+        Ok((!buf.is_empty()).then_some(buf))
+    }
 }
 
 /// Serialize a `PhysicalExpr` to default protobuf representation.
@@ -299,26 +312,7 @@ pub fn serialize_physical_expr_with_converter(
         return Ok(node);
     }
 
-    if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
-        let mut buf = Vec::new();
-        codec.try_encode_udf(expr.fun(), &mut buf)?;
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
-                protobuf::PhysicalScalarUdfNode {
-                    name: expr.name().to_string(),
-                    args: serialize_physical_exprs(expr.args(), codec, proto_converter)?,
-                    fun_definition: (!buf.is_empty()).then_some(buf),
-                    return_type: Some(expr.return_type().try_into()?),
-                    nullable: expr.nullable(),
-                    return_field_name: expr
-                        .return_field(&Schema::empty())?
-                        .name()
-                        .to_string(),
-                },
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<ScalarSubqueryExpr>() {
+    if let Some(expr) = expr.downcast_ref::<ScalarSubqueryExpr>() {
         Ok(protobuf::PhysicalExprNode {
             expr_id,
             expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarSubquery(

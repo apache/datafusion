@@ -138,4 +138,13 @@ impl PhysicalExprEncode for StubEncoder {
         }
         Ok(column_node("child"))
     }
+
+    fn encode_udf(
+        &self,
+        _udf: &(dyn std::any::Any + Send + Sync),
+    ) -> Result<Option<Vec<u8>>> {
+        // Behaves like a codec that writes nothing (built-in functions
+        // decodable by name alone).
+        Ok(None)
+    }
 }

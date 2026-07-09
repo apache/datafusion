@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::compute::SortOptions;
-use arrow::datatypes::{Field, Schema};
+use arrow::datatypes::Schema;
 use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
 use datafusion_common::{
@@ -304,36 +304,7 @@ pub fn parse_physical_expr_with_converter(
         ExprType::Case(_) => CaseExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Cast(_) => CastExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::TryCast(_) => TryCastExpr::try_from_proto(proto, &decode_ctx)?,
-        ExprType::ScalarUdf(e) => {
-            let udf = match &e.fun_definition {
-                Some(buf) => ctx.codec().try_decode_udf(&e.name, buf)?,
-                None => ctx
-                    .task_ctx()
-                    .udf(e.name.as_str())
-                    .or_else(|_| ctx.codec().try_decode_udf(&e.name, &[]))?,
-            };
-            let scalar_fun_def = Arc::clone(&udf);
-
-            let args = parse_physical_exprs(&e.args, ctx, input_schema, proto_converter)?;
-
-            let config_options = Arc::clone(ctx.task_ctx().session_config().options());
-
-            Arc::new(
-                ScalarFunctionExpr::new(
-                    e.name.as_str(),
-                    scalar_fun_def,
-                    args,
-                    Field::new(
-                        &e.return_field_name,
-                        convert_required!(e.return_type)?,
-                        true,
-                    )
-                    .into(),
-                    config_options,
-                )
-                .with_nullable(e.nullable),
-            )
-        }
+        ExprType::ScalarUdf(_) => ScalarFunctionExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::LikeExpr(_) => LikeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::HashExpr(_) => HashExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::ScalarSubquery(sq) => {
@@ -783,6 +754,28 @@ impl datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprD
     ) -> Result<Arc<dyn PhysicalExpr>> {
         self.proto_converter
             .proto_to_physical_expr(node, schema, self.ctx)
+    }
+
+    fn decode_udf(
+        &self,
+        name: &str,
+        fun_definition: Option<&[u8]>,
+    ) -> Result<Arc<dyn std::any::Any + Send + Sync>> {
+        // Returned type-erased to avoid a dependency cycle (see the trait
+        // docs); the concrete type is always `Arc<ScalarUDF>`.
+        let udf = match fun_definition {
+            Some(buf) => self.ctx.codec().try_decode_udf(name, buf)?,
+            None => self
+                .ctx
+                .task_ctx()
+                .udf(name)
+                .or_else(|_| self.ctx.codec().try_decode_udf(name, &[]))?,
+        };
+        Ok(udf)
+    }
+
+    fn config_options(&self) -> Arc<datafusion_common::config::ConfigOptions> {
+        Arc::clone(self.ctx.task_ctx().session_config().options())
     }
 }
 
