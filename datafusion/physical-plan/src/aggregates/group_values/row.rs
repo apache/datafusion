@@ -21,7 +21,7 @@ use arrow::array::{
     downcast_run_end_index,
 };
 use arrow::compute::cast;
-use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::Result;
@@ -263,11 +263,11 @@ impl GroupValues for GroupValuesRows {
             }
         };
 
-        // Re-encode dictionary group keys using the current key type. If the
-        // emitted cardinality no longer fits, grow to the next key width and
+        // Re-encode top-level dictionary group keys using the current key type.
+        // If an emitted array no longer fits, grow to the next key width and
         // retain that promoted type for all later emissions.
         for (field, array) in self.schema.fields().iter().zip(&mut output) {
-            *array = dictionary_encode_if_necessary(array, field.data_type())?;
+            *array = dictionary_encode_with_promotion(array, field.data_type())?;
         }
         self.schema = schema_with_group_values(&self.schema, &output);
 
@@ -308,6 +308,29 @@ fn materialized_row_schema(schema: &SchemaRef) -> SchemaRef {
     ))
 }
 
+fn dictionary_encode_with_promotion(
+    array: &ArrayRef,
+    expected: &DataType,
+) -> Result<ArrayRef> {
+    if !matches!(expected, DataType::Dictionary(_, _)) {
+        return dictionary_encode_if_necessary(array, expected);
+    }
+
+    let mut target = expected.clone();
+    loop {
+        match cast(array.as_ref(), &target) {
+            Ok(array) => return Ok(array),
+            Err(ArrowError::DictionaryKeyOverflowError) => {
+                let Some(promoted) = promote_dictionary_type(&target) else {
+                    return Err(ArrowError::DictionaryKeyOverflowError.into());
+                };
+                target = promoted;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
 fn dictionary_encode_if_necessary(
     array: &ArrayRef,
     expected: &DataType,
@@ -322,49 +345,27 @@ fn dictionary_encode_if_necessary(
                     dictionary_encode_if_necessary(column, expected_field.data_type())
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let fields = expected_fields
-                .iter()
-                .zip(&arrays)
-                .map(|(field, array)| field_with_array_type(field, array))
-                .collect::<Vec<_>>()
-                .into();
 
             Ok(Arc::new(StructArray::try_new(
-                fields,
+                expected_fields.clone(),
                 arrays,
                 struct_array.nulls().cloned(),
             )?))
         }
         (DataType::List(expected_field), &DataType::List(_)) => {
             let list = array.as_any().downcast_ref::<ListArray>().unwrap();
-            let values = dictionary_encode_if_necessary(
-                list.values(),
-                expected_field.data_type(),
-            )?;
-            let field = field_with_array_type(expected_field, &values);
 
             Ok(Arc::new(ListArray::try_new(
-                field,
+                Arc::<arrow::datatypes::Field>::clone(expected_field),
                 list.offsets().clone(),
-                values,
+                dictionary_encode_if_necessary(
+                    list.values(),
+                    expected_field.data_type(),
+                )?,
                 list.nulls().cloned(),
             )?))
         }
-        (DataType::Dictionary(_, _), _) => {
-            let mut target = expected.clone();
-            loop {
-                match cast(array.as_ref(), &target) {
-                    Ok(array) => return Ok(array),
-                    Err(ArrowError::DictionaryKeyOverflowError) => {
-                        let Some(promoted) = promote_dictionary_type(&target) else {
-                            return Err(ArrowError::DictionaryKeyOverflowError.into());
-                        };
-                        target = promoted;
-                    }
-                    Err(error) => return Err(error.into()),
-                }
-            }
-        }
+        (DataType::Dictionary(_, _), _) => Ok(cast(array.as_ref(), expected)?),
         (
             DataType::RunEndEncoded(run_ends_field, expected_values_field),
             &DataType::RunEndEncoded(_, _),
@@ -393,19 +394,6 @@ fn dictionary_encode_if_necessary(
         }
         (DataType::RunEndEncoded(_, _), _) => Ok(cast(array.as_ref(), expected)?),
         (_, _) => Ok(Arc::<dyn Array>::clone(array)),
-    }
-}
-
-fn field_with_array_type(field: &FieldRef, array: &ArrayRef) -> FieldRef {
-    if field.data_type() == array.data_type() {
-        Arc::clone(field)
-    } else {
-        Arc::new(
-            field
-                .as_ref()
-                .clone()
-                .with_data_type(array.data_type().clone()),
-        )
     }
 }
 
