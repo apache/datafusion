@@ -944,10 +944,14 @@ config_namespace! {
         /// conjunct's selectivity and evaluation cost on the rows that reach it
         /// and runs the conjuncts that discard the most rows per unit of CPU
         /// time first, so cheap-and-selective predicates gate expensive ones.
-        /// Reordering never changes query results (only the evaluation order of
-        /// a conjunction) but can change observable side effects of fallible
-        /// predicates, so it is off by default. Predicates containing volatile
-        /// expressions are never reordered.
+        /// This never changes query results, but it is off by default because
+        /// it can change observable side effects of fallible predicates (even
+        /// when no reorder is adopted): while measuring, and after a reorder,
+        /// conjuncts are evaluated only on the rows that survived the conjuncts
+        /// before them, so an error the fused predicate would have raised on an
+        /// already-filtered row (e.g. `b <> 0 AND 1/b > 2` evaluating `1/b` on
+        /// every row) may not occur. Predicates containing volatile expressions
+        /// are never reordered.
         pub adaptive_filter_reordering: bool, default = false
 
         /// Size (bytes) of data buffer DataFusion uses when writing output files.

@@ -101,7 +101,10 @@ pub struct FilterExec {
     fetch: Option<usize>,
     /// Measurements shared by all partition streams, used by adaptive conjunct
     /// reordering (see [`AdaptiveConjunction`]) so the streams learn as one.
-    /// Fresh per plan node; never affects the plan.
+    /// Fresh per plan node; never affects the plan. `Clone` deliberately shares
+    /// it (the clone filters the same predicate over the same input, so pooled
+    /// learning still applies); [`reset_state`](ExecutionPlan::reset_state)
+    /// and predicate rewrites replace it with a fresh instance.
     adaptive_stats: Arc<AdaptiveFilterShared>,
 }
 
