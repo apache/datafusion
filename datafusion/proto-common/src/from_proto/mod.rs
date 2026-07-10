@@ -40,7 +40,8 @@ use datafusion_common::{
     arrow_datafusion_err,
     config::{
         CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions,
-        ParquetColumnOptions, ParquetOptions, TableParquetOptions,
+        ParquetColumnOptions, ParquetOptions, ParquetPushdownFilterMode,
+        TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
     parsers::CompressionTypeVariant,
@@ -964,6 +965,26 @@ impl From<CompressionTypeVariant> for protobuf::CompressionTypeVariant {
     }
 }
 
+impl From<protobuf::parquet_options::PushdownFilterMode> for ParquetPushdownFilterMode {
+    fn from(value: protobuf::parquet_options::PushdownFilterMode) -> Self {
+        match value {
+            protobuf::parquet_options::PushdownFilterMode::Auto => Self::Auto,
+            protobuf::parquet_options::PushdownFilterMode::Always => Self::Always,
+            protobuf::parquet_options::PushdownFilterMode::Heuristic => Self::Heuristic,
+        }
+    }
+}
+
+impl From<ParquetPushdownFilterMode> for protobuf::parquet_options::PushdownFilterMode {
+    fn from(value: ParquetPushdownFilterMode) -> Self {
+        match value {
+            ParquetPushdownFilterMode::Auto => Self::Auto,
+            ParquetPushdownFilterMode::Always => Self::Always,
+            ParquetPushdownFilterMode::Heuristic => Self::Heuristic,
+        }
+    }
+}
+
 impl From<protobuf::CsvQuoteStyle> for datafusion_common::parsers::CsvQuoteStyle {
     fn from(value: protobuf::CsvQuoteStyle) -> Self {
         match value {
@@ -1133,7 +1154,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             max_row_group_bytes: value.max_row_group_bytes_opt.and_then(|opt| match opt {
                 protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v) => MaxRowGroupBytes::try_new(v as usize).ok(),
             }),
-            pushdown_filter_narrow_projection_gate: value.pushdown_filter_narrow_projection_gate,
+            pushdown_filter_mode: value.pushdown_filter_mode().into(),
             content_defined_chunking: value.content_defined_chunking.map(ParquetCdcOptions::from).unwrap_or_default(),
         })
     }

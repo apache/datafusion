@@ -17,11 +17,11 @@
 
 # Test push down filter
 
-# Test file exercises the pushdown path directly. Disable the
-# narrow-projection gate so the expected plans (FilterExec absorbed
+# Test file exercises the pushdown path directly. Force unconditional
+# pushdown (pushdown_filter_mode = always) so the expected plans (FilterExec absorbed
 # into DataSourceExec) are reproduced regardless of projection width.
 statement ok
-set datafusion.execution.parquet.pushdown_filter_narrow_projection_gate = false;
+set datafusion.execution.parquet.pushdown_filter_mode = always;
 
 # Regression test for https://github.com/apache/datafusion/issues/17188
 query I
@@ -595,4 +595,4 @@ statement ok
 drop table t2;
 
 statement ok
-RESET datafusion.execution.parquet.pushdown_filter_narrow_projection_gate;
+RESET datafusion.execution.parquet.pushdown_filter_mode;

@@ -583,6 +583,72 @@ impl Display for SpillCompression {
     }
 }
 
+/// Strategy for filter pushdown in Parquet scan when
+/// `datafusion.execution.parquet.pushdown_filters`
+/// (*[`ParquetOptions::pushdown_filters`]) is enabled
+///
+/// Different strategies are better depending on how data is stored in the
+/// Parquet files and what rows predicates select (e.g. their selectivity and
+/// how many contiguous rows they select).
+///
+/// Note: This option has no effect unless `pushdown_filters` is also enabled.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ParquetPushdownFilterMode {
+    /// Let DataFusion pick the best available strategy.
+    ///
+    /// Note: currently  identical to [`Self::Heuristic`], but as we implement
+    /// more sophisticated pushdown strategies (e.g. runtime-adaptive placement
+    /// in <https://github.com/apache/datafusion/issues/22883>), this may change.
+    #[default]
+    Auto,
+    /// Always push filters into the scan.
+    Always,
+    /// Use plan-time heuristics to decide which filters to push.
+    ///
+    /// The current heuristic skips pushdown when the projection contains fewer
+    /// than 3 non-filter columns, which avoid narrow-projection queries such as
+    /// `SELECT col2 FROM t WHERE col1 <> ''`, where `RowFilter` overhead
+    /// tends to dominate the decode it would save.
+    Heuristic,
+}
+
+impl FromStr for ParquetPushdownFilterMode {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "auto" | "" => Ok(Self::Auto),
+            "always" => Ok(Self::Always),
+            "heuristic" => Ok(Self::Heuristic),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid pushdown filter mode: {other}. Expected one of: auto, always, heuristic"
+            ))),
+        }
+    }
+}
+
+impl ConfigField for ParquetPushdownFilterMode {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = ParquetPushdownFilterMode::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for ParquetPushdownFilterMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Auto => "auto",
+            Self::Always => "always",
+            Self::Heuristic => "heuristic",
+        };
+        write!(f, "{str}")
+    }
+}
+
 /// A `usize` configuration value that rejects zero when set from strings.
 ///
 /// Use this for options where zero is never a meaningful runtime value.
@@ -1137,14 +1203,10 @@ config_namespace! {
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
         pub pushdown_filters: bool, default = false
 
-        /// (reading) When `pushdown_filters` is enabled, decline to push filters
-        /// into the Parquet scan for queries whose projection contains fewer than
-        /// 3 columns not referenced by the filter. RowFilter has a fixed per-row
-        /// overhead that only pays for itself when there is enough wide-column
-        /// decode to skip; without this gate, narrow-projection queries (e.g.
-        /// `SELECT col1 FROM t WHERE col1 <> ''`) regress. Set to `false` to
-        /// force unconditional pushdown (the pre-existing behavior).
-        pub pushdown_filter_narrow_projection_gate: bool, default = true
+        /// (reading) When `pushdown_filters` is enabled, determines how DataFusion
+        /// pushes each filter into the Parquet scan. Options are `auto` (the default)
+        ///  `always`, and `heurstic` (plan time heuristic).
+        pub pushdown_filter_mode: ParquetPushdownFilterMode, default = ParquetPushdownFilterMode::Auto
 
         /// (reading) If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,

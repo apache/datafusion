@@ -32,6 +32,7 @@ use arrow_schema::{DataType, Field};
 use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
+use datafusion_common::config::ParquetPushdownFilterMode;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::morsel::Morselizer;
@@ -849,10 +850,10 @@ impl FileSource for ParquetSource {
         // and pushdown regresses. Decline pushdown for those scans; keep
         // it for wider projections where the fast-path pays.
         //
-        // Kept intentionally simple: a plan-time column-count check
-        // gated on a single boolean opt-out. A future
-        // adaptive-placement pass ([#22883]) can supersede this with a
-        // runtime cost model.
+        // Kept intentionally simple: a plan-time column-count check,
+        // used when `pushdown_filter_mode` is `auto` or `heuristic`. A
+        // future adaptive-placement pass ([#22883]) can supersede this
+        // with a runtime cost model behind the same `auto` mode.
         //
         // When declined: the filter stays above the scan in a
         // `FilterExec` (correctness preserved) and the predicate is
@@ -860,7 +861,7 @@ impl FileSource for ParquetSource {
         // page-index pruning.
         //
         // Users who want the pre-existing "always push" behavior can
-        // set `pushdown_filter_narrow_projection_gate = false`.
+        // set `pushdown_filter_mode = always`.
         //
         // [#22883]: https://github.com/apache/datafusion/issues/22883
         const PUSHDOWN_MIN_NON_FILTER_COLS: usize = 3;
@@ -885,10 +886,8 @@ impl FileSource for ParquetSource {
             existing_predicate_has_dynamic || incoming_filters_have_dynamic;
         if pushdown_filters
             && !has_dynamic_filter
-            && config
-                .execution
-                .parquet
-                .pushdown_filter_narrow_projection_gate
+            && config.execution.parquet.pushdown_filter_mode
+                != ParquetPushdownFilterMode::Always
         {
             // `TableSchema` layout is `[file, partition, virtual]`; only
             // file columns are actually decoded from parquet, so partition
@@ -1966,15 +1965,12 @@ mod tests {
         .expect("file_row_index should rewrite to the row_number virtual column");
 
         let mut config = ConfigOptions::default();
-        // Disable the narrow-projection gate so this test can exercise the
+        // Force unconditional pushdown so this test can exercise the
         // virtual-column rejection path independently. The scan projection
         // here has 0 non-filter file columns, which would otherwise trip
-        // the gate and mark every filter as `PushedDown::No` regardless
-        // of virtual-column content.
-        config
-            .execution
-            .parquet
-            .pushdown_filter_narrow_projection_gate = false;
+        // the narrow-projection heuristic and mark every filter as
+        // `PushedDown::No` regardless of virtual-column content.
+        config.execution.parquet.pushdown_filter_mode = ParquetPushdownFilterMode::Always;
         let prop = source
             .try_pushdown_filters(vec![pushable, virtual_only, mixed, row_index], &config)
             .expect("try_pushdown_filters must not error");

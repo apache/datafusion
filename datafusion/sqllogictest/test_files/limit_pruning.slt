@@ -18,11 +18,11 @@
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;
 
-# Test file exercises the pushdown path directly. Disable the
-# narrow-projection gate so the expected plans (FilterExec absorbed
+# Test file exercises the pushdown path directly. Force unconditional
+# pushdown (pushdown_filter_mode = always) so the expected plans (FilterExec absorbed
 # into DataSourceExec) are reproduced.
 statement ok
-set datafusion.execution.parquet.pushdown_filter_narrow_projection_gate = false;
+set datafusion.execution.parquet.pushdown_filter_mode = always;
 
 
 statement ok
@@ -139,4 +139,4 @@ statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
 
 statement ok
-RESET datafusion.execution.parquet.pushdown_filter_narrow_projection_gate;
+RESET datafusion.execution.parquet.pushdown_filter_mode;

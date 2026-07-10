@@ -631,7 +631,16 @@ message ParquetOptions {
     uint64 max_row_group_bytes = 37;
   }
 
-  bool pushdown_filter_narrow_projection_gate = 38;
+  // Strategy for deciding whether to push filters into the parquet scan when
+  // `pushdown_filters` is enabled. Nested so its `ALWAYS` value does not
+  // collide with other file-level enum values.
+  enum PushdownFilterMode {
+    AUTO = 0;
+    ALWAYS = 1;
+    HEURISTIC = 2;
+  }
+
+  PushdownFilterMode pushdown_filter_mode = 38;
 
   ParquetCdcOptions content_defined_chunking = 35;
 
