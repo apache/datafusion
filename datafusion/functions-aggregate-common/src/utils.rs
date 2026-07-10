@@ -142,8 +142,11 @@ impl<T: DecimalType> DecimalAverager<T> {
                 target_scale,
             })
         } else {
-            // can't convert the lit decimal to the returned data type
-            exec_err!("Arithmetic Overflow in AvgAccumulator")
+            // rescaling the sum would have to drop digits to reach the output
+            exec_err!(
+                "Cannot compute avg: output scale {target_scale} is smaller than \
+                 the scale of the sum {sum_scale}"
+            )
         }
     }
 
@@ -155,23 +158,32 @@ impl<T: DecimalType> DecimalAverager<T> {
     /// * count: total count, stored as a i128/i256 (*NOT* a Decimal128/Decimal256 value)
     #[inline(always)]
     pub fn avg(&self, sum: T::Native, count: T::Native) -> Result<T::Native> {
-        if let Ok(value) = sum.mul_checked(self.target_mul.div_wrapping(self.sum_mul)) {
-            let new_value = value.div_wrapping(count);
-
-            let validate = T::validate_decimal_precision(
-                new_value,
-                self.target_precision,
-                self.target_scale,
+        let Ok(value) = sum.mul_checked(self.target_mul.div_wrapping(self.sum_mul))
+        else {
+            return exec_err!(
+                "Arithmetic overflow in avg: rescaling the sum to scale {} \
+                 exceeds the range of the sum type",
+                self.target_scale
             );
+        };
 
-            if validate.is_ok() {
-                Ok(new_value)
-            } else {
-                exec_err!("Arithmetic Overflow in AvgAccumulator")
-            }
+        let new_value = value.div_wrapping(count);
+
+        let validate = T::validate_decimal_precision(
+            new_value,
+            self.target_precision,
+            self.target_scale,
+        );
+
+        if validate.is_ok() {
+            Ok(new_value)
         } else {
-            // can't convert the lit decimal to the returned data type
-            exec_err!("Arithmetic Overflow in AvgAccumulator")
+            exec_err!(
+                "Arithmetic overflow in avg: the average does not fit the output type \
+                 with precision {} and scale {}",
+                self.target_precision,
+                self.target_scale
+            )
         }
     }
 }
