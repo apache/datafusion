@@ -220,7 +220,7 @@ e true false NULL
 statement ok
 reset datafusion.execution.batch_size;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;
@@ -628,6 +628,44 @@ FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 query II
 SELECT c2,
        approx_distinct(c3) FILTER (WHERE c11 > 0.5)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 10
+2 6
+3 3
+4 3
+5 6
+
+# Test variance and stddev with nullable fields and filters
+query IRRR
+SELECT c2,
+       var_samp(c11) FILTER (WHERE c3 > 0),
+       stddev_samp(c11) FILTER (WHERE c3 > 0),
+       stddev_pop(c11) FILTER (WHERE c3 > 0)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 0.085786074994 0.29289259976 0.276141791266
+2 0.070769227104 0.266024861816 0.24884347232
+3 0.087515365779 0.295829960922 0.270054571305
+4 0.038697229167 0.196716113134 0.182123731489
+5 0.081817232141 0.286037116719 0.23354832782
+
+# Test corr with nullable fields and filters
+query IR
+SELECT c2,
+       corr(c3, c11) FILTER (WHERE c5 > 0)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 -0.38515658251
+2 0.414489249329
+3 -0.796447131429
+4 -0.938568248748
+5 -0.051058146743
+
+# Test count distinct with nullable fields and filters
+query II
+SELECT c2,
+       count(distinct c3) FILTER (WHERE c11 > 0.5)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
 1 10
