@@ -239,15 +239,21 @@ pub struct LambdaArgument {
     /// For example, for `array_transform([2], v -> -v)`,
     /// this will be `vec![Field::new("v", DataType::Int32, true)]`
     params: Vec<FieldRef>,
-    /// Indices into `params` of the parameters that are actually referenced
-    /// by `body` (taking nested-lambda shadowing into account).
+    /// Indices into [`Self::params`] of the parameters that are actually
+    /// referenced by [`Self::body`] (taking nested-lambda shadowing into
+    /// account), in the original declaration order of `params`.
     ///
-    /// `None` means "no information, assume every declared parameter is used"
-    /// — that is the backwards-compatible behavior of [`Self::new`]. When set,
-    /// [`Self::evaluate`] skips evaluating and pushing the closures for the
-    /// parameters not listed here, so unused declared parameters do not shift
-    /// the columns the body's compressed indices expect.
-    used_param_indices: Option<Vec<usize>>,
+    /// [`Self::evaluate`] only evaluates and pushes the closures whose
+    /// corresponding parameter index appears here, so unused declared
+    /// parameters leave no slot in the merged batch and the body's compressed
+    /// column indices line up directly with what the evaluator built.
+    ///
+    /// Callers who already have a [`LambdaExpr`] should read the used names
+    /// from `LambdaExpr::used_params()` and pass them to [`Self::new`];
+    /// [`Self::new`] handles the name → index translation.
+    ///
+    /// [`LambdaExpr`]: https://docs.rs/datafusion-physical-expr/latest/datafusion_physical_expr/expressions/struct.LambdaExpr.html
+    used_param_indices: Vec<usize>,
     /// The body of the lambda
     ///
     /// For example, for `array_transform([2], v -> -v)`,
@@ -266,49 +272,34 @@ pub struct LambdaArgument {
 }
 
 impl LambdaArgument {
-    /// Build a [`LambdaArgument`] that treats every declared parameter as
-    /// used. This is the backwards-compatible behavior. Prefer
-    /// [`Self::new_with_used_params`] when the caller knows which subset of
-    /// the lambda's parameters the body actually references — otherwise the
-    /// merged batch will still contain columns for unused parameters.
+    /// Build a [`LambdaArgument`] for a lambda whose body references the
+    /// subset of `params` named in `used_params`.
+    ///
+    /// [`Self::evaluate`] only materialises the closures whose parameter name
+    /// appears in `used_params`, preserving the original declaration order of
+    /// `params`. Unused declared parameters therefore leave no slot in the
+    /// merged batch, so the body's compressed column indices line up directly
+    /// with the columns the evaluator built.
+    ///
+    /// Callers with a `LambdaExpr` in hand should pass `lambda.used_params()`;
+    /// that method already computes the exact set required here (with
+    /// nested-lambda shadow tracking).
     pub fn new(
         params: Vec<FieldRef>,
         body: Arc<dyn PhysicalExpr>,
         captures: Option<RecordBatch>,
+        used_params: &HashSet<String>,
     ) -> Self {
-        Self::new_with_used_params(params, body, captures, None)
-    }
+        let used_param_indices: Vec<usize> = params
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| used_params.contains(f.name()))
+            .map(|(i, _)| i)
+            .collect();
 
-    /// Build a [`LambdaArgument`] knowing which subset of `params` (by name)
-    /// the lambda body actually references.
-    ///
-    /// When `used_params` is `Some(set)`, [`Self::evaluate`] only evaluates
-    /// and pushes the closures whose corresponding parameter name is in
-    /// `set`, in the original declaration order of `params`. Unused declared
-    /// parameters leave no slot in the merged batch, so the body's compressed
-    /// column indices line up directly. When `used_params` is `None`,
-    /// behavior is identical to [`Self::new`].
-    pub fn new_with_used_params(
-        params: Vec<FieldRef>,
-        body: Arc<dyn PhysicalExpr>,
-        captures: Option<RecordBatch>,
-        used_params: Option<HashSet<String>>,
-    ) -> Self {
-        let used_param_indices = used_params.map(|set| {
-            params
-                .iter()
-                .enumerate()
-                .filter(|(_, f)| set.contains(f.name()))
-                .map(|(i, _)| i)
-                .collect::<Vec<_>>()
-        });
+        let effective_params = used_param_indices.iter().map(|i| Arc::clone(&params[*i]));
 
-        let effective_params: Vec<FieldRef> = match &used_param_indices {
-            Some(indices) => indices.iter().map(|i| Arc::clone(&params[*i])).collect(),
-            None => params.clone(),
-        };
-
-        let fields = match &captures {
+        let fields: Vec<FieldRef> = match &captures {
             Some(batch) => batch
                 .schema_ref()
                 .fields()
@@ -316,7 +307,7 @@ impl LambdaArgument {
                 .cloned()
                 .chain(effective_params)
                 .collect(),
-            None => effective_params,
+            None => effective_params.collect(),
         };
 
         let schema = Arc::new(Schema::new(fields));
@@ -391,7 +382,7 @@ impl LambdaArgument {
             spread_captures.as_ref(),
             Arc::clone(&self.schema),
             &self.params,
-            self.used_param_indices.as_deref(),
+            &self.used_param_indices,
             args,
         )?;
 
@@ -403,7 +394,7 @@ fn merge_captures_with_variables(
     captures: Option<&RecordBatch>,
     schema: SchemaRef,
     params: &[FieldRef],
-    used_param_indices: Option<&[usize]>,
+    used_param_indices: &[usize],
     variables: &[&dyn Fn() -> Result<ArrayRef>],
 ) -> Result<RecordBatch> {
     if variables.len() < params.len() {
@@ -415,17 +406,8 @@ fn merge_captures_with_variables(
     }
 
     let push_param_arrays = |columns: &mut Vec<ArrayRef>| -> Result<()> {
-        match used_param_indices {
-            Some(indices) => {
-                for &i in indices {
-                    columns.push(variables[i]()?);
-                }
-            }
-            None => {
-                for arg in &variables[..params.len()] {
-                    columns.push(arg()?);
-                }
-            }
+        for &i in used_param_indices {
+            columns.push(variables[i]()?);
         }
         Ok(())
     };
@@ -437,11 +419,7 @@ fn merge_captures_with_variables(
             columns
         }
         None => {
-            let mut columns = Vec::with_capacity(
-                used_param_indices
-                    .map(<[usize]>::len)
-                    .unwrap_or(params.len()),
-            );
+            let mut columns = Vec::with_capacity(used_param_indices.len());
             push_param_arrays(&mut columns)?;
             columns
         }
