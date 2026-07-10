@@ -30,7 +30,7 @@ use datafusion::{
 };
 use datafusion_cli::{
     cli_context::CliSessionContext,
-    entry_point::{CliError, CliSession, CliArgs},
+    entry_point::{CliArgs, CliError, CliSession},
     exec::exec_from_repl,
 };
 use object_store::ObjectStore;
@@ -81,7 +81,9 @@ pub async fn main() -> Result<(), CliError> {
         ctx,
         args: _,
         mut print_options,
-    } = CliSession::try_from_args(CliArgs::try_parse()?)?;
+    } = CliSession::builder()
+        .with_args(CliArgs::try_parse()?)
+        .build()?;
     let my_ctx = MyUnionerContext { ctx };
     exec_from_repl(&my_ctx, &mut print_options).await?;
     Ok(())

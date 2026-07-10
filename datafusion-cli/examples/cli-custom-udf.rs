@@ -20,7 +20,7 @@ use clap::Parser;
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::logical_expr::{ColumnarValue, Volatility, create_udf};
 use datafusion::prelude::SessionContext;
-use datafusion_cli::entry_point::{CliError, CliSession, CliArgs};
+use datafusion_cli::entry_point::{CliArgs, CliError, CliSession};
 use datafusion_common::cast::as_string_array;
 use mimalloc::MiMalloc;
 use std::sync::Arc;
@@ -33,11 +33,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 struct CustomArgs {
     #[command(flatten)]
     cli_args: CliArgs,
-    #[clap(
-        long,
-        help = "Register the hello udf function",
-        default_value = "true",
-    )]
+    #[clap(long, help = "Register the hello udf function", default_value = "true")]
     register_hello: bool,
 }
 
@@ -66,7 +62,7 @@ pub async fn main() -> Result<(), CliError> {
         }),
     );
     let args = CustomArgs::try_parse()?;
-    let cli_session = CliSession::try_from_args(args.cli_args)?;
+    let cli_session = CliSession::builder().with_args(args.cli_args).build()?;
     let ctx: &SessionContext = cli_session.session_context();
     if args.register_hello {
         ctx.register_udf(hello_udf);

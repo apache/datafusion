@@ -61,6 +61,8 @@ pub enum CliError {
     // This is used to print e.g. help text so we don't want to embellish it
     #[error(transparent)]
     ArgumentParsing(#[from] clap::Error),
+    #[error("Error building CliSession `{0}`")]
+    CliSessionBuilderError(String),
 }
 
 impl fmt::Debug for CliError {
@@ -75,6 +77,103 @@ pub struct CliSession {
     pub ctx: SessionContext,
     pub print_options: PrintOptions,
     pub args: CliArgs,
+}
+
+/// A `Builder` API which allows you to construct a `CliSession` while customizing the build process.
+///
+#[derive(Default)]
+pub struct CliSessionBuilder {
+    ctx: Option<SessionContext>,
+    args: Option<CliArgs>,
+}
+
+impl CliSessionBuilder {
+    pub fn with_session_context(mut self, ctx: SessionContext) -> Self {
+        self.ctx = Some(ctx);
+        self
+    }
+
+    pub fn with_args(mut self, args: CliArgs) -> Self {
+        self.args = Some(args);
+        self
+    }
+
+    pub fn build(self) -> Result<CliSession, CliError> {
+        let args = self.args.ok_or_else(|| {
+            CliError::CliSessionBuilderError(
+                "Missing clap arguments from `CliSessionBuilder::with_args(...)".into(),
+            )
+        })?;
+        env_logger::init();
+
+        if !args.quiet {
+            println!("DataFusion CLI v{DATAFUSION_CLI_VERSION}");
+        }
+
+        if let Some(ref path) = args.data_path {
+            let p = Path::new(path);
+            env::set_current_dir(p).unwrap();
+        };
+
+        let session_config = get_session_config(&args)?;
+
+        let mut rt_builder = RuntimeEnvBuilder::new();
+        // set memory pool size
+        if let Some(memory_limit) = args.memory_limit {
+            // set memory pool type
+            let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
+                PoolType::Fair if args.top_memory_consumers == 0 => {
+                    Arc::new(FairSpillPool::new(memory_limit))
+                }
+                PoolType::Fair => Arc::new(TrackConsumersPool::new(
+                    FairSpillPool::new(memory_limit),
+                    NonZeroUsize::new(args.top_memory_consumers).unwrap(),
+                )),
+                PoolType::Greedy if args.top_memory_consumers == 0 => {
+                    Arc::new(GreedyMemoryPool::new(memory_limit))
+                }
+                PoolType::Greedy => Arc::new(TrackConsumersPool::new(
+                    GreedyMemoryPool::new(memory_limit),
+                    NonZeroUsize::new(args.top_memory_consumers).unwrap(),
+                )),
+            };
+
+            rt_builder = rt_builder.with_memory_pool(pool)
+        }
+
+        // set disk limit
+        if let Some(disk_limit) = args.disk_limit {
+            let builder = DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::OsTmpDirectory)
+                .with_max_temp_directory_size(disk_limit.try_into().unwrap());
+            rt_builder = rt_builder.with_disk_manager_builder(builder);
+        }
+
+        let instrumented_registry = Arc::new(
+            InstrumentedObjectStoreRegistry::new()
+                .with_profile_mode(args.object_store_profiling),
+        );
+        rt_builder = rt_builder.with_object_store_registry(instrumented_registry.clone());
+
+        let runtime_env = rt_builder.build_arc()?;
+
+        // enable dynamic file query
+        let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
+            .enable_url_table();
+
+        let print_options = PrintOptions {
+            format: args.format,
+            quiet: args.quiet,
+            maxrows: args.maxrows,
+            color: args.color,
+            instrumented_registry: Arc::clone(&instrumented_registry),
+        };
+        Ok(CliSession {
+            ctx,
+            args,
+            print_options,
+        })
+    }
 }
 
 #[derive(Debug, Parser, PartialEq)]
@@ -200,85 +299,18 @@ impl CliArgs {
 }
 
 impl CliSession {
+    pub fn builder() -> CliSessionBuilder {
+        CliSessionBuilder::default()
+    }
     pub async fn entry_point() -> Result<(), CliError> {
-        let cli_session = CliSession::try_from_args(CliArgs::try_parse()?)?;
+        let cli_session = CliSession::builder()
+            .with_args(CliArgs::try_parse()?)
+            .build()?;
         Ok(cli_session.run().await?)
     }
     pub fn session_context(&self) -> &SessionContext {
         &self.ctx
     }
-    pub fn try_from_args(args: CliArgs) -> Result<Self, CliError> {
-        env_logger::init();
-
-        if !args.quiet {
-            println!("DataFusion CLI v{DATAFUSION_CLI_VERSION}");
-        }
-
-        if let Some(ref path) = args.data_path {
-            let p = Path::new(path);
-            env::set_current_dir(p).unwrap();
-        };
-
-        let session_config = get_session_config(&args)?;
-
-        let mut rt_builder = RuntimeEnvBuilder::new();
-        // set memory pool size
-        if let Some(memory_limit) = args.memory_limit {
-            // set memory pool type
-            let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
-                PoolType::Fair if args.top_memory_consumers == 0 => {
-                    Arc::new(FairSpillPool::new(memory_limit))
-                }
-                PoolType::Fair => Arc::new(TrackConsumersPool::new(
-                    FairSpillPool::new(memory_limit),
-                    NonZeroUsize::new(args.top_memory_consumers).unwrap(),
-                )),
-                PoolType::Greedy if args.top_memory_consumers == 0 => {
-                    Arc::new(GreedyMemoryPool::new(memory_limit))
-                }
-                PoolType::Greedy => Arc::new(TrackConsumersPool::new(
-                    GreedyMemoryPool::new(memory_limit),
-                    NonZeroUsize::new(args.top_memory_consumers).unwrap(),
-                )),
-            };
-
-            rt_builder = rt_builder.with_memory_pool(pool)
-        }
-
-        // set disk limit
-        if let Some(disk_limit) = args.disk_limit {
-            let builder = DiskManagerBuilder::default()
-                .with_mode(DiskManagerMode::OsTmpDirectory)
-                .with_max_temp_directory_size(disk_limit.try_into().unwrap());
-            rt_builder = rt_builder.with_disk_manager_builder(builder);
-        }
-
-        let instrumented_registry = Arc::new(
-            InstrumentedObjectStoreRegistry::new()
-                .with_profile_mode(args.object_store_profiling),
-        );
-        rt_builder = rt_builder.with_object_store_registry(instrumented_registry.clone());
-
-        let runtime_env = rt_builder.build_arc()?;
-
-        // enable dynamic file query
-        let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
-            .enable_url_table();
-
-        let print_options = PrintOptions {
-            format: args.format,
-            quiet: args.quiet,
-            maxrows: args.maxrows,
-            color: args.color,
-            instrumented_registry: Arc::clone(&instrumented_registry),
-        };
-        Ok(Self {
-            ctx,
-            args,
-            print_options,
-        })
-    }
-
     /// Main CLI entrypoint
     pub async fn run(self) -> Result<(), CliError> {
         let CliSession {
