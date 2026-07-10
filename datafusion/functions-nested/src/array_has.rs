@@ -19,8 +19,8 @@
 
 use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray, BooleanArray,
-    BooleanBufferBuilder, Datum, PrimitiveArray, Scalar, StringArrayType,
-    StringViewArray,
+    BooleanBufferBuilder, Datum, MAX_INLINE_VIEW_LEN, PrimitiveArray, Scalar,
+    StringArrayType, StringViewArray,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::DataType;
@@ -327,20 +327,75 @@ impl<'a> ArrayWrapper<'a> {
 
 /// Evaluate `array_has` with an array (per-row) needle.
 ///
-/// The straightforward implementation compares each row with the Arrow `eq`
-/// kernel, which allocates a `BooleanArray` and pays dispatch on every row --
-/// overhead that dominates for short lists. Primitive and string element types
-/// therefore take [`array_has_array_fast_path`]; nested (and any other) types
-/// fall back to the per-row kernel.
+/// Primitive and string element types take a per-type fast path; nested (and any
+/// other) element types fall back to the per-row `eq` kernel, which allocates a
+/// `BooleanArray` per row.
 fn array_has_dispatch_for_array<'a>(
     haystack: ArrayWrapper<'a>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
     let combined_nulls = NullBuffer::union(haystack.nulls(), needle.nulls());
+    let needle = needle.as_ref();
 
-    if let Some(values) =
-        array_has_array_fast_path(&haystack, needle, combined_nulls.as_ref())
-    {
+    // Slice to the visible region and rebase the offsets to 0 so `offsets[i]`
+    // indexes `visible_values` directly (the haystack may be a sliced list).
+    let mut offsets: Vec<usize> = haystack.offsets().collect();
+    let first_offset = offsets[0];
+    let visible_values = haystack
+        .values()
+        .slice(first_offset, offsets[offsets.len() - 1] - first_offset);
+    let visible_values = visible_values.as_ref();
+    for offset in &mut offsets {
+        *offset -= first_offset;
+    }
+
+    // Fast path for primitive/string elements whose (coerced) type matches the
+    // needle; a type mismatch or a nested type falls through to the per-row kernel.
+    let fast_path = if visible_values.data_type() != needle.data_type() {
+        None
+    } else {
+        downcast_primitive_array! {
+            visible_values => {
+                // The element-null path makes several passes over the values, so
+                // past a large average list length the per-row `eq` kernel is
+                // faster -- bail to it. The single-pass all-valid path has no such
+                // crossover, so only bail when elements are null.
+                let num_rows = offsets.len() - 1;
+                if num_rows > 0
+                    && offsets[num_rows] / num_rows > NULL_FAST_PATH_MAX_LEN
+                    && visible_values.null_count() > 0
+                {
+                    None
+                } else {
+                    Some(array_has_array_primitive(
+                        visible_values, needle, &offsets,
+                        combined_nulls.as_ref(),
+                    ))
+                }
+            },
+            DataType::Utf8 => Some(array_has_array_string(
+                visible_values.as_string::<i32>(),
+                needle.as_string::<i32>(),
+                &offsets,
+                combined_nulls.as_ref(),
+            )),
+            DataType::LargeUtf8 => Some(array_has_array_string(
+                visible_values.as_string::<i64>(),
+                needle.as_string::<i64>(),
+                &offsets,
+                combined_nulls.as_ref(),
+            )),
+            DataType::Utf8View => Some(array_has_array_string_view(
+                visible_values.as_string_view(),
+                needle.as_string_view(),
+                &offsets,
+                combined_nulls.as_ref(),
+            )),
+            _ => None,
+        }
+    };
+
+    if let Some(values) = fast_path {
         return Ok(Arc::new(BooleanArray::new(values, combined_nulls)));
     }
 
@@ -361,97 +416,20 @@ fn array_has_dispatch_for_array<'a>(
     Ok(Arc::new(BooleanArray::new(result.finish(), combined_nulls)))
 }
 
-/// Average list length past which the element-null fast path (case 2 of
-/// [`array_has_array_primitive`]) stops beating the per-row `eq` kernel and is
-/// bailed out of -- an empirically measured crossover.
+/// Average list length past which the element-null path loses to the per-row
+/// `eq` kernel and bails to it (empirically measured).
 const NULL_FAST_PATH_MAX_LEN: usize = 512;
 
-/// Per-element fast path for primitive and string element types. Returns `None`
-/// for any other type (and on a needle/element type mismatch), so the caller
-/// falls back to the per-row `eq` kernel.
-fn array_has_array_fast_path(
-    haystack: &ArrayWrapper<'_>,
-    needle: &ArrayRef,
-    combined_nulls: Option<&NullBuffer>,
-) -> Option<BooleanBuffer> {
-    let needle = needle.as_ref();
-
-    // Normalize for sliced arrays (like `array_has_dispatch_for_scalar`): slice
-    // to the visible region so `offsets[i] - first_offset` indexes the values.
-    let offsets: Vec<usize> = haystack.offsets().collect();
-    let first_offset = offsets[0];
-    let visible_values = haystack
-        .values()
-        .slice(first_offset, offsets[offsets.len() - 1] - first_offset);
-    let visible_values = visible_values.as_ref();
-
-    // The needle shares the haystack's element type after coercion; defer any
-    // mismatch to the generic path rather than panicking in the downcasts.
-    if visible_values.data_type() != needle.data_type() {
-        return None;
-    }
-
-    downcast_primitive_array! {
-        visible_values => {
-            // The element-null branch of `array_has_array_primitive` makes
-            // several passes over the values; past a moderate average list
-            // length the per-row `eq` kernel wins, so bail to it there. Measured
-            // over the *visible* region -- the offset span and `visible_values`
-            // nulls, not the full backing child -- so a sliced array's hidden
-            // elements can't skew the decision. The average check short-circuits,
-            // so the all-valid win path never pays for `null_count`. Strings
-            // (single-pass) and nested types have no such crossover and never
-            // reach this arm.
-            let num_rows = offsets.len() - 1;
-            if num_rows > 0
-                && (offsets[num_rows] - first_offset) / num_rows > NULL_FAST_PATH_MAX_LEN
-                && visible_values.null_count() > 0
-            {
-                return None;
-            }
-            Some(array_has_array_primitive(
-                visible_values, needle, &offsets, first_offset, combined_nulls,
-            ))
-        },
-        DataType::Utf8 => Some(array_has_array_string(
-            visible_values.as_string::<i32>(),
-            needle.as_string::<i32>(),
-            &offsets,
-            first_offset,
-            combined_nulls,
-        )),
-        DataType::LargeUtf8 => Some(array_has_array_string(
-            visible_values.as_string::<i64>(),
-            needle.as_string::<i64>(),
-            &offsets,
-            first_offset,
-            combined_nulls,
-        )),
-        DataType::Utf8View => Some(array_has_array_string_view(
-            visible_values.as_string_view(),
-            needle.as_string_view(),
-            &offsets,
-            first_offset,
-            combined_nulls,
-        )),
-        _ => None,
-    }
-}
-
-/// Primitive fast path, with two branches on element validity:
+/// Primitive fast path, two branches on element validity:
 ///
-/// 1. No element nulls: a branchless OR-reduction over the raw value slice --
-///    auto-vectorizes, and is the common, fastest case.
-/// 2. Element nulls: a null slot's backing value is arbitrary, so validity must
-///    be consulted. Compare into an equality bitmap and AND it with the validity
-///    bitmap -- one word-parallel op, no per-element branch -- then reduce each
-///    row to "any bit set". Chunked so the expanded-needle scratch stays bounded
-///    regardless of batch size.
+/// 1. No nulls: branchless OR-reduction over the raw slice (auto-vectorizes).
+/// 2. Nulls: AND the equality bitmap with validity (a null slot's value is
+///    arbitrary), then reduce each row to "any bit set". Chunked to bound the
+///    expanded needle.
 fn array_has_array_primitive<T: ArrowPrimitiveType>(
     values: &PrimitiveArray<T>,
     needle: &dyn Array,
     offsets: &[usize],
-    first_offset: usize,
     combined_nulls: Option<&NullBuffer>,
 ) -> BooleanBuffer
 where
@@ -469,8 +447,8 @@ where
             }
             // `needle[i]` is non-null here: combined_nulls covers the needle nulls.
             let needle_val = needle_slice[i];
-            let start = offsets[i] - first_offset;
-            let end = offsets[i + 1] - first_offset;
+            let start = offsets[i];
+            let end = offsets[i + 1];
             value_slice[start..end]
                 .iter()
                 .fold(false, |acc, &v| acc | v.is_eq(needle_val))
@@ -482,15 +460,17 @@ where
     let mut needle_expanded: Vec<T::Native> = Vec::new();
     for chunk_start in (0..num_rows).step_by(ROW_CONVERSION_CHUNK_SIZE) {
         let chunk_end = (chunk_start + ROW_CONVERSION_CHUNK_SIZE).min(num_rows);
-        let elem_start = offsets[chunk_start] - first_offset;
-        let elem_end = offsets[chunk_end] - first_offset;
+        let elem_start = offsets[chunk_start];
+        let elem_end = offsets[chunk_end];
 
         // Expand the per-row needle across this chunk's elements (reused scratch),
         // then compare in one vectorizable pass and mask out null elements.
         needle_expanded.clear();
         for i in chunk_start..chunk_end {
-            needle_expanded
-                .resize(offsets[i + 1] - first_offset - elem_start, needle_slice[i]);
+            needle_expanded.extend(std::iter::repeat_n(
+                needle_slice[i],
+                offsets[i + 1] - offsets[i],
+            ));
         }
         let chunk_values = &value_slice[elem_start..elem_end];
         let eq_bits = BooleanBuffer::collect_bool(chunk_values.len(), |k| {
@@ -506,21 +486,19 @@ where
                 result.append(false);
                 continue;
             }
-            let start = offsets[i] - first_offset - elem_start;
-            let end = offsets[i + 1] - first_offset - elem_start;
+            let start = offsets[i] - elem_start;
+            let end = offsets[i + 1] - elem_start;
             result.append(matched.slice(start, end - start).has_true());
         }
     }
     result.finish()
 }
 
-/// String implementation of `array_has_array_fast_path`, generic over the
-/// concrete string array type (`Utf8`, `LargeUtf8`, `Utf8View`).
+/// String fast path, generic over the offset width (`Utf8` / `LargeUtf8`).
 fn array_has_array_string<'a, S: StringArrayType<'a> + Copy>(
     values: S,
     needle: S,
     offsets: &[usize],
-    first_offset: usize,
     combined_nulls: Option<&NullBuffer>,
 ) -> BooleanBuffer {
     let num_rows = offsets.len() - 1;
@@ -530,29 +508,23 @@ fn array_has_array_string<'a, S: StringArrayType<'a> + Copy>(
         }
         // `needle[i]` is non-null here: combined_nulls covers the needle nulls.
         let needle_val = needle.value(i);
-        let start = offsets[i] - first_offset;
-        let end = offsets[i + 1] - first_offset;
+        let start = offsets[i];
+        let end = offsets[i + 1];
         // Compare the value first and only consult validity on a match (see the
         // primitive path for why this is correct and faster on no-match scans).
         (start..end).any(|k| values.value(k) == needle_val && !values.is_null(k))
     })
 }
 
-/// View-aware `Utf8View` variant of [`array_has_array_string`]. A `StringView`
-/// packs the byte length and a 4-byte prefix into its 128-bit view; Arrow's
-/// per-row `eq` kernel compares those before ever touching the data buffer,
-/// which the generic `value(k) == needle` path gives up by materializing every
-/// element. Here we compare the raw views directly: an inline needle (<= 12
-/// bytes, whose view holds the whole value zero-padded) matches iff the full
-/// views are equal -- no materialization at all -- and a longer needle is
-/// rejected on length + prefix and only materialized to confirm a candidate. A
-/// null slot's backing view is arbitrary, so (as in the primitive path)
-/// validity is consulted only on a view match.
+/// `Utf8View` variant of [`array_has_array_string`]: compare the packed 128-bit
+/// views directly so the length + 4-byte prefix reject non-matches without
+/// touching the data buffer, and an inline value matches on the view alone. A
+/// longer view is only materialized to confirm a candidate; validity is
+/// consulted only on a view match.
 fn array_has_array_string_view(
     values: &StringViewArray,
     needle: &StringViewArray,
     offsets: &[usize],
-    first_offset: usize,
     combined_nulls: Option<&NullBuffer>,
 ) -> BooleanBuffer {
     let num_rows = offsets.len() - 1;
@@ -565,11 +537,11 @@ fn array_has_array_string_view(
         // `needle[i]` is non-null here: combined_nulls covers the needle nulls.
         let needle_view = needle_views[i];
         // Low 32 bits are the byte length; the next 32 are the inline prefix.
-        let needle_inline = (needle_view as u32) <= 12;
+        let needle_inline = (needle_view as u32) <= MAX_INLINE_VIEW_LEN;
         let needle_lo = needle_view as u64;
         let needle_val = needle.value(i);
-        let start = offsets[i] - first_offset;
-        let end = offsets[i + 1] - first_offset;
+        let start = offsets[i];
+        let end = offsets[i + 1];
         (start..end).any(|k| {
             let v = value_views[k];
             let matched = if needle_inline {
