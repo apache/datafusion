@@ -33,7 +33,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 struct CustomArgs {
     #[command(flatten)]
     cli_args: CliArgs,
-    #[clap(long, help = "Register the hello udf function", default_value = "true")]
+    #[clap(long, help = "Register the hello udf function", action = clap::ArgAction::Set, default_value_t = true)]
     register_hello: bool,
 }
 
