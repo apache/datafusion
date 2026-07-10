@@ -344,10 +344,39 @@ async fn aggregate_multiple_keys() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_grouping_sets() -> Result<()> {
-    roundtrip(
-        "SELECT a, c, d, avg(b) FROM data GROUP BY GROUPING SETS ((a, c), (a), (d), ())",
+    let proto = roundtrip_with_ctx(
+        "SELECT a, c, d, avg(b), sum(e) FROM data GROUP BY GROUPING SETS ((a, c), (a), (d), ())",
+        create_context().await?,
     )
-    .await
+    .await?;
+
+    let Some(plan_rel::RelType::Root(root)) = &proto.relations[0].rel_type else {
+        panic!("expected root relation");
+    };
+    let Some(RelType::Project(project)) = &root.input.as_ref().unwrap().rel_type else {
+        panic!("expected project relation");
+    };
+    let Some(RelType::Aggregate(aggregate)) = &project.input.as_ref().unwrap().rel_type
+    else {
+        panic!("expected aggregate relation");
+    };
+
+    assert_eq!(aggregate.grouping_expressions.len(), 3);
+    assert_eq!(aggregate.groupings[0].expression_references, [0, 1]);
+    assert_eq!(aggregate.groupings[1].expression_references, [0]);
+    assert_eq!(aggregate.groupings[2].expression_references, [2]);
+    assert!(aggregate.groupings[3].expression_references.is_empty());
+    let output_mapping = match aggregate
+        .common
+        .as_ref()
+        .and_then(|common| common.emit_kind.as_ref())
+    {
+        Some(substrait::proto::rel_common::EmitKind::Emit(emit)) => &emit.output_mapping,
+        _ => panic!("expected aggregate output mapping"),
+    };
+    assert_eq!(output_mapping, &[0, 1, 2, 5, 3, 4]);
+
+    Ok(())
 }
 
 #[tokio::test]
