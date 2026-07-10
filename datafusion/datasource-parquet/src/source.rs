@@ -315,13 +315,6 @@ pub struct ParquetSource {
     /// Sort order driving `PreparedAccessPlan::reorder_by_statistics`
     /// in the opener.
     sort_order_for_reorder: Option<LexOrdering>,
-    /// True when [`try_pushdown_filters`] declined pushdown for this
-    /// scan due to the narrow-projection gate — surfaced in the plan
-    /// display so profiling can tell that the heuristic fired here
-    /// (the filter stays above the scan in a `FilterExec`).
-    ///
-    /// [`try_pushdown_filters`]: Self::try_pushdown_filters
-    pub(crate) narrow_projection_gate_declined: bool,
 }
 
 impl ParquetSource {
@@ -348,7 +341,6 @@ impl ParquetSource {
             encryption_factory: None,
             reverse_row_groups: false,
             sort_order_for_reorder: None,
-            narrow_projection_gate_declined: false,
         }
     }
 
@@ -749,9 +741,6 @@ impl FileSource for ParquetSource {
                 if self.reverse_row_groups {
                     write!(f, ", reverse_row_groups=true")?;
                 }
-                if self.narrow_projection_gate_declined {
-                    write!(f, ", pushdown_declined=narrow_projection")?;
-                }
 
                 // Plan-time marker for dynamic RG-level pruning: if the
                 // predicate is dynamic (e.g. a TopK threshold expression),
@@ -915,7 +904,6 @@ impl FileSource for ParquetSource {
         }
 
         let mut source = self.clone();
-        source.narrow_projection_gate_declined = narrow_projection_gate_declined;
         let filters: Vec<PushedDownPredicate> = filters
             .into_iter()
             .map(|filter| {
