@@ -872,9 +872,15 @@ impl FileSource for ParquetSource {
                 .parquet
                 .pushdown_filter_narrow_projection_gate
         {
+            // `TableSchema` layout is `[file, partition, virtual]`; only
+            // file columns are actually decoded from parquet, so partition
+            // and virtual columns don't count toward the "wide-decode
+            // saving" the RowFilter fast-path buys us.
+            let file_col_count = self.table_schema.file_schema().fields().len();
             let filter_col_indices: std::collections::HashSet<usize> = filters
                 .iter()
                 .flat_map(|f| collect_columns(f).into_iter().map(|c| c.index()))
+                .filter(|idx| *idx < file_col_count)
                 .collect();
             let non_filter_projected = self
                 .projection
@@ -882,7 +888,7 @@ impl FileSource for ParquetSource {
                 .iter()
                 .flat_map(|pe| collect_columns(&pe.expr))
                 .map(|c| c.index())
-                .filter(|idx| !filter_col_indices.contains(idx))
+                .filter(|idx| *idx < file_col_count && !filter_col_indices.contains(idx))
                 .collect::<std::collections::HashSet<_>>()
                 .len();
             if non_filter_projected < PUSHDOWN_MIN_NON_FILTER_COLS {
