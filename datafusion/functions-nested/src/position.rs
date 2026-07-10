@@ -207,14 +207,16 @@ fn resolve_start_from(
     match third_arg {
         None => Ok(vec![0i64; num_rows]),
         Some(ColumnarValue::Scalar(ScalarValue::Int64(Some(v)))) => {
-            Ok(vec![v - 1; num_rows])
+            Ok(vec![v.saturating_sub(1); num_rows])
         }
         Some(ColumnarValue::Scalar(s)) => {
             exec_err!("array_position expected Int64 for start_from, got {s}")
         }
-        Some(ColumnarValue::Array(a)) => {
-            Ok(as_int64_array(a)?.values().iter().map(|&x| x - 1).collect())
-        }
+        Some(ColumnarValue::Array(a)) => Ok(as_int64_array(a)?
+            .values()
+            .iter()
+            .map(|&x| x.saturating_sub(1))
+            .collect()),
     }
 }
 
@@ -273,7 +275,7 @@ fn array_position_scalar<O: OffsetSizeTrait>(
         let from = arr_from[i];
         let row_len = end - start;
         if !(from >= 0 && (from as usize) <= row_len) {
-            return exec_err!("start_from out of bounds: {}", from + 1);
+            return exec_err!("start_from out of bounds: {}", from.saturating_add(1));
         }
         let search_start = start + from as usize;
 
@@ -309,7 +311,7 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
         as_int64_array(&args[2])?
             .values()
             .iter()
-            .map(|&x| x - 1)
+            .map(|&x| x.saturating_sub(1))
             .collect::<Vec<_>>()
     } else {
         vec![0; haystack.len()]
@@ -317,7 +319,7 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
 
     for (row, &from) in haystack.iter().zip(arr_from.iter()) {
         if !row.is_none_or(|row| from >= 0 && (from as usize) <= row.len()) {
-            return exec_err!("start_from out of bounds: {}", from + 1);
+            return exec_err!("start_from out of bounds: {}", from.saturating_add(1));
         }
     }
 
@@ -749,5 +751,33 @@ mod tests {
         assert_eq!(row1.values().as_ref(), &[2]);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_array_position_start_from_i64_min() {
+        // start_from of i64::MIN used to overflow while converting the
+        // 1-indexed argument to a 0-indexed position; it should now surface
+        // an error instead of panicking.
+        let list =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(1)])]);
+        let haystack_field =
+            Arc::new(Field::new("haystack", list.data_type().clone(), true));
+        let needle_field = Arc::new(Field::new("needle", DataType::Int32, true));
+        let start_field = Arc::new(Field::new("start_from", DataType::Int64, true));
+        let return_field = Arc::new(Field::new("return", UInt64, true));
+
+        let result = ArrayPosition::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(list)),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(i64::MIN))),
+            ],
+            arg_fields: vec![haystack_field, needle_field, start_field],
+            number_rows: 1,
+            return_field,
+            config_options: Arc::new(ConfigOptions::default()),
+        });
+
+        assert!(result.is_err());
     }
 }
