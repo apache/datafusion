@@ -18,20 +18,28 @@
 # Tests for execution.adaptive_filter_reordering. Runtime reordering of a
 # conjunction must never change query results, only evaluation order.
 
+# Store the table as many small batches so that, with the flag on, the
+# adaptive evaluator's warm-up (8 measured batches) completes and the settled
+# (possibly reordered) path is exercised end-to-end — not just the measuring
+# path a single-batch table would reach.
+statement ok
+SET datafusion.execution.batch_size = 64;
+
 statement ok
 CREATE TABLE t AS
 SELECT
   i AS a,
   i % 7 AS b,
-  arrow_cast(i, 'Utf8') AS s
-FROM generate_series(1, 1000) AS tbl(i);
+  arrow_cast(i, 'Utf8') AS s,
+  CASE WHEN i % 5 = 0 THEN NULL ELSE i END AS n
+FROM generate_series(1, 4000) AS tbl(i);
 
 # Baseline (flag off): multi-conjunct filter mixing a cheap comparison with an
 # expensive LIKE.
 query I
 SELECT count(*) FROM t WHERE b = 3 AND s LIKE '1%';
 ----
-17
+160
 
 statement ok
 SET datafusion.execution.adaptive_filter_reordering = true;
@@ -40,7 +48,7 @@ SET datafusion.execution.adaptive_filter_reordering = true;
 query I
 SELECT count(*) FROM t WHERE b = 3 AND s LIKE '1%';
 ----
-17
+160
 
 # A three-conjunct predicate, including an expensive-but-selective LIKE.
 query I
@@ -48,11 +56,19 @@ SELECT count(*) FROM t WHERE a > 100 AND s LIKE '5%' AND b <> 0;
 ----
 86
 
+# A conjunct that produces NULLs: SQL filter semantics treat NULL as false,
+# with or without reordering.
+query I
+SELECT count(*) FROM t WHERE n % 2 = 0 AND s LIKE '2%';
+----
+445
+
 # Full row materialization (not just count) is unchanged by reordering.
 query IIT
-SELECT a, b, s FROM t WHERE b = 1 AND a > 990 AND s LIKE '99%' ORDER BY a;
+SELECT a, b, s FROM t WHERE b = 1 AND a > 3990 AND s LIKE '39%' ORDER BY a;
 ----
-995 1 995
+3991 1 3991
+3998 1 3998
 
 # EXPLAIN: runtime reordering is invisible to the plan — the FilterExec
 # predicate is unchanged whether the flag is on or off.
@@ -71,10 +87,13 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 05)--------FilterExec: b@0 = 3 AND s@1 LIKE 1%, projection=[]
-06)----------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+06)----------DataSourceExec: partitions=4, partition_sizes=[16, 16, 16, 15]
 
 statement ok
 SET datafusion.execution.adaptive_filter_reordering = false;
+
+statement ok
+SET datafusion.execution.batch_size = 8192;
 
 statement ok
 DROP TABLE t;
