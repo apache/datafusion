@@ -2222,8 +2222,7 @@ impl LogicalPlan {
                             .map(|(i, unnest_info)| {
                                 format!(
                                     "{}|depth={}",
-                                    &input_columns[*i].to_string(),
-                                    unnest_info.depth
+                                    input_columns[*i], unnest_info.depth
                                 )
                             })
                             .collect::<Vec<String>>();

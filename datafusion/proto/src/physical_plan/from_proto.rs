@@ -29,7 +29,9 @@ use datafusion_common::{
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::file_scan_config::{
+    FileScanConfig, FileScanConfigBuilder, output_partitioning_from_partition_fields,
+};
 use datafusion_datasource::file_sink_config::FileSinkConfig;
 use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile, TableSchema};
 use datafusion_datasource_csv::file_format::CsvSink;
@@ -558,6 +560,20 @@ pub fn parse_protobuf_file_scan_config(
         &schema,
         proto_converter,
     )?;
+    let output_partitioning = match output_partitioning {
+        Some(output_partitioning) => Some(output_partitioning),
+        None if proto.partitioned_by_file_group.unwrap_or(false) => {
+            // Backward compatibility: older serialized plans used only
+            // `partitioned_by_file_group` to declare scan output partitioning.
+            let table_schema = parse_table_schema_from_proto(proto)?;
+            output_partitioning_from_partition_fields(
+                &schema,
+                table_schema.table_partition_cols(),
+                file_groups.len(),
+            )
+        }
+        None => None,
+    };
 
     // Parse projection expressions if present and apply to file source
     let file_source = if let Some(proto_projection_exprs) = &proto.projection_exprs {
@@ -586,18 +602,15 @@ pub fn parse_protobuf_file_scan_config(
         file_source
     };
 
-    let mut config_builder = FileScanConfigBuilder::new(object_store_url, file_source)
+    let config = FileScanConfigBuilder::new(object_store_url, file_source)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_output_ordering(output_ordering)
         .with_output_partitioning(output_partitioning)
-        .with_batch_size(proto.batch_size.map(|s| s as usize));
-    if proto.partitioned_by_file_group.unwrap_or(false) {
-        config_builder = config_builder.with_partitioned_by_file_group(true);
-    }
-    let config = config_builder.build();
+        .with_batch_size(proto.batch_size.map(|s| s as usize))
+        .build();
     Ok(config)
 }
 
