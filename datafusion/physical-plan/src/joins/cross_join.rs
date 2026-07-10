@@ -23,7 +23,7 @@ use std::{sync::Arc, task::Poll};
 use super::utils::{
     BatchSplitter, BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer,
     OnceAsync, OnceFut, StatefulStreamResult, adjust_right_output_partitioning,
-    reorder_output_after_swap,
+    build_join_schema, reorder_output_after_swap,
 };
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -41,7 +41,7 @@ use crate::{
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
-use arrow::datatypes::{Fields, Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     JoinType, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
@@ -102,23 +102,11 @@ pub struct CrossJoinExec {
 impl CrossJoinExec {
     /// Create a new [CrossJoinExec].
     pub fn new(left: Arc<dyn ExecutionPlan>, right: Arc<dyn ExecutionPlan>) -> Self {
-        // left then right
-        let (all_columns, metadata) = {
-            let left_schema = left.schema();
-            let right_schema = right.schema();
-            let left_fields = left_schema.fields().iter();
-            let right_fields = right_schema.fields().iter();
-
-            let mut metadata = left_schema.metadata().clone();
-            metadata.extend(right_schema.metadata().clone());
-
-            (
-                left_fields.chain(right_fields).cloned().collect::<Fields>(),
-                metadata,
-            )
-        };
-
-        let schema = Arc::new(Schema::new(all_columns).with_metadata(metadata));
+        // Use the shared helper (inner join) so metadata merges the same way as
+        // the logical plan; merging it here independently let schemas diverge.
+        let (schema, _) =
+            build_join_schema(&left.schema(), &right.schema(), &JoinType::Inner);
+        let schema = Arc::new(schema);
         let cache = Self::compute_properties(&left, &right, Arc::clone(&schema)).unwrap();
 
         CrossJoinExec {
@@ -692,11 +680,41 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
 mod tests {
     use super::*;
     use crate::common;
-    use crate::test::{assert_join_metrics, build_table_scan_i32};
+    use crate::test::{TestMemoryExec, assert_join_metrics, build_table_scan_i32};
 
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::{assert_contains, test_util::batches_to_sort_string};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use insta::assert_snapshot;
+    use std::collections::HashMap;
+
+    // On a conflicting schema-metadata key, the cross join keeps the LEFT value,
+    // matching `build_join_schema` and the logical plan (mirrors the per-join-type
+    // metadata tests #16221 added in joins/utils.rs and the logical builder.rs).
+    #[test]
+    fn cross_join_schema_metadata_is_left_biased() {
+        let input = |field: &str, meta_value: &str| {
+            let schema = Arc::new(
+                Schema::new(vec![Field::new(field, DataType::Int32, false)])
+                    .with_metadata(HashMap::from([(
+                        String::from("metadata_key"),
+                        String::from(meta_value),
+                    )])),
+            );
+            TestMemoryExec::try_new_exec(&[vec![]], schema, None).unwrap()
+        };
+
+        let join =
+            CrossJoinExec::new(input("a", "left value"), input("b", "right value"));
+
+        assert_eq!(
+            join.schema()
+                .metadata()
+                .get("metadata_key")
+                .map(String::as_str),
+            Some("left value"),
+        );
+    }
 
     async fn join_collect(
         left: Arc<dyn ExecutionPlan>,

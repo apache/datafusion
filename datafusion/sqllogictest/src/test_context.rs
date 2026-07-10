@@ -521,6 +521,25 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
     .unwrap();
 
     ctx.register_batch("table_with_metadata", batch).unwrap();
+
+    // Same `metadata_key` as `table_with_metadata` but a different value, so a
+    // cross join of the two exercises the schema-metadata merge (#23434).
+    let alt_id =
+        Field::new("id", DataType::Int32, true).with_metadata(HashMap::from([(
+            String::from("metadata_key"),
+            String::from("the alt id field"),
+        )]));
+    let alt_schema = Schema::new(vec![alt_id]).with_metadata(HashMap::from([(
+        String::from("metadata_key"),
+        String::from("the other schema"),
+    )]));
+    let alt_batch = RecordBatch::try_new(
+        Arc::new(alt_schema),
+        vec![Arc::new(Int32Array::from(vec![Some(10), Some(20)])) as _],
+    )
+    .unwrap();
+    ctx.register_batch("table_with_metadata_alt", alt_batch)
+        .unwrap();
 }
 
 /// Create a UDF function named "example". See the `sample_udf.rs` example
