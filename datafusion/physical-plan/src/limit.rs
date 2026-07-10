@@ -109,17 +109,6 @@ impl GlobalLimitExec {
     pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
         self.required_ordering = required_ordering;
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for GlobalLimitExec {
@@ -184,6 +173,17 @@ impl ExecutionPlan for GlobalLimitExec {
             self.skip,
             self.fetch,
         )))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -294,17 +294,6 @@ impl LocalLimitExec {
     pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
         self.required_ordering = required_ordering;
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for LocalLimitExec {
@@ -358,6 +347,17 @@ impl ExecutionPlan for LocalLimitExec {
             ))),
             _ => internal_err!("LocalLimitExec wrong number of children"),
         }
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
