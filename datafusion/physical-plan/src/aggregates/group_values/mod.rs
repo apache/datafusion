@@ -24,14 +24,11 @@ use arrow::array::types::{
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::compute::cast;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
-use datafusion_common::{Result, internal_err};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit};
+use datafusion_common::Result;
 use std::sync::Arc;
 
 use datafusion_expr::EmitTo;
-
-const ORIGINAL_DICTIONARY_KEY_TYPE: &str =
-    "datafusion:group_value_original_dictionary_key_type";
 
 /// Returns `schema` with its leading group fields updated to the data types
 /// actually emitted by [`GroupValues`]. Dictionary key types may grow at
@@ -70,8 +67,8 @@ pub(crate) fn schema_with_group_values(
 }
 
 /// Casts the leading group-value arrays to the corresponding schema fields.
-/// Stable partial/spill schemas use this before crossing fixed-schema transport
-/// boundaries such as repartition coalescing and Arrow IPC.
+/// This is used by spill files, which require one stable IPC schema even though
+/// normal aggregate output may promote dictionary keys dynamically.
 pub(crate) fn cast_group_values_to_schema(
     group_values: &mut [ArrayRef],
     schema: &SchemaRef,
@@ -84,23 +81,10 @@ pub(crate) fn cast_group_values_to_schema(
     Ok(())
 }
 
-/// Returns true when the leading group fields use the stable transport encoding.
-pub(crate) fn has_group_value_transport_fields(
-    schema: &SchemaRef,
-    num_group_fields: usize,
-) -> bool {
-    schema
-        .fields()
-        .iter()
-        .take(num_group_fields)
-        .any(|field| field.metadata().contains_key(ORIGINAL_DICTIONARY_KEY_TYPE))
-}
-
-/// Returns a stable internal transport schema for partial aggregate and spill
-/// batches. Dictionary group keys use the widest key with the same signedness,
-/// while metadata records the original key type so final aggregate output can
-/// start from the planned minimum width and promote only when necessary.
-pub(crate) fn group_value_transport_schema(
+/// Returns a stable spill schema whose dictionary group keys use their widest
+/// key type. The widening is internal to spill IPC and does not change planned
+/// or non-spill aggregate output schemas.
+pub(crate) fn group_value_spill_schema(
     schema: &SchemaRef,
     num_group_fields: usize,
 ) -> SchemaRef {
@@ -110,7 +94,7 @@ pub(crate) fn group_value_transport_schema(
         .enumerate()
         .map(|(index, field)| {
             if index < num_group_fields {
-                group_value_transport_field(field.as_ref())
+                group_value_spill_field(field.as_ref())
             } else {
                 Arc::clone(field)
             }
@@ -123,88 +107,60 @@ pub(crate) fn group_value_transport_schema(
     ))
 }
 
-/// Restores the planned minimum dictionary key type from an internal transport
-/// field. The transport marker is removed so it does not leak into final output.
-pub(crate) fn group_value_output_field(field: Field) -> Result<Field> {
-    let Some(original_key) = field
-        .metadata()
-        .get(ORIGINAL_DICTIONARY_KEY_TYPE)
-        .cloned()
-    else {
-        return Ok(field);
-    };
-
-    let DataType::Dictionary(_, value_type) = field.data_type() else {
-        return internal_err!(
-            "Group value transport marker found on non-dictionary field {}",
-            field.name()
-        );
-    };
-    let value_type = value_type.as_ref().clone();
-    let Some(key_type) = dictionary_key_type_from_name(&original_key) else {
-        return internal_err!(
-            "Invalid group value dictionary key type marker: {original_key}"
-        );
-    };
-
-    let mut metadata = field.metadata().clone();
-    metadata.remove(ORIGINAL_DICTIONARY_KEY_TYPE);
-    Ok(field
-        .with_data_type(DataType::Dictionary(
-            Box::new(key_type),
-            Box::new(value_type),
-        ))
-        .with_metadata(metadata))
-}
-
-fn group_value_transport_field(field: &Field) -> Arc<Field> {
-    let DataType::Dictionary(key_type, value_type) = field.data_type() else {
-        return Arc::new(field.clone());
-    };
-    let Some((original_key, transport_key)) = dictionary_transport_key(key_type) else {
-        return Arc::new(field.clone());
-    };
-
-    let mut metadata = field.metadata().clone();
-    metadata
-        .entry(ORIGINAL_DICTIONARY_KEY_TYPE.to_string())
-        .or_insert_with(|| original_key.to_string());
-
+fn group_value_spill_field(field: &Field) -> FieldRef {
     Arc::new(
         field
             .clone()
-            .with_data_type(DataType::Dictionary(
-                Box::new(transport_key),
-                Box::new(value_type.as_ref().clone()),
-            ))
-            .with_metadata(metadata),
+            .with_data_type(group_value_spill_data_type(field.data_type())),
     )
 }
 
-fn dictionary_transport_key(key_type: &DataType) -> Option<(&'static str, DataType)> {
-    match key_type {
-        DataType::Int8 => Some(("Int8", DataType::Int64)),
-        DataType::Int16 => Some(("Int16", DataType::Int64)),
-        DataType::Int32 => Some(("Int32", DataType::Int64)),
-        DataType::UInt8 => Some(("UInt8", DataType::UInt64)),
-        DataType::UInt16 => Some(("UInt16", DataType::UInt64)),
-        DataType::UInt32 => Some(("UInt32", DataType::UInt64)),
-        DataType::Int64 | DataType::UInt64 => None,
-        _ => None,
-    }
-}
-
-fn dictionary_key_type_from_name(name: &str) -> Option<DataType> {
-    match name {
-        "Int8" => Some(DataType::Int8),
-        "Int16" => Some(DataType::Int16),
-        "Int32" => Some(DataType::Int32),
-        "Int64" => Some(DataType::Int64),
-        "UInt8" => Some(DataType::UInt8),
-        "UInt16" => Some(DataType::UInt16),
-        "UInt32" => Some(DataType::UInt32),
-        "UInt64" => Some(DataType::UInt64),
-        _ => None,
+fn group_value_spill_data_type(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::Dictionary(key_type, value_type) => {
+            let key_type = match key_type.as_ref() {
+                DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+                    DataType::Int64
+                }
+                DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64 => DataType::UInt64,
+                _ => key_type.as_ref().clone(),
+            };
+            DataType::Dictionary(
+                Box::new(key_type),
+                Box::new(group_value_spill_data_type(value_type)),
+            )
+        }
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(|field| group_value_spill_field(field.as_ref()))
+                .collect::<Vec<_>>()
+                .into(),
+        ),
+        DataType::List(field) => DataType::List(group_value_spill_field(field.as_ref())),
+        DataType::LargeList(field) => {
+            DataType::LargeList(group_value_spill_field(field.as_ref()))
+        }
+        DataType::ListView(field) => {
+            DataType::ListView(group_value_spill_field(field.as_ref()))
+        }
+        DataType::LargeListView(field) => {
+            DataType::LargeListView(group_value_spill_field(field.as_ref()))
+        }
+        DataType::FixedSizeList(field, size) => {
+            DataType::FixedSizeList(group_value_spill_field(field.as_ref()), *size)
+        }
+        DataType::Map(field, sorted) => {
+            DataType::Map(group_value_spill_field(field.as_ref()), *sorted)
+        }
+        DataType::RunEndEncoded(run_ends, values) => DataType::RunEndEncoded(
+            Arc::clone(run_ends),
+            group_value_spill_field(values.as_ref()),
+        ),
+        _ => data_type.clone(),
     }
 }
 
