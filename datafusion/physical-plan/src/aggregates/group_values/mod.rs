@@ -23,65 +23,142 @@ use arrow::array::types::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::array::{ArrayRef, downcast_primitive};
+use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit};
 use datafusion_common::Result;
 use std::sync::Arc;
 
 use datafusion_expr::EmitTo;
 
-pub(crate) fn group_value_output_schema(schema: &Schema) -> SchemaRef {
-    Arc::new(Schema::new(
-        schema
-            .fields()
-            .iter()
-            .map(|field| group_value_output_field(field.as_ref()))
-            .collect::<Vec<_>>(),
+/// Returns `schema` with its leading group fields updated to the data types
+/// actually emitted by [`GroupValues`]. Dictionary key types may grow at
+/// runtime, while all field names, nullability, and metadata remain unchanged.
+pub(crate) fn schema_with_group_values(
+    schema: &SchemaRef,
+    group_values: &[ArrayRef],
+) -> SchemaRef {
+    if group_values
+        .iter()
+        .zip(schema.fields())
+        .all(|(array, field)| array.data_type() == field.data_type())
+    {
+        return Arc::clone(schema);
+    }
+
+    let fields = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(index, field)| match group_values.get(index) {
+            Some(array) if array.data_type() != field.data_type() => Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(array.data_type().clone()),
+            ),
+            _ => Arc::clone(field),
+        })
+        .collect::<Vec<_>>();
+
+    Arc::new(Schema::new_with_metadata(
+        fields,
+        schema.metadata().clone(),
     ))
 }
 
-pub(crate) fn group_value_output_field(field: &Field) -> FieldRef {
+/// Casts the leading group-value arrays to the corresponding schema fields.
+/// This is used by spill files, which require one stable IPC schema even though
+/// normal aggregate output may promote dictionary keys dynamically.
+pub(crate) fn cast_group_values_to_schema(
+    group_values: &mut [ArrayRef],
+    schema: &SchemaRef,
+) -> Result<()> {
+    for (array, field) in group_values.iter_mut().zip(schema.fields()) {
+        if array.data_type() != field.data_type() {
+            *array = cast(array.as_ref(), field.data_type())?;
+        }
+    }
+    Ok(())
+}
+
+/// Returns a stable spill schema whose dictionary group keys use their widest
+/// key type. The widening is internal to spill IPC and does not change planned
+/// or non-spill aggregate output schemas.
+pub(crate) fn group_value_spill_schema(
+    schema: &SchemaRef,
+    num_group_fields: usize,
+) -> SchemaRef {
+    let fields = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            if index < num_group_fields {
+                group_value_spill_field(field.as_ref())
+            } else {
+                Arc::clone(field)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Arc::new(Schema::new_with_metadata(
+        fields,
+        schema.metadata().clone(),
+    ))
+}
+
+fn group_value_spill_field(field: &Field) -> FieldRef {
     Arc::new(
-        Field::new(
-            field.name(),
-            group_value_output_data_type(field.data_type()),
-            field.is_nullable(),
-        )
-        .with_metadata(field.metadata().clone()),
+        field
+            .clone()
+            .with_data_type(group_value_spill_data_type(field.data_type())),
     )
 }
 
-fn group_value_output_data_type(data_type: &DataType) -> DataType {
+fn group_value_spill_data_type(data_type: &DataType) -> DataType {
     match data_type {
-        DataType::Dictionary(_, value_type) => DataType::Dictionary(
-            Box::new(DataType::UInt64),
-            Box::new(group_value_output_data_type(value_type)),
-        ),
+        DataType::Dictionary(key_type, value_type) => {
+            let key_type = match key_type.as_ref() {
+                DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+                    DataType::Int64
+                }
+                DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64 => DataType::UInt64,
+                _ => key_type.as_ref().clone(),
+            };
+            DataType::Dictionary(
+                Box::new(key_type),
+                Box::new(group_value_spill_data_type(value_type)),
+            )
+        }
         DataType::Struct(fields) => DataType::Struct(
             fields
                 .iter()
-                .map(|field| group_value_output_field(field.as_ref()))
+                .map(|field| group_value_spill_field(field.as_ref()))
                 .collect::<Vec<_>>()
                 .into(),
         ),
-        DataType::List(field) => DataType::List(group_value_output_field(field.as_ref())),
+        DataType::List(field) => DataType::List(group_value_spill_field(field.as_ref())),
         DataType::LargeList(field) => {
-            DataType::LargeList(group_value_output_field(field.as_ref()))
+            DataType::LargeList(group_value_spill_field(field.as_ref()))
         }
         DataType::ListView(field) => {
-            DataType::ListView(group_value_output_field(field.as_ref()))
+            DataType::ListView(group_value_spill_field(field.as_ref()))
         }
         DataType::LargeListView(field) => {
-            DataType::LargeListView(group_value_output_field(field.as_ref()))
+            DataType::LargeListView(group_value_spill_field(field.as_ref()))
         }
         DataType::FixedSizeList(field, size) => {
-            DataType::FixedSizeList(group_value_output_field(field.as_ref()), *size)
+            DataType::FixedSizeList(group_value_spill_field(field.as_ref()), *size)
         }
         DataType::Map(field, sorted) => {
-            DataType::Map(group_value_output_field(field.as_ref()), *sorted)
+            DataType::Map(group_value_spill_field(field.as_ref()), *sorted)
         }
         DataType::RunEndEncoded(run_ends, values) => DataType::RunEndEncoded(
             Arc::clone(run_ends),
-            group_value_output_field(values.as_ref()),
+            group_value_spill_field(values.as_ref()),
         ),
         _ => data_type.clone(),
     }
