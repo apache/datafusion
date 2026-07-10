@@ -599,15 +599,19 @@ impl ExecutionPlan for FilterExec {
             context.task_id()
         );
         let metrics = FilterExecMetrics::new(&self.metrics, partition);
-        let adaptive = AdaptiveConjunction::try_new(
-            &self.predicate,
-            context
-                .session_config()
-                .options()
-                .execution
-                .adaptive_filter_reordering,
-            Arc::clone(&self.adaptive_stats),
-        );
+        let enabled = context
+            .session_config()
+            .options()
+            .execution
+            .adaptive_filter_reordering;
+        let adaptive = enabled
+            .then(|| {
+                AdaptiveConjunction::try_new(
+                    &self.predicate,
+                    Arc::clone(&self.adaptive_stats),
+                )
+            })
+            .flatten();
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
