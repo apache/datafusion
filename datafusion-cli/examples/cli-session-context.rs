@@ -79,6 +79,7 @@ pub async fn main() -> Result<(), CliError> {
         ctx,
         args: _,
         mut print_options,
+        ..
     } = CliSession::builder().build()?;
     let my_ctx = MyUnionerContext { ctx };
     exec_from_repl(&my_ctx, &mut print_options).await?;

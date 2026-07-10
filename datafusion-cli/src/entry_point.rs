@@ -54,6 +54,7 @@ use rustyline::error::ReadlineError;
 use thiserror::Error;
 
 #[derive(Error)]
+#[non_exhaustive]
 pub enum CliError {
     #[error("DataFusion error `{0}`")]
     DataFusion(#[from] DataFusionError),
@@ -72,6 +73,7 @@ impl fmt::Debug for CliError {
 }
 
 /// `CliSession` implements argument parsing, and construction of the default `CliSessionContext`.
+#[non_exhaustive]
 pub struct CliSession {
     pub ctx: SessionContext,
     pub print_options: PrintOptions,
