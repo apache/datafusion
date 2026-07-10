@@ -17,9 +17,12 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, Float16Array, Float32Array, Float64Array};
+use arrow::array::builder::NullBufferBuilder;
+use arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray};
 use arrow::datatypes::DataType::{Float16, Float32, Float64};
-use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
+use arrow::datatypes::{
+    ArrowPrimitiveType, DataType, Float16Type, Float32Type, Float64Type,
+};
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
 use datafusion_expr::{
@@ -27,6 +30,7 @@ use datafusion_expr::{
     TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
+use num_traits::Float;
 
 #[user_doc(
     doc_section(label = "Math Functions"),
@@ -148,46 +152,81 @@ fn scalar_is_nan(scalar: &ScalarValue) -> bool {
 /// - otherwise -> output is x (which may itself be NULL)
 fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        Float64 => {
-            let x = args[0].as_primitive::<Float64Type>();
-            let y = args[1].as_primitive::<Float64Type>();
-            let result: Float64Array = x
-                .iter()
-                .zip(y.iter())
-                .map(|(x_value, y_value)| match x_value {
-                    Some(x_value) if x_value.is_nan() => y_value,
-                    _ => x_value,
-                })
-                .collect();
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        Float32 => {
-            let x = args[0].as_primitive::<Float32Type>();
-            let y = args[1].as_primitive::<Float32Type>();
-            let result: Float32Array = x
-                .iter()
-                .zip(y.iter())
-                .map(|(x_value, y_value)| match x_value {
-                    Some(x_value) if x_value.is_nan() => y_value,
-                    _ => x_value,
-                })
-                .collect();
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        Float16 => {
-            let x = args[0].as_primitive::<Float16Type>();
-            let y = args[1].as_primitive::<Float16Type>();
-            let result: Float16Array = x
-                .iter()
-                .zip(y.iter())
-                .map(|(x_value, y_value)| match x_value {
-                    Some(x_value) if x_value.is_nan() => y_value,
-                    _ => x_value,
-                })
-                .collect();
-            Ok(Arc::new(result) as ArrayRef)
-        }
+        Float64 => Ok(Arc::new(nanvl_impl::<Float64Type>(
+            args[0].as_primitive(),
+            args[1].as_primitive(),
+        ))),
+        Float32 => Ok(Arc::new(nanvl_impl::<Float32Type>(
+            args[0].as_primitive(),
+            args[1].as_primitive(),
+        ))),
+        Float16 => Ok(Arc::new(nanvl_impl::<Float16Type>(
+            args[0].as_primitive(),
+            args[1].as_primitive(),
+        ))),
         other => exec_err!("Unsupported data type {other:?} for function nanvl"),
+    }
+}
+
+/// Element-wise `nanvl`: selects `y[i]` where `x[i]` is `NaN`, otherwise `x[i]`
+/// (a null `x` selects `x`, i.e. propagates null).
+///
+/// This produces output identical to collecting an iterator of `Option`s but
+/// splits out a null-free fast path that iterates the raw value slices,
+/// skipping per-element validity checks and `Option` handling. The null-aware
+/// path builds its null buffer lazily via [`NullBufferBuilder`] exactly as the
+/// `FromIterator` implementation does, so the result is byte-for-byte the same.
+fn nanvl_impl<T>(x: &PrimitiveArray<T>, y: &PrimitiveArray<T>) -> PrimitiveArray<T>
+where
+    T: ArrowPrimitiveType,
+    T::Native: Float,
+{
+    let xv = x.values();
+    let yv = y.values();
+
+    match (x.nulls(), y.nulls()) {
+        // No nulls in either input means no nulls in the output, so we can
+        // iterate values directly and avoid the null bookkeeping entirely.
+        (None, None) => {
+            let values: Vec<T::Native> = xv
+                .iter()
+                .zip(yv.iter())
+                .map(
+                    |(&x_value, &y_value)| {
+                        if x_value.is_nan() { y_value } else { x_value }
+                    },
+                )
+                .collect();
+            PrimitiveArray::<T>::new(values.into(), None)
+        }
+        _ => {
+            let len = x.len();
+            let mut nulls = NullBufferBuilder::new(len);
+            let mut values = Vec::with_capacity(len);
+            for i in 0..len {
+                // `y` is only consulted when `x` is a (non-null) NaN, matching
+                // the original short-circuiting match.
+                if x.is_valid(i) {
+                    let x_value = xv[i];
+                    if x_value.is_nan() {
+                        if y.is_valid(i) {
+                            values.push(yv[i]);
+                            nulls.append_non_null();
+                        } else {
+                            values.push(T::Native::default());
+                            nulls.append_null();
+                        }
+                    } else {
+                        values.push(x_value);
+                        nulls.append_non_null();
+                    }
+                } else {
+                    values.push(T::Native::default());
+                    nulls.append_null();
+                }
+            }
+            PrimitiveArray::<T>::new(values.into(), nulls.finish())
+        }
     }
 }
 
@@ -197,7 +236,7 @@ mod test {
 
     use crate::math::nanvl::nanvl;
 
-    use arrow::array::{ArrayRef, Float32Array, Float64Array};
+    use arrow::array::{Array, ArrayRef, Float32Array, Float64Array};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
 
     #[test]
@@ -234,5 +273,38 @@ mod test {
         assert_eq!(floats.value(1), 6.0);
         assert_eq!(floats.value(2), 3.0);
         assert!(floats.value(3).is_nan());
+    }
+
+    #[test]
+    fn test_nanvl_f64_with_nulls() {
+        // Covers the null-aware path and null propagation:
+        // - x null            -> null (regardless of y)
+        // - x NaN, y non-null -> y
+        // - x NaN, y null     -> null
+        // - x non-NaN         -> x
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from(vec![
+                None,
+                Some(f64::NAN),
+                Some(f64::NAN),
+                Some(2.5),
+            ])), // x
+            Arc::new(Float64Array::from(vec![
+                Some(9.0),
+                Some(6.0),
+                None,
+                Some(7.0),
+            ])), // y
+        ];
+
+        let result = nanvl(&args).expect("failed to initialize function nanvl");
+        let floats =
+            as_float64_array(&result).expect("failed to initialize function nanvl");
+
+        assert_eq!(floats.len(), 4);
+        assert!(floats.is_null(0));
+        assert_eq!(floats.value(1), 6.0);
+        assert!(floats.is_null(2));
+        assert_eq!(floats.value(3), 2.5);
     }
 }
