@@ -302,10 +302,7 @@ fn materialized_row_schema(schema: &SchemaRef) -> SchemaRef {
             _ => Arc::clone(field),
         })
         .collect::<Vec<_>>();
-    Arc::new(Schema::new_with_metadata(
-        fields,
-        schema.metadata().clone(),
-    ))
+    Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
 fn dictionary_encode_with_promotion(
@@ -421,9 +418,7 @@ fn promote_dictionary_type(data_type: &DataType) -> Option<DataType> {
 mod tests {
     use super::*;
     use arrow::array::{DictionaryArray, StringArray, StringDictionaryBuilder};
-    use arrow::datatypes::{
-        Field, Int8Type, Int16Type, Schema, UInt8Type, UInt16Type,
-    };
+    use arrow::datatypes::{Field, Int8Type, Int16Type, Schema, UInt8Type, UInt16Type};
 
     #[test]
     fn dict_uint8_utf8_promotes_and_does_not_shrink() -> Result<()> {
@@ -493,10 +488,12 @@ mod tests {
             arrays[0].data_type(),
             &DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8))
         );
-        assert!(arrays[0]
-            .as_any()
-            .downcast_ref::<DictionaryArray<UInt8Type>>()
-            .is_some());
+        assert!(
+            arrays[0]
+                .as_any()
+                .downcast_ref::<DictionaryArray<UInt8Type>>()
+                .is_some()
+        );
         Ok(())
     }
 
@@ -520,10 +517,12 @@ mod tests {
             arrays[0].data_type(),
             &DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8))
         );
-        assert!(arrays[0]
-            .as_any()
-            .downcast_ref::<DictionaryArray<Int16Type>>()
-            .is_some());
+        assert!(
+            arrays[0]
+                .as_any()
+                .downcast_ref::<DictionaryArray<Int16Type>>()
+                .is_some()
+        );
         Ok(())
     }
 }

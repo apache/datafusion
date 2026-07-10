@@ -60,10 +60,7 @@ pub(crate) fn schema_with_group_values(
         })
         .collect::<Vec<_>>();
 
-    Arc::new(Schema::new_with_metadata(
-        fields,
-        schema.metadata().clone(),
-    ))
+    Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
 /// Returns the largest partial aggregate batch that can be emitted without
@@ -147,10 +144,7 @@ pub(crate) fn group_value_spill_schema(
         })
         .collect::<Vec<_>>();
 
-    Arc::new(Schema::new_with_metadata(
-        fields,
-        schema.metadata().clone(),
-    ))
+    Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
 fn group_value_spill_field(field: &Field) -> FieldRef {
@@ -166,7 +160,10 @@ fn group_value_spill_field(field: &Field) -> FieldRef {
                 | DataType::UInt64 => DataType::UInt64,
                 _ => key_type.as_ref().clone(),
             };
-            DataType::Dictionary(Box::new(key_type), Box::new(value_type.as_ref().clone()))
+            DataType::Dictionary(
+                Box::new(key_type),
+                Box::new(value_type.as_ref().clone()),
+            )
         }
         _ => field.data_type().clone(),
     };

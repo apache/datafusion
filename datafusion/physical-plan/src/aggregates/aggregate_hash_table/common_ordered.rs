@@ -339,11 +339,8 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                 self.batch_size,
             )
         };
-        let (emit_to, should_remove_groups) = self.clamp_emit_to(
-            self.buffer.group_values.len(),
-            emit_to,
-            max_batch_size,
-        );
+        let (emit_to, should_remove_groups) =
+            self.clamp_emit_to(self.buffer.group_values.len(), emit_to, max_batch_size);
 
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.buffer.group_values.emit(emit_to)?;
@@ -368,10 +365,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         drop(timer);
 
         let output_schema = if is_final {
-            schema_with_group_values(
-                &self.output_schema,
-                &output[..num_group_columns],
-            )
+            schema_with_group_values(&self.output_schema, &output[..num_group_columns])
         } else {
             Arc::clone(&self.output_schema)
         };

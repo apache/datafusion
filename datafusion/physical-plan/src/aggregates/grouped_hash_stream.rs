@@ -1039,24 +1039,23 @@ impl GroupedHashAggregateStream {
             return Ok(None);
         }
 
-        let emit_to = if !spilling
-            && self.mode.output_mode() == AggregateOutputMode::Partial
-        {
-            let max_groups = group_value_emit_batch_size(
-                &self.schema,
-                self.group_by.num_group_exprs(),
-                self.batch_size,
-            );
-            match emit_to {
-                EmitTo::First(n) => EmitTo::First(n.min(max_groups)),
-                EmitTo::All if self.group_values.len() > max_groups => {
-                    EmitTo::First(max_groups)
+        let emit_to =
+            if !spilling && self.mode.output_mode() == AggregateOutputMode::Partial {
+                let max_groups = group_value_emit_batch_size(
+                    &self.schema,
+                    self.group_by.num_group_exprs(),
+                    self.batch_size,
+                );
+                match emit_to {
+                    EmitTo::First(n) => EmitTo::First(n.min(max_groups)),
+                    EmitTo::All if self.group_values.len() > max_groups => {
+                        EmitTo::First(max_groups)
+                    }
+                    EmitTo::All => EmitTo::All,
                 }
-                EmitTo::All => EmitTo::All,
-            }
-        } else {
-            emit_to
-        };
+            } else {
+                emit_to
+            };
 
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.group_values.emit(emit_to)?;
@@ -1070,10 +1069,8 @@ impl GroupedHashAggregateStream {
         } else if self.mode.output_mode() == AggregateOutputMode::Partial {
             Arc::clone(&self.schema)
         } else {
-            let schema = schema_with_group_values(
-                &self.schema,
-                &output[..num_group_columns],
-            );
+            let schema =
+                schema_with_group_values(&self.schema, &output[..num_group_columns]);
             self.schema = Arc::clone(&schema);
             schema
         };
@@ -1498,11 +1495,13 @@ mod tests {
             batch.schema().field(0).data_type(),
             &DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8))
         );
-        assert!(batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<DictionaryArray<UInt16Type>>()
-            .is_some());
+        assert!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<DictionaryArray<UInt16Type>>()
+                .is_some()
+        );
         assert!(stream.next().await.is_none());
         Ok(())
     }

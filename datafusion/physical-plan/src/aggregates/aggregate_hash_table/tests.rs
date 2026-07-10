@@ -17,9 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{
-    ArrayRef, DictionaryArray, StringArray, StringDictionaryBuilder,
-};
+use arrow::array::{ArrayRef, DictionaryArray, StringArray, StringDictionaryBuilder};
 use arrow::datatypes::{DataType, Field, Schema, UInt8Type, UInt16Type};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -86,11 +84,13 @@ fn dictionary_groups_keep_partial_schema_and_promote_final_output() -> Result<()
             batch.schema().field(0).data_type(),
             &DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8))
         );
-        assert!(batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<DictionaryArray<UInt8Type>>()
-            .is_some());
+        assert!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<DictionaryArray<UInt8Type>>()
+                .is_some()
+        );
         partial_batches.push(batch);
     }
     assert_eq!(
