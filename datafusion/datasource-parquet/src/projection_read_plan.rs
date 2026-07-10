@@ -363,18 +363,7 @@ pub(crate) fn build_projection_read_plan(
         root_indices.sort_unstable();
         root_indices.dedup();
 
-        let projection_mask =
-            ProjectionMask::roots(schema_descr, root_indices.iter().copied());
-        let projected_schema = Arc::new(
-            file_schema
-                .project(&root_indices)
-                .expect("valid column indices"),
-        );
-
-        return ParquetReadPlan {
-            projection_mask,
-            projected_schema,
-        };
+        return root_level_plan(&root_indices, file_schema, schema_descr);
     }
 
     // secondary fast path: if the schema has no struct columns, we can skip
@@ -393,19 +382,7 @@ pub(crate) fn build_projection_read_plan(
         root_indices.sort_unstable();
         root_indices.dedup();
 
-        let projection_mask =
-            ProjectionMask::roots(schema_descr, root_indices.iter().copied());
-
-        let projected_schema = Arc::new(
-            file_schema
-                .project(&root_indices)
-                .expect("valid column indices"),
-        );
-
-        return ParquetReadPlan {
-            projection_mask,
-            projected_schema,
-        };
+        return root_level_plan(&root_indices, file_schema, schema_descr);
     }
 
     let mut all_root_indices = Vec::new();
@@ -426,38 +403,74 @@ pub(crate) fn build_projection_read_plan(
     // when no struct field accesses were found, fall back to root-level projection
     // to match the performance of the simple path
     if all_struct_accesses.is_empty() {
-        let projection_mask =
-            ProjectionMask::roots(schema_descr, all_root_indices.iter().copied());
-        let projected_schema = Arc::new(
-            file_schema
-                .project(&all_root_indices)
-                .expect("valid column indices"),
-        );
-
-        return ParquetReadPlan {
-            projection_mask,
-            projected_schema,
-        };
+        return root_level_plan(&all_root_indices, file_schema, schema_descr);
     }
 
-    let leaf_indices = {
-        let mut out =
-            leaf_indices_for_roots(all_root_indices.iter().copied(), schema_descr);
-        let struct_leaf_indices =
-            resolve_struct_field_leaves(&all_struct_accesses, file_schema, schema_descr);
+    let (read_plan, _leaf_indices) = assemble_read_plan(
+        &all_root_indices,
+        &all_struct_accesses,
+        file_schema,
+        schema_descr,
+    );
 
-        out.extend_from_slice(&struct_leaf_indices);
-        out.sort_unstable();
-        out.dedup();
+    read_plan
+}
 
-        out
-    };
+/// Builds a leaf-level [`ParquetReadPlan`] covering `root_indices` in full plus
+/// the individual leaves reached by `struct_field_accesses`.
+///
+/// `root_indices` must be sorted, deduplicated indices into `file_schema`.
+///
+/// Also returns the resolved Parquet leaf indices, sorted and deduplicated, so
+/// callers can size the columns the decoder will read.
+pub(crate) fn assemble_read_plan(
+    root_indices: &[usize],
+    struct_field_accesses: &[StructFieldAccess],
+    file_schema: &Schema,
+    schema_descr: &SchemaDescriptor,
+) -> (ParquetReadPlan, Vec<usize>) {
+    let mut leaf_indices =
+        leaf_indices_for_roots(root_indices.iter().copied(), schema_descr);
+    leaf_indices.extend_from_slice(&resolve_struct_field_leaves(
+        struct_field_accesses,
+        file_schema,
+        schema_descr,
+    ));
+    leaf_indices.sort_unstable();
+    leaf_indices.dedup();
 
     let projection_mask =
         ProjectionMask::leaves(schema_descr, leaf_indices.iter().copied());
-
     let projected_schema =
-        build_filter_schema(file_schema, &all_root_indices, &all_struct_accesses);
+        build_filter_schema(file_schema, root_indices, struct_field_accesses);
+
+    (
+        ParquetReadPlan {
+            projection_mask,
+            projected_schema,
+        },
+        leaf_indices,
+    )
+}
+
+/// Builds a [`ParquetReadPlan`] that decodes whole root columns.
+///
+/// `root_indices` must be sorted, deduplicated indices into `file_schema`. Every
+/// leaf below each root is decoded, and the projected schema keeps each root
+/// field's full type. Callers that need to decode only some leaves of a struct
+/// root must build the plan from leaf indices instead.
+fn root_level_plan(
+    root_indices: &[usize],
+    file_schema: &Schema,
+    schema_descr: &SchemaDescriptor,
+) -> ParquetReadPlan {
+    let projection_mask =
+        ProjectionMask::roots(schema_descr, root_indices.iter().copied());
+    let projected_schema = Arc::new(
+        file_schema
+            .project(root_indices)
+            .expect("valid column indices"),
+    );
 
     ParquetReadPlan {
         projection_mask,
@@ -465,7 +478,7 @@ pub(crate) fn build_projection_read_plan(
     }
 }
 
-pub(crate) fn leaf_indices_for_roots<I>(
+fn leaf_indices_for_roots<I>(
     root_indices: I,
     schema_descr: &SchemaDescriptor,
 ) -> Vec<usize>
@@ -491,7 +504,7 @@ where
 /// For every `StructFieldAccess`, finds the leaf columns in the Parquet schema
 /// whose path matches the struct root name + field path. This avoids reading all
 /// leaves of a struct when only specific fields are needed
-pub(crate) fn resolve_struct_field_leaves(
+fn resolve_struct_field_leaves(
     accesses: &[StructFieldAccess],
     file_schema: &Schema,
     schema_descr: &SchemaDescriptor,
@@ -530,7 +543,7 @@ pub(crate) fn resolve_struct_field_leaves(
 /// For struct columns accessed via `get_field`, a pruned struct type is created
 /// containing only the fields along the access path. Note: it must match the schema
 /// that the Parquet reader produces when projecting specific struct leaves
-pub(crate) fn build_filter_schema(
+fn build_filter_schema(
     file_schema: &Schema,
     regular_indices: &[usize],
     struct_field_accesses: &[StructFieldAccess],
