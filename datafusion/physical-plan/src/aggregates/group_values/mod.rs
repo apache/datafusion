@@ -105,16 +105,24 @@ fn dictionary_key_capacity(key_type: &DataType) -> Option<usize> {
 }
 
 /// Casts the leading group-value arrays to the corresponding schema fields.
-/// This is used by spill files, which require one stable IPC schema even though
-/// normal aggregate output may promote dictionary keys dynamically.
+/// Dictionary arrays are decoded and re-encoded when their key type changes so
+/// sliced batches receive compact keys starting at zero.
 pub(crate) fn cast_group_values_to_schema(
     group_values: &mut [ArrayRef],
     schema: &SchemaRef,
 ) -> Result<()> {
     for (array, field) in group_values.iter_mut().zip(schema.fields()) {
-        if array.data_type() != field.data_type() {
-            *array = cast(array.as_ref(), field.data_type())?;
+        if array.data_type() == field.data_type() {
+            continue;
         }
+
+        *array = match (array.data_type(), field.data_type()) {
+            (DataType::Dictionary(_, _), DataType::Dictionary(_, value_type)) => {
+                let values = cast(array.as_ref(), value_type.as_ref())?;
+                cast(values.as_ref(), field.data_type())?
+            }
+            _ => cast(array.as_ref(), field.data_type())?,
+        };
     }
     Ok(())
 }
