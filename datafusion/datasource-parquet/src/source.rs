@@ -840,7 +840,6 @@ impl FileSource for ParquetSource {
         let config_pushdown_enabled = config.execution.parquet.pushdown_filters;
         let table_pushdown_enabled = self.pushdown_filters();
         let mut pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
-
         // Narrow-projection gate (issue #3463, discussion on PR #23369):
         // RowFilter has a fixed per-row machinery overhead that only pays
         // for itself when the wide-column decode it lets us skip is
@@ -866,15 +865,24 @@ impl FileSource for ParquetSource {
         // [#22883]: https://github.com/apache/datafusion/issues/22883
         const PUSHDOWN_MIN_NON_FILTER_COLS: usize = 3;
         let mut narrow_projection_gate_declined = false;
-        // Never gate a scan that receives a dynamic filter. Dynamic filters
-        // (e.g. `TopK`'s heap-threshold predicate) rely on pushdown being
-        // active in order to feed the runtime row-group pruner
-        // (`RowGroupPruner`); declining pushdown here would silently
-        // disable the entire dynamic-RG-prune cascade for narrow
-        // ORDER BY ... LIMIT queries.
-        let has_dynamic_filter = filters
+        // Never gate a scan whose predicate already contains a dynamic
+        // filter — either in the incoming `filters` parameter, or already
+        // installed on `self.predicate` by an earlier optimizer rule (this
+        // is how `TopK`'s heap-threshold expression arrives: the sort
+        // pushdown / TopK rule injects the `DynamicFilterPhysicalExpr`
+        // into the scan's predicate before filter pushdown runs). Dynamic
+        // filters rely on the scan-time RowFilter/RowGroupPruner cascade
+        // to prune data as the threshold tightens, so declining pushdown
+        // here would silently disable the entire dynamic-RG-prune path
+        // for narrow `ORDER BY ... LIMIT` queries.
+        let existing_predicate_has_dynamic = self.predicate.as_ref().is_some_and(|p| {
+            DynamicFilterTracking::classify(p).contains_dynamic_filter()
+        });
+        let incoming_filters_have_dynamic = filters
             .iter()
             .any(|f| DynamicFilterTracking::classify(f).contains_dynamic_filter());
+        let has_dynamic_filter =
+            existing_predicate_has_dynamic || incoming_filters_have_dynamic;
         if pushdown_filters
             && !has_dynamic_filter
             && config
@@ -943,7 +951,18 @@ impl FileSource for ParquetSource {
             None => conjunction(allowed_filters),
         };
         source.predicate = Some(predicate);
-        source = source.with_pushdown_filters(pushdown_filters);
+        // Only persist the pushdown_filters bit on the source when this is
+        // a "real" config-driven decision. When the gate declined, we
+        // deliberately do NOT flip the source's pushdown flag to false —
+        // a later `try_pushdown_filters` call (e.g. from TopK's dynamic
+        // filter injection) needs the source to still be pushdown-eligible
+        // so that dynamic filter can install its RowFilter and drive the
+        // runtime RG-prune cascade. The current call still returns
+        // `PushedDown::No` for its incoming filters, so the FilterExec
+        // above the scan stays and correctness is preserved.
+        if !narrow_projection_gate_declined {
+            source = source.with_pushdown_filters(pushdown_filters);
+        }
         let source = Arc::new(source);
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
         // even if we updated the predicate to include the filters (they will only be used for stats pruning).

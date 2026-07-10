@@ -324,12 +324,12 @@ impl ContextWithParquet {
                 config = config.with_parquet_bloom_filter_pruning(true);
                 config.options_mut().execution.parquet.pushdown_filters = true;
                 // These tests specifically exercise the TopK dynamic RG
-                // pruning + RowFilter co-existence path, which relies on
-                // pushdown being active at the scan. The narrow-projection
-                // gate cannot detect that a *TopK* dynamic filter will be
-                // injected later (after `try_pushdown_filters` has run), so
-                // for these tests we opt out of the gate so the dynamic RG
-                // pruning cascade can fire.
+                // pruning + RowFilter co-existence path. TopK's dynamic
+                // filter is injected AFTER filter pushdown runs, so the
+                // narrow-projection gate cannot detect it at plan time and
+                // may decline the WHERE-filter pushdown for narrow
+                // projections. Opt out of the gate so these tests exercise
+                // the unconditional-pushdown path they were designed for.
                 config
                     .options_mut()
                     .execution
@@ -353,12 +353,12 @@ impl ContextWithParquet {
                 config = config.with_parquet_page_index_pruning(true);
                 config.options_mut().execution.parquet.pushdown_filters = true;
                 // These tests specifically exercise the TopK dynamic RG
-                // pruning + RowFilter co-existence path, which relies on
-                // pushdown being active at the scan. The narrow-projection
-                // gate cannot detect that a *TopK* dynamic filter will be
-                // injected later (after `try_pushdown_filters` has run), so
-                // for these tests we opt out of the gate so the dynamic RG
-                // pruning cascade can fire.
+                // pruning + RowFilter co-existence path. TopK's dynamic
+                // filter is injected AFTER filter pushdown runs, so the
+                // narrow-projection gate cannot detect it at plan time and
+                // may decline the WHERE-filter pushdown for narrow
+                // projections. Opt out of the gate so these tests exercise
+                // the unconditional-pushdown path they were designed for.
                 config
                     .options_mut()
                     .execution
