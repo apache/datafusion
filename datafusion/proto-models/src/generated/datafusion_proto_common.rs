@@ -815,6 +815,8 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "5")]
     pub pushdown_filters: bool,
+    #[prost(enumeration = "parquet_options::PushdownFilterMode", tag = "38")]
+    pub pushdown_filter_mode: i32,
     /// default = false
     #[prost(bool, tag = "6")]
     pub reorder_filters: bool,
@@ -864,8 +866,6 @@ pub struct ParquetOptions {
     pub max_row_group_size: u64,
     #[prost(string, tag = "16")]
     pub created_by: ::prost::alloc::string::String,
-    #[prost(enumeration = "parquet_options::PushdownFilterMode", tag = "38")]
-    pub pushdown_filter_mode: i32,
     #[prost(message, optional, tag = "35")]
     pub content_defined_chunking: ::core::option::Option<ParquetCdcOptions>,
     #[prost(oneof = "parquet_options::MetadataSizeHintOpt", tags = "4")]

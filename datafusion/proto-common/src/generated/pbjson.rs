@@ -6361,6 +6361,9 @@ impl serde::Serialize for ParquetOptions {
         if self.pushdown_filters {
             len += 1;
         }
+        if self.pushdown_filter_mode != 0 {
+            len += 1;
+        }
         if self.reorder_filters {
             len += 1;
         }
@@ -6410,9 +6413,6 @@ impl serde::Serialize for ParquetOptions {
             len += 1;
         }
         if !self.created_by.is_empty() {
-            len += 1;
-        }
-        if self.pushdown_filter_mode != 0 {
             len += 1;
         }
         if self.content_defined_chunking.is_some() {
@@ -6469,6 +6469,11 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.pushdown_filters {
             struct_ser.serialize_field("pushdownFilters", &self.pushdown_filters)?;
+        }
+        if self.pushdown_filter_mode != 0 {
+            let v = parquet_options::PushdownFilterMode::try_from(self.pushdown_filter_mode)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.pushdown_filter_mode)))?;
+            struct_ser.serialize_field("pushdownFilterMode", &v)?;
         }
         if self.reorder_filters {
             struct_ser.serialize_field("reorderFilters", &self.reorder_filters)?;
@@ -6534,11 +6539,6 @@ impl serde::Serialize for ParquetOptions {
         }
         if !self.created_by.is_empty() {
             struct_ser.serialize_field("createdBy", &self.created_by)?;
-        }
-        if self.pushdown_filter_mode != 0 {
-            let v = parquet_options::PushdownFilterMode::try_from(self.pushdown_filter_mode)
-                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.pushdown_filter_mode)))?;
-            struct_ser.serialize_field("pushdownFilterMode", &v)?;
         }
         if let Some(v) = self.content_defined_chunking.as_ref() {
             struct_ser.serialize_field("contentDefinedChunking", v)?;
@@ -6663,6 +6663,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "skipMetadata",
             "pushdown_filters",
             "pushdownFilters",
+            "pushdown_filter_mode",
+            "pushdownFilterMode",
             "reorder_filters",
             "reorderFilters",
             "force_filter_selections",
@@ -6697,8 +6699,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maxRowGroupSize",
             "created_by",
             "createdBy",
-            "pushdown_filter_mode",
-            "pushdownFilterMode",
             "content_defined_chunking",
             "contentDefinedChunking",
             "metadata_size_hint",
@@ -6733,6 +6733,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             Pruning,
             SkipMetadata,
             PushdownFilters,
+            PushdownFilterMode,
             ReorderFilters,
             ForceFilterSelections,
             DataPagesizeLimit,
@@ -6750,7 +6751,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             DataPageRowCountLimit,
             MaxRowGroupSize,
             CreatedBy,
-            PushdownFilterMode,
             ContentDefinedChunking,
             MetadataSizeHint,
             Compression,
@@ -6790,6 +6790,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "pruning" => Ok(GeneratedField::Pruning),
                             "skipMetadata" | "skip_metadata" => Ok(GeneratedField::SkipMetadata),
                             "pushdownFilters" | "pushdown_filters" => Ok(GeneratedField::PushdownFilters),
+                            "pushdownFilterMode" | "pushdown_filter_mode" => Ok(GeneratedField::PushdownFilterMode),
                             "reorderFilters" | "reorder_filters" => Ok(GeneratedField::ReorderFilters),
                             "forceFilterSelections" | "force_filter_selections" => Ok(GeneratedField::ForceFilterSelections),
                             "dataPagesizeLimit" | "data_pagesize_limit" => Ok(GeneratedField::DataPagesizeLimit),
@@ -6807,7 +6808,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
                             "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
-                            "pushdownFilterMode" | "pushdown_filter_mode" => Ok(GeneratedField::PushdownFilterMode),
                             "contentDefinedChunking" | "content_defined_chunking" => Ok(GeneratedField::ContentDefinedChunking),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
                             "compression" => Ok(GeneratedField::Compression),
@@ -6845,6 +6845,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut pruning__ = None;
                 let mut skip_metadata__ = None;
                 let mut pushdown_filters__ = None;
+                let mut pushdown_filter_mode__ = None;
                 let mut reorder_filters__ = None;
                 let mut force_filter_selections__ = None;
                 let mut data_pagesize_limit__ = None;
@@ -6862,7 +6863,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
                 let mut created_by__ = None;
-                let mut pushdown_filter_mode__ = None;
                 let mut content_defined_chunking__ = None;
                 let mut metadata_size_hint_opt__ = None;
                 let mut compression_opt__ = None;
@@ -6902,6 +6902,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 return Err(serde::de::Error::duplicate_field("pushdownFilters"));
                             }
                             pushdown_filters__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PushdownFilterMode => {
+                            if pushdown_filter_mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("pushdownFilterMode"));
+                            }
+                            pushdown_filter_mode__ = Some(map_.next_value::<parquet_options::PushdownFilterMode>()? as i32);
                         }
                         GeneratedField::ReorderFilters => {
                             if reorder_filters__.is_some() {
@@ -7019,12 +7025,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             created_by__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::PushdownFilterMode => {
-                            if pushdown_filter_mode__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("pushdownFilterMode"));
-                            }
-                            pushdown_filter_mode__ = Some(map_.next_value::<parquet_options::PushdownFilterMode>()? as i32);
-                        }
                         GeneratedField::ContentDefinedChunking => {
                             if content_defined_chunking__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("contentDefinedChunking"));
@@ -7116,6 +7116,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     pruning: pruning__.unwrap_or_default(),
                     skip_metadata: skip_metadata__.unwrap_or_default(),
                     pushdown_filters: pushdown_filters__.unwrap_or_default(),
+                    pushdown_filter_mode: pushdown_filter_mode__.unwrap_or_default(),
                     reorder_filters: reorder_filters__.unwrap_or_default(),
                     force_filter_selections: force_filter_selections__.unwrap_or_default(),
                     data_pagesize_limit: data_pagesize_limit__.unwrap_or_default(),
@@ -7133,7 +7134,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
                     created_by: created_by__.unwrap_or_default(),
-                    pushdown_filter_mode: pushdown_filter_mode__.unwrap_or_default(),
                     content_defined_chunking: content_defined_chunking__,
                     metadata_size_hint_opt: metadata_size_hint_opt__,
                     compression_opt: compression_opt__,
