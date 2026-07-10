@@ -910,6 +910,9 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             skip_metadata: value.skip_metadata,
             metadata_size_hint_opt: value.metadata_size_hint.map(|v| protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v as u64)),
             pushdown_filters: value.pushdown_filters,
+            pushdown_filter_mode: protobuf::parquet_options::PushdownFilterMode::from(
+                value.pushdown_filter_mode,
+            ) as i32,
             reorder_filters: value.reorder_filters,
             force_filter_selections: value.force_filter_selections,
             data_pagesize_limit: value.data_pagesize_limit as u64,
@@ -939,9 +942,6 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             coerce_int96_tz_opt: value.coerce_int96_tz.clone().map(protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz),
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
             max_row_group_bytes_opt: value.max_row_group_bytes.map(|v| protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v.get() as u64)),
-            pushdown_filter_mode: protobuf::parquet_options::PushdownFilterMode::from(
-                value.pushdown_filter_mode,
-            ) as i32,
             content_defined_chunking: Some((&value.content_defined_chunking).into()),
         })
     }

@@ -1082,6 +1082,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 })
                 .unwrap_or(None),
             pushdown_filters: value.pushdown_filters,
+            pushdown_filter_mode: value.pushdown_filter_mode().into(),
             reorder_filters: value.reorder_filters,
             force_filter_selections: value.force_filter_selections,
             data_pagesize_limit: value.data_pagesize_limit as usize,
@@ -1154,7 +1155,6 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             max_row_group_bytes: value.max_row_group_bytes_opt.and_then(|opt| match opt {
                 protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v) => MaxRowGroupBytes::try_new(v as usize).ok(),
             }),
-            pushdown_filter_mode: value.pushdown_filter_mode().into(),
             content_defined_chunking: value.content_defined_chunking.map(ParquetCdcOptions::from).unwrap_or_default(),
         })
     }
