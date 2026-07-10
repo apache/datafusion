@@ -1694,3 +1694,47 @@ mod tests {
         all_ops.into_iter().collect()
     }
 }
+
+use std::sync::Arc;
+
+use datafusion_common::Column;
+
+/// A statistic a caller would like a provider to supply, if it can do so
+/// cheaply.
+///
+/// A small, query-aware extension to the existing `Statistics` model: instead
+/// of "give me everything you have for every column", a caller can ask for a
+/// specific list of stats by name. `StatisticsRequest` is just that vocabulary
+/// — DataFusion itself does not populate or consume it. It exists so a request
+/// can be threaded from a `TableScan` (see `TableScan::statistics_requests`)
+/// through `ScanArgs::statistics_requests` to a `TableProvider`, which is enough
+/// for a query-aware statistics feature to be implemented outside of DataFusion.
+///
+/// Each variant maps onto a field of [`datafusion_common::Statistics`] /
+/// [`datafusion_common::ColumnStatistics`], so a provider that already
+/// populates one can answer the request trivially.
+///
+/// The per-column variants hold an `Arc<Column>` rather than an owned
+/// [`Column`] (which carries owned strings) so cloning a request — and the
+/// `BTreeSet<StatisticsRequest>` stored on `TableScan`, which is cloned with
+/// the plan during optimization — stays cheap.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StatisticsRequest {
+    /// Smallest non-null value of `column`.
+    Min(Arc<Column>),
+    /// Largest non-null value of `column`.
+    Max(Arc<Column>),
+    /// Number of NULLs in `column`.
+    NullCount(Arc<Column>),
+    /// Number of distinct values in `column` (exact or estimated).
+    DistinctCount(Arc<Column>),
+    /// Sum of values in `column` (numerics, widened per
+    /// `ColumnStatistics::sum_value`).
+    Sum(Arc<Column>),
+    /// Encoded/output byte size of `column`.
+    ByteSize(Arc<Column>),
+    /// Number of rows in the container (table / file).
+    RowCount,
+    /// Total byte size of the container's output.
+    TotalByteSize,
+}

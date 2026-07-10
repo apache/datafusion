@@ -25,11 +25,10 @@ use std::task::{Context, Poll};
 use crate::file_format::JsonDecoder;
 use crate::utils::{ChannelReader, JsonArrayToNdjsonReader};
 
-use crate::boundary_stream::AlignedBoundaryStream;
-
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::exec_datafusion_err;
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
+use datafusion_datasource::boundary_stream::AlignedBoundaryStream;
 use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};

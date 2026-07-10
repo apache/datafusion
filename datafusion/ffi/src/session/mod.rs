@@ -258,6 +258,7 @@ fn table_options_to_rhash(mut options: TableOptions) -> SVec<(SString, SString)>
             "datafusion_ffi.table_current_format".into(),
             match current_format {
                 ConfigFileType::JSON => "json",
+                #[cfg(feature = "parquet")]
                 ConfigFileType::PARQUET => "parquet",
                 ConfigFileType::CSV => "csv",
             }
@@ -378,7 +379,7 @@ pub struct ForeignSession {
     session: FFI_SessionRef,
     config: SessionConfig,
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
+    higher_order_functions: HashMap<String, Arc<HigherOrderUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     window_functions: HashMap<String, Arc<WindowUDF>>,
     extension_types: ExtensionTypeRegistryRef,
@@ -476,6 +477,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
     let formats = [
         ConfigFileType::CSV,
         ConfigFileType::JSON,
+        #[cfg(feature = "parquet")]
         ConfigFileType::PARQUET,
     ];
     for format in formats {
@@ -483,6 +485,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
         // included in the formats list above and in the extension check below.
         let format_name = match &format {
             ConfigFileType::CSV => "csv",
+            #[cfg(feature = "parquet")]
             ConfigFileType::PARQUET => "parquet",
             ConfigFileType::JSON => "json",
         };
@@ -504,7 +507,6 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
                 .unwrap_or_else(|err| log::warn!("Error parsing table options: {err}"));
         }
     }
-
     let extension_options: HashMap<String, String> = options
         .iter()
         .filter_map(|(k, v)| {
@@ -525,6 +527,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
     table_options.current_format =
         current_format.and_then(|format| match format.as_str() {
             "csv" => Some(ConfigFileType::CSV),
+            #[cfg(feature = "parquet")]
             "parquet" => Some(ConfigFileType::PARQUET),
             "json" => Some(ConfigFileType::JSON),
             _ => None,
@@ -590,7 +593,7 @@ impl Session for ForeignSession {
         &self.scalar_functions
     }
 
-    fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
+    fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
         &self.higher_order_functions
     }
 
@@ -661,7 +664,10 @@ mod tests {
         let mut table_options = TableOptions::default();
         table_options.csv.has_header = Some(true);
         table_options.json.schema_infer_max_rec = Some(10);
-        table_options.parquet.global.coerce_int96 = Some("123456789".into());
+        #[cfg(feature = "parquet")]
+        {
+            table_options.parquet.global.coerce_int96 = Some("123456789".into());
+        }
         table_options.current_format = Some(ConfigFileType::JSON);
 
         let state = SessionStateBuilder::new_from_existing(ctx.state())

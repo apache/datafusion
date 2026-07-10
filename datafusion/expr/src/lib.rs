@@ -101,8 +101,8 @@ pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::placement::ExpressionPlacement;
 pub use datafusion_expr_common::signature::{
-    ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature,
-    TIMEZONE_WILDCARD, TypeSignature, TypeSignatureClass, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, Coercion, EncodingPreservation,
+    Signature, TIMEZONE_WILDCARD, TypeSignature, TypeSignatureClass, Volatility,
 };
 pub use datafusion_expr_common::type_coercion::binary;
 pub use expr::{
@@ -117,8 +117,8 @@ pub use function::{
 };
 pub use higher_order_function::{
     HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
-    HigherOrderTypeSignature, HigherOrderUDF, LambdaArgument, LambdaParametersProgress,
-    ValueOrLambda,
+    HigherOrderTypeSignature, HigherOrderUDF, HigherOrderUDFImpl, LambdaArgument,
+    LambdaParametersProgress, ValueOrLambda,
 };
 pub use literal::{
     Literal, TimestampLiteral, lit, lit_timestamp_nano, lit_with_metadata,

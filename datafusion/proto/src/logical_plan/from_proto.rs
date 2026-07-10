@@ -20,12 +20,14 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    NullEquality, RecursionUnnestOption, Result, ScalarValue, TableReference,
+    NullEquality, RecursionUnnestOption, Result, ScalarValue, SplitPoint, TableReference,
     UnnestOptions, exec_datafusion_err, internal_err, plan_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::registry::FunctionRegistry;
-use datafusion_expr::dml::InsertOp;
+use datafusion_expr::dml::{
+    InsertOp, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
+};
 use datafusion_expr::expr::{
     Alias, Lambda, LambdaVariable, NullTreatment, Placeholder, Sort,
 };
@@ -241,20 +243,131 @@ impl FromProto<protobuf::NullEquality> for NullEquality {
     }
 }
 
-impl FromProto<protobuf::dml_node::Type> for WriteOp {
-    fn from_proto(t: protobuf::dml_node::Type) -> Self {
-        match t {
-            protobuf::dml_node::Type::Update => WriteOp::Update,
-            protobuf::dml_node::Type::Delete => WriteOp::Delete,
-            protobuf::dml_node::Type::InsertAppend => WriteOp::Insert(InsertOp::Append),
-            protobuf::dml_node::Type::InsertOverwrite => {
-                WriteOp::Insert(InsertOp::Overwrite)
+impl FromProto<protobuf::merge_into_clause_node::Kind> for MergeIntoClauseKind {
+    fn from_proto(k: protobuf::merge_into_clause_node::Kind) -> Self {
+        match k {
+            protobuf::merge_into_clause_node::Kind::Matched => {
+                MergeIntoClauseKind::Matched
             }
-            protobuf::dml_node::Type::InsertReplace => WriteOp::Insert(InsertOp::Replace),
-            protobuf::dml_node::Type::Ctas => WriteOp::Ctas,
-            protobuf::dml_node::Type::Truncate => WriteOp::Truncate,
+            protobuf::merge_into_clause_node::Kind::NotMatched => {
+                MergeIntoClauseKind::NotMatched
+            }
+            protobuf::merge_into_clause_node::Kind::NotMatchedByTarget => {
+                MergeIntoClauseKind::NotMatchedByTarget
+            }
+            protobuf::merge_into_clause_node::Kind::NotMatchedBySource => {
+                MergeIntoClauseKind::NotMatchedBySource
+            }
         }
     }
+}
+
+/// Reconstruct a [`WriteOp`] from a [`protobuf::DmlNode`], reading the
+/// `merge_into` payload when the type tag is `MergeInto`.
+pub fn parse_write_op(
+    node: &protobuf::DmlNode,
+    ctx: &TaskContext,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<WriteOp, Error> {
+    let typ = node.dml_type();
+    Ok(match typ {
+        protobuf::dml_node::Type::Update => WriteOp::Update,
+        protobuf::dml_node::Type::Delete => WriteOp::Delete,
+        protobuf::dml_node::Type::InsertAppend => WriteOp::Insert(InsertOp::Append),
+        protobuf::dml_node::Type::InsertOverwrite => WriteOp::Insert(InsertOp::Overwrite),
+        protobuf::dml_node::Type::InsertReplace => WriteOp::Insert(InsertOp::Replace),
+        protobuf::dml_node::Type::Ctas => WriteOp::Ctas,
+        protobuf::dml_node::Type::Truncate => WriteOp::Truncate,
+        protobuf::dml_node::Type::MergeInto => {
+            let merge_into = node.merge_into.as_deref().ok_or_else(|| {
+                Error::General(
+                    "DmlNode with MERGE_INTO type is missing the merge_into payload"
+                        .to_string(),
+                )
+            })?;
+            WriteOp::MergeInto(Box::new(parse_merge_into_op(merge_into, ctx, codec)?))
+        }
+    })
+}
+
+fn parse_merge_into_op(
+    op: &protobuf::MergeIntoOpNode,
+    ctx: &TaskContext,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<MergeIntoOp, Error> {
+    let on = op.on.as_ref().ok_or_else(|| {
+        Error::General("MergeIntoOpNode is missing required `on` expression".to_string())
+    })?;
+    let on = parse_expr(on, ctx, codec)?;
+    let clauses = op
+        .clauses
+        .iter()
+        .map(|c| parse_merge_into_clause(c, ctx, codec))
+        .collect::<Result<Vec<_>, Error>>()?;
+    Ok(MergeIntoOp { on, clauses })
+}
+
+fn parse_merge_into_clause(
+    clause: &protobuf::MergeIntoClauseNode,
+    ctx: &TaskContext,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<MergeIntoClause, Error> {
+    let kind = protobuf::merge_into_clause_node::Kind::try_from(clause.kind)
+        .map_err(|_| {
+            Error::General(format!(
+                "MergeIntoClauseNode has unknown kind tag {}",
+                clause.kind
+            ))
+        })
+        .map(MergeIntoClauseKind::from_proto)?;
+    let predicate = clause
+        .predicate
+        .as_ref()
+        .map(|e| parse_expr(e, ctx, codec))
+        .transpose()?;
+    let action = clause.action.as_ref().ok_or_else(|| {
+        Error::General("MergeIntoClauseNode is missing required `action`".to_string())
+    })?;
+    let action = parse_merge_into_action(action, ctx, codec)?;
+    Ok(MergeIntoClause {
+        kind,
+        predicate,
+        action,
+    })
+}
+
+fn parse_merge_into_action(
+    action: &protobuf::MergeIntoActionNode,
+    ctx: &TaskContext,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<MergeIntoAction, Error> {
+    use protobuf::merge_into_action_node::Action;
+    let action = action.action.as_ref().ok_or_else(|| {
+        Error::General("MergeIntoActionNode is missing the `action` oneof".to_string())
+    })?;
+    Ok(match action {
+        Action::Update(update) => {
+            let assignments = update
+                .assignments
+                .iter()
+                .map(|a| {
+                    let value = a.value.as_ref().ok_or_else(|| {
+                        Error::General(format!(
+                            "MergeAssignment for column `{}` is missing its value",
+                            a.column
+                        ))
+                    })?;
+                    Ok((a.column.clone(), parse_expr(value, ctx, codec)?))
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            MergeIntoAction::Update(assignments)
+        }
+        Action::Insert(insert) => MergeIntoAction::Insert {
+            columns: insert.columns.clone(),
+            values: parse_exprs(&insert.values, ctx, codec)?,
+        },
+        Action::Delete(_) => MergeIntoAction::Delete,
+    })
 }
 
 impl FromProto<protobuf::NullTreatment> for NullTreatment {
@@ -813,4 +926,15 @@ fn parse_required_expr(
 
 fn proto_error<S: Into<String>>(message: S) -> Error {
     Error::General(message.into())
+}
+
+pub(super) fn parse_protobuf_range_split_point(
+    split_point: &protobuf::RangeSplitPoint,
+) -> Result<SplitPoint, Error> {
+    let values = split_point
+        .value
+        .iter()
+        .map(ScalarValue::try_from)
+        .collect::<Result<_, Error>>()?;
+    Ok(SplitPoint::new(values))
 }

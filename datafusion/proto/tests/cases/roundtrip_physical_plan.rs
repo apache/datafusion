@@ -74,7 +74,6 @@ use datafusion::physical_plan::joins::{
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::metrics::MetricType;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -90,7 +89,8 @@ use datafusion::physical_plan::windows::{
 };
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
-    PhysicalExpr, SendableRecordBatchStream, Statistics, displayable,
+    PhysicalExpr, PlanProperties, RangePartitioning, SendableRecordBatchStream,
+    SplitPoint, Statistics, displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -103,8 +103,8 @@ use datafusion_common::{
     DataFusionError, NullEquality, Result, UnnestOptions, exec_datafusion_err,
     internal_datafusion_err, internal_err, not_impl_err,
 };
-use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
+use datafusion_datasource::{TableSchema, TableSchemaBuilder};
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
@@ -124,7 +124,12 @@ use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
 };
-use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
+use datafusion_proto::physical_plan::from_proto::{
+    parse_protobuf_file_scan_config, parse_table_schema_from_proto,
+};
+use datafusion_proto::physical_plan::to_proto::{
+    serialize_file_scan_config, serialize_physical_expr_with_converter,
+};
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DeduplicatingProtoConverter, DefaultPhysicalExtensionCodec,
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
@@ -228,6 +233,74 @@ async fn all_types_context() -> Result<SessionContext> {
 #[test]
 fn roundtrip_empty() -> Result<()> {
     roundtrip_test(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))))
+}
+
+#[derive(Debug)]
+struct DowncastDelegatingExec {
+    inner: Arc<dyn ExecutionPlan>,
+}
+
+impl DowncastDelegatingExec {
+    fn new(inner: Arc<dyn ExecutionPlan>) -> Self {
+        Self { inner }
+    }
+}
+
+impl DisplayAs for DowncastDelegatingExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        self.inner.fmt_as(t, f)
+    }
+}
+
+impl ExecutionPlan for DowncastDelegatingExec {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        self.inner.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.inner.children()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let inner = Arc::clone(&self.inner).with_new_children(children)?;
+        Ok(Arc::new(Self::new(inner)))
+    }
+
+    fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
+        Some(self.inner.as_ref())
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.inner.execute(partition, context)
+    }
+}
+
+#[test]
+fn serialize_uses_downcast_delegate() -> Result<()> {
+    let inner: Arc<dyn ExecutionPlan> =
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(DowncastDelegatingExec::new(inner));
+    let codec = DefaultPhysicalExtensionCodec {};
+
+    let proto = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+
+    assert!(matches!(
+        proto.physical_plan_type,
+        Some(protobuf::physical_plan_node::PhysicalPlanType::Empty(_))
+    ));
+
+    Ok(())
 }
 
 #[test]
@@ -344,6 +417,59 @@ fn roundtrip_nested_loop_join() -> Result<()> {
             None,
             join_type,
             Some(vec![0]),
+        )?))?;
+    }
+    Ok(())
+}
+
+/// Regression: proto3 `repeated` fields cannot distinguish "absent" from "empty",
+/// so a naive encoding collapses `Some(vec![])` and `None` into the same wire
+/// representation. `try_embed_projection` (DataFusion 53+) produces
+/// `HashJoinExec.projection = Some(vec![])` for `SELECT count(1) … JOIN …`,
+/// which previously round-tripped to `None` and caused downstream consumers (e.g.
+/// distributed Flight executors) to receive a different number of output
+/// columns than the planner declared. Verify all three states preserve.
+#[test]
+fn roundtrip_hash_join_projection_states() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Arc::new(Schema::new(vec![field_a.clone()]));
+    let schema_right = Arc::new(Schema::new(vec![field_a]));
+    let on = vec![(
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
+    )];
+
+    for projection in [None, Some(vec![]), Some(vec![0]), Some(vec![1])] {
+        roundtrip_test(Arc::new(HashJoinExec::try_new(
+            Arc::new(EmptyExec::new(schema_left.clone())),
+            Arc::new(EmptyExec::new(schema_right.clone())),
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            projection,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?))?;
+    }
+    Ok(())
+}
+
+/// Same regression coverage for `NestedLoopJoinExec`, which shares the
+/// `repeated uint32 projection` proto field shape with `HashJoinExec`.
+#[test]
+fn roundtrip_nested_loop_join_projection_states() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Arc::new(Schema::new(vec![field_a.clone()]));
+    let schema_right = Arc::new(Schema::new(vec![field_a]));
+
+    for projection in [None, Some(vec![]), Some(vec![0]), Some(vec![1])] {
+        roundtrip_test(Arc::new(NestedLoopJoinExec::try_new(
+            Arc::new(EmptyExec::new(schema_left.clone())),
+            Arc::new(EmptyExec::new(schema_right.clone())),
+            None,
+            &JoinType::Inner,
+            projection,
         )?))?;
     }
     Ok(())
@@ -1009,7 +1135,7 @@ fn roundtrip_arrow_scan() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-    let table_schema = TableSchema::new(file_schema.clone(), vec![]);
+    let table_schema = TableSchema::from(&file_schema);
     let file_source = Arc::new(ArrowSource::new_file_source(table_schema));
 
     let scan_config =
@@ -1036,14 +1162,13 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         vec![wrap_partition_value_in_dict(ScalarValue::Int64(Some(0)))];
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-    let table_schema = TableSchema::new(
-        schema.clone(),
-        vec![Arc::new(Field::new(
+    let table_schema = TableSchemaBuilder::from(&schema)
+        .with_table_partition_cols(vec![Arc::new(Field::new(
             "part".to_string(),
             wrap_partition_type_in_dict(DataType::Int16),
             false,
-        ))],
-    );
+        ))])
+        .build();
 
     let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
     let scan_config =
@@ -1674,14 +1799,9 @@ fn roundtrip_analyze() -> Result<()> {
     let schema = Schema::new(vec![field_a, field_b]);
     let input = Arc::new(PlaceholderRowExec::new(Arc::new(schema.clone())));
 
-    roundtrip_test(Arc::new(AnalyzeExec::new(
-        false,
-        false,
-        vec![MetricType::Summary, MetricType::Dev],
-        None,
-        input,
-        Arc::new(schema),
-    )))
+    roundtrip_test(Arc::new(
+        AnalyzeExec::builder(false, false, input, Arc::new(schema)).build(),
+    ))
 }
 
 #[tokio::test]
@@ -1919,6 +2039,21 @@ fn roundtrip_repartition_preserve_order() -> Result<()> {
     let repartition = RepartitionExec::try_new(union, Partitioning::RoundRobinBatch(10))?
         .with_preserve_order();
     assert!(repartition.preserve_order());
+
+    roundtrip_test(Arc::new(repartition))
+}
+
+#[test]
+fn roundtrip_range_partitioning() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let range_partitioning = Partitioning::Range(RangePartitioning::new(
+        [PhysicalSortExpr::new_default(col("a", &schema)?)].into(),
+        vec![SplitPoint::new(vec![ScalarValue::Int64(Some(10))])],
+    ));
+    // RepartitionExec is used only to carry the partitioning through proto.
+    // Executing range repartitioning is intentionally unsupported.
+    let repartition = RepartitionExec::try_new(input, range_partitioning)?;
 
     roundtrip_test(Arc::new(repartition))
 }
@@ -4187,40 +4322,13 @@ fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn roundtrip_parquet_exec_partitioned_by_file_group() -> Result<()> {
-    use datafusion::datasource::physical_plan::FileScanConfig;
-
-    let file_schema =
-        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
-    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
-    let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-                "/path/to/file.parquet".to_string(),
-                1024,
-            )])])
-            .with_partitioned_by_file_group(true)
-            .build();
-
-    assert!(scan_config.partitioned_by_file_group);
-
+fn roundtrip_file_scan_config(scan_config: FileScanConfig) -> Result<FileScanConfig> {
     let exec_plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
-
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let proto_converter = DefaultPhysicalProtoConverter {};
-    let bytes = physical_plan_to_bytes_with_proto_converter(
-        Arc::clone(&exec_plan),
-        &codec,
-        &proto_converter,
-    )?;
-    let result_plan = physical_plan_from_bytes_with_proto_converter(
-        bytes.as_ref(),
-        ctx.task_ctx().as_ref(),
-        &codec,
-        &proto_converter,
-    )?;
+    let result_plan =
+        roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_converter)?;
 
     let data_source_exec = result_plan
         .downcast_ref::<DataSourceExec>()
@@ -4229,8 +4337,120 @@ fn roundtrip_parquet_exec_partitioned_by_file_group() -> Result<()> {
         .data_source()
         .downcast_ref::<FileScanConfig>()
         .expect("Expected FileScanConfig");
+    Ok(file_scan_config.clone())
+}
 
-    assert!(file_scan_config.partitioned_by_file_group);
+#[test]
+fn roundtrip_parquet_exec_output_partitioning() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let output_partitioning =
+        Partitioning::Hash(vec![Arc::new(Column::new("col", 0))], 1);
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .with_output_partitioning(Some(output_partitioning.clone()))
+            .build();
+
+    assert_eq!(
+        roundtrip_file_scan_config(scan_config)?.output_partitioning,
+        Some(output_partitioning)
+    );
+
+    Ok(())
+}
+
+#[test]
+fn parse_legacy_partitioned_by_file_group_as_output_partitioning() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let table_schema = TableSchema::builder(Arc::clone(&file_schema))
+        .with_table_partition_cols(vec![Arc::new(Field::new(
+            "part",
+            DataType::Utf8,
+            false,
+        ))])
+        .build();
+    let file_source = Arc::new(ParquetSource::new(table_schema));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file1.parquet".to_string(),
+                    1024,
+                )]),
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file2.parquet".to_string(),
+                    1024,
+                )]),
+            ])
+            .build();
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let mut proto = serialize_file_scan_config(&scan_config, &codec, &proto_converter)?;
+    proto.partitioned_by_file_group = Some(true);
+    proto.output_partitioning = None;
+
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let parsed = parse_protobuf_file_scan_config(
+        &proto,
+        &decode_ctx,
+        &proto_converter,
+        Arc::new(ParquetSource::new(parse_table_schema_from_proto(&proto)?)),
+    )?;
+
+    match parsed.output_partitioning {
+        Some(Partitioning::Hash(exprs, partition_count)) => {
+            assert_eq!(partition_count, 2);
+            assert_eq!(exprs.len(), 1);
+            let column = exprs[0].downcast_ref::<Column>().unwrap();
+            assert_eq!(column.name(), "part");
+            assert_eq!(column.index(), 1);
+        }
+        other => panic!("Expected legacy hash output partitioning, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_parquet_exec_range_output_partitioning() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let output_partitioning = Partitioning::Range(RangePartitioning::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+            "col", 0,
+        )))])
+        .unwrap(),
+        vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+    ));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-1.parquet".to_string(),
+                    1024,
+                )]),
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-2.parquet".to_string(),
+                    1024,
+                )]),
+            ])
+            .with_output_partitioning(Some(output_partitioning.clone()))
+            .build();
+
+    assert_eq!(
+        roundtrip_file_scan_config(scan_config)?.output_partitioning,
+        Some(output_partitioning)
+    );
 
     Ok(())
 }

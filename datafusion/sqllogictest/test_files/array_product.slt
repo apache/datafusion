@@ -1,0 +1,145 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+## array_product
+
+# Basic product of three floats
+query R
+select array_product([1.0, 2.0, 3.0]);
+----
+6
+
+# Negative values: signs multiply
+query R
+select array_product([-2.0, 3.0]);
+----
+-6
+
+# Single element returns itself
+query R
+select array_product([5.0]);
+----
+5
+
+# Zero element produces zero (no short-circuit; we still multiply)
+query R
+select array_product([0.0, 3.0, 4.0]);
+----
+0
+
+# NULL elements inside the list are skipped (SQL aggregate convention)
+query R
+select array_product([2.0, NULL, 3.0]);
+----
+6
+
+# All-NULL elements: no data to reduce, returns NULL
+query R
+select array_product([CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE)]);
+----
+NULL
+
+# Bare NULL input returns NULL
+query R
+select array_product(NULL);
+----
+NULL
+
+# Empty array: no data to reduce, returns NULL
+query R
+select array_product(arrow_cast(make_array(), 'List(Float64)'));
+----
+NULL
+
+# LargeList input
+query R
+select array_product(arrow_cast([2.0, 3.0, 4.0], 'LargeList(Float64)'));
+----
+24
+
+# FixedSizeList input (coerced to List)
+query R
+select array_product(arrow_cast([2.0, 3.0, 4.0], 'FixedSizeList(3, Float64)'));
+----
+24
+
+# Float32 inner type (coerced to Float64)
+query R
+select array_product(arrow_cast([2.0, 3.0, 4.0], 'List(Float32)'));
+----
+24
+
+# Int64 inner type (coerced to Float64)
+query R
+select array_product(arrow_cast([2, 3, 4], 'List(Int64)'));
+----
+24
+
+# Integer literals (coerced to Float64)
+query R
+select array_product([2, 3, 4]);
+----
+24
+
+# Unsupported non-list input (plan error)
+query error array_product does not support type
+select array_product(1);
+
+# No arguments error
+query error array_product function requires 1 argument, got 0
+select array_product();
+
+# Multi-row query: normal row, NULL row, empty list, all-NULL elements,
+# element-NULL skip, single zero
+query R
+select array_product(column1) from (values
+    (make_array(2.0, 3.0, 4.0)),
+    (NULL),
+    (arrow_cast(make_array(), 'List(Float64)')),
+    (make_array(CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE))),
+    (make_array(CAST(2.0 AS DOUBLE), CAST(NULL AS DOUBLE), CAST(5.0 AS DOUBLE))),
+    (make_array(0.0, 7.0))
+) as t(column1);
+----
+24
+NULL
+NULL
+NULL
+10
+0
+
+# Return type is always Float64 (scalar, not List)
+query RT
+select array_product([2.0, 3.0]), arrow_typeof(array_product([2.0, 3.0]));
+----
+6 Float64
+
+# list_product alias produces the same result
+query R
+select list_product([2.0, 3.0, 4.0]);
+----
+24
+
+# list_product alias multi-row
+query R
+select list_product(column1) from (values
+    (make_array(2.0, 3.0)),
+    (NULL)
+) as t(column1);
+----
+6
+NULL

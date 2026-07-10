@@ -142,3 +142,44 @@ name_count Int64 NO
 # Describing a statement that's not a query is not supported
 statement error Describing statements other than SELECT not supported
 DESCRIBE CREATE TABLE test_desc_table (id INT, name VARCHAR);
+
+##########
+# VALUES nullability inference
+#
+# Inferred VALUES schemas should be non-nullable when no row contributes a
+# NULL in that column position, and nullable when at least one does.
+##########
+
+# All-non-null VALUES: every column is non-nullable.
+query TTT rowsort
+DESCRIBE SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS t(x, y);
+----
+x Int64 NO
+y Utf8 NO
+
+# Untyped NULL in one row makes that column nullable; sibling all-non-null
+# columns remain non-nullable.
+query TTT rowsort
+DESCRIBE SELECT * FROM (VALUES (1, 'a'), (NULL, 'b')) AS t(x, y);
+----
+x Int64 YES
+y Utf8 NO
+
+# Typed NULL has the same effect as untyped NULL on column nullability.
+query TTT
+DESCRIBE SELECT * FROM (VALUES (1), (CAST(NULL AS BIGINT))) AS t(x);
+----
+x Int64 YES
+
+# All-NULL column is nullable; the inferred type is Null.
+query TTT
+DESCRIBE SELECT * FROM (VALUES (NULL), (NULL)) AS t(x);
+----
+x Null YES
+
+# A Null-typed value sourced from a non-nullable expression must still
+# produce a nullable column: a DataType::Null field is always nullable.
+query TTT
+DESCRIBE SELECT * FROM (VALUES (arrow_cast(1, 'Null'))) AS t(x);
+----
+x Null YES

@@ -18,8 +18,8 @@
 use std::sync::Arc;
 
 use datafusion_common::{DataFusionError, Result, TableReference};
-use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::CachedFileList;
+use datafusion_execution::cache::cache_manager::TableScopedPath;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_session::Session;
 
@@ -1210,7 +1210,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
+        fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
             unimplemented!()
         }
 

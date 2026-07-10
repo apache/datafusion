@@ -26,6 +26,7 @@ use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::display::StringifiedPlan;
+use datafusion_common::format::ExplainFormat;
 use datafusion_common::{
     DataFusionError, JoinType, NullEquality, Result, internal_datafusion_err,
     internal_err, not_impl_err,
@@ -53,7 +54,7 @@ use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
-use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, HigherOrderUDFImpl, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
@@ -82,7 +83,7 @@ use datafusion_physical_plan::joins::{
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
-use datafusion_physical_plan::metrics::{MetricCategory, MetricType};
+use datafusion_physical_plan::metrics::MetricCategory;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -441,7 +442,7 @@ pub trait PhysicalPlanNodeExt: Sized {
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
         let plan_clone = Arc::clone(&plan);
-        let plan = plan.as_ref() as &dyn Any;
+        let plan = plan.as_ref();
 
         if let Some(exec) = plan.downcast_ref::<ExplainExec>() {
             return protobuf::PhysicalPlanNode::try_from_explain_exec(exec, codec);
@@ -1497,16 +1498,15 @@ pub trait PhysicalPlanNodeExt: Sized {
             protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
             protobuf::PartitionMode::Auto => PartitionMode::Auto,
         };
-        let projection = if !hashjoin.projection.is_empty() {
-            Some(
-                hashjoin
-                    .projection
-                    .iter()
-                    .map(|i| *i as usize)
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            None
+        // Proto3 `repeated` cannot distinguish `None` from `Some(vec![])`. The latter
+        // is reachable via `try_embed_projection` for `SELECT count(1) … JOIN …` and
+        // changes the join's output schema, so the encoder reserves the single-element
+        // sentinel `[u32::MAX]` (never a valid column index) to mean "explicitly empty";
+        // every other state is sent as-is. See `try_from_hash_join_exec`.
+        let projection = match hashjoin.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
         let mut hash_join = HashJoinExec::try_new(
             left,
@@ -1924,15 +1924,13 @@ pub trait PhysicalPlanNodeExt: Sized {
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
-        let projection = if !join.projection.is_empty() {
-            Some(
-                join.projection
-                    .iter()
-                    .map(|i| *i as usize)
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            None
+        // See `try_into_hash_join_physical_plan` for the rationale behind the
+        // `[u32::MAX]` sentinel; `NestedLoopJoinExec` has the same `Option<Vec<usize>>`
+        // projection field and shares the proto3 `repeated` ambiguity.
+        let projection = match join.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
 
         Ok(Arc::new(NestedLoopJoinExec::try_new(
@@ -1962,14 +1960,30 @@ pub trait PhysicalPlanNodeExt: Sized {
         } else {
             None
         };
-        Ok(Arc::new(AnalyzeExec::new(
-            analyze.verbose,
-            analyze.show_statistics,
-            vec![MetricType::Summary, MetricType::Dev],
-            metric_categories,
-            input,
-            Arc::new(convert_required!(analyze.schema)?),
-        )))
+        let pb_format =
+            protobuf::ExplainFormat::try_from(analyze.format).map_err(|_| {
+                DataFusionError::Internal(format!(
+                    "Received an AnalyzeExecNode message with unknown ExplainFormat {}",
+                    analyze.format
+                ))
+            })?;
+        let format = match pb_format {
+            protobuf::ExplainFormat::Indent => ExplainFormat::Indent,
+            protobuf::ExplainFormat::Tree => ExplainFormat::Tree,
+            protobuf::ExplainFormat::Pgjson => ExplainFormat::PostgresJSON,
+            protobuf::ExplainFormat::Graphviz => ExplainFormat::Graphviz,
+        };
+        Ok(Arc::new(
+            AnalyzeExec::builder(
+                analyze.verbose,
+                analyze.show_statistics,
+                input,
+                Arc::new(convert_required!(analyze.schema)?),
+            )
+            .with_metric_categories(metric_categories)
+            .with_format(format)
+            .build(),
+        ))
     }
 
     fn try_into_json_sink_physical_plan(
@@ -2463,6 +2477,12 @@ pub trait PhysicalPlanNodeExt: Sized {
             Some(cats) => (true, cats.iter().map(|c| c.to_string()).collect()),
             None => (false, vec![]),
         };
+        let format = match exec.format() {
+            ExplainFormat::Indent => protobuf::ExplainFormat::Indent,
+            ExplainFormat::Tree => protobuf::ExplainFormat::Tree,
+            ExplainFormat::PostgresJSON => protobuf::ExplainFormat::Pgjson,
+            ExplainFormat::Graphviz => protobuf::ExplainFormat::Graphviz,
+        } as i32;
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Analyze(Box::new(
                 protobuf::AnalyzeExecNode {
@@ -2472,6 +2492,7 @@ pub trait PhysicalPlanNodeExt: Sized {
                     schema: Some(exec.schema().as_ref().try_into()?),
                     has_metric_categories,
                     metric_categories,
+                    format,
                 },
             ))),
         })
@@ -2634,9 +2655,14 @@ pub trait PhysicalPlanNodeExt: Sized {
                     partition_mode: partition_mode.into(),
                     null_equality: null_equality.into(),
                     filter,
-                    projection: exec.projection.as_ref().map_or_else(Vec::new, |v| {
-                        v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
-                    }),
+                    // Send `Some(vec![])` as `[u32::MAX]` (never a valid index) so the
+                    // wire format can distinguish it from `None` (which stays empty).
+                    // See `try_into_hash_join_physical_plan` for the matching decoder.
+                    projection: match exec.projection.as_ref() {
+                        None => Vec::new(),
+                        Some(v) if v.is_empty() => vec![u32::MAX],
+                        Some(v) => v.iter().map(|x| *x as u32).collect(),
+                    },
                     null_aware: exec.null_aware,
                     dynamic_filter,
                 },
@@ -3425,9 +3451,13 @@ pub trait PhysicalPlanNodeExt: Sized {
                     right: Some(Box::new(right)),
                     join_type: join_type.into(),
                     filter,
-                    projection: exec.projection().as_ref().map_or_else(Vec::new, |v| {
-                        v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
-                    }),
+                    // `[u32::MAX]` sentinel distinguishes `Some(vec![])` from `None`;
+                    // see `try_from_hash_join_exec`.
+                    projection: match exec.projection().as_ref() {
+                        None => Vec::new(),
+                        Some(v) if v.is_empty() => vec![u32::MAX],
+                        Some(v) => v.iter().map(|x| *x as u32).collect(),
+                    },
                 },
             ))),
         })
@@ -3920,7 +3950,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
         &self,
         name: &str,
         _buf: &[u8],
-    ) -> Result<Arc<dyn HigherOrderUDF>> {
+    ) -> Result<Arc<dyn HigherOrderUDFImpl>> {
         not_impl_err!(
             "PhysicalExtensionCodec is not provided for higher order function {name}"
         )
@@ -3928,7 +3958,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
 
     fn try_encode_higher_order_function(
         &self,
-        _node: &dyn HigherOrderUDF,
+        _node: &dyn HigherOrderUDFImpl,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         Ok(())
