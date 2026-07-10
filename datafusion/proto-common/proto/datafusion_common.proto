@@ -631,6 +631,8 @@ message ParquetOptions {
     uint64 max_row_group_bytes = 37;
   }
 
+  bool pushdown_filter_narrow_projection_gate = 38;
+
   ParquetCdcOptions content_defined_chunking = 35;
 
   // Optional timezone applied to INT96-coerced timestamps when `coerce_int96`

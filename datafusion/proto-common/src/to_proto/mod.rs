@@ -939,6 +939,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             coerce_int96_tz_opt: value.coerce_int96_tz.clone().map(protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz),
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
             max_row_group_bytes_opt: value.max_row_group_bytes.map(|v| protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v.get() as u64)),
+            pushdown_filter_narrow_projection_gate: value.pushdown_filter_narrow_projection_gate,
             content_defined_chunking: Some((&value.content_defined_chunking).into()),
         })
     }

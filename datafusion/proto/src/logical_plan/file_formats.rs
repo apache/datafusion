@@ -461,6 +461,7 @@ mod parquet {
                 max_row_group_bytes_opt: global_options.global.max_row_group_bytes.map(|size| {
                     parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size.get() as u64)
                 }),
+                pushdown_filter_narrow_projection_gate: global_options.global.pushdown_filter_narrow_projection_gate,
                 content_defined_chunking: Some(ParquetCdcOptionsProto {
                     enabled: global_options.global.content_defined_chunking.enabled,
                     min_chunk_size: global_options.global.content_defined_chunking.min_chunk_size as u64,
@@ -642,6 +643,8 @@ mod parquet {
                             MaxRowGroupBytes::try_new(*size as usize).ok()
                         }
                     }),
+                pushdown_filter_narrow_projection_gate: proto
+                    .pushdown_filter_narrow_projection_gate,
                 content_defined_chunking: proto
                     .content_defined_chunking
                     .map(ParquetCdcOptions::from_proto)

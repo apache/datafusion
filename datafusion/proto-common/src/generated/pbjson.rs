@@ -6412,6 +6412,9 @@ impl serde::Serialize for ParquetOptions {
         if !self.created_by.is_empty() {
             len += 1;
         }
+        if self.pushdown_filter_narrow_projection_gate {
+            len += 1;
+        }
         if self.content_defined_chunking.is_some() {
             len += 1;
         }
@@ -6531,6 +6534,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if !self.created_by.is_empty() {
             struct_ser.serialize_field("createdBy", &self.created_by)?;
+        }
+        if self.pushdown_filter_narrow_projection_gate {
+            struct_ser.serialize_field("pushdownFilterNarrowProjectionGate", &self.pushdown_filter_narrow_projection_gate)?;
         }
         if let Some(v) = self.content_defined_chunking.as_ref() {
             struct_ser.serialize_field("contentDefinedChunking", v)?;
@@ -6689,6 +6695,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maxRowGroupSize",
             "created_by",
             "createdBy",
+            "pushdown_filter_narrow_projection_gate",
+            "pushdownFilterNarrowProjectionGate",
             "content_defined_chunking",
             "contentDefinedChunking",
             "metadata_size_hint",
@@ -6740,6 +6748,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             DataPageRowCountLimit,
             MaxRowGroupSize,
             CreatedBy,
+            PushdownFilterNarrowProjectionGate,
             ContentDefinedChunking,
             MetadataSizeHint,
             Compression,
@@ -6796,6 +6805,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
                             "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
+                            "pushdownFilterNarrowProjectionGate" | "pushdown_filter_narrow_projection_gate" => Ok(GeneratedField::PushdownFilterNarrowProjectionGate),
                             "contentDefinedChunking" | "content_defined_chunking" => Ok(GeneratedField::ContentDefinedChunking),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
                             "compression" => Ok(GeneratedField::Compression),
@@ -6850,6 +6860,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
                 let mut created_by__ = None;
+                let mut pushdown_filter_narrow_projection_gate__ = None;
                 let mut content_defined_chunking__ = None;
                 let mut metadata_size_hint_opt__ = None;
                 let mut compression_opt__ = None;
@@ -7006,6 +7017,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             created_by__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::PushdownFilterNarrowProjectionGate => {
+                            if pushdown_filter_narrow_projection_gate__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("pushdownFilterNarrowProjectionGate"));
+                            }
+                            pushdown_filter_narrow_projection_gate__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::ContentDefinedChunking => {
                             if content_defined_chunking__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("contentDefinedChunking"));
@@ -7114,6 +7131,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
                     created_by: created_by__.unwrap_or_default(),
+                    pushdown_filter_narrow_projection_gate: pushdown_filter_narrow_projection_gate__.unwrap_or_default(),
                     content_defined_chunking: content_defined_chunking__,
                     metadata_size_hint_opt: metadata_size_hint_opt__,
                     compression_opt: compression_opt__,

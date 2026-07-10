@@ -864,6 +864,8 @@ pub struct ParquetOptions {
     pub max_row_group_size: u64,
     #[prost(string, tag = "16")]
     pub created_by: ::prost::alloc::string::String,
+    #[prost(bool, tag = "38")]
+    pub pushdown_filter_narrow_projection_gate: bool,
     #[prost(message, optional, tag = "35")]
     pub content_defined_chunking: ::core::option::Option<ParquetCdcOptions>,
     #[prost(oneof = "parquet_options::MetadataSizeHintOpt", tags = "4")]

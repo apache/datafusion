@@ -314,6 +314,13 @@ pub struct ParquetSource {
     /// Sort order driving `PreparedAccessPlan::reorder_by_statistics`
     /// in the opener.
     sort_order_for_reorder: Option<LexOrdering>,
+    /// True when [`try_pushdown_filters`] declined pushdown for this
+    /// scan due to the narrow-projection gate — surfaced in the plan
+    /// display so profiling can tell that the heuristic fired here
+    /// (the filter stays above the scan in a `FilterExec`).
+    ///
+    /// [`try_pushdown_filters`]: Self::try_pushdown_filters
+    pub(crate) narrow_projection_gate_declined: bool,
 }
 
 impl ParquetSource {
@@ -340,6 +347,7 @@ impl ParquetSource {
             encryption_factory: None,
             reverse_row_groups: false,
             sort_order_for_reorder: None,
+            narrow_projection_gate_declined: false,
         }
     }
 
@@ -740,6 +748,12 @@ impl FileSource for ParquetSource {
                 if self.reverse_row_groups {
                     write!(f, ", reverse_row_groups=true")?;
                 }
+                if self.narrow_projection_gate_declined {
+                    write!(
+                        f,
+                        ", pushdown_declined=narrow_projection"
+                    )?;
+                }
 
                 // Plan-time marker for dynamic RG-level pruning: if the
                 // predicate is dynamic (e.g. a TopK threshold expression),
@@ -830,24 +844,34 @@ impl FileSource for ParquetSource {
         let table_pushdown_enabled = self.pushdown_filters();
         let mut pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
 
-        // Simple heuristic (issue #3463, discussion on PR #23369):
+        // Narrow-projection gate (issue #3463, discussion on PR #23369):
         // RowFilter has a fixed per-row machinery overhead that only pays
         // for itself when the wide-column decode it lets us skip is
         // meaningful. When the projection is narrow and the filter columns
         // already cover most of it (typical for `GROUP BY col`-style
         // queries such as ClickBench Q10/Q11/Q40), the overhead dominates
-        // and pushdown regresses. Decline pushdown for those scans; keep it
-        // for wider projections where the fast-path pays.
+        // and pushdown regresses. Decline pushdown for those scans; keep
+        // it for wider projections where the fast-path pays.
         //
-        // Kept intentionally simple: a plan-time column-count check with
-        // no tuning knob. A future adaptive-placement pass (#22883) can
-        // supersede this with a runtime cost model.
+        // Kept intentionally simple: a plan-time column-count check
+        // gated on a single boolean opt-out. A future
+        // adaptive-placement pass ([#22883]) can supersede this with a
+        // runtime cost model.
         //
-        // When declined: the filter stays above the scan in a FilterExec
-        // (correctness preserved) and the predicate is still injected
-        // into `ParquetSource` for stats / bloom / page-index pruning.
+        // When declined: the filter stays above the scan in a
+        // `FilterExec` (correctness preserved) and the predicate is
+        // still injected into `ParquetSource` for stats / bloom /
+        // page-index pruning.
+        //
+        // Users who want the pre-existing "always push" behavior can
+        // set `pushdown_filter_narrow_projection_gate = false`.
+        //
+        // [#22883]: https://github.com/apache/datafusion/issues/22883
         const PUSHDOWN_MIN_NON_FILTER_COLS: usize = 3;
-        if pushdown_filters {
+        let mut narrow_projection_gate_declined = false;
+        if pushdown_filters
+            && config.execution.parquet.pushdown_filter_narrow_projection_gate
+        {
             let filter_col_indices: std::collections::HashSet<usize> = filters
                 .iter()
                 .flat_map(|f| collect_columns(f).into_iter().map(|c| c.index()))
@@ -863,10 +887,12 @@ impl FileSource for ParquetSource {
                 .len();
             if non_filter_projected < PUSHDOWN_MIN_NON_FILTER_COLS {
                 pushdown_filters = false;
+                narrow_projection_gate_declined = true;
             }
         }
 
         let mut source = self.clone();
+        source.narrow_projection_gate_declined = narrow_projection_gate_declined;
         let filters: Vec<PushedDownPredicate> = filters
             .into_iter()
             .map(|filter| {

@@ -1133,6 +1133,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             max_row_group_bytes: value.max_row_group_bytes_opt.and_then(|opt| match opt {
                 protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v) => MaxRowGroupBytes::try_new(v as usize).ok(),
             }),
+            pushdown_filter_narrow_projection_gate: value.pushdown_filter_narrow_projection_gate,
             content_defined_chunking: value.content_defined_chunking.map(ParquetCdcOptions::from).unwrap_or_default(),
         })
     }

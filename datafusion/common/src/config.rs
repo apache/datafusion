@@ -1137,6 +1137,15 @@ config_namespace! {
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
         pub pushdown_filters: bool, default = false
 
+        /// (reading) When `pushdown_filters` is enabled, decline to push filters
+        /// into the Parquet scan for queries whose projection contains fewer than
+        /// 3 columns not referenced by the filter. RowFilter has a fixed per-row
+        /// overhead that only pays for itself when there is enough wide-column
+        /// decode to skip; without this gate, narrow-projection queries (e.g.
+        /// `SELECT col1 FROM t WHERE col1 <> ''`) regress. Set to `false` to
+        /// force unconditional pushdown (the pre-existing behavior).
+        pub pushdown_filter_narrow_projection_gate: bool, default = true
+
         /// (reading) If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
