@@ -573,6 +573,12 @@ LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/agg_data.parquet';
 statement ok
 SET datafusion.execution.parquet.pushdown_filters = true;
 
+# This section exercises the pushdown path directly. Disable the
+# narrow-projection gate so the expected plans (FilterExec absorbed
+# into DataSourceExec) are reproduced regardless of projection width.
+statement ok
+SET datafusion.execution.parquet.pushdown_filter_narrow_projection_gate = false;
+
 # Aggregate dynamic filter should be pushed into the scan when enabled
 # Expecting a `DynamicFilter` inside parquet scanner's predicate
 query TT
@@ -870,3 +876,6 @@ SET datafusion.optimizer.enable_dynamic_filter_pushdown = true;
 
 statement ok
 RESET datafusion.execution.parquet.max_row_group_size;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filter_narrow_projection_gate;
