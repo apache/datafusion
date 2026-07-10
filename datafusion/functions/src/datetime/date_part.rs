@@ -19,7 +19,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
-use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, Int64Array};
+use arrow::array::{
+    Array, ArrayRef, Date32Array, Date64Array, Float64Array, Int32Array, Int64Array,
+};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{DatePart, binary, date_part};
 use arrow::datatypes::DataType::{
@@ -406,6 +408,32 @@ fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
         return not_impl_err!("Date part {unit:?} not supported");
     }
 
+    // Fast path with seconds - no need to compute nanoseconds
+    if unit == Second {
+        return Ok(date_part(array, DatePart::Second)?);
+    }
+
+    // Fast path for Date32 and Date64 - no seconds
+    match array.data_type() {
+        Date32 => {
+            return if array.null_count() == 0 {
+                Ok(Arc::new(Int32Array::from_value(0, array.len())))
+            } else {
+                let r: Date32Array = as_date32_array(array)?.unary(|_| 0);
+                Ok(Arc::new(r))
+            };
+        }
+        Date64 => {
+            return if array.null_count() == 0 {
+                Ok(Arc::new(Int32Array::from_value(0, array.len())))
+            } else {
+                let r: Date64Array = as_date64_array(array)?.unary(|_| 0);
+                Ok(Arc::new(r))
+            };
+        }
+        _ => {}
+    }
+
     let conversion_factor = match unit {
         Second => 1_000_000_000,
         Millisecond => 1_000_000,
@@ -547,6 +575,27 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
 /// `nanosecond`s in each second, so representing up to 60 seconds as
 /// nanoseconds can be values up to 60 billion, which does not fit in Int32.
 fn seconds_ns(array: &dyn Array) -> Result<ArrayRef> {
+    // Fast path for Date32 and Date64 - no nanoseconds
+    match array.data_type() {
+        Date32 => {
+            return if array.null_count() == 0 {
+                Ok(Arc::new(Int64Array::from_value(0, array.len())))
+            } else {
+                let r: Int64Array = as_date32_array(array)?.unary(|_| 0);
+                Ok(Arc::new(r))
+            };
+        }
+        Date64 => {
+            return if array.null_count() == 0 {
+                Ok(Arc::new(Int64Array::from_value(0, array.len())))
+            } else {
+                let r: Int64Array = as_date64_array(array)?.unary(|_| 0);
+                Ok(Arc::new(r))
+            };
+        }
+        _ => {}
+    }
+
     let secs = date_part(array, DatePart::Second)?;
     // This assumes array is primitive and not a dictionary
     let secs = as_int32_array(secs.as_ref())?;
