@@ -749,10 +749,7 @@ impl FileSource for ParquetSource {
                     write!(f, ", reverse_row_groups=true")?;
                 }
                 if self.narrow_projection_gate_declined {
-                    write!(
-                        f,
-                        ", pushdown_declined=narrow_projection"
-                    )?;
+                    write!(f, ", pushdown_declined=narrow_projection")?;
                 }
 
                 // Plan-time marker for dynamic RG-level pruning: if the
@@ -870,7 +867,10 @@ impl FileSource for ParquetSource {
         const PUSHDOWN_MIN_NON_FILTER_COLS: usize = 3;
         let mut narrow_projection_gate_declined = false;
         if pushdown_filters
-            && config.execution.parquet.pushdown_filter_narrow_projection_gate
+            && config
+                .execution
+                .parquet
+                .pushdown_filter_narrow_projection_gate
         {
             let filter_col_indices: std::collections::HashSet<usize> = filters
                 .iter()
