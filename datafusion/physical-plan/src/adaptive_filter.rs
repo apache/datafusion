@@ -203,6 +203,26 @@ struct SharedInner {
     settled: Option<Settled>,
 }
 
+/// How one batch was evaluated. Reported by
+/// [`AdaptiveConjunction::evaluate_traced`] so the evaluator's behaviour is
+/// observable batch by batch (its input/output contract is exercised by the
+/// `scenario_*` tests). Borrows the adopted order rather than cloning it, so
+/// reporting costs nothing on the per-batch path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchStrategy<'a> {
+    /// Still learning: the written order through the compact-once loop, each
+    /// conjunct instrumented and its counts pooled. (Empty batches are
+    /// evaluated but measure nothing and do not consume the warm-up.)
+    Measure,
+    /// Settled without a reorder: the written fused predicate, exactly as if
+    /// the feature were off.
+    Fused,
+    /// Settled on an adopted reorder, evaluated through the compact-once
+    /// loop. The payload is the adopted evaluation order: positions in the
+    /// written conjunct list, first-evaluated first.
+    Reordered(&'a [usize]),
+}
+
 /// The settled outcome of the warm-up: the evaluation order, and whether to run
 /// it through the compact-once loop or the plain predicate.
 #[derive(Debug, Clone)]
@@ -252,22 +272,19 @@ pub(crate) struct AdaptiveConjunction {
 
 impl AdaptiveConjunction {
     /// Build an adaptive evaluator for `predicate`, or `None` if adaptive
-    /// reordering does not apply:
+    /// reordering does not structurally apply:
     ///
-    /// - `enabled` is false (the config flag is off);
     /// - the predicate has fewer than two `AND` conjuncts (nothing to reorder);
     /// - any conjunct is volatile (reordering could change side effects).
     ///
-    /// `shared` is the state common to all partition streams of the owning
-    /// `FilterExec`.
+    /// Whether adaptive reordering is *enabled* is the caller's policy (the
+    /// config flag lives with `FilterExec`); this constructor only answers
+    /// whether the predicate is a reorderable conjunction. `shared` is the
+    /// state common to all partition streams of the owning `FilterExec`.
     pub(crate) fn try_new(
         predicate: &Arc<dyn PhysicalExpr>,
-        enabled: bool,
         shared: Arc<AdaptiveFilterShared>,
     ) -> Option<Self> {
-        if !enabled {
-            return None;
-        }
         let conjuncts: Vec<Arc<dyn PhysicalExpr>> = split_conjunction(predicate)
             .into_iter()
             .map(Arc::clone)
@@ -294,6 +311,16 @@ impl AdaptiveConjunction {
     /// into the shared registry; a stream adopts the settled order another
     /// stream published as soon as it sees the epoch advance.
     pub(crate) fn evaluate(&mut self, batch: &RecordBatch) -> Result<ArrayRef> {
+        self.evaluate_traced(batch).map(|(mask, _)| mask)
+    }
+
+    /// [`evaluate`](Self::evaluate), additionally reporting the
+    /// [`BatchStrategy`] used for this batch, so the evaluator's behaviour is
+    /// observable batch by batch (see the scenario tests).
+    fn evaluate_traced(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<(ArrayRef, BatchStrategy<'_>)> {
         // Adopt a settled order another stream published since we last looked:
         // one relaxed atomic load per batch, a lock only on the transition.
         if !self.settled {
@@ -306,14 +333,21 @@ impl AdaptiveConjunction {
             }
         }
         if self.settled {
-            return self.evaluate_settled(batch);
+            let mask = self.evaluate_settled(batch)?;
+            let strategy = if self.compact {
+                BatchStrategy::Reordered(&self.order)
+            } else {
+                BatchStrategy::Fused
+            };
+            return Ok((mask, strategy));
         }
 
         // An empty batch measures nothing; evaluating it must not consume the
         // warm-up (a run of empty batches would otherwise settle the written
         // order on no evidence, permanently).
         if batch.num_rows() == 0 {
-            return eval_conjuncts(&self.conjuncts, &self.order, batch, None);
+            let mask = eval_conjuncts(&self.conjuncts, &self.order, batch, None)?;
+            return Ok((mask, BatchStrategy::Measure));
         }
 
         // Measure this batch into a local accumulator, then pool it.
@@ -321,7 +355,7 @@ impl AdaptiveConjunction {
         let result =
             eval_conjuncts(&self.conjuncts, &self.order, batch, Some(&mut local))?;
         self.pool_and_maybe_settle(&local);
-        Ok(result)
+        Ok((result, BatchStrategy::Measure))
     }
 
     /// Evaluate the settled arrangement with no instrumentation: the
@@ -599,21 +633,18 @@ mod tests {
     }
 
     /// `try_new` with a fresh, unshared registry.
-    fn try_new(
-        predicate: &Arc<dyn PhysicalExpr>,
-        enabled: bool,
-    ) -> Option<AdaptiveConjunction> {
-        AdaptiveConjunction::try_new(
-            predicate,
-            enabled,
-            Arc::new(AdaptiveFilterShared::new()),
-        )
+    fn try_new(predicate: &Arc<dyn PhysicalExpr>) -> Option<AdaptiveConjunction> {
+        AdaptiveConjunction::try_new(predicate, Arc::new(AdaptiveFilterShared::new()))
     }
 
-    #[test]
-    fn disabled_is_not_adaptive() {
-        let schema = schema();
-        assert!(try_new(&predicate(&schema), false).is_none());
+    /// Seed the shared pool as if `batches` instrumented batches had already
+    /// recorded `stats` — a stand-in for a mocked clock, giving scenario tests
+    /// deterministic control over each conjunct's measured cost and
+    /// selectivity.
+    fn seed(shared: &AdaptiveFilterShared, stats: Vec<ConjunctStats>, batches: u64) {
+        let mut inner = shared.inner.lock().unwrap();
+        inner.stats = stats;
+        inner.measured_batches = batches;
     }
 
     #[test]
@@ -621,13 +652,13 @@ mod tests {
         let schema = schema();
         let p =
             binary(col("a", &schema).unwrap(), Operator::Gt, lit(2i32), &schema).unwrap();
-        assert!(try_new(&p, true).is_none());
+        assert!(try_new(&p).is_none());
     }
 
     #[test]
     fn two_conjuncts_are_adaptive() {
         let schema = schema();
-        let adaptive = try_new(&predicate(&schema), true).unwrap();
+        let adaptive = try_new(&predicate(&schema)).unwrap();
         assert_eq!(adaptive.conjuncts.len(), 2);
         assert_eq!(adaptive.order, vec![0, 1]);
         assert!(!adaptive.settled);
@@ -674,7 +705,7 @@ mod tests {
     #[test]
     fn empty_batches_do_not_consume_warmup() {
         let schema = schema();
-        let mut adaptive = try_new(&predicate(&schema), true).unwrap();
+        let mut adaptive = try_new(&predicate(&schema)).unwrap();
 
         for _ in 0..(2 * WARMUP_BATCHES) {
             let rb = batch(&schema, vec![], vec![]);
@@ -725,7 +756,7 @@ mod tests {
     fn evaluate_matches_predicate_across_warmup() {
         let schema = schema();
         let p = predicate(&schema);
-        let mut adaptive = try_new(&p, true).unwrap();
+        let mut adaptive = try_new(&p).unwrap();
 
         for round in 0..(WARMUP_BATCHES as i32 + 4) {
             let base = round * 10;
@@ -778,7 +809,7 @@ mod tests {
         let right =
             binary(col("b", &schema).unwrap(), Operator::Gt, lit(2i32), &schema).unwrap();
         let p = binary(left, Operator::And, right, &schema).unwrap();
-        let mut adaptive = try_new(&p, true).unwrap();
+        let mut adaptive = try_new(&p).unwrap();
 
         for round in 0..(WARMUP_BATCHES as i32 + 2) {
             let base = round * 10;
@@ -804,8 +835,8 @@ mod tests {
         let schema = schema();
         let p = predicate(&schema);
         let shared = Arc::new(AdaptiveFilterShared::new());
-        let mut s1 = AdaptiveConjunction::try_new(&p, true, Arc::clone(&shared)).unwrap();
-        let mut s2 = AdaptiveConjunction::try_new(&p, true, Arc::clone(&shared)).unwrap();
+        let mut s1 = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
+        let mut s2 = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
 
         // `b < 5` (conjunct 1) is the selective one; drive both streams with
         // batches where it keeps ~1 row in 25.
@@ -837,5 +868,89 @@ mod tests {
         assert_eq!(s1.order, vec![1, 0]);
         assert_eq!(s2.order, vec![1, 0]);
         assert!(s1.compact && s2.compact);
+    }
+
+    /// End-to-end input/output-contract scenario: feed batches, observe the
+    /// strategy used for each one alongside the masks.
+    ///
+    /// Per-conjunct costs are injected by seeding the shared pool with
+    /// synthetic measurements (the stand-in for a mocked clock): conjunct 0 is
+    /// cheap but unselective, conjunct 1 is expensive but very selective, so
+    /// the warm-up must settle on promoting conjunct 1 and run the reorder
+    /// through the compact-once loop. The seeded magnitudes dominate the one
+    /// real measured batch, so the decision is deterministic regardless of
+    /// real timer values.
+    #[test]
+    fn scenario_measure_batches_then_settle_on_reorder() {
+        let schema = schema();
+        let p = predicate(&schema); // `a > 2 AND b < 5`, written order [0, 1]
+        let shared = Arc::new(AdaptiveFilterShared::new());
+        // One batch short of the warm-up: the next measured batch settles.
+        seed(
+            &shared,
+            vec![
+                stats(70_000_000, 63_000_000, 70_000_000), // pass 0.9, ~1ns/row
+                stats(70_000_000, 700_000, 350_000_000),   // pass 0.01, ~5ns/row
+            ],
+            WARMUP_BATCHES - 1,
+        );
+        let mut adaptive = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
+
+        let mut trace = vec![];
+        for round in 0..3 {
+            let base = round * 100;
+            let a: Vec<i32> = (base..base + 100).collect();
+            let b: Vec<i32> = (base..base + 100).map(|x| x.rem_euclid(25)).collect();
+            let rb = batch(&schema, a, b);
+            let (got, strategy) = adaptive.evaluate_traced(&rb).unwrap();
+            trace.push(format!("{strategy:?}"));
+            let want = p.evaluate(&rb).unwrap().into_array(rb.num_rows()).unwrap();
+            assert_eq!(passing_rows(&got), passing_rows(&want), "round {round}");
+        }
+
+        // Batch 1 completes the warm-up and settles; batches 2+ run the
+        // adopted reorder (selective conjunct promoted to the front) through
+        // the compact-once loop.
+        assert_eq!(
+            trace,
+            vec!["Measure", "Reordered([1, 0])", "Reordered([1, 0])"]
+        );
+    }
+
+    /// Contract scenario for the no-win case: interchangeable conjuncts settle
+    /// on the written fused predicate (as if the feature were off), never the
+    /// compact-once loop.
+    #[test]
+    fn scenario_measure_batches_then_settle_on_fused() {
+        let schema = schema();
+        let p = predicate(&schema);
+        let shared = Arc::new(AdaptiveFilterShared::new());
+        // Identical cost and selectivity: no order can be materially cheaper.
+        // The seeded magnitudes dominate the one real measured batch, so even
+        // if real timings nudge the ranking, the 5% material-win guard holds.
+        seed(
+            &shared,
+            vec![
+                stats(70_000_000, 35_000_000, 70_000_000),
+                stats(70_000_000, 35_000_000, 70_000_000),
+            ],
+            WARMUP_BATCHES - 1,
+        );
+        let mut adaptive = AdaptiveConjunction::try_new(&p, Arc::clone(&shared)).unwrap();
+
+        let mut trace = vec![];
+        for round in 0..3 {
+            let base = round * 100;
+            let a: Vec<i32> = (base..base + 100).collect();
+            let b: Vec<i32> = (base..base + 100).collect();
+            let rb = batch(&schema, a, b);
+            let (got, strategy) = adaptive.evaluate_traced(&rb).unwrap();
+            trace.push(format!("{strategy:?}"));
+            let want = p.evaluate(&rb).unwrap().into_array(rb.num_rows()).unwrap();
+            assert_eq!(passing_rows(&got), passing_rows(&want), "round {round}");
+        }
+
+        assert_eq!(trace, vec!["Measure", "Fused", "Fused"]);
+        assert_eq!(adaptive.order, vec![0, 1]);
     }
 }
