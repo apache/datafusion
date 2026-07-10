@@ -19,7 +19,7 @@
 
 use crate::{
     EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
-    expressions::UnKnownColumn, physical_exprs_equal,
+    expressions::UnKnownColumn, physical_exprs_contains, physical_exprs_equal,
 };
 pub use datafusion_common::SplitPoint;
 use datafusion_common::{Result, validate_range_split_points};
@@ -454,11 +454,9 @@ impl Partitioning {
             return false;
         }
 
-        subset_exprs.iter().all(|subset_expr| {
-            superset_exprs
-                .iter()
-                .any(|superset_expr| subset_expr.eq(superset_expr))
-        })
+        subset_exprs
+            .iter()
+            .all(|subset_expr| physical_exprs_contains(superset_exprs, subset_expr))
     }
 
     #[deprecated(since = "52.0.0", note = "Use satisfaction instead")]
@@ -1092,6 +1090,13 @@ mod tests {
                 "KeyPartitioned([unknown]) satisfied by Hash([unknown])",
                 Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
                 Distribution::KeyPartitioned(vec![Arc::clone(&unknown)]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "KeyPartitioned([unknown, a]) satisfied by Hash([unknown])",
+                Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
+                Distribution::KeyPartitioned(vec![Arc::clone(&unknown), fixture.col(0)]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),

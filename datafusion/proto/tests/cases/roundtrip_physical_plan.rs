@@ -124,7 +124,12 @@ use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
 };
-use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
+use datafusion_proto::physical_plan::from_proto::{
+    parse_protobuf_file_scan_config, parse_table_schema_from_proto,
+};
+use datafusion_proto::physical_plan::to_proto::{
+    serialize_file_scan_config, serialize_physical_expr_with_converter,
+};
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DeduplicatingProtoConverter, DefaultPhysicalExtensionCodec,
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
@@ -4220,24 +4225,6 @@ fn roundtrip_file_scan_config(scan_config: FileScanConfig) -> Result<FileScanCon
 }
 
 #[test]
-fn roundtrip_parquet_exec_partitioned_by_file_group() -> Result<()> {
-    let file_schema =
-        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
-    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
-    let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-                "/path/to/file.parquet".to_string(),
-                1024,
-            )])])
-            .with_partitioned_by_file_group(true)
-            .build();
-
-    assert!(roundtrip_file_scan_config(scan_config)?.partitioned_by_file_group);
-    Ok(())
-}
-
-#[test]
 fn roundtrip_parquet_exec_output_partitioning() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
@@ -4257,6 +4244,62 @@ fn roundtrip_parquet_exec_output_partitioning() -> Result<()> {
         roundtrip_file_scan_config(scan_config)?.output_partitioning,
         Some(output_partitioning)
     );
+
+    Ok(())
+}
+
+#[test]
+fn parse_legacy_partitioned_by_file_group_as_output_partitioning() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let table_schema = TableSchema::builder(Arc::clone(&file_schema))
+        .with_table_partition_cols(vec![Arc::new(Field::new(
+            "part",
+            DataType::Utf8,
+            false,
+        ))])
+        .build();
+    let file_source = Arc::new(ParquetSource::new(table_schema));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file1.parquet".to_string(),
+                    1024,
+                )]),
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file2.parquet".to_string(),
+                    1024,
+                )]),
+            ])
+            .build();
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let mut proto = serialize_file_scan_config(&scan_config, &codec, &proto_converter)?;
+    proto.partitioned_by_file_group = Some(true);
+    proto.output_partitioning = None;
+
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let parsed = parse_protobuf_file_scan_config(
+        &proto,
+        &decode_ctx,
+        &proto_converter,
+        Arc::new(ParquetSource::new(parse_table_schema_from_proto(&proto)?)),
+    )?;
+
+    match parsed.output_partitioning {
+        Some(Partitioning::Hash(exprs, partition_count)) => {
+            assert_eq!(partition_count, 2);
+            assert_eq!(exprs.len(), 1);
+            let column = exprs[0].downcast_ref::<Column>().unwrap();
+            assert_eq!(column.name(), "part");
+            assert_eq!(column.index(), 1);
+        }
+        other => panic!("Expected legacy hash output partitioning, got {other:?}"),
+    }
 
     Ok(())
 }

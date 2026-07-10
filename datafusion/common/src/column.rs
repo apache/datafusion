@@ -271,7 +271,7 @@ impl Column {
                     })
                     .map_err(|err| {
                         let mut diagnostic = Diagnostic::new_error(
-                            format!("column '{}' is ambiguous", &self.name),
+                            format!("column '{}' is ambiguous", self.name),
                             self.spans().first(),
                         );
                         // TODO If [`DFSchema`] had spans, we could show the
