@@ -565,6 +565,26 @@ fn count_matches(
             ));
         }
 
+        // Fast path for the default (and most common) case: `start == 1` always
+        // resolves to a byte offset of 0, so the search runs over the whole
+        // value and the character-counting scan below can be skipped entirely.
+        if start == 1 {
+            return Ok(pattern.find_iter(value).count() as i64);
+        }
+
+        // ASCII fast path: character indices equal byte indices, so the start
+        // position maps directly to a byte offset without scanning the value to
+        // count characters or resolve a `char_indices` boundary. A `start_index`
+        // equal to the length yields an empty slice (matching the general path),
+        // and one strictly past the end yields no matches.
+        if value.is_ascii() {
+            let start_index = (start as usize) - 1;
+            if start_index > value.len() {
+                return Ok(0);
+            }
+            return Ok(pattern.find_iter(&value[start_index..]).count() as i64);
+        }
+
         let char_len = value.chars().count();
         let start_index = (start as usize).saturating_sub(1);
 
