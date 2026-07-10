@@ -30,10 +30,10 @@ use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
-use datafusion_expr::WindowFrame;
-use datafusion_physical_expr::ScalarFunctionExpr;
+use datafusion_expr::{ScalarUDF, WindowFrame};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
+use datafusion_physical_expr::{ScalarFunctionExpr, ScalarUdfProtoEncoder};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
@@ -271,6 +271,26 @@ impl datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprE
     }
 }
 
+/// Typed encode bridge for [`ScalarFunctionExpr`], whose `ScalarUDF` cannot be
+/// carried by the crate-wide encode context (crate-graph cycle — see
+/// `ScalarFunctionExpr`'s proto module docs). Routes the UDF through the same
+/// [`PhysicalExtensionCodec::try_encode_udf`] path as the old inline arm.
+impl ScalarUdfProtoEncoder for ConverterEncoder<'_> {
+    fn encode_child(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        self.proto_converter
+            .physical_expr_to_proto(expr, self.codec)
+    }
+
+    fn encode_udf(&self, udf: &ScalarUDF) -> Result<Option<Vec<u8>>> {
+        let mut buf = Vec::new();
+        self.codec.try_encode_udf(udf, &mut buf)?;
+        Ok((!buf.is_empty()).then_some(buf))
+    }
+}
+
 /// Serialize a `PhysicalExpr` to default protobuf representation.
 ///
 /// If required, a [`PhysicalExtensionCodec`] can be provided which can handle
@@ -299,25 +319,12 @@ pub fn serialize_physical_expr_with_converter(
         return Ok(node);
     }
 
-    if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
-        let mut buf = Vec::new();
-        codec.try_encode_udf(expr.fun(), &mut buf)?;
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
-                protobuf::PhysicalScalarUdfNode {
-                    name: expr.name().to_string(),
-                    args: serialize_physical_exprs(expr.args(), codec, proto_converter)?,
-                    fun_definition: (!buf.is_empty()).then_some(buf),
-                    return_type: Some(expr.return_type().try_into()?),
-                    nullable: expr.nullable(),
-                    return_field_name: expr
-                        .return_field(&Schema::empty())?
-                        .name()
-                        .to_string(),
-                },
-            )),
-        })
+    if let Some(scalar_fn) = expr.downcast_ref::<ScalarFunctionExpr>() {
+        // `ScalarFunctionExpr` declares its own ser/de against a fully-typed
+        // bridge (no `dyn Any`); we hand it the encoder that already backs the
+        // crate-wide hook. See its proto module docs for why it can't ride the
+        // hook itself.
+        scalar_fn.try_to_proto(&encoder)
     } else if let Some(expr) = expr.downcast_ref::<ScalarSubqueryExpr>() {
         Ok(protobuf::PhysicalExprNode {
             expr_id,

@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::compute::SortOptions;
-use arrow::datatypes::{Field, Schema};
+use arrow::datatypes::Schema;
 use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
 use datafusion_common::{
@@ -38,12 +38,14 @@ use datafusion_datasource_json::file_format::JsonSink;
 use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
-use datafusion_expr::WindowFunctionDefinition;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::SubqueryIndex;
+use datafusion_expr::{ScalarUDF, WindowFunctionDefinition};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion_physical_expr::{
+    LexOrdering, PhysicalSortExpr, ScalarFunctionExpr, ScalarUdfProtoDecoder,
+};
 use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
@@ -305,34 +307,16 @@ pub fn parse_physical_expr_with_converter(
         ExprType::Cast(_) => CastExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::TryCast(_) => TryCastExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::ScalarUdf(e) => {
-            let udf = match &e.fun_definition {
-                Some(buf) => ctx.codec().try_decode_udf(&e.name, buf)?,
-                None => ctx
-                    .task_ctx()
-                    .udf(e.name.as_str())
-                    .or_else(|_| ctx.codec().try_decode_udf(&e.name, &[]))?,
+            // `ScalarFunctionExpr` decodes itself against a fully-typed bridge
+            // (no `dyn Any`); this struct supplies the codec, registry, and
+            // session config it needs. See its proto module docs for why it
+            // can't ride the crate-wide decode context.
+            let decoder = ScalarUdfConverterDecoder {
+                ctx,
+                proto_converter,
+                input_schema,
             };
-            let scalar_fun_def = Arc::clone(&udf);
-
-            let args = parse_physical_exprs(&e.args, ctx, input_schema, proto_converter)?;
-
-            let config_options = Arc::clone(ctx.task_ctx().session_config().options());
-
-            Arc::new(
-                ScalarFunctionExpr::new(
-                    e.name.as_str(),
-                    scalar_fun_def,
-                    args,
-                    Field::new(
-                        &e.return_field_name,
-                        convert_required!(e.return_type)?,
-                        true,
-                    )
-                    .into(),
-                    config_options,
-                )
-                .with_nullable(e.nullable),
-            )
+            ScalarFunctionExpr::try_from_proto(e, &decoder)?
         }
         ExprType::LikeExpr(_) => LikeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::HashExpr(_) => HashExpr::try_from_proto(proto, &decode_ctx)?,
@@ -783,6 +767,47 @@ impl datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprD
     ) -> Result<Arc<dyn PhysicalExpr>> {
         self.proto_converter
             .proto_to_physical_expr(node, schema, self.ctx)
+    }
+}
+
+/// Typed decode bridge for [`ScalarFunctionExpr`]. Bundles the codec,
+/// function registry, and session config the expression needs to
+/// reconstruct itself — none of which the crate-wide decode context can
+/// carry, because [`ScalarUDF`] and the codec live above
+/// `physical-expr-common` in the crate graph. Reproduces the exact
+/// registry-then-codec lookup order of the old inline arm.
+struct ScalarUdfConverterDecoder<'a, 'b, 'c> {
+    ctx: &'a PhysicalPlanDecodeContext<'b>,
+    proto_converter: &'a dyn PhysicalProtoConverterExtension,
+    input_schema: &'c Schema,
+}
+
+impl ScalarUdfProtoDecoder for ScalarUdfConverterDecoder<'_, '_, '_> {
+    fn decode_child(
+        &self,
+        node: &protobuf::PhysicalExprNode,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        self.proto_converter
+            .proto_to_physical_expr(node, self.input_schema, self.ctx)
+    }
+
+    fn decode_udf(
+        &self,
+        name: &str,
+        fun_definition: Option<&[u8]>,
+    ) -> Result<Arc<ScalarUDF>> {
+        match fun_definition {
+            Some(buf) => self.ctx.codec().try_decode_udf(name, buf),
+            None => self
+                .ctx
+                .task_ctx()
+                .udf(name)
+                .or_else(|_| self.ctx.codec().try_decode_udf(name, &[])),
+        }
+    }
+
+    fn config_options(&self) -> Arc<datafusion_common::config::ConfigOptions> {
+        Arc::clone(self.ctx.task_ctx().session_config().options())
     }
 }
 
