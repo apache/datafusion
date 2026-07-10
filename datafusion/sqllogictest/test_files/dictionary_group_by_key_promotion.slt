@@ -15,13 +15,32 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Each input batch can be encoded with UInt8, but the complete GROUP BY result
-# has 257 distinct values and therefore requires UInt16 dictionary keys.
+# Each input dictionary batch fits in UInt8. With four target partitions and a
+# batch size of 128, one partial aggregate receives 257 distinct groups. Its
+# output must be split into schema-stable UInt8 batches before repartitioning.
 statement ok
 SET datafusion.execution.batch_size = 128;
 
 statement ok
 SET datafusion.execution.target_partitions = 4;
+
+query I
+SELECT COUNT(*)
+FROM (
+  SELECT k
+  FROM (
+    SELECT arrow_cast(CAST(value AS VARCHAR), 'Dictionary(UInt8, Utf8)') AS k
+    FROM generate_series(0, 1024) AS series(value)
+  )
+  GROUP BY k
+);
+----
+1025
+
+# A single final aggregate sees all 257 groups and must promote the emitted
+# dictionary key type from UInt8 to UInt16.
+statement ok
+SET datafusion.execution.target_partitions = 1;
 
 query I
 SELECT COUNT(*)
