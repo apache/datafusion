@@ -38,8 +38,8 @@ use crate::filter_pushdown::{
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::statistics::StatisticsArgs;
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
-    SendableRecordBatchStream, Statistics, check_if_same_properties,
+    DisplayFormatType, Distribution, ExecutionPlan, InputDistributionRequirements,
+    InputOrderMode, SendableRecordBatchStream, Statistics, check_if_same_properties,
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_expr::utils::collect_columns;
@@ -1610,17 +1610,6 @@ impl AggregateExec {
             _ => Precision::Absent,
         }
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for AggregateExec {
@@ -1783,7 +1772,11 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        match &self.mode {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        let requirements = InputDistributionRequirements::new(match &self.mode {
             AggregateMode::Partial | AggregateMode::PartialReduce => {
                 vec![Distribution::UnspecifiedDistribution]
             }
@@ -1793,6 +1786,14 @@ impl ExecutionPlan for AggregateExec {
             AggregateMode::Final | AggregateMode::Single => {
                 vec![Distribution::SinglePartition]
             }
+        });
+        match &self.mode {
+            AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned
+                if !self.group_by.has_grouping_set() =>
+            {
+                requirements.allow_range_satisfaction_for_key_partitioning()
+            }
+            _ => requirements,
         }
     }
 
@@ -1836,6 +1837,17 @@ impl ExecutionPlan for AggregateExec {
         me.dynamic_filter.clone_from(&self.dynamic_filter);
 
         Ok(Arc::new(me))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(

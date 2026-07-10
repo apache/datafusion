@@ -1228,18 +1228,6 @@ impl RepartitionExec {
     pub fn name(&self) -> &str {
         "RepartitionExec"
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            state: Default::default(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for RepartitionExec {
@@ -1316,6 +1304,18 @@ impl ExecutionPlan for RepartitionExec {
             repartition = repartition.with_preserve_order();
         }
         Ok(Arc::new(repartition))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            state: Default::default(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {

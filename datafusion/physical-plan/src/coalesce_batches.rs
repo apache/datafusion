@@ -117,17 +117,6 @@ impl CoalesceBatchesExec {
             input.boundedness(),
         )
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 #[expect(deprecated)]
@@ -193,6 +182,17 @@ impl ExecutionPlan for CoalesceBatchesExec {
             CoalesceBatchesExec::new(children.swap_remove(0), self.target_batch_size)
                 .with_fetch(self.fetch),
         ))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(

@@ -708,8 +708,12 @@ impl ExecutionPlan for TopKExec {
         &self.cache
     }
 
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+    fn input_distribution_requirements(
+        &self,
+    ) -> datafusion_physical_plan::InputDistributionRequirements {
+        datafusion_physical_plan::InputDistributionRequirements::new(vec![
+            Distribution::SinglePartition,
+        ])
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
