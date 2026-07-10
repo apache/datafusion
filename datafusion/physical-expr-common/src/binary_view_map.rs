@@ -24,7 +24,6 @@ use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView, make_view};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
-use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::fmt::Debug;
 use std::mem::size_of;
@@ -273,22 +272,22 @@ where
         OP: FnMut(V),
         B: ByteViewType,
     {
-        // step 1: compute hashes
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(values.len(), 0);
-        create_hashes([values], &self.random_state, batch_hashes)
-            // hash is supported for all types and create_hashes only
-            // returns errors for unsupported types
-            .unwrap();
-
-        // step 2: insert each value into the set, if not already present
         let values = values.as_byte_view::<B>();
-
-        // Get raw views buffer for direct comparison
         let input_views = values.views();
 
-        // Ensure lengths are equivalent
+        let batch_hashes = &mut self.hashes_buffer;
+        batch_hashes.clear();
+        batch_hashes.reserve(values.len());
+        for i in 0..values.len() {
+            let view_u128 = input_views[i];
+            let hash = if values.is_null(i) {
+                0
+            } else {
+                Self::cheap_hash::<B>(values, i, view_u128)
+            };
+            batch_hashes.push(hash);
+        }
+
         assert_eq!(values.len(), self.hashes_buffer.len());
 
         for i in 0..values.len() {
@@ -392,6 +391,39 @@ where
             };
             observe_payload_fn(payload);
         }
+    }
+
+    #[inline(always)]
+    fn cheap_hash<B: ByteViewType>(
+        values: &arrow::array::GenericByteViewArray<B>,
+        row: usize,
+        view_u128: u128,
+    ) -> u64 {
+        let len = view_u128 as usize;
+        let (first8, last8) = if len <= 12 {
+            let view_bytes = view_u128.to_le_bytes();
+            let value = &view_bytes[4..4 + len];
+            let first8 = Self::sample_u64(value, 0);
+            let last8_offset = value.len().saturating_sub(8);
+            let last8 = Self::sample_u64(value, last8_offset);
+            (first8, last8)
+        } else {
+            let value: &[u8] = values.value(row).as_ref();
+            let first8 = Self::sample_u64(value, 0);
+            let last8_offset = value.len().saturating_sub(8);
+            let last8 = Self::sample_u64(value, last8_offset);
+            (first8, last8)
+        };
+
+        (len as u64).wrapping_add(first8).wrapping_add(last8)
+    }
+
+    #[inline(always)]
+    fn sample_u64(value: &[u8], offset: usize) -> u64 {
+        let mut sample = [0_u8; 8];
+        let sample_len = value.len().saturating_sub(offset).min(8);
+        sample[..sample_len].copy_from_slice(&value[offset..offset + sample_len]);
+        u64::from_le_bytes(sample)
     }
 
     /// Converts this set into a `StringViewArray`, or `BinaryViewArray`,
