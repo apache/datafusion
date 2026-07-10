@@ -18,9 +18,6 @@
 //! Shows an example of a custom session context that unions the input plan with itself.
 //! To run this example, use `cargo run --example cli-session-context` from within the `datafusion-cli` directory.
 
-use std::sync::Arc;
-
-use clap::Parser;
 use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
@@ -30,10 +27,11 @@ use datafusion::{
 };
 use datafusion_cli::{
     cli_context::CliSessionContext,
-    entry_point::{CliArgs, CliError, CliSession},
+    entry_point::{CliError, CliSession},
     exec::exec_from_repl,
 };
 use object_store::ObjectStore;
+use std::sync::Arc;
 
 /// This is a toy example of a custom session context that unions the input plan with itself.
 struct MyUnionerContext {
@@ -81,9 +79,7 @@ pub async fn main() -> Result<(), CliError> {
         ctx,
         args: _,
         mut print_options,
-    } = CliSession::builder()
-        .with_args(CliArgs::try_parse()?)
-        .build()?;
+    } = CliSession::builder().build()?;
     let my_ctx = MyUnionerContext { ctx };
     exec_from_repl(&my_ctx, &mut print_options).await?;
     Ok(())

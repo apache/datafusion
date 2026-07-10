@@ -62,8 +62,6 @@ pub enum CliError {
     // This is used to print e.g. help text so we don't want to embellish it
     #[error(transparent)]
     ArgumentParsing(#[from] clap::Error),
-    #[error("Error building CliSession `{0}`")]
-    CliSessionBuilderError(String),
 }
 
 impl fmt::Debug for CliError {
@@ -100,11 +98,10 @@ impl CliSessionBuilder {
     }
 
     pub fn build(self) -> Result<CliSession, CliError> {
-        let args = self.args.ok_or_else(|| {
-            CliError::CliSessionBuilderError(
-                "Missing clap arguments from `CliSessionBuilder::with_args(...)".into(),
-            )
-        })?;
+        let args = match self.args {
+            Some(args) => args,
+            None => CliArgs::try_parse()?,
+        };
         env_logger::init();
 
         if !args.quiet {
@@ -312,9 +309,7 @@ impl CliSession {
         CliSessionBuilder::default()
     }
     pub async fn entry_point() -> Result<(), CliError> {
-        let cli_session = CliSession::builder()
-            .with_args(CliArgs::try_parse()?)
-            .build()?;
+        let cli_session = CliSession::builder().build()?;
         Ok(cli_session.run().await?)
     }
     pub fn session_context(&self) -> &SessionContext {
