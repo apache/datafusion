@@ -48,7 +48,7 @@ fn dictionary_groups_keep_partial_schema_and_promote_final_output() -> Result<()
         .collect::<Result<Vec<_>>>()?;
 
     let input = TestMemoryExec::try_new(
-        &[input_batches.clone()],
+        std::slice::from_ref(&input_batches),
         Arc::clone(&input_schema),
         None,
     )?;
@@ -102,7 +102,7 @@ fn dictionary_groups_keep_partial_schema_and_promote_final_output() -> Result<()
     );
 
     let partial_input = TestMemoryExec::try_new(
-        &[partial_batches.clone()],
+        std::slice::from_ref(&partial_batches),
         Arc::clone(&partial_schema),
         None,
     )?;
