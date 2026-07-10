@@ -105,6 +105,15 @@ SELECT array_first(arrow_cast([1, 2, 3, 4], 'LargeList(Int32)'), x -> x > 2);
 ----
 3
 
+# other list representations are coerced during planning
+query III
+SELECT
+  array_first(arrow_cast([1, 2, 3, 4], 'FixedSizeList(4, Int32)'), x -> x > 2),
+  array_first(arrow_cast([1, 2, 3, 4], 'ListView(Int32)'), x -> x > 2),
+  array_first(arrow_cast([1, 2, 3, 4], 'LargeListView(Int32)'), x -> x > 2);
+----
+3 3 3
+
 # alias array_first/list_first work
 query I
 SELECT list_first([1, 2, 3, 4], x -> x > 2);
