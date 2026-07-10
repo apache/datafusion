@@ -2191,26 +2191,11 @@ impl Expr {
                     subquery,
                     negated: _,
                 }) => {
-                    let subquery_schema = subquery.subquery.schema();
-                      match &subquery_schema.fields()[..] {
-                          [subquery_field] => {
-                              let column = Expr::Column(Column::new_unqualified(
-                                  subquery_field.name().clone(),
-                              ));
-                              rewrite_placeholder(
-                                  expr.as_mut(),
-                                  &column,
-                                  subquery_schema,
-                              )?;
-                          }
-                          _ => {
-                              return plan_err!(
-                                  "InSubquery should only return one column, but found {}: {}",
-                                  subquery_schema.fields().len(),
-                                  subquery_schema.field_names().join(", ")
-                              );
-                          }
-                      }
+                    rewrite_placeholder_from_subquery(
+                        "InSubquery",
+                        expr.as_mut(),
+                        subquery,
+                    )?;
                 }
                 Expr::SetComparison(SetComparison {
                     expr,
@@ -2218,26 +2203,11 @@ impl Expr {
                     op: _,
                     quantifier: _,
                 }) => {
-                    let subquery_schema = subquery.subquery.schema();
-                    match &subquery_schema.fields()[..] {
-                        [subquery_field] => {
-                            let column = Expr::Column(Column::new_unqualified(
-                                subquery_field.name().clone(),
-                            ));
-                            rewrite_placeholder(
-                                expr.as_mut(),
-                                &column,
-                                subquery_schema,
-                            )?;
-                        }
-                        _ => {
-                            return plan_err!(
-                                "SetComparison should only return one column, but found {}: {}",
-                                subquery_schema.fields().len(),
-                                subquery_schema.field_names().join(", ")
-                            );
-                        }
-                    }
+                    rewrite_placeholder_from_subquery(
+                        "SetComparison",
+                        expr.as_mut(),
+                        subquery,
+                    )?;
                 }
                 Expr::Like(Like { expr, pattern, .. })
                 | Expr::SimilarTo(Like { expr, pattern, .. }) => {
@@ -2964,6 +2934,26 @@ macro_rules! expr_vec_fmt {
             .collect::<Vec<String>>()
             .join(", ")
     }};
+}
+/// Infer an untyped placeholder on the left of a single-column subquery predicate from the subquery projection
+fn rewrite_placeholder_from_subquery(
+    kind: &str,
+    expr: &mut Expr,
+    subquery: &Subquery,
+) -> Result<()> {
+    let subquery_schema = subquery.subquery.schema();
+    match &subquery_schema.fields()[..] {
+        [subquery_field] => {
+            let column =
+                Expr::Column(Column::new_unqualified(subquery_field.name().clone()));
+            rewrite_placeholder(expr, &column, subquery_schema)
+        }
+        _ => plan_err!(
+            "{kind} should only return one column, but found {}: {}",
+            subquery_schema.fields().len(),
+            subquery_schema.field_names().join(", ")
+        ),
+    }
 }
 
 struct SchemaDisplay<'a>(&'a Expr);
