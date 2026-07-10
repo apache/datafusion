@@ -66,6 +66,44 @@ pub(crate) fn schema_with_group_values(
     ))
 }
 
+/// Returns the largest partial aggregate batch that can be emitted without
+/// changing any top-level dictionary group key type in `schema`.
+///
+/// Partial aggregate batches cross fixed-schema transport boundaries such as
+/// repartition coalescing. Splitting them at the dictionary key capacity keeps
+/// that transport schema stable; the final aggregate can still combine all
+/// groups and promote its output key type dynamically.
+pub(crate) fn group_value_emit_batch_size(
+    schema: &SchemaRef,
+    num_group_fields: usize,
+    batch_size: usize,
+) -> usize {
+    schema
+        .fields()
+        .iter()
+        .take(num_group_fields)
+        .filter_map(|field| match field.data_type() {
+            DataType::Dictionary(key_type, _) => dictionary_key_capacity(key_type),
+            _ => None,
+        })
+        .fold(batch_size, usize::min)
+        .max(1)
+}
+
+fn dictionary_key_capacity(key_type: &DataType) -> Option<usize> {
+    let capacity = match key_type {
+        DataType::Int8 => 1u64 << 7,
+        DataType::Int16 => 1u64 << 15,
+        DataType::Int32 => 1u64 << 31,
+        DataType::UInt8 => 1u64 << 8,
+        DataType::UInt16 => 1u64 << 16,
+        DataType::UInt32 => 1u64 << 32,
+        DataType::Int64 | DataType::UInt64 => return Some(usize::MAX),
+        _ => return None,
+    };
+    Some(usize::try_from(capacity).unwrap_or(usize::MAX))
+}
+
 /// Casts the leading group-value arrays to the corresponding schema fields.
 /// This is used by spill files, which require one stable IPC schema even though
 /// normal aggregate output may promote dictionary keys dynamically.
