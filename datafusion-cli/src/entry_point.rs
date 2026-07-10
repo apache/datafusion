@@ -41,6 +41,7 @@ use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::logical_expr::ExplainFormat;
 use datafusion::prelude::SessionContext;
 
@@ -83,13 +84,13 @@ pub struct CliSession {
 ///
 #[derive(Default)]
 pub struct CliSessionBuilder {
-    ctx: Option<SessionContext>,
+    session_state: Option<SessionState>,
     args: Option<CliArgs>,
 }
 
 impl CliSessionBuilder {
-    pub fn with_session_context(mut self, ctx: SessionContext) -> Self {
-        self.ctx = Some(ctx);
+    pub fn with_session_state(mut self, session_state: SessionState) -> Self {
+        self.session_state = Some(session_state);
         self
     }
 
@@ -158,8 +159,16 @@ impl CliSessionBuilder {
         let runtime_env = rt_builder.build_arc()?;
 
         // enable dynamic file query
-        let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
-            .enable_url_table();
+        let ctx = if let Some(session_state) = self.session_state {
+            SessionStateBuilder::new_from_existing(session_state)
+                .with_config(session_config)
+                .with_runtime_env(runtime_env)
+                .build()
+                .into()
+        } else {
+            SessionContext::new_with_config_rt(session_config, runtime_env)
+        }
+        .enable_url_table();
 
         let print_options = PrintOptions {
             format: args.format,
