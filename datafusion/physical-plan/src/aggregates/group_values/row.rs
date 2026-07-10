@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::{GroupValues, group_value_output_schema};
+use crate::aggregates::group_values::{GroupValues, schema_with_group_values};
 use arrow::array::{
     Array, ArrayRef, ListArray, PrimitiveArray, RunArray, StructArray,
     downcast_run_end_index,
 };
 use arrow::compute::cast;
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
+use arrow::error::ArrowError;
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
@@ -43,8 +44,13 @@ use std::sync::Arc;
 /// It uses the arrow-rs [`Rows`] to store the group values, which is a row-wise
 /// representation.
 pub struct GroupValuesRows {
-    /// The output schema
+    /// The current output schema. Dictionary key types may grow, but never shrink.
     schema: SchemaRef,
+
+    /// Schema used by the row converter. Top-level dictionaries are materialized
+    /// to their value type so input batches with promoted dictionary keys remain
+    /// compatible with the same converter.
+    row_schema: SchemaRef,
 
     /// Converter for the group values
     row_converter: RowConverter,
@@ -83,13 +89,13 @@ pub struct GroupValuesRows {
 }
 
 impl GroupValuesRows {
-    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         // Print a debugging message, so it is clear when the (slower) fallback
         // GroupValuesRows is used.
         debug!("Creating GroupValuesRows for schema: {schema}");
+        let row_schema = materialized_row_schema(&schema);
         let row_converter = RowConverter::new(
-            schema
+            row_schema
                 .fields()
                 .iter()
                 .map(|f| SortField::new(f.data_type().clone()))
@@ -103,9 +109,9 @@ impl GroupValuesRows {
         let starting_data_capacity = 64 * starting_rows_capacity;
         let rows_buffer =
             row_converter.empty_rows(starting_rows_capacity, starting_data_capacity);
-        let output_schema = group_value_output_schema(schema.as_ref());
         Ok(Self {
-            schema: output_schema,
+            schema,
+            row_schema,
             row_converter,
             map,
             map_size: 0,
@@ -119,11 +125,23 @@ impl GroupValuesRows {
 
 impl GroupValues for GroupValuesRows {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        // Normalize -0.0 → +0.0 so RowConverter (IEEE 754 totalOrder) and
-        // primitive hashing both group ±0 together. No-op for non-float
-        // columns.
-        let normalized_cols: Vec<ArrayRef> =
-            cols.iter().map(normalize_float_zero).collect();
+        // Dictionary keys are an encoding detail and can be promoted between
+        // aggregate stages. Materialize top-level dictionaries before row
+        // conversion so the stored row representation remains stable.
+        // Also normalize -0.0 → +0.0 so RowConverter (IEEE 754 totalOrder) and
+        // primitive hashing both group ±0 together.
+        let normalized_cols = cols
+            .iter()
+            .zip(self.row_schema.fields())
+            .map(|(col, field)| {
+                let col = if col.data_type() == field.data_type() {
+                    Arc::clone(col)
+                } else {
+                    cast(col.as_ref(), field.data_type())?
+                };
+                Ok(normalize_float_zero(&col))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let cols = normalized_cols.as_slice();
 
         // Convert the group keys into the row format
@@ -245,12 +263,13 @@ impl GroupValues for GroupValuesRows {
             }
         };
 
-        // TODO: Materialize dictionaries in group keys
-        // https://github.com/apache/datafusion/issues/7647
-        for (field, array) in self.schema.fields.iter().zip(&mut output) {
-            let expected = field.data_type();
-            *array = dictionary_encode_if_necessary(array, expected)?;
+        // Re-encode dictionary group keys using the current key type. If the
+        // emitted cardinality no longer fits, grow to the next key width and
+        // retain that promoted type for all later emissions.
+        for (field, array) in self.schema.fields().iter().zip(&mut output) {
+            *array = dictionary_encode_if_necessary(array, field.data_type())?;
         }
+        self.schema = schema_with_group_values(&self.schema, &output);
 
         self.group_values = Some(group_values);
         Ok(output)
@@ -269,6 +288,26 @@ impl GroupValues for GroupValuesRows {
     }
 }
 
+fn materialized_row_schema(schema: &SchemaRef) -> SchemaRef {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| match field.data_type() {
+            DataType::Dictionary(_, value_type) => Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(value_type.as_ref().clone()),
+            ),
+            _ => Arc::clone(field),
+        })
+        .collect::<Vec<_>>();
+    Arc::new(Schema::new_with_metadata(
+        fields,
+        schema.metadata().clone(),
+    ))
+}
+
 fn dictionary_encode_if_necessary(
     array: &ArrayRef,
     expected: &DataType,
@@ -283,27 +322,49 @@ fn dictionary_encode_if_necessary(
                     dictionary_encode_if_necessary(column, expected_field.data_type())
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let fields = expected_fields
+                .iter()
+                .zip(&arrays)
+                .map(|(field, array)| field_with_array_type(field, array))
+                .collect::<Vec<_>>()
+                .into();
 
             Ok(Arc::new(StructArray::try_new(
-                expected_fields.clone(),
+                fields,
                 arrays,
                 struct_array.nulls().cloned(),
             )?))
         }
         (DataType::List(expected_field), &DataType::List(_)) => {
             let list = array.as_any().downcast_ref::<ListArray>().unwrap();
+            let values = dictionary_encode_if_necessary(
+                list.values(),
+                expected_field.data_type(),
+            )?;
+            let field = field_with_array_type(expected_field, &values);
 
             Ok(Arc::new(ListArray::try_new(
-                Arc::<arrow::datatypes::Field>::clone(expected_field),
+                field,
                 list.offsets().clone(),
-                dictionary_encode_if_necessary(
-                    list.values(),
-                    expected_field.data_type(),
-                )?,
+                values,
                 list.nulls().cloned(),
             )?))
         }
-        (DataType::Dictionary(_, _), _) => Ok(cast(array.as_ref(), expected)?),
+        (DataType::Dictionary(_, _), _) => {
+            let mut target = expected.clone();
+            loop {
+                match cast(array.as_ref(), &target) {
+                    Ok(array) => return Ok(array),
+                    Err(ArrowError::DictionaryKeyOverflowError) => {
+                        let Some(promoted) = promote_dictionary_type(&target) else {
+                            return Err(ArrowError::DictionaryKeyOverflowError.into());
+                        };
+                        target = promoted;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
         (
             DataType::RunEndEncoded(run_ends_field, expected_values_field),
             &DataType::RunEndEncoded(_, _),
@@ -335,14 +396,49 @@ fn dictionary_encode_if_necessary(
     }
 }
 
+fn field_with_array_type(field: &FieldRef, array: &ArrayRef) -> FieldRef {
+    if field.data_type() == array.data_type() {
+        Arc::clone(field)
+    } else {
+        Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_data_type(array.data_type().clone()),
+        )
+    }
+}
+
+fn promote_dictionary_type(data_type: &DataType) -> Option<DataType> {
+    let DataType::Dictionary(key_type, value_type) = data_type else {
+        return None;
+    };
+    let key_type = match key_type.as_ref() {
+        DataType::Int8 => DataType::Int16,
+        DataType::Int16 => DataType::Int32,
+        DataType::Int32 => DataType::Int64,
+        DataType::UInt8 => DataType::UInt16,
+        DataType::UInt16 => DataType::UInt32,
+        DataType::UInt32 => DataType::UInt64,
+        DataType::Int64 | DataType::UInt64 => return None,
+        _ => return None,
+    };
+    Some(DataType::Dictionary(
+        Box::new(key_type),
+        Box::new(value_type.as_ref().clone()),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::array::{DictionaryArray, StringArray, StringDictionaryBuilder};
-    use arrow::datatypes::{Field, Schema, UInt8Type, UInt64Type};
+    use arrow::datatypes::{
+        Field, Int8Type, Int16Type, Schema, UInt8Type, UInt16Type,
+    };
 
     #[test]
-    fn dict_uint8_utf8_257_groups_emit_promotes_key_type() -> Result<()> {
+    fn dict_uint8_utf8_promotes_and_does_not_shrink() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "k",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
@@ -358,30 +454,88 @@ mod tests {
             group_values.intern(&[array], &mut groups)?;
         }
 
-        assert_eq!(group_values.len(), 257);
         let arrays = group_values.emit(EmitTo::All)?;
-        assert_eq!(arrays.len(), 1);
-        assert_eq!(arrays[0].len(), 257);
         assert_eq!(
             arrays[0].data_type(),
-            &DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8))
+            &DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8))
         );
-
         let dictionary = arrays[0]
             .as_any()
-            .downcast_ref::<DictionaryArray<UInt64Type>>()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
             .unwrap();
         let values = dictionary
             .values()
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
-
         for row in 0..257 {
             let key = dictionary.keys().value(row) as usize;
             assert_eq!(values.value(key), format!("group_{row}"));
         }
 
+        let mut builder = StringDictionaryBuilder::<UInt8Type>::new();
+        builder.append_value("after_promotion");
+        group_values.intern(&[Arc::new(builder.finish())], &mut groups)?;
+        let arrays = group_values.emit(EmitTo::All)?;
+        assert_eq!(
+            arrays[0].data_type(),
+            &DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn dict_uint8_utf8_keeps_key_type_at_capacity() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "k",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let mut group_values = GroupValuesRows::try_new(schema)?;
+        let mut groups = vec![];
+        for i in 0u32..256 {
+            let mut builder = StringDictionaryBuilder::<UInt8Type>::new();
+            builder.append_value(format!("group_{i}"));
+            group_values.intern(&[Arc::new(builder.finish())], &mut groups)?;
+        }
+
+        let arrays = group_values.emit(EmitTo::All)?;
+        assert_eq!(
+            arrays[0].data_type(),
+            &DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8))
+        );
+        assert!(arrays[0]
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt8Type>>()
+            .is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn dict_int8_utf8_promotes_after_capacity() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "k",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let mut group_values = GroupValuesRows::try_new(schema)?;
+        let mut groups = vec![];
+        for i in 0u32..129 {
+            let mut builder = StringDictionaryBuilder::<Int8Type>::new();
+            builder.append_value(format!("group_{i}"));
+            group_values.intern(&[Arc::new(builder.finish())], &mut groups)?;
+        }
+
+        let arrays = group_values.emit(EmitTo::All)?;
+        assert_eq!(
+            arrays[0].data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8))
+        );
+        assert!(arrays[0]
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int16Type>>()
+            .is_some());
         Ok(())
     }
 }
