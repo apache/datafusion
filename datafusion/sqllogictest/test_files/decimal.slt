@@ -1326,3 +1326,17 @@ from (
 ) t;
 ----
 9999999999999999999999999999999999 Decimal128(38, 4)
+
+# Regression: `avg(DISTINCT ...)` must widen its intermediate sum the same way.
+# The second distinct aggregate keeps `single_distinct_to_group_by` from
+# rewriting the plan, so the distinct accumulator is the code under test.
+
+# sum(1..65536) = 2,147,516,416 > i32::MAX, avg = 32768.5
+query RTR
+select avg(distinct d), arrow_typeof(avg(distinct d)), avg(distinct v)
+from (
+    select arrow_cast(v, 'Decimal32(9, 0)') as d, v
+    from generate_series(1, 65536) t(v)
+) t;
+----
+32768.5 Decimal32(9, 4) 32768.5

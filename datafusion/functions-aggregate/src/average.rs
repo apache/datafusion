@@ -138,7 +138,7 @@ impl Default for Avg {
 /// of reach. `Decimal256` input near max precision is the exception: no wider
 /// type exists, so its sum keeps only whatever headroom `Decimal256(76, _)` has
 /// left, as before this budget was introduced.
-const AVG_SUM_HEADROOM_DIGITS: u8 = 4 + 9;
+const AVG_SUM_HEADROOM_DIGITS: u8 = 13;
 
 /// The narrowest decimal that can accumulate `avg`'s sum over `data_type`, never
 /// narrower than `data_type` itself. Other types accumulate as themselves.
@@ -261,39 +261,19 @@ impl AggregateUDFImpl for Avg {
                 // Numeric types are converted to Float64 via `coerce_avg_type` during logical plan creation
                 (Float64, _) => Ok(Box::new(Float64DistinctAvgAccumulator::default())),
 
-                (
-                    Decimal32(_, scale),
-                    Decimal32(target_precision, target_scale),
-                ) => Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal32Type>::with_decimal_params(
-                    *scale,
-                    *target_precision,
-                    *target_scale,
-                ))),
-                                (
-                    Decimal64(_, scale),
-                    Decimal64(target_precision, target_scale),
-                ) => Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal64Type>::with_decimal_params(
-                    *scale,
-                    *target_precision,
-                    *target_scale,
-                ))),
-                (
-                    Decimal128(_, scale),
-                    Decimal128(target_precision, target_scale),
-                ) => Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal128Type>::with_decimal_params(
-                    *scale,
-                    *target_precision,
-                    *target_scale,
-                ))),
-
-                (
-                    Decimal256(_, scale),
-                    Decimal256(target_precision, target_scale),
-                ) => Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal256Type>::with_decimal_params(
-                    *scale,
-                    *target_precision,
-                    *target_scale,
-                ))),
+                (Decimal32(..), Decimal32(..))
+                | (Decimal64(..), Decimal64(..))
+                | (Decimal128(..), Decimal128(..))
+                | (Decimal256(..), Decimal256(..)) => {
+                    let sum_data_type = avg_sum_data_type(data_type);
+                    decimal_avg_dispatch!(
+                        data_type,
+                        &sum_data_type,
+                        decimal_distinct_avg_accumulator,
+                        &sum_data_type,
+                        acc_args.return_type()
+                    )
+                }
 
                 (dt, return_type) => exec_err!(
                     "AVG(DISTINCT) for ({} --> {}) not supported",
@@ -548,6 +528,28 @@ where
         return_data_type,
         avg_fn,
     )))
+}
+
+fn decimal_distinct_avg_accumulator<I, S>(
+    sum_data_type: &DataType,
+    return_data_type: &DataType,
+) -> Result<Box<dyn Accumulator>>
+where
+    I: DecimalType + ArrowNumericType + Debug + Send + Sync,
+    S: DecimalType + ArrowNumericType + Debug + Send + Sync,
+    I::Native: Into<S::Native> + DecimalCast,
+    S::Native: DecimalCast,
+{
+    let (_, sum_scale) = decimal_parts(sum_data_type)?;
+    let (target_precision, target_scale) = decimal_parts(return_data_type)?;
+
+    Ok(Box::new(
+        DecimalDistinctAvgAccumulator::<I, S>::with_decimal_params(
+            sum_scale,
+            target_precision,
+            target_scale,
+        ),
+    ))
 }
 
 fn decimal_avg_groups_accumulator<I, S>(
