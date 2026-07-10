@@ -30,7 +30,9 @@ use datafusion_expr::EmitTo;
 
 use crate::InputOrderMode;
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    GroupByMetrics, GroupValues, new_group_values, schema_with_group_values,
+};
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
@@ -253,7 +255,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     }
     /// Aggregates one evaluated input batch.
     ///
-    /// This common utility is used by ordered partial and ordered final aggregation.
+    /// This common utility is used by ordered partial and final aggregation.
     ///
     /// # Argument: `is_final`
     ///
@@ -308,7 +310,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     /// Emits groups allowed by `GroupOrdering`, leaving only the current
     /// unfinished ordered-key range buffered.
     ///
-    /// This common utility is used by ordered partial and ordered final aggregation.
+    /// This common utility is used by ordered partial and final aggregation.
     ///
     /// # Argument: `is_final`
     ///
@@ -330,6 +332,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
 
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.buffer.group_values.emit(emit_to)?;
+        let num_group_columns = output.len();
         if should_remove_groups {
             match emit_to {
                 EmitTo::First(n) => self.buffer.group_ordering.remove_groups(n),
@@ -349,7 +352,11 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         }
         drop(timer);
 
-        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        let output_schema = schema_with_group_values(
+            &self.output_schema,
+            &output[..num_group_columns],
+        );
+        let batch = RecordBatch::try_new(output_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
 
         Ok(Some(batch))
