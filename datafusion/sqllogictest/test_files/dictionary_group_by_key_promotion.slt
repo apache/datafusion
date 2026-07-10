@@ -67,3 +67,9 @@ FROM (
 );
 ----
 Dictionary(UInt16, Utf8)
+
+statement ok
+SET datafusion.execution.batch_size = 8192;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
