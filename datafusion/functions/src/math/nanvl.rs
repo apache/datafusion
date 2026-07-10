@@ -307,4 +307,58 @@ mod test {
         assert!(floats.is_null(2));
         assert_eq!(floats.value(3), 2.5);
     }
+
+    #[test]
+    fn test_nanvl_f64_only_y_nulls() {
+        // `x` has no nulls, `y` does:
+        // - x non-NaN         -> x
+        // - x NaN, y non-null -> y
+        // - x NaN, y null     -> null (propagated from y)
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from(vec![1.0, f64::NAN, f64::NAN, 4.0])), // x
+            Arc::new(Float64Array::from(vec![
+                Some(5.0),
+                Some(6.0),
+                None,
+                Some(8.0),
+            ])), // y
+        ];
+
+        let result = nanvl(&args).expect("failed to initialize function nanvl");
+        let floats =
+            as_float64_array(&result).expect("failed to initialize function nanvl");
+
+        assert_eq!(floats.len(), 4);
+        assert_eq!(floats.value(0), 1.0);
+        assert_eq!(floats.value(1), 6.0);
+        assert!(floats.is_null(2));
+        assert_eq!(floats.value(3), 4.0);
+    }
+
+    #[test]
+    fn test_nanvl_f64_only_x_nulls() {
+        // `x` has nulls, `y` does not:
+        // - x null    -> null (propagated from x)
+        // - x NaN     -> y
+        // - x non-NaN -> x
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from(vec![
+                None,
+                Some(f64::NAN),
+                Some(3.0),
+                None,
+            ])), // x
+            Arc::new(Float64Array::from(vec![5.0, 6.0, 7.0, 8.0])), // y
+        ];
+
+        let result = nanvl(&args).expect("failed to initialize function nanvl");
+        let floats =
+            as_float64_array(&result).expect("failed to initialize function nanvl");
+
+        assert_eq!(floats.len(), 4);
+        assert!(floats.is_null(0));
+        assert_eq!(floats.value(1), 6.0);
+        assert_eq!(floats.value(2), 3.0);
+        assert!(floats.is_null(3));
+    }
 }
