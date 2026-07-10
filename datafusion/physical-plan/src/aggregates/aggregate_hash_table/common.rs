@@ -28,7 +28,8 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 
 use crate::PhysicalExpr;
 use crate::aggregates::group_values::{
-    GroupByMetrics, GroupValues, new_group_values, schema_with_group_values,
+    GroupByMetrics, GroupValues, group_value_emit_batch_size, new_group_values,
+    schema_with_group_values,
 };
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
@@ -207,12 +208,74 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         Ok(())
     }
 
+    /// Emits one partial-state batch without changing the planned schema.
+    ///
+    /// Dictionary group columns are capped at the number of values representable
+    /// by their planned key type. Remaining groups stay in the table and are
+    /// emitted on later polls. This keeps repartition/coalescing schemas stable
+    /// while allowing a downstream final aggregate to combine all groups and
+    /// promote its final output key type when required.
+    pub(super) fn next_partial_output_batch_inner(
+        &mut self,
+        materialize_accumulator_fn: MaterializeAccumulatorFn,
+    ) -> Result<Option<RecordBatch>> {
+        let output_schema = Arc::clone(&self.output_schema);
+        let batch_size = self.batch_size;
+
+        let mut state =
+            match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
+                AggregateHashTableState::Outputting(state) => state,
+                AggregateHashTableState::Done => return Ok(None),
+                AggregateHashTableState::Building(_) => {
+                    return internal_err!(
+                        "next_output_batch must be called in the outputting state"
+                    );
+                }
+                AggregateHashTableState::OutputtingMaterialized(_) => {
+                    return internal_err!(
+                        "partial aggregate output must not be materialized"
+                    );
+                }
+            };
+
+        if state.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let max_groups = group_value_emit_batch_size(
+            &output_schema,
+            state.group_by.num_group_exprs(),
+            batch_size,
+        );
+        let num_groups = max_groups.min(state.group_values.len());
+        let emit_to = if num_groups == state.group_values.len() {
+            EmitTo::All
+        } else {
+            EmitTo::First(num_groups)
+        };
+
+        let timer = self.group_by_metrics.emitting_time.timer();
+        let mut columns = state.group_values.emit(emit_to)?;
+        for acc in state.accumulators.iter_mut() {
+            columns.extend(materialize_accumulator_fn(acc, emit_to)?);
+        }
+        drop(timer);
+
+        let batch = RecordBatch::try_new(output_schema, columns)?;
+        debug_assert!(batch.num_rows() > 0);
+        if state.group_values.is_empty() {
+            self.state = AggregateHashTableState::Done;
+        } else {
+            self.state = AggregateHashTableState::Outputting(state);
+        }
+        Ok(Some(batch))
+    }
+
     /// Materializes the full output once, then returns it downstream incrementally
     /// by slicing it into `batch_size` chunks.
     ///
-    /// Each aggregation mode chooses a different `materialize_accumulator_fn`
-    /// according to its semantics. For example, partial aggregation emits
-    /// partial states to feed the final stage, so it uses [`GroupsAccumulator::state`].
+    /// Final aggregate evaluation consumes accumulator state, so it is
+    /// materialized once and then sliced on later polls.
     ///
     /// This is a temporary solution until blocked state management is implemented:
     /// Issue: <https://github.com/apache/datafusion/issues/7065>
@@ -430,9 +493,8 @@ pub(super) enum AggregateHashTableState {
 
 /// Fully evaluated aggregate output and the next row offset to emit.
 ///
-/// Final aggregate evaluation consumes accumulator state, and partial terminal
-/// output should not repeatedly renumber group values with `EmitTo::First`.
-/// Materialize once and then slice to honor `batch_size` across output polls.
+/// Final aggregate evaluation consumes accumulator state, so it is materialized
+/// once and then sliced to honor `batch_size` across output polls.
 pub(super) struct MaterializedAggregateOutput {
     batch: RecordBatch,
     offset: usize,
