@@ -5,6 +5,12 @@ SET datafusion.execution.parquet.pushdown_filters = true;
 statement ok
 SET datafusion.optimizer.enable_sort_pushdown = true;
 
+# Test file exercises the pushdown path directly. Disable the
+# narrow-projection gate so the expected plans (FilterExec absorbed
+# into DataSourceExec) are reproduced regardless of projection width.
+statement ok
+SET datafusion.execution.parquet.pushdown_filter_narrow_projection_gate = false;
+
 # Test 1: Sort Pushdown for ordered Parquet files
 # Create a sorted dataset
 statement ok
@@ -2959,3 +2965,6 @@ DROP TABLE tp_multifile;
 # Restore settings
 statement ok
 SET datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filter_narrow_projection_gate;
