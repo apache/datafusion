@@ -17,13 +17,14 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
 use crate as datafusion_cli;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
@@ -53,9 +54,48 @@ use datafusion::config::ConfigOptions;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_spark::SessionStateBuilderSpark;
 
+use rustyline::error::ReadlineError;
+use thiserror::Error;
+
+#[derive(Error)]
+#[non_exhaustive]
+pub enum CliError {
+    #[error("{0}")]
+    DataFusion(#[from] DataFusionError),
+    #[error("Readline error `{0}`")]
+    Readline(#[from] ReadlineError),
+    // This is used to print e.g. help text so we don't want to embellish it
+    #[error(transparent)]
+    ArgumentParsing(#[from] clap::Error),
+}
+
+impl fmt::Debug for CliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // We use Display ({}) here instead of Debug ({:?}) for nicer `error?` output.
+        write!(f, "{self}")
+    }
+}
+
+/// `CliSession` implements argument parsing, and construction of the default `CliSessionContext`.
+#[non_exhaustive]
+pub struct CliSession {
+    pub ctx: SessionContext,
+    pub print_options: PrintOptions,
+    pub args: CliArgs,
+}
+
+/// A `Builder` API which allows you to construct a `CliSession` while customizing the build process.
+///
+#[derive(Default)]
+pub struct CliSessionBuilder {
+    session_state: Option<SessionState>,
+    args: Option<CliArgs>,
+}
+
 #[derive(Debug, Parser, PartialEq)]
 #[clap(author, version, about, long_about= None)]
-struct Args {
+#[non_exhaustive]
+pub struct CliArgs {
     #[clap(
         short = 'p',
         long,
@@ -164,7 +204,7 @@ struct Args {
     object_store_profiling: InstrumentedObjectStoreMode,
 }
 
-impl Args {
+impl CliArgs {
     /// Without -c/-f the CLI enters the REPL, which reads its SQL from
     /// stdin — interactively or piped.
     fn repl_mode(&self) -> bool {
@@ -181,10 +221,23 @@ impl Args {
     }
 }
 
-/// Main CLI entrypoint
-pub async fn main_inner() -> Result<()> {
+impl CliSessionBuilder {
+    pub fn with_session_state(mut self, session_state: SessionState) -> Self {
+        self.session_state = Some(session_state);
+        self
+    }
+
+    pub fn with_args(mut self, args: CliArgs) -> Self {
+        self.args = Some(args);
+        self
+    }
+
+pub fn build(self) -> Result<CliSession, CliError> {
+    let args = match self.args {
+        Some(args) => args,
+        None => CliArgs::try_parse()?,
+    };
     env_logger::init();
-    let args = Args::parse();
 
     if !args.quiet {
         println!("DataFusion CLI v{DATAFUSION_CLI_VERSION}");
@@ -237,18 +290,55 @@ pub async fn main_inner() -> Result<()> {
 
     let runtime_env = rt_builder.build_arc()?;
 
-    let mut state_builder = SessionStateBuilder::new()
-        .with_config(session_config)
-        .with_runtime_env(runtime_env)
-        .with_default_features();
+    let mut state_builder = if let Some(session_state) = self.session_state {
+        SessionStateBuilder::new_from_existing(session_state)
+    } else {
+        SessionStateBuilder::new()
+    };
+    state_builder = state_builder.with_config(session_config)
+            .with_runtime_env(runtime_env)
+            .with_default_features();
+        
     if args.spark {
         state_builder = state_builder.with_spark_features();
     }
 
-
     // enable dynamic file query
     let ctx = SessionContext::new_with_state(state_builder.build()).enable_url_table();
 
+    let print_options = PrintOptions {
+        format: args.format,
+        quiet: args.quiet,
+        maxrows: args.maxrows,
+        color: args.color,
+        instrumented_registry: Arc::clone(&instrumented_registry),
+    };
+    Ok(CliSession {
+        ctx,
+        args,
+        print_options,
+    })
+}
+}
+
+impl CliSession {
+    pub fn builder() -> CliSessionBuilder {
+        CliSessionBuilder::default()
+    }
+    pub async fn entry_point() -> Result<(), CliError> {
+        let cli_session = CliSession::builder().build()?;
+        cli_session.run().await
+    }
+    pub fn session_context(&self) -> &SessionContext {
+        &self.ctx
+    }
+/// Main CLI entrypoint
+pub async fn run(self) -> Result<(), CliError> {
+    let CliSession {
+        ctx,
+        args,
+        mut print_options,
+    } = self;
     ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that can register required object stores
     ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
@@ -281,14 +371,6 @@ pub async fn main_inner() -> Result<()> {
         )),
     );
 
-    let mut print_options = PrintOptions {
-        format: args.format,
-        quiet: args.quiet,
-        maxrows: args.maxrows,
-        color: args.color,
-        instrumented_registry: Arc::clone(&instrumented_registry),
-    };
-
     let repl_mode = args.repl_mode();
     let commands = args.command;
     let files = args.file;
@@ -311,10 +393,7 @@ pub async fn main_inner() -> Result<()> {
         if !rc.is_empty() {
             exec::exec_from_files(&ctx, rc, &print_options).await?;
         }
-        // TODO maybe we can have thiserror for cli but for now let's keep it simple
-        return exec::exec_from_repl(&ctx, &mut print_options)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)));
+        exec::exec_from_repl(&ctx, &mut print_options).await?;
     }
 
     if !files.is_empty() {
@@ -327,10 +406,11 @@ pub async fn main_inner() -> Result<()> {
 
     Ok(())
 }
+}
 
 /// Get the session configuration based on the provided arguments
 /// and environment settings.
-fn get_session_config(args: &Args) -> Result<SessionConfig> {
+fn get_session_config(args: &CliArgs) -> Result<SessionConfig, DataFusionError> {
     // Read options from environment variables and merge with command line options
     let mut config_options = ConfigOptions::from_env()?;
 
@@ -463,11 +543,11 @@ fn parse_size_string(size: &str, label: &str) -> Result<usize, String> {
     }
 }
 
-pub fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
+fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
     parse_size_string(size, "memory pool size")
 }
 
-pub fn extract_disk_limit(size: &str) -> Result<usize, String> {
+fn extract_disk_limit(size: &str) -> Result<usize, String> {
     parse_size_string(size, "disk limit")
 }
 
