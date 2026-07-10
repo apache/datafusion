@@ -17,15 +17,17 @@
 
 use std::process::ExitCode;
 
+use datafusion_cli::entry_point::CliSession;
+
 use mimalloc::MiMalloc;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
 #[tokio::main]
-/// Calls [`main_inner`], then handles printing errors and returning the correct exit code
+/// Calls [`CliSession::entry_point`], then handles printing errors and returning the correct exit code
 pub async fn main() -> ExitCode {
-    if let Err(e) = datafusion_cli::entry_point::main_inner().await {
+    if let Err(e) = CliSession::entry_point().await {
         println!("Error: {e}");
         return ExitCode::FAILURE;
     }
