@@ -147,7 +147,7 @@ fn roundtrip_expr_test_with_codec(
     let round_trip: Expr =
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), codec).unwrap();
 
-    assert_eq!(format!("{:?}", &initial_struct), format!("{round_trip:?}"));
+    assert_eq!(format!("{:?}", initial_struct), format!("{round_trip:?}"));
 
     roundtrip_json_test(&proto);
 }
@@ -2354,7 +2354,7 @@ fn roundtrip_null_scalar_values() {
     for test_case in test_types.into_iter() {
         let proto_scalar: protobuf::ScalarValue = (&test_case).try_into().unwrap();
         let returned_scalar: ScalarValue = (&proto_scalar).try_into().unwrap();
-        assert_eq!(format!("{:?}", &test_case), format!("{returned_scalar:?}"));
+        assert_eq!(format!("{:?}", test_case), format!("{returned_scalar:?}"));
     }
 }
 
@@ -2849,7 +2849,7 @@ fn roundtrip_scalar_udf_extension_codec() {
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
             .expect("parse expr");
 
-    assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
+    assert_eq!(format!("{:?}", test_expr), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 
@@ -2863,7 +2863,7 @@ fn roundtrip_aggregate_udf_extension_codec() {
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
             .expect("parse expr");
 
-    assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
+    assert_eq!(format!("{:?}", test_expr), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 
