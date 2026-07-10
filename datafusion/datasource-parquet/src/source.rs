@@ -866,7 +866,17 @@ impl FileSource for ParquetSource {
         // [#22883]: https://github.com/apache/datafusion/issues/22883
         const PUSHDOWN_MIN_NON_FILTER_COLS: usize = 3;
         let mut narrow_projection_gate_declined = false;
+        // Never gate a scan that receives a dynamic filter. Dynamic filters
+        // (e.g. `TopK`'s heap-threshold predicate) rely on pushdown being
+        // active in order to feed the runtime row-group pruner
+        // (`RowGroupPruner`); declining pushdown here would silently
+        // disable the entire dynamic-RG-prune cascade for narrow
+        // ORDER BY ... LIMIT queries.
+        let has_dynamic_filter = filters
+            .iter()
+            .any(|f| DynamicFilterTracking::classify(f).contains_dynamic_filter());
         if pushdown_filters
+            && !has_dynamic_filter
             && config
                 .execution
                 .parquet

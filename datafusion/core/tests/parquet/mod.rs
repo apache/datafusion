@@ -323,6 +323,18 @@ impl ContextWithParquet {
             Unit::RowGroup(row_per_group) => {
                 config = config.with_parquet_bloom_filter_pruning(true);
                 config.options_mut().execution.parquet.pushdown_filters = true;
+                // These tests specifically exercise the TopK dynamic RG
+                // pruning + RowFilter co-existence path, which relies on
+                // pushdown being active at the scan. The narrow-projection
+                // gate cannot detect that a *TopK* dynamic filter will be
+                // injected later (after `try_pushdown_filters` has run), so
+                // for these tests we opt out of the gate so the dynamic RG
+                // pruning cascade can fire.
+                config
+                    .options_mut()
+                    .execution
+                    .parquet
+                    .pushdown_filter_narrow_projection_gate = false;
                 make_test_file_rg(
                     scenario,
                     row_per_group,
@@ -340,6 +352,18 @@ impl ContextWithParquet {
                 config = config.with_parquet_bloom_filter_pruning(true);
                 config = config.with_parquet_page_index_pruning(true);
                 config.options_mut().execution.parquet.pushdown_filters = true;
+                // These tests specifically exercise the TopK dynamic RG
+                // pruning + RowFilter co-existence path, which relies on
+                // pushdown being active at the scan. The narrow-projection
+                // gate cannot detect that a *TopK* dynamic filter will be
+                // injected later (after `try_pushdown_filters` has run), so
+                // for these tests we opt out of the gate so the dynamic RG
+                // pruning cascade can fire.
+                config
+                    .options_mut()
+                    .execution
+                    .parquet
+                    .pushdown_filter_narrow_projection_gate = false;
                 make_test_file_rg(
                     scenario,
                     row_per_group,
