@@ -398,6 +398,20 @@ mod tests {
     }
 
     #[test]
+    fn test_first_eagerly_evaluates_predicate_after_match() {
+        // Although 4 is the first match, the predicate is evaluated for the
+        // later 0 in the same sublist and produces a division-by-zero error.
+        let list =
+            create_i32_list(vec![4, 0], OffsetBuffer::<i32>::from_lengths(vec![2]), None);
+
+        let err = first_where_hundred_div_gt_five(list).unwrap_err();
+        assert!(
+            err.to_string().contains("Divide by zero"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn test_first_string_elements() -> Result<()> {
         use arrow::array::ListArray;
         use arrow::datatypes::{DataType, Field};
