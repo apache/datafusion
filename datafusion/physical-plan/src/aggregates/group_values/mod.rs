@@ -119,9 +119,9 @@ pub(crate) fn cast_group_values_to_schema(
     Ok(())
 }
 
-/// Returns a stable spill schema whose dictionary group keys use their widest
-/// key type. The widening is internal to spill IPC and does not change planned
-/// or non-spill aggregate output schemas.
+/// Returns a stable spill schema whose top-level dictionary group keys use
+/// their widest key type. This widening is internal to spill IPC and does not
+/// change planned or non-spill aggregate output schemas.
 pub(crate) fn group_value_spill_schema(
     schema: &SchemaRef,
     num_group_fields: usize,
@@ -146,15 +146,7 @@ pub(crate) fn group_value_spill_schema(
 }
 
 fn group_value_spill_field(field: &Field) -> FieldRef {
-    Arc::new(
-        field
-            .clone()
-            .with_data_type(group_value_spill_data_type(field.data_type())),
-    )
-}
-
-fn group_value_spill_data_type(data_type: &DataType) -> DataType {
-    match data_type {
+    let data_type = match field.data_type() {
         DataType::Dictionary(key_type, value_type) => {
             let key_type = match key_type.as_ref() {
                 DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
@@ -166,40 +158,11 @@ fn group_value_spill_data_type(data_type: &DataType) -> DataType {
                 | DataType::UInt64 => DataType::UInt64,
                 _ => key_type.as_ref().clone(),
             };
-            DataType::Dictionary(
-                Box::new(key_type),
-                Box::new(group_value_spill_data_type(value_type)),
-            )
+            DataType::Dictionary(Box::new(key_type), Box::new(value_type.as_ref().clone()))
         }
-        DataType::Struct(fields) => DataType::Struct(
-            fields
-                .iter()
-                .map(|field| group_value_spill_field(field.as_ref()))
-                .collect::<Vec<_>>()
-                .into(),
-        ),
-        DataType::List(field) => DataType::List(group_value_spill_field(field.as_ref())),
-        DataType::LargeList(field) => {
-            DataType::LargeList(group_value_spill_field(field.as_ref()))
-        }
-        DataType::ListView(field) => {
-            DataType::ListView(group_value_spill_field(field.as_ref()))
-        }
-        DataType::LargeListView(field) => {
-            DataType::LargeListView(group_value_spill_field(field.as_ref()))
-        }
-        DataType::FixedSizeList(field, size) => {
-            DataType::FixedSizeList(group_value_spill_field(field.as_ref()), *size)
-        }
-        DataType::Map(field, sorted) => {
-            DataType::Map(group_value_spill_field(field.as_ref()), *sorted)
-        }
-        DataType::RunEndEncoded(run_ends, values) => DataType::RunEndEncoded(
-            Arc::clone(run_ends),
-            group_value_spill_field(values.as_ref()),
-        ),
-        _ => data_type.clone(),
-    }
+        _ => field.data_type().clone(),
+    };
+    Arc::new(field.clone().with_data_type(data_type))
 }
 
 pub mod multi_group_by;
@@ -303,7 +266,7 @@ pub trait GroupValues: Send {
 ///   - Otherwise, the general implementation `GroupValuesRows` will be chosen.
 ///
 /// `GroupColumn`:  crate::aggregates::group_values::multi_group_by::GroupColumn
-/// `GroupValuesColumn`: crate::aggregates::group_values::GroupValuesColumn
+/// `GroupValuesColumn`: crate::aggregates::group_values::multi_group_by::GroupValuesColumn
 /// `GroupValuesRows`: crate::aggregates::group_values::GroupValuesRows
 pub fn new_group_values(
     schema: SchemaRef,
