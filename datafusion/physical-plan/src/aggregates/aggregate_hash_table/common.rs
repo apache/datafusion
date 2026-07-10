@@ -18,9 +18,10 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, new_null_array};
+use arrow::array::{ArrayRef, AsArray, UInt64Array, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
@@ -31,7 +32,8 @@ use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_val
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
-    AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
+    AGGREGATION_HASH_SEED, AggregateExec, PhysicalGroupBy, aggregate_expressions,
+    evaluate_group_by, schema_with_group_hash,
 };
 
 /// Marker for raw rows -> partial state aggregation.
@@ -136,6 +138,8 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 group_by: Arc::clone(&agg.group_by),
                 group_values,
                 batch_group_indices: Default::default(),
+                group_hashes: Default::default(),
+                batch_hashes: Default::default(),
                 accumulators,
             }),
             _mode: PhantomData,
@@ -183,6 +187,8 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
                 acc + state.group_values.size()
                     + state.batch_group_indices.allocated_size()
+                    + state.group_hashes.allocated_size()
+                    + state.batch_hashes.allocated_size()
             }
             AggregateHashTableState::OutputtingMaterialized(output) => {
                 output.memory_size()
@@ -212,6 +218,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         };
 
         state.batch_group_indices = Vec::new();
+        state.batch_hashes = Vec::new();
         self.state = AggregateHashTableState::Outputting(state);
     }
 }
@@ -287,6 +294,12 @@ pub(super) struct AggregateHashTableBuffer {
     /// accumulator to update that group's aggregate state.
     pub(super) batch_group_indices: Vec<usize>,
 
+    /// Hash value for each stored group, indexed by group index.
+    pub(super) group_hashes: Vec<u64>,
+
+    /// Scratch hash vector for the current input batch.
+    pub(super) batch_hashes: Vec<u64>,
+
     /// One item per aggregate expression.
     ///
     /// Example: `COUNT(x), SUM(y)` creates two items. Each item owns the input
@@ -340,6 +353,64 @@ impl MaterializedAggregateOutput {
 
     pub(super) fn memory_size(&self) -> usize {
         self.batch.get_array_memory_size()
+    }
+}
+
+pub(super) fn try_new_internal_batch(
+    output_schema: SchemaRef,
+    mut columns: Vec<ArrayRef>,
+    has_group_hash: bool,
+) -> Result<RecordBatch> {
+    if has_group_hash {
+        Ok(RecordBatch::try_new(
+            schema_with_group_hash(&output_schema),
+            columns,
+        )?)
+    } else {
+        Ok(RecordBatch::try_new(
+            output_schema,
+            std::mem::take(&mut columns),
+        )?)
+    }
+}
+
+impl AggregateHashTableBuffer {
+    pub(super) fn create_batch_hashes(
+        &mut self,
+        group_values: &[ArrayRef],
+    ) -> Result<&[u64]> {
+        self.batch_hashes.clear();
+        let num_rows = group_values.first().map(|array| array.len()).unwrap_or(0);
+        self.batch_hashes.resize(num_rows, 0);
+        create_hashes(group_values, &AGGREGATION_HASH_SEED, &mut self.batch_hashes)?;
+        Ok(&self.batch_hashes)
+    }
+
+    pub(super) fn reuse_batch_hashes(&mut self, input_hashes: &UInt64Array) -> &[u64] {
+        self.batch_hashes.clear();
+        self.batch_hashes.extend_from_slice(input_hashes.values());
+        &self.batch_hashes
+    }
+
+    pub(super) fn record_new_group_hashes(
+        &mut self,
+        starting_num_groups: usize,
+        total_num_groups: usize,
+    ) {
+        self.group_hashes.resize(total_num_groups, 0);
+        for (row, group_index) in self.batch_group_indices.iter().enumerate() {
+            if *group_index >= starting_num_groups {
+                self.group_hashes[*group_index] = self.batch_hashes[row];
+            }
+        }
+    }
+
+    pub(super) fn emit_hashes(&mut self, emit_to: EmitTo) -> ArrayRef {
+        let hashes = match emit_to {
+            EmitTo::All => std::mem::take(&mut self.group_hashes),
+            EmitTo::First(n) => self.group_hashes.drain(..n).collect(),
+        };
+        Arc::new(UInt64Array::from(hashes))
     }
 }
 

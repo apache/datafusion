@@ -24,10 +24,8 @@ use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::Result;
-use datafusion_common::hash_utils::RandomState;
-use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::normalize_float_zero;
-use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
+use datafusion_execution::memory_pool::proxy::HashTableAllocExt;
 use datafusion_expr::EmitTo;
 use hashbrown::hash_table::HashTable;
 use log::debug;
@@ -72,14 +70,8 @@ pub struct GroupValuesRows {
     /// [`Row`]: arrow::row::Row
     group_values: Option<Rows>,
 
-    /// reused buffer to store hashes
-    hashes_buffer: Vec<u64>,
-
     /// reused buffer to store rows
     rows_buffer: Rows,
-
-    /// Random state for creating hashes
-    random_state: RandomState,
 }
 
 impl GroupValuesRows {
@@ -108,15 +100,18 @@ impl GroupValuesRows {
             map,
             map_size: 0,
             group_values: None,
-            hashes_buffer: Default::default(),
             rows_buffer,
-            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         })
     }
 }
 
 impl GroupValues for GroupValuesRows {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hashes: &[u64],
+    ) -> Result<()> {
         // Normalize -0.0 → +0.0 so RowConverter (IEEE 754 totalOrder) and
         // primitive hashing both group ±0 together. No-op for non-float
         // columns.
@@ -128,8 +123,6 @@ impl GroupValues for GroupValuesRows {
         let group_rows = &mut self.rows_buffer;
         group_rows.clear();
         self.row_converter.append(group_rows, cols)?;
-        let n_rows = group_rows.num_rows();
-
         let mut group_values = match self.group_values.take() {
             Some(group_values) => group_values,
             None => self.row_converter.empty_rows(0, 0),
@@ -138,13 +131,7 @@ impl GroupValues for GroupValuesRows {
         // tracks to which group each of the input rows belongs
         groups.clear();
 
-        // 1.1 Calculate the group keys for the group values
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(n_rows, 0);
-        create_hashes(cols, &self.random_state, batch_hashes)?;
-
-        for (row, &target_hash) in batch_hashes.iter().enumerate() {
+        for (row, &target_hash) in hashes.iter().enumerate() {
             let entry = self.map.find_mut(target_hash, |(exist_hash, group_idx)| {
                 // Somewhat surprisingly, this closure can be called even if the
                 // hash doesn't match, so check the hash first with an integer
@@ -189,7 +176,6 @@ impl GroupValues for GroupValuesRows {
             + group_values_size
             + self.map_size
             + self.rows_buffer.size()
-            + self.hashes_buffer.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -262,8 +248,6 @@ impl GroupValues for GroupValuesRows {
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
         self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
-        self.hashes_buffer.clear();
-        self.hashes_buffer.shrink_to(num_rows);
     }
 }
 

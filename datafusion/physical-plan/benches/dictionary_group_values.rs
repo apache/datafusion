@@ -27,6 +27,7 @@ use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use criterion::{
     BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
 };
+use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_expr::EmitTo;
 use datafusion_physical_plan::aggregates::group_values::new_group_values;
 use datafusion_physical_plan::aggregates::order::GroupOrdering;
@@ -109,10 +110,17 @@ fn bench_intern_emit(c: &mut Criterion) {
                                 new_group_values(schema.clone(), &GroupOrdering::None)
                                     .unwrap(),
                                 Vec::<usize>::with_capacity(size),
+                                Vec::<u64>::new(),
                             )
                         },
-                        |(gv, groups)| {
-                            gv.intern(std::slice::from_ref(&array), groups).unwrap();
+                        |(gv, groups, hashes)| {
+                            let seed = RandomState::with_seed(15395726432021054657);
+                            hashes.clear();
+                            hashes.resize(array.len(), 0);
+                            create_hashes(std::slice::from_ref(&array), &seed, hashes)
+                                .unwrap();
+                            gv.intern(std::slice::from_ref(&array), groups, hashes)
+                                .unwrap();
                             black_box(&*groups);
                             black_box(gv.emit(EmitTo::All).unwrap());
                         },
@@ -154,11 +162,18 @@ fn bench_repeated_intern_emit(c: &mut Criterion) {
                                 new_group_values(schema.clone(), &GroupOrdering::None)
                                     .unwrap(),
                                 Vec::<usize>::with_capacity(size),
+                                Vec::<u64>::new(),
                             )
                         },
-                        |(gv, groups)| {
+                        |(gv, groups, hashes)| {
                             for arr in &batches {
-                                gv.intern(std::slice::from_ref(arr), groups).unwrap();
+                                let seed = RandomState::with_seed(15395726432021054657);
+                                hashes.clear();
+                                hashes.resize(arr.len(), 0);
+                                create_hashes(std::slice::from_ref(arr), &seed, hashes)
+                                    .unwrap();
+                                gv.intern(std::slice::from_ref(arr), groups, hashes)
+                                    .unwrap();
                                 black_box(&*groups);
                             }
                             black_box(gv.emit(EmitTo::All).unwrap());

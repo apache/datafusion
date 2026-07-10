@@ -22,11 +22,11 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::EmitTo;
 
-use crate::aggregates::AggregateExec;
+use crate::aggregates::{AggregateExec, try_strip_group_hash_column};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
-    MaterializedAggregateOutput, PartialReduceMarker,
+    MaterializedAggregateOutput, PartialReduceMarker, try_new_internal_batch,
 };
 
 /// Methods specific to the aggregate hash table used in the partial-reduce stage.
@@ -89,13 +89,15 @@ impl AggregateHashTable<PartialReduceMarker> {
         let emit_to_all = EmitTo::All;
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = state.group_values.emit(emit_to_all)?;
+        let group_hashes = state.emit_hashes(emit_to_all);
 
         for acc in state.accumulators.iter_mut() {
             output.extend(acc.state(emit_to_all)?);
         }
+        output.push(group_hashes);
         drop(timer);
 
-        let batch = RecordBatch::try_new(output_schema, output)?;
+        let batch = try_new_internal_batch(output_schema, output, true)?;
         debug_assert!(batch.num_rows() > 0);
         Ok(MaterializedAggregateOutput::new(batch))
     }
@@ -118,16 +120,26 @@ impl AggregateHashTable<PartialReduceMarker> {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
-        let evaluated_batch = self.evaluate_batch(batch)?;
+        let (batch, input_hashes) = try_strip_group_hash_column(batch)?;
+        let evaluated_batch = self.evaluate_batch(&batch)?;
         let state = self.state.building_mut();
 
         let timer = self.group_by_metrics.aggregation_time.timer();
         for group_values in &evaluated_batch.grouping_set_args {
-            state
-                .group_values
-                .intern(group_values, &mut state.batch_group_indices)?;
-            let group_indices = &state.batch_group_indices;
+            let starting_num_groups = state.group_values.len();
+            if let Some(input_hashes) = input_hashes {
+                state.reuse_batch_hashes(input_hashes);
+            } else {
+                state.create_batch_hashes(group_values)?;
+            }
+            state.group_values.intern(
+                group_values,
+                &mut state.batch_group_indices,
+                &state.batch_hashes,
+            )?;
             let total_num_groups = state.group_values.len();
+            state.record_new_group_hashes(starting_num_groups, total_num_groups);
+            let group_indices = &state.batch_group_indices;
 
             for (acc, values) in state
                 .accumulators

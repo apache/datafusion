@@ -35,7 +35,7 @@ use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
-    evaluate_group_by,
+    create_group_hash_array, evaluate_group_by, schema_with_group_hash,
 };
 
 use super::common::{AggregateAccumulator, EvaluatedAggregateBatch};
@@ -266,9 +266,13 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     ) -> Result<()> {
         for group_values in &evaluated_batch.grouping_set_args {
             let starting_num_groups = self.buffer.group_values.len();
-            self.buffer
-                .group_values
-                .intern(group_values, &mut self.buffer.group_indices)?;
+            let mut hashes = Vec::new();
+            crate::aggregates::create_group_hashes(group_values, &mut hashes)?;
+            self.buffer.group_values.intern(
+                group_values,
+                &mut self.buffer.group_indices,
+                &hashes,
+            )?;
             let total_num_groups = self.buffer.group_values.len();
             if total_num_groups > starting_num_groups {
                 self.buffer.group_ordering.new_groups(
@@ -330,6 +334,11 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
 
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.buffer.group_values.emit(emit_to)?;
+        let group_hashes = if is_final || self.buffer.accumulators.is_empty() {
+            None
+        } else {
+            Some(create_group_hash_array(&output)?)
+        };
         if should_remove_groups {
             match emit_to {
                 EmitTo::First(n) => self.buffer.group_ordering.remove_groups(n),
@@ -347,9 +356,15 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                 output.extend(acc.state(emit_to)?);
             }
         }
+        let output_schema = if let Some(group_hashes) = group_hashes {
+            output.push(group_hashes);
+            schema_with_group_hash(&self.output_schema)
+        } else {
+            Arc::clone(&self.output_schema)
+        };
         drop(timer);
 
-        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        let batch = RecordBatch::try_new(output_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
 
         Ok(Some(batch))

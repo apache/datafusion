@@ -28,8 +28,8 @@ use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_val
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
-    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, group_id_array,
-    max_duplicate_ordinal,
+    create_group_hash_array, create_schema, evaluate_group_by, evaluate_many,
+    evaluate_optional, group_id_array, max_duplicate_ordinal, schema_with_group_hash,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
@@ -883,8 +883,13 @@ impl GroupedHashAggregateStream {
 
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
-            self.group_values
-                .intern(group_values, &mut self.current_group_indices)?;
+            let mut hashes = Vec::new();
+            aggregates::create_group_hashes(group_values, &mut hashes)?;
+            self.group_values.intern(
+                group_values,
+                &mut self.current_group_indices,
+                &hashes,
+            )?;
             let group_indices = &self.current_group_indices;
 
             // Update ordering information if necessary
@@ -1034,6 +1039,13 @@ impl GroupedHashAggregateStream {
 
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.group_values.emit(emit_to)?;
+        let group_hashes = if !self.accumulators.is_empty()
+            && (self.mode.output_mode() == AggregateOutputMode::Partial || spilling)
+        {
+            Some(create_group_hash_array(&output)?)
+        } else {
+            None
+        };
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
         }
@@ -1048,11 +1060,21 @@ impl GroupedHashAggregateStream {
                 output.extend(acc.state(emit_to)?)
             }
         }
+        if let Some(group_hashes) = group_hashes {
+            output.push(group_hashes);
+        }
         drop(timer);
 
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
+        let schema = if !self.accumulators.is_empty()
+            && (self.mode.output_mode() == AggregateOutputMode::Partial || spilling)
+        {
+            schema_with_group_hash(&schema)
+        } else {
+            schema
+        };
         let batch = RecordBatch::try_new(schema, output)?;
         debug_assert!(batch.num_rows() > 0);
 
@@ -1103,8 +1125,10 @@ impl GroupedHashAggregateStream {
             cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
 
             let starting_groups = self.group_values.len();
+            let mut hashes = Vec::new();
+            aggregates::create_group_hashes(&cols, &mut hashes)?;
             self.group_values
-                .intern(&cols, &mut self.current_group_indices)?;
+                .intern(&cols, &mut self.current_group_indices, &hashes)?;
             let total_groups = self.group_values.len();
             if total_groups > starting_groups {
                 self.group_ordering.new_groups(
@@ -1383,6 +1407,9 @@ impl GroupedHashAggregateStream {
             "group_values expected to have single element"
         );
         let mut output = group_values.swap_remove(0);
+        let group_hashes = (!self.accumulators.is_empty())
+            .then(|| create_group_hash_array(&output))
+            .transpose()?;
 
         let iter = self
             .accumulators
@@ -1394,8 +1421,16 @@ impl GroupedHashAggregateStream {
             let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
             output.extend(acc.convert_to_state(values, opt_filter)?);
         }
+        if let Some(group_hashes) = group_hashes {
+            output.push(group_hashes);
+        }
 
-        let states_batch = RecordBatch::try_new(self.schema(), output)?;
+        let states_schema = if self.accumulators.is_empty() {
+            self.schema()
+        } else {
+            schema_with_group_hash(&self.schema())
+        };
+        let states_batch = RecordBatch::try_new(states_schema, output)?;
 
         Ok(states_batch)
     }

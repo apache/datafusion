@@ -27,12 +27,15 @@ use datafusion_expr::EmitTo;
 
 use crate::aggregates::group_values::new_group_values;
 use crate::aggregates::order::GroupOrdering;
-use crate::aggregates::{AggregateExec, group_id_array, max_duplicate_ordinal};
+use crate::aggregates::{
+    AggregateExec, create_group_hash_array, group_id_array, max_duplicate_ordinal,
+    schema_with_group_hash,
+};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
     EvaluatedAccumulatorArgs, HashAggregateAccumulator, MaterializedAggregateOutput,
-    PartialMarker, PartialSkipMarker,
+    PartialMarker, PartialSkipMarker, try_new_internal_batch,
 };
 
 /// Implementation specific to partial aggregation, where the table stores
@@ -98,13 +101,15 @@ impl AggregateHashTable<PartialMarker> {
         let emit_to = EmitTo::All;
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = state.group_values.emit(emit_to)?;
+        let group_hashes = state.emit_hashes(emit_to);
 
         for acc in state.accumulators.iter_mut() {
             output.extend(acc.state(emit_to)?);
         }
+        output.push(group_hashes);
         drop(timer);
 
-        let batch = RecordBatch::try_new(output_schema, output)?;
+        let batch = try_new_internal_batch(output_schema, output, true)?;
         debug_assert!(batch.num_rows() > 0);
         Ok(MaterializedAggregateOutput::new(batch))
     }
@@ -155,6 +160,8 @@ impl AggregateHashTable<PartialMarker> {
                 group_by: Arc::clone(&state.group_by),
                 group_values,
                 batch_group_indices: Default::default(),
+                group_hashes: Default::default(),
+                batch_hashes: Default::default(),
                 accumulators,
             }),
             _mode: PhantomData,
@@ -170,11 +177,16 @@ impl AggregateHashTable<PartialMarker> {
 
         let _timer = self.group_by_metrics.aggregation_time.timer();
         for group_values in &evaluated_batch.grouping_set_args {
-            state
-                .group_values
-                .intern(group_values, &mut state.batch_group_indices)?;
-            let group_indices = &state.batch_group_indices;
+            let starting_num_groups = state.group_values.len();
+            state.create_batch_hashes(group_values)?;
+            state.group_values.intern(
+                group_values,
+                &mut state.batch_group_indices,
+                &state.batch_hashes,
+            )?;
             let total_num_groups = state.group_values.len();
+            state.record_new_group_hashes(starting_num_groups, total_num_groups);
+            let group_indices = &state.batch_group_indices;
 
             for (acc, values) in state
                 .accumulators
@@ -215,12 +227,13 @@ impl AggregateHashTable<PartialMarker> {
         }
 
         let max_ordinal = max_duplicate_ordinal(state.group_by.groups());
+        let groups = state.group_by.groups().to_vec();
         let mut ordinals: HashMap<&[bool], usize> = HashMap::new();
         let group_schema = state.group_by.group_schema(&self.input_schema)?;
         let n_expr = state.group_by.expr().len();
         let mut any_interned = false;
 
-        for group in state.group_by.groups() {
+        for group in &groups {
             let ordinal = {
                 let entry = ordinals.entry(group.as_slice()).or_insert(0);
                 let ordinal = *entry;
@@ -240,9 +253,15 @@ impl AggregateHashTable<PartialMarker> {
                 .collect();
             cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
 
-            state
-                .group_values
-                .intern(&cols, &mut state.batch_group_indices)?;
+            let starting_num_groups = state.group_values.len();
+            state.create_batch_hashes(&cols)?;
+            state.group_values.intern(
+                &cols,
+                &mut state.batch_group_indices,
+                &state.batch_hashes,
+            )?;
+            let total_num_groups = state.group_values.len();
+            state.record_new_group_hashes(starting_num_groups, total_num_groups);
             any_interned = true;
         }
 
@@ -280,8 +299,8 @@ impl AggregateHashTable<PartialSkipMarker> {
             .into_iter()
             .next()
             .unwrap_or_default();
-
         let state = self.state.building_mut();
+        let group_hashes = create_group_hash_array(&output)?;
         for (acc, values) in state
             .accumulators
             .iter_mut()
@@ -289,9 +308,10 @@ impl AggregateHashTable<PartialSkipMarker> {
         {
             output.extend(acc.convert_to_state(values)?);
         }
+        output.push(group_hashes);
 
         Ok(RecordBatch::try_new(
-            Arc::clone(&self.output_schema),
+            schema_with_group_hash(&self.output_schema),
             output,
         )?)
     }

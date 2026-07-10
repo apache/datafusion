@@ -31,6 +31,7 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
+use crate::aggregates::group_hash_column_index;
 use crate::coalesce::LimitedBatchCoalescer;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::hash_utils::create_hashes;
@@ -245,6 +246,9 @@ impl SharedCoalescer {
     fn push_and_drain(&self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
         let mut acc = Vec::new();
         let mut c = self.inner.lock();
+        if c.schema() != batch.schema() {
+            return Ok(vec![batch]);
+        }
         c.push_batch(batch)?;
         while let Some(b) = c.next_completed_batch() {
             acc.push(b);
@@ -807,17 +811,28 @@ impl BatchPartitioner {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
 
-                    let arrays =
-                        evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
-
                     hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);
 
-                    create_hashes(
-                        &arrays,
-                        REPARTITION_RANDOM_STATE.random_state(),
-                        hash_buffer,
-                    )?;
+                    if let Some(hash_index) =
+                        group_hash_column_index(batch.schema().as_ref())
+                    {
+                        let hashes = batch
+                            .column(hash_index)
+                            .as_any()
+                            .downcast_ref::<PrimitiveArray<arrow::datatypes::UInt64Type>>(
+                            )
+                            .expect("group hash column must be UInt64Array");
+                        hash_buffer.copy_from_slice(hashes.values());
+                    } else {
+                        let arrays =
+                            evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
+                        create_hashes(
+                            &arrays,
+                            REPARTITION_RANDOM_STATE.random_state(),
+                            hash_buffer,
+                        )?;
+                    }
 
                     indices.iter_mut().for_each(|v| v.clear());
 

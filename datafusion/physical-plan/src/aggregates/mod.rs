@@ -53,7 +53,7 @@ use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err,
-    internal_err, not_impl_err,
+    internal_err, not_impl_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryLimit;
@@ -103,6 +103,80 @@ pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool 
 const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
     // This seed is chosen to be a large 64-bit number
     datafusion_common::hash_utils::RandomState::with_seed(15395726432021054657);
+
+/// Internal partial-aggregation column that carries precomputed group hashes
+/// across repartition and into downstream aggregate stages.
+pub(crate) const GROUP_HASH_COLUMN_NAME: &str = "__datafusion_group_hash";
+
+pub(crate) fn create_group_hashes(
+    group_values: &[ArrayRef],
+    hashes: &mut Vec<u64>,
+) -> Result<()> {
+    let num_rows = group_values.first().map(|array| array.len()).unwrap_or(0);
+    hashes.clear();
+    hashes.resize(num_rows, 0);
+    datafusion_common::hash_utils::create_hashes(
+        group_values,
+        &AGGREGATION_HASH_SEED,
+        hashes,
+    )?;
+    Ok(())
+}
+
+pub(crate) fn create_group_hash_array(group_values: &[ArrayRef]) -> Result<ArrayRef> {
+    let mut hashes = Vec::new();
+    create_group_hashes(group_values, &mut hashes)?;
+    Ok(Arc::new(UInt64Array::from(hashes)))
+}
+
+pub(crate) fn group_hash_field() -> Field {
+    Field::new(GROUP_HASH_COLUMN_NAME, DataType::UInt64, false)
+}
+
+pub(crate) fn schema_with_group_hash(schema: &SchemaRef) -> SchemaRef {
+    let mut fields = schema.fields().to_vec();
+    fields.push(group_hash_field().into());
+    Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+pub(crate) fn group_hash_column_index(schema: &Schema) -> Option<usize> {
+    let last_index = schema.fields().len().checked_sub(1)?;
+    (schema.field(last_index).name() == GROUP_HASH_COLUMN_NAME).then_some(last_index)
+}
+
+pub(crate) fn try_strip_group_hash_column(
+    batch: &RecordBatch,
+) -> Result<(RecordBatch, Option<&UInt64Array>)> {
+    let Some(hash_index) = group_hash_column_index(batch.schema().as_ref()) else {
+        return Ok((batch.clone(), None));
+    };
+
+    strip_group_hash_column_at(batch, hash_index)
+        .map(|(batch, hashes)| (batch, Some(hashes)))
+}
+
+pub(crate) fn strip_group_hash_column(
+    batch: &RecordBatch,
+) -> Result<(RecordBatch, &UInt64Array)> {
+    let hash_index = group_hash_column_index(batch.schema().as_ref())
+        .expect("input must include internal group hash column");
+    strip_group_hash_column_at(batch, hash_index)
+}
+
+fn strip_group_hash_column_at(
+    batch: &RecordBatch,
+    hash_index: usize,
+) -> Result<(RecordBatch, &UInt64Array)> {
+    let hashes = batch
+        .column(hash_index)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .expect("group hash column must be UInt64Array");
+    let projection: Vec<usize> = (0..hash_index).collect();
+    let schema = project_schema(&batch.schema(), Some(&projection))?;
+    let columns = batch.columns()[..hash_index].to_vec();
+    Ok((RecordBatch::try_new(schema, columns)?, hashes))
+}
 
 /// Whether an aggregate stage consumes raw input data or intermediate
 /// accumulator state from a previous aggregation stage.
@@ -2518,7 +2592,10 @@ mod tests {
     };
     use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::Int32Type;
-    use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
+    use datafusion_common::test_util::{
+        batches_to_sort_string as format_batches_to_sort_string,
+        batches_to_string as format_batches_to_string,
+    };
     use datafusion_common::{DataFusionError, internal_err};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
@@ -2558,6 +2635,23 @@ mod tests {
         Ok(schema)
     }
 
+    fn batches_without_group_hash(batches: &[RecordBatch]) -> Vec<RecordBatch> {
+        batches
+            .iter()
+            .map(|batch| try_strip_group_hash_column(batch).map(|(batch, _hashes)| batch))
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+    }
+
+    fn batches_to_sort_string(batches: &[RecordBatch]) -> String {
+        let batches = batches_without_group_hash(batches);
+        format_batches_to_sort_string(&batches)
+    }
+
+    fn batches_to_string(batches: &[RecordBatch]) -> String {
+        let batches = batches_without_group_hash(batches);
+        format_batches_to_string(&batches)
+    }
     /// some mock data to aggregates
     fn some_data() -> (Arc<Schema>, Vec<RecordBatch>) {
         // define a schema.

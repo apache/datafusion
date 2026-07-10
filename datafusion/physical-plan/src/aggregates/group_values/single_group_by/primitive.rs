@@ -114,8 +114,6 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     null_group: Option<usize>,
     /// The values for each group index
     values: Vec<T::Native>,
-    /// The random state used to generate hashes
-    random_state: RandomState,
 }
 
 impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
@@ -126,7 +124,6 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             map: HashTable::with_capacity(128),
             values: Vec::with_capacity(128),
             null_group: None,
-            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         }
     }
 }
@@ -135,11 +132,16 @@ impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
 where
     T::Native: HashValue,
 {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hashes: &[u64],
+    ) -> Result<()> {
         assert_eq!(cols.len(), 1);
         groups.clear();
 
-        for v in cols[0].as_primitive::<T>() {
+        for (row, v) in cols[0].as_primitive::<T>().iter().enumerate() {
             let group_id = match v {
                 None => *self.null_group.get_or_insert_with(|| {
                     let group_id = self.values.len();
@@ -151,8 +153,7 @@ where
                     // so the bit-equal `is_eq` matches and the stored value is
                     // the canonical representative.
                     let key = key.canonicalize();
-                    let state = &self.random_state;
-                    let hash = key.hash(state);
+                    let hash = hashes[row];
                     let insert = self.map.entry(
                         hash,
                         |&(g, h)| unsafe {
@@ -273,7 +274,9 @@ mod tests {
         // Intern 20 distinct values; `new()` pre-allocates capacity 128 for `values`.
         let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..20i32));
         let mut groups = vec![];
-        gv.intern(&[arr], &mut groups)?;
+        let mut hashes = Vec::new();
+        crate::aggregates::create_group_hashes(std::slice::from_ref(&arr), &mut hashes)?;
+        gv.intern(&[arr], &mut groups, &hashes)?;
         let capacity_before = gv.values.capacity(); // 128
 
         // n=4, n*2=8 <= len=20 -> drain branch

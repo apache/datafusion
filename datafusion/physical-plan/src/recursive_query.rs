@@ -466,8 +466,13 @@ impl DistinctDeduplicator {
                     "failed to reserve {additional} recursive query group ids: {e}"
                 )
             })?;
-        self.group_values
-            .intern(batch.columns(), &mut self.intern_output_buffer)?;
+        let mut hashes = Vec::new();
+        crate::aggregates::create_group_hashes(batch.columns(), &mut hashes)?;
+        self.group_values.intern(
+            batch.columns(),
+            &mut self.intern_output_buffer,
+            &hashes,
+        )?;
         let mask = new_groups_mask(&self.intern_output_buffer, size_before);
         self.intern_output_buffer.clear();
         // We update the reservation to reflect the new size of the hash table.

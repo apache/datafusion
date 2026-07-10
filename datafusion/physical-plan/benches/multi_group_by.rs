@@ -28,6 +28,7 @@
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_physical_plan::aggregates::group_values::GroupValues;
 use datafusion_physical_plan::aggregates::group_values::GroupValuesRows;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupValuesColumn;
@@ -95,9 +96,14 @@ fn bench_intern(
     batches: &[Vec<ArrayRef>],
     groups: &mut Vec<usize>,
 ) {
+    let seed = RandomState::with_seed(15395726432021054657);
+    let mut hashes = Vec::new();
     for batch in batches {
         groups.clear();
-        gv.intern(batch, groups).unwrap();
+        hashes.clear();
+        hashes.resize(batch[0].len(), 0);
+        create_hashes(batch, &seed, &mut hashes).unwrap();
+        gv.intern(batch, groups, &hashes).unwrap();
     }
     black_box(&*groups);
 }
