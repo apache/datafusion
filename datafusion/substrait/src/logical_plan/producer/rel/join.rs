@@ -18,11 +18,11 @@
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::common::{JoinConstraint, JoinType, NullEquality, not_impl_err};
 use datafusion::logical_expr::utils::conjunction;
-use datafusion::logical_expr::{Expr, Join, Operator};
+use datafusion::logical_expr::{Expr, Join, Operator, lit};
 use datafusion::prelude::binary_expr;
 use std::sync::Arc;
 use substrait::proto::rel::RelType;
-use substrait::proto::{JoinRel, Rel, join_rel};
+use substrait::proto::{CrossRel, JoinRel, Rel, join_rel};
 
 pub fn from_join(
     producer: &mut impl SubstraitProducer,
@@ -38,16 +38,26 @@ pub fn from_join(
     let right = producer.handle_plan(join.right.as_ref())?;
     let join_type = to_substrait_jointype(join.join_type);
 
-    let join_expr =
-        to_substrait_join_expr(join.on.clone(), join.null_equality, join.filter.clone());
-    let join_expression = match join_expr {
-        Some(expr) => {
-            let in_join_schema = Arc::new(join.left.schema().join(join.right.schema())?);
-            let expression = producer.handle_expr(&expr, &in_join_schema)?;
-            Some(Box::new(expression))
+    let join_expr = match to_substrait_join_expr(
+        join.on.clone(),
+        join.null_equality,
+        join.filter.clone(),
+    ) {
+        Some(expr) => expr,
+        None if join.join_type == JoinType::Inner => {
+            return Ok(Box::new(Rel {
+                rel_type: Some(RelType::Cross(Box::new(CrossRel {
+                    common: None,
+                    left: Some(left),
+                    right: Some(right),
+                    advanced_extension: None,
+                }))),
+            }));
         }
-        None => None,
+        None => lit(true),
     };
+    let in_join_schema = Arc::new(join.left.schema().join(join.right.schema())?);
+    let join_expression = producer.handle_expr(&join_expr, &in_join_schema)?;
 
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Join(Box::new(JoinRel {
@@ -55,7 +65,7 @@ pub fn from_join(
             left: Some(left),
             right: Some(right),
             r#type: join_type as i32,
-            expression: join_expression,
+            expression: Some(Box::new(join_expression)),
             post_join_filter: None,
             advanced_extension: None,
         }))),
