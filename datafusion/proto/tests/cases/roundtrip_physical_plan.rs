@@ -1478,13 +1478,15 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
         &self,
         name: &str,
         buf: &[u8],
-    ) -> Result<Arc<dyn HigherOrderUDF>> {
+    ) -> Result<Arc<HigherOrderUDF>> {
         if name == "higher_order_udf" {
             let proto = MyHigherOrderUdfNode::decode(buf).map_err(|err| {
                 internal_datafusion_err!("failed to decode higher_order_udf: {err}")
             })?;
 
-            Ok(Arc::new(MyHigherOrderUDF::new(proto.payload)))
+            Ok(Arc::new(HigherOrderUDF::new_from_impl(
+                MyHigherOrderUDF::new(proto.payload),
+            )))
         } else {
             not_impl_err!("unrecognized higher order UDF implementation, cannot decode")
         }
@@ -1492,10 +1494,11 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
 
     fn try_encode_higher_order_function(
         &self,
-        node: &dyn HigherOrderUDF,
+        node: &HigherOrderUDF,
         buf: &mut Vec<u8>,
     ) -> Result<()> {
-        if let Some(hof) = (node as &dyn std::any::Any).downcast_ref::<MyHigherOrderUDF>()
+        if let Some(hof) = (node.inner().as_ref() as &dyn std::any::Any)
+            .downcast_ref::<MyHigherOrderUDF>()
         {
             let proto = MyHigherOrderUdfNode {
                 payload: hof.payload.clone(),
@@ -1578,7 +1581,9 @@ fn roundtrip_higher_order_udf() -> Result<()> {
 
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
-    let hof = Arc::new(MyHigherOrderUDF::new("payload".to_string())) as _;
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
 
     let expr = HigherOrderFunctionExpr::try_new_with_schema(
         Arc::clone(&hof),
@@ -1621,7 +1626,9 @@ fn roundtrip_higher_order_udf_extension_codec() -> Result<()> {
     let lambda_body = Arc::new(LambdaVariable::new(1, Arc::clone(&element_field)));
     let lambda_expr = lambda(["v"], lambda_body)?;
 
-    let hof = Arc::new(MyHigherOrderUDF::new("payload".to_string()));
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
     let hof_expr = Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
         hof,
         vec![col("list_col", &schema)?, lambda_expr],

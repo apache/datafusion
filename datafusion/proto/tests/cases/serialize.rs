@@ -306,12 +306,14 @@ fn test_expression_serialization_roundtrip() {
 /// return a `SessionContext` with `MyHigherOrderUDF` registered as a higher-order UDF
 fn context_with_higher_order_function() -> SessionContext {
     let ctx = SessionContext::new();
-    let hof = Arc::new(MyHigherOrderUDF::new("payload".to_string()));
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
     ctx.register_higher_order_function(hof);
     ctx
 }
 
-fn dummy_higher_order_function_call(hof: Arc<dyn HigherOrderUDF>) -> Expr {
+fn dummy_higher_order_function_call(hof: Arc<HigherOrderUDF>) -> Expr {
     let list = ScalarValue::List(ScalarValue::new_list_nullable(
         &[ScalarValue::Int32(Some(1))],
         &DataType::Int32,

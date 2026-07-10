@@ -399,20 +399,10 @@ pub fn parse_physical_expr_with_converter(
             ctx.codec()
                 .try_decode_expr(extension.expr.as_slice(), &inputs)? as _
         }
-        ExprType::Lambda(lambda) => Arc::new(LambdaExpr::try_new(
-            lambda.params.clone(),
-            parse_required_physical_expr(
-                lambda.body.as_deref(),
-                ctx,
-                "body",
-                input_schema,
-                proto_converter,
-            )?,
-        )?),
-        ExprType::LambdaVariable(var) => Arc::new(LambdaVariable::new(
-            var.index as usize,
-            Arc::new(convert_required!(var.field)?),
-        )),
+        ExprType::Lambda(_) => LambdaExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::LambdaVariable(_) => {
+            LambdaVariable::try_from_proto(proto, &decode_ctx)?
+        }
     };
 
     Ok(pexpr)

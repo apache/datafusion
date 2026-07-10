@@ -22,7 +22,7 @@ use datafusion_common::plan_err;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
-    HigherOrderSignature, HigherOrderUDF, LambdaParametersProgress, LimitEffect,
+    HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, LimitEffect,
     PartitionEvaluator, ScalarFunctionArgs, ScalarUDFImpl, Signature, ValueOrLambda,
     Volatility, WindowUDFImpl,
 };
@@ -198,7 +198,7 @@ impl MyHigherOrderUDF {
     }
 }
 
-impl HigherOrderUDF for MyHigherOrderUDF {
+impl HigherOrderUDFImpl for MyHigherOrderUDF {
     fn name(&self) -> &str {
         "higher_order_udf"
     }
