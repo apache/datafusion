@@ -507,6 +507,8 @@ mod tests {
             coerce_int96: None,
             coerce_int96_tz: None,
             max_predicate_cache_size: defaults.max_predicate_cache_size,
+            pushdown_filter_narrow_projection_gate: defaults
+                .pushdown_filter_narrow_projection_gate,
             content_defined_chunking: defaults.content_defined_chunking.clone(),
         }
     }
@@ -628,6 +630,8 @@ mod tests {
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
                 coerce_int96: None,
                 coerce_int96_tz: None,
+                pushdown_filter_narrow_projection_gate: global_options_defaults
+                    .pushdown_filter_narrow_projection_gate,
                 content_defined_chunking: props.content_defined_chunking().into(),
             },
             column_specific_options,
