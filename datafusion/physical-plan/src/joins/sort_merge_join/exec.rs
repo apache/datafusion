@@ -410,15 +410,19 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
         let (left_expr, right_expr) = self
             .on
             .iter()
             .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
             .unzip();
-        vec![
+        crate::InputDistributionRequirements::new(vec![
             Distribution::KeyPartitioned(left_expr),
             Distribution::KeyPartitioned(right_expr),
-        ]
+        ])
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {

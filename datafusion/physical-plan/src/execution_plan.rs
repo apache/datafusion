@@ -16,6 +16,7 @@
 // under the License.
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+use crate::distribution_requirements::InputDistributionRequirements;
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -164,10 +165,28 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         check_default_invariants(self, check)
     }
 
-    /// Specifies the data distribution requirements for all the
-    /// children for this `ExecutionPlan`, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
+    /// Specifies simple per-child input distribution requirements.
+    ///
+    /// Deprecated: override [`Self::input_distribution_requirements`] instead.
+    ///
+    /// By default, each child has [`Distribution::UnspecifiedDistribution`].
+    #[deprecated(since = "55.0.0", note = "Use input_distribution_requirements")]
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution; self.children().len()]
+    }
+
+    /// Specifies the input distribution requirements for this plan.
+    ///
+    /// The default implementation wraps [`Self::required_input_distribution`].
+    /// Override this method for richer requirements, such as allowing alternate
+    /// satisfaction policies or requiring multiple children to be co-partitioned.
+    /// See [`InputDistributionRequirements`] for details.
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        #[expect(
+            deprecated,
+            reason = "compatibility shim for external ExecutionPlan implementations"
+        )]
+        InputDistributionRequirements::new(self.required_input_distribution())
     }
 
     /// Specifies the ordering required for all of the children of this
@@ -216,8 +235,8 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         // By default try to maximize parallelism with more CPUs if
         // possible
-        self.required_input_distribution()
-            .into_iter()
+        self.input_distribution_requirements()
+            .per_child_distributions()
             .map(|dist| !matches!(dist, Distribution::SinglePartition))
             .collect()
     }
@@ -1249,14 +1268,15 @@ macro_rules! check_len {
 /// Returns an error if the given node does not conform.
 pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
     plan: &P,
-    _check: InvariantLevel,
+    check: InvariantLevel,
 ) -> Result<(), DataFusionError> {
     let children_len = plan.children().len();
 
     check_len!(plan, maintains_input_order, children_len);
     check_len!(plan, required_input_ordering, children_len);
-    check_len!(plan, required_input_distribution, children_len);
     check_len!(plan, benefits_from_input_partitioning, children_len);
+    plan.input_distribution_requirements()
+        .check_invariants(plan, check)?;
 
     Ok(())
 }
