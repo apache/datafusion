@@ -47,9 +47,11 @@
 //!
 //! Compact-once is used **only in service of a reorder**: if the warm-up does
 //! not reorder the conjuncts (e.g. they are interchangeable), the written
-//! predicate is evaluated as-is, so a conjunction that does not benefit from
-//! reordering pays no compact-once overhead and behaves exactly as it would
-//! with the feature off.
+//! predicate is evaluated as-is, so once settled a conjunction that does not
+//! benefit from reordering pays no compact-once overhead and evaluates exactly
+//! as it would with the feature off. During the warm-up itself the conjuncts
+//! are necessarily evaluated individually (with compaction) so they can be
+//! measured — see the side-effects caveat below.
 //!
 //! ## How it shares
 //!
@@ -67,9 +69,26 @@
 //! containing volatile expressions are never reordered (their observable side
 //! effects depend on order).
 //!
-//! This is the core of the adaptive evaluator. Further policies (drift
-//! re-measurement, confidence-interval statistics, A/B-validated adoption for
-//! the cases a cost model cannot separate) can build on top of it.
+//! Observable *side effects* of fallible predicates can change even when no
+//! reorder is adopted: whenever conjuncts are evaluated individually (during
+//! warm-up, or settled with a reorder), a conjunct after a compaction sees only
+//! the surviving rows, so an error a fused evaluation would have raised on an
+//! already-filtered row (e.g. `b <> 0 AND 1/b > 2` with the fused `AND`
+//! evaluating `1/b` on every row) may not occur.
+//!
+//! ## Known limitations
+//!
+//! The statistics are *conditional*: each conjunct is measured on the rows that
+//! survived the conjuncts before it in written order, and (after a compaction)
+//! on small survivor batches whose per-row cost is inflated by fixed overheads.
+//! Correlated conjuncts can therefore look more selective in a late position
+//! than they would be up front, and the settle decision is one-shot: once
+//! adopted, the order is never re-measured, so a misjudged reorder (or drifting
+//! data) is kept for the stream's lifetime. The material-win guard
+//! ([`TIE_COST_FRACTION`]) makes adoption conservative but cannot detect
+//! correlation. Further policies (drift re-measurement, confidence-interval
+//! statistics, A/B-validated adoption for the cases a cost model cannot
+//! separate) can build on top of this core.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -135,9 +154,12 @@ impl ConjunctStats {
         (self.rows > 0).then(|| self.matched as f64 / self.rows as f64)
     }
 
-    /// Per-row evaluation cost in nanoseconds, or `None` if unmeasured.
+    /// Per-row evaluation cost in nanoseconds, or `None` if the conjunct was
+    /// never evaluated on any row. An evaluation faster than the timer's
+    /// resolution is clamped to one nanosecond total: "too cheap to measure"
+    /// must rank as very cheap, not drop out of the ranking as unmeasured.
     fn cost_per_row(&self) -> Option<f64> {
-        (self.rows > 0 && self.nanos > 0).then(|| self.nanos as f64 / self.rows as f64)
+        (self.rows > 0).then(|| self.nanos.max(1) as f64 / self.rows as f64)
     }
 
     /// Ranking key: rows discarded per nanosecond of evaluation
@@ -287,6 +309,13 @@ impl AdaptiveConjunction {
             return self.evaluate_settled(batch);
         }
 
+        // An empty batch measures nothing; evaluating it must not consume the
+        // warm-up (a run of empty batches would otherwise settle the written
+        // order on no evidence, permanently).
+        if batch.num_rows() == 0 {
+            return eval_conjuncts(&self.conjuncts, &self.order, batch, None);
+        }
+
         // Measure this batch into a local accumulator, then pool it.
         let mut local = vec![ConjunctStats::default(); self.conjuncts.len()];
         let result =
@@ -387,11 +416,10 @@ fn eval_conjuncts(
         return Ok(Arc::new(BooleanArray::from(Vec::<bool>::new())));
     }
     // Live-row indices are tracked as `u32` (arrow's `filter`/`take` index
-    // space), so a batch cannot exceed `u32::MAX` rows here.
-    debug_assert!(
-        num_rows <= u32::MAX as usize,
-        "adaptive filter: batch exceeds u32::MAX rows"
-    );
+    // space); a larger batch would silently wrap the indices, so refuse it.
+    if num_rows > u32::MAX as usize {
+        return internal_err!("adaptive filter: batch exceeds u32::MAX rows");
+    }
 
     // `working` is the batch conjuncts are evaluated against. `acc` is the
     // accumulated (`AND`-combined, null-free) result over `working`'s rows since
@@ -626,6 +654,35 @@ mod tests {
             stats(1000, 900, 1000), // unselective
         ];
         assert_eq!(rank_by_effectiveness(&s), vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn zero_nanos_ranks_as_very_cheap() {
+        // A conjunct evaluated faster than the timer's resolution must rank as
+        // very cheap (its cost clamps to 1ns total), not drop out of the
+        // ranking as unmeasured (which would sort it last — backwards).
+        let s = vec![
+            stats(1000, 500, 0),    // immeasurably cheap, somewhat selective
+            stats(1000, 500, 1000), // same selectivity, 1ns/row
+        ];
+        assert_eq!(rank_by_effectiveness(&s), vec![0, 1]);
+    }
+
+    /// Empty batches measure nothing, so they must not consume the warm-up:
+    /// a stream fed only empty batches keeps learning instead of settling the
+    /// written order on no evidence.
+    #[test]
+    fn empty_batches_do_not_consume_warmup() {
+        let schema = schema();
+        let mut adaptive = try_new(&predicate(&schema), true).unwrap();
+
+        for _ in 0..(2 * WARMUP_BATCHES) {
+            let rb = batch(&schema, vec![], vec![]);
+            let got = adaptive.evaluate(&rb).unwrap();
+            assert_eq!(got.len(), 0);
+        }
+        assert!(!adaptive.settled);
+        assert_eq!(adaptive.shared.inner.lock().unwrap().measured_batches, 0);
     }
 
     #[test]
