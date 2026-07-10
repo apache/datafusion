@@ -1965,7 +1965,16 @@ mod tests {
         )
         .expect("file_row_index should rewrite to the row_number virtual column");
 
-        let config = ConfigOptions::default();
+        let mut config = ConfigOptions::default();
+        // Disable the narrow-projection gate so this test can exercise the
+        // virtual-column rejection path independently. The scan projection
+        // here has 0 non-filter file columns, which would otherwise trip
+        // the gate and mark every filter as `PushedDown::No` regardless
+        // of virtual-column content.
+        config
+            .execution
+            .parquet
+            .pushdown_filter_narrow_projection_gate = false;
         let prop = source
             .try_pushdown_filters(vec![pushable, virtual_only, mixed, row_index], &config)
             .expect("try_pushdown_filters must not error");
