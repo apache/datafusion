@@ -28,3 +28,6 @@ pub(super) use common::{
     PartialSkipMarker,
 };
 pub(super) use common_ordered::OrderedAggregateTable;
+
+#[cfg(test)]
+mod tests;
