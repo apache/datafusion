@@ -182,23 +182,6 @@ impl CrossJoinExec {
             &self.right.schema(),
         )
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        let left = children.swap_remove(0);
-        let right = children.swap_remove(0);
-
-        Self {
-            left,
-            right,
-            metrics: ExecutionPlanMetricsSet::new(),
-            left_fut: Default::default(),
-            cache: Arc::clone(&self.cache),
-            schema: Arc::clone(&self.schema),
-        }
-    }
 }
 
 /// Asynchronously collect the result of the left child
@@ -282,6 +265,23 @@ impl ExecutionPlan for CrossJoinExec {
         )))
     }
 
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+
+        Ok(Arc::new(Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            left_fut: Default::default(),
+            cache: Arc::clone(&self.cache),
+            schema: Arc::clone(&self.schema),
+        }))
+    }
+
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let new_exec = CrossJoinExec {
             left: Arc::clone(&self.left),
@@ -295,10 +295,14 @@ impl ExecutionPlan for CrossJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![
             Distribution::SinglePartition,
             Distribution::UnspecifiedDistribution,
-        ]
+        ])
     }
 
     fn execute(
