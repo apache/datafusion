@@ -19,24 +19,26 @@
 
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::mem::align_of_val;
+use std::mem::size_of_val;
 use std::sync::Arc;
 
 use arrow::array::Float64Array;
 use arrow::datatypes::FieldRef;
-use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
+use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
 use datafusion_common::{Result, internal_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
-    Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 use datafusion_macros::user_doc;
 
-use crate::variance::{VarianceAccumulator, VarianceGroupsAccumulator};
+use crate::variance::{
+    Decimal128VarianceAccumulator, Decimal128VarianceGroupsAccumulator,
+    VarianceAccumulator, VarianceGroupsAccumulator, stats_coerce_types, stats_signature,
+    variance_state_fields,
+};
 
 make_udaf_expr_and_func!(
     Stddev,
@@ -77,7 +79,7 @@ impl Stddev {
     /// Create a new STDDEV aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
+            signature: stats_signature(),
             alias: vec!["stddev_samp".to_string()],
         }
     }
@@ -96,28 +98,30 @@ impl AggregateUDFImpl for Stddev {
         Ok(DataType::Float64)
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        stats_coerce_types(self.name(), arg_types)
+    }
+
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![
-            Field::new(
-                format_state_name(args.name, "count"),
-                DataType::UInt64,
-                true,
-            ),
-            Field::new(
-                format_state_name(args.name, "mean"),
-                DataType::Float64,
-                true,
-            ),
-            Field::new(format_state_name(args.name, "m2"), DataType::Float64, true),
-        ]
-        .into_iter()
-        .map(Arc::new)
-        .collect())
+        Ok(variance_state_fields(
+            args.name,
+            args.input_fields[0].data_type(),
+            false,
+        ))
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
             return not_impl_err!("STDDEV_POP(DISTINCT) aggregations are not available");
+        }
+        if let DataType::Decimal128(precision, scale) =
+            acc_args.expr_fields[0].data_type()
+        {
+            return Ok(Box::new(Decimal128StddevAccumulator::try_new(
+                StatsType::Sample,
+                *precision,
+                *scale,
+            )?));
         }
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
     }
@@ -127,13 +131,27 @@ impl AggregateUDFImpl for Stddev {
     }
 
     fn groups_accumulator_supported(&self, acc_args: AccumulatorArgs) -> bool {
+        // This relies on stats_coerce_types mapping supported inputs to one of
+        // these execution types before physical planning.
         !acc_args.is_distinct
+            && matches!(
+                acc_args.expr_fields[0].data_type(),
+                DataType::Float64 | DataType::Decimal128(_, _)
+            )
     }
 
     fn create_groups_accumulator(
         &self,
-        _args: AccumulatorArgs,
+        args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
+        if let DataType::Decimal128(precision, scale) = args.expr_fields[0].data_type() {
+            return Ok(Box::new(Decimal128StddevGroupsAccumulator::new(
+                StatsType::Sample,
+                *precision,
+                *scale,
+            )));
+        }
+
         Ok(Box::new(StddevGroupsAccumulator::new(StatsType::Sample)))
     }
 
@@ -180,7 +198,7 @@ impl StddevPop {
     /// Create a new STDDEV_POP aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
+            signature: stats_signature(),
         }
     }
 }
@@ -195,27 +213,25 @@ impl AggregateUDFImpl for StddevPop {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![
-            Field::new(
-                format_state_name(args.name, "count"),
-                DataType::UInt64,
-                true,
-            ),
-            Field::new(
-                format_state_name(args.name, "mean"),
-                DataType::Float64,
-                true,
-            ),
-            Field::new(format_state_name(args.name, "m2"), DataType::Float64, true),
-        ]
-        .into_iter()
-        .map(Arc::new)
-        .collect())
+        Ok(variance_state_fields(
+            args.name,
+            args.input_fields[0].data_type(),
+            false,
+        ))
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
             return not_impl_err!("STDDEV_POP(DISTINCT) aggregations are not available");
+        }
+        if let DataType::Decimal128(precision, scale) =
+            acc_args.expr_fields[0].data_type()
+        {
+            return Ok(Box::new(Decimal128StddevAccumulator::try_new(
+                StatsType::Population,
+                *precision,
+                *scale,
+            )?));
         }
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
     }
@@ -224,14 +240,32 @@ impl AggregateUDFImpl for StddevPop {
         Ok(DataType::Float64)
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        stats_coerce_types(self.name(), arg_types)
+    }
+
     fn groups_accumulator_supported(&self, acc_args: AccumulatorArgs) -> bool {
+        // This relies on stats_coerce_types mapping supported inputs to one of
+        // these execution types before physical planning.
         !acc_args.is_distinct
+            && matches!(
+                acc_args.expr_fields[0].data_type(),
+                DataType::Float64 | DataType::Decimal128(_, _)
+            )
     }
 
     fn create_groups_accumulator(
         &self,
-        _args: AccumulatorArgs,
+        args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
+        if let DataType::Decimal128(precision, scale) = args.expr_fields[0].data_type() {
+            return Ok(Box::new(Decimal128StddevGroupsAccumulator::new(
+                StatsType::Population,
+                *precision,
+                *scale,
+            )));
+        }
+
         Ok(Box::new(StddevGroupsAccumulator::new(
             StatsType::Population,
         )))
@@ -239,6 +273,54 @@ impl AggregateUDFImpl for StddevPop {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[derive(Debug)]
+struct Decimal128StddevAccumulator {
+    variance: Decimal128VarianceAccumulator,
+}
+
+impl Decimal128StddevAccumulator {
+    fn try_new(s_type: StatsType, precision: u8, scale: i8) -> Result<Self> {
+        Ok(Self {
+            variance: Decimal128VarianceAccumulator::new(s_type, precision, scale),
+        })
+    }
+}
+
+impl Accumulator for Decimal128StddevAccumulator {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.variance.state()
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.variance.update_batch(values)
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.variance.retract_batch(values)
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.variance.merge_batch(states)
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let variance = self.variance.evaluate()?;
+        match variance {
+            ScalarValue::Float64(None) => Ok(ScalarValue::Float64(None)),
+            ScalarValue::Float64(Some(f)) => Ok(ScalarValue::Float64(Some(f.sqrt()))),
+            _ => internal_err!("Variance should be f64"),
+        }
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self) - size_of_val(&self.variance) + self.variance.size()
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        self.variance.supports_retract_batch()
     }
 }
 
@@ -292,11 +374,62 @@ impl Accumulator for StddevAccumulator {
     }
 
     fn size(&self) -> usize {
-        align_of_val(self) - align_of_val(&self.variance) + self.variance.size()
+        size_of_val(self) - size_of_val(&self.variance) + self.variance.size()
     }
 
     fn supports_retract_batch(&self) -> bool {
         self.variance.supports_retract_batch()
+    }
+}
+
+#[derive(Debug)]
+struct Decimal128StddevGroupsAccumulator {
+    variance: Decimal128VarianceGroupsAccumulator,
+}
+
+impl Decimal128StddevGroupsAccumulator {
+    fn new(s_type: StatsType, precision: u8, scale: i8) -> Self {
+        Self {
+            variance: Decimal128VarianceGroupsAccumulator::new(s_type, precision, scale),
+        }
+    }
+}
+
+impl GroupsAccumulator for Decimal128StddevGroupsAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow::array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        self.variance
+            .update_batch(values, group_indices, opt_filter, total_num_groups)
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow::array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        self.variance
+            .merge_batch(values, group_indices, opt_filter, total_num_groups)
+    }
+
+    fn evaluate(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
+        let (mut variances, nulls) = self.variance.variance(emit_to)?;
+        variances.iter_mut().for_each(|v| *v = v.sqrt());
+        Ok(Arc::new(Float64Array::new(variances.into(), Some(nulls))))
+    }
+
+    fn state(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<Vec<ArrayRef>> {
+        self.variance.state(emit_to)
+    }
+
+    fn size(&self) -> usize {
+        self.variance.size()
     }
 }
 
