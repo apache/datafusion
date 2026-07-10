@@ -1190,7 +1190,9 @@ message FileScanExecConf {
   optional uint64 batch_size = 12;
 
   optional ProjectionExprs projection_exprs = 13;
-  optional bool partitioned_by_file_group = 14;
+  // Was optional bool partitioned_by_file_group = 14.
+  reserved 14;
+  reserved "partitioned_by_file_group";
   optional Partitioning output_partitioning = 15;
 }
 
