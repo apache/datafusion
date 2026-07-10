@@ -29,7 +29,7 @@ FROM (
   SELECT k
   FROM (
     SELECT arrow_cast(CAST(value AS VARCHAR), 'Dictionary(UInt8, Utf8)') AS k
-    FROM generate_series(0, 256)
+    FROM generate_series(0, 256) AS series(value)
   )
   GROUP BY k
 );
@@ -42,7 +42,7 @@ FROM (
   SELECT k
   FROM (
     SELECT arrow_cast(CAST(value AS VARCHAR), 'Dictionary(UInt8, Utf8)') AS k
-    FROM generate_series(0, 256)
+    FROM generate_series(0, 256) AS series(value)
   )
   GROUP BY k
 );
