@@ -26,7 +26,8 @@ use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{
     GroupByMetrics, GroupValues, cast_group_values_to_schema,
-    group_value_spill_schema, new_group_values, schema_with_group_values,
+    group_value_emit_batch_size, group_value_spill_schema, new_group_values,
+    schema_with_group_values,
 };
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
@@ -765,7 +766,7 @@ impl Stream for GroupedHashAggregateStream {
                             if !self.group_values.is_empty() {
                                 return Poll::Ready(Some(internal_err!(
                                     "Switching from SkippingAggregation to Done with {} groups still in hash table. \
-This is a bug - all groups should have been emitted before skip aggregation started.",
+                                    This is a bug - all groups should have been emitted before skip aggregation started.",
                                     self.group_values.len()
                                 )));
                             }
@@ -785,12 +786,18 @@ This is a bug - all groups should have been emitted before skip aggregation star
                     (self.exec_state, output_batch) = if batch.num_rows() <= size {
                         (
                             if self.input_done {
-                                ExecutionState::Done
+                                if self.group_values.is_empty() {
+                                    ExecutionState::Done
+                                } else {
+                                    ExecutionState::ReadingInput
+                                }
                             }
                             // In Partial aggregation, we also need to check
-                            // if we should trigger partial skipping
+                            // if we should trigger partial skipping after every
+                            // accumulated group has been emitted.
                             else if self.mode == AggregateMode::Partial
                                 && self.should_skip_aggregation()
+                                && self.group_values.is_empty()
                             {
                                 ExecutionState::SkippingAggregation
                             } else {
@@ -824,7 +831,7 @@ This is a bug - all groups should have been emitted before skip aggregation star
                     if !self.group_values.is_empty() {
                         return Poll::Ready(Some(internal_err!(
                             "AggregateStream was in Done state with {} groups left in hash table. \
-This is a bug - all groups should have been emitted before entering Done state.",
+                            This is a bug - all groups should have been emitted before entering Done state.",
                             self.group_values.len()
                         )));
                     }
@@ -1032,6 +1039,25 @@ impl GroupedHashAggregateStream {
             return Ok(None);
         }
 
+        let emit_to = if !spilling
+            && self.mode.output_mode() == AggregateOutputMode::Partial
+        {
+            let max_groups = group_value_emit_batch_size(
+                &self.schema,
+                self.group_by.num_group_exprs(),
+                self.batch_size,
+            );
+            match emit_to {
+                EmitTo::First(n) => EmitTo::First(n.min(max_groups)),
+                EmitTo::All if self.group_values.len() > max_groups => {
+                    EmitTo::First(max_groups)
+                }
+                EmitTo::All => EmitTo::All,
+            }
+        } else {
+            emit_to
+        };
+
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.group_values.emit(emit_to)?;
         let num_group_columns = output.len();
@@ -1041,6 +1067,8 @@ impl GroupedHashAggregateStream {
                 &self.spill_state.spill_schema,
             )?;
             Arc::clone(&self.spill_state.spill_schema)
+        } else if self.mode.output_mode() == AggregateOutputMode::Partial {
+            Arc::clone(&self.schema)
         } else {
             let schema = schema_with_group_values(
                 &self.schema,
@@ -1436,13 +1464,13 @@ mod tests {
             false,
         )]));
         let batches = (0u32..257)
-            .map(|value| {
+            .map(|value| -> Result<RecordBatch> {
                 let mut builder = StringDictionaryBuilder::<UInt8Type>::new();
                 builder.append_value(format!("group_{value}"));
-                RecordBatch::try_new(
+                Ok(RecordBatch::try_new(
                     Arc::clone(&schema),
                     vec![Arc::new(builder.finish())],
-                )
+                )?)
             })
             .collect::<Result<Vec<_>>>()?;
         let exec = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)?;
