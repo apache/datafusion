@@ -38,11 +38,14 @@ fn dictionary_groups_keep_partial_schema_and_promote_final_output() -> Result<()
         false,
     )]));
     let input_batches = (0u32..257)
-        .map(|value| {
+        .map(|value| -> Result<RecordBatch> {
             let mut builder = StringDictionaryBuilder::<UInt8Type>::new();
             builder.append_value(format!("group_{value}"));
             let array: ArrayRef = Arc::new(builder.finish());
-            RecordBatch::try_new(Arc::clone(&input_schema), vec![array])
+            Ok(RecordBatch::try_new(
+                Arc::clone(&input_schema),
+                vec![array],
+            )?)
         })
         .collect::<Result<Vec<_>>>()?;
 
