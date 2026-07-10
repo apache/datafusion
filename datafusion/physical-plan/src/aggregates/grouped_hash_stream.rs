@@ -24,7 +24,10 @@ use std::vec;
 use super::order::GroupOrdering;
 use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, format_human_display};
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    GroupByMetrics, GroupValues, cast_group_values_to_schema,
+    group_value_spill_schema, new_group_values, schema_with_group_values,
+};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
@@ -424,6 +427,7 @@ impl GroupedHashAggregateStream {
             .collect::<Result<_>>()?;
 
         let group_schema = agg_group_by.group_schema(&agg.input().schema())?;
+        let num_group_fields = group_schema.fields().len();
 
         // fix https://github.com/apache/datafusion/issues/13949
         // Builds a **partial aggregation** schema by combining the group columns and
@@ -446,6 +450,7 @@ impl GroupedHashAggregateStream {
             &aggregate_exprs,
             AggregateMode::Partial,
         )?);
+        let spill_schema = group_value_spill_schema(&spill_schema, num_group_fields);
 
         // Need to update the GROUP BY expressions to point to the correct column after schema change
         let merging_group_by_expr = agg_group_by
@@ -760,7 +765,7 @@ impl Stream for GroupedHashAggregateStream {
                             if !self.group_values.is_empty() {
                                 return Poll::Ready(Some(internal_err!(
                                     "Switching from SkippingAggregation to Done with {} groups still in hash table. \
-                                    This is a bug - all groups should have been emitted before skip aggregation started.",
+This is a bug - all groups should have been emitted before skip aggregation started.",
                                     self.group_values.len()
                                 )));
                             }
@@ -819,7 +824,7 @@ impl Stream for GroupedHashAggregateStream {
                     if !self.group_values.is_empty() {
                         return Poll::Ready(Some(internal_err!(
                             "AggregateStream was in Done state with {} groups left in hash table. \
-                            This is a bug - all groups should have been emitted before entering Done state.",
+This is a bug - all groups should have been emitted before entering Done state.",
                             self.group_values.len()
                         )));
                     }
@@ -1023,17 +1028,27 @@ impl GroupedHashAggregateStream {
     /// Create an output RecordBatch with the group keys and
     /// accumulator states/values specified in emit_to
     fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<Option<RecordBatch>> {
-        let schema = if spilling {
-            Arc::clone(&self.spill_state.spill_schema)
-        } else {
-            self.schema()
-        };
         if self.group_values.is_empty() {
             return Ok(None);
         }
 
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.group_values.emit(emit_to)?;
+        let num_group_columns = output.len();
+        let schema = if spilling {
+            cast_group_values_to_schema(
+                &mut output[..num_group_columns],
+                &self.spill_state.spill_schema,
+            )?;
+            Arc::clone(&self.spill_state.spill_schema)
+        } else {
+            let schema = schema_with_group_values(
+                &self.schema,
+                &output[..num_group_columns],
+            );
+            self.schema = Arc::clone(&schema);
+            schema
+        };
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
         }
@@ -1312,10 +1327,7 @@ impl GroupedHashAggregateStream {
             // in first-seen order, as required by `GroupOrderingFull`.
             // The pre-spill multi-column collector may use `vectorized_intern`, which
             // can assign new group ids out of input order under hash collisions.
-            let group_schema = self
-                .spill_state
-                .merging_group_by
-                .group_schema(&self.spill_state.spill_schema)?;
+            let group_schema = self.group_by.group_schema(&self.input_schema)?;
             if group_schema.fields().len() > 1 {
                 self.group_values = new_group_values(group_schema, &self.group_ordering)?;
             }
@@ -1338,7 +1350,7 @@ impl GroupedHashAggregateStream {
     fn update_skip_aggregation_probe(&mut self, input_rows: usize) {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             // Skip aggregation probe is not supported if stream has any spills,
-            // currently spilling is not supported for Partial aggregation
+            // currently spilling is not supported in Partial aggregation
             assert!(self.spill_state.spills.is_empty());
             probe.update_state(input_rows, self.group_values.len());
         };
@@ -1383,6 +1395,7 @@ impl GroupedHashAggregateStream {
             "group_values expected to have single element"
         );
         let mut output = group_values.swap_remove(0);
+        cast_group_values_to_schema(&mut output, &self.schema)?;
 
         let iter = self
             .accumulators
@@ -1406,12 +1419,65 @@ mod tests {
     use super::*;
     use crate::InputOrderMode;
     use crate::test::TestMemoryExec;
-    use arrow::array::{Int32Array, Int64Array};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{
+        DictionaryArray, Int32Array, Int64Array, StringDictionaryBuilder,
+    };
+    use arrow::datatypes::{DataType, Field, Schema, UInt8Type, UInt16Type};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
+
+    #[tokio::test]
+    async fn dictionary_group_key_promotes_runtime_schema() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group_col",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let batches = (0u32..257)
+            .map(|value| {
+                let mut builder = StringDictionaryBuilder::<UInt8Type>::new();
+                builder.append_value(format!("group_{value}"));
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(builder.finish())],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let exec = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)?;
+        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![(
+                col("group_col", &schema)?,
+                "group_col".to_string(),
+            )]),
+            vec![],
+            vec![],
+            exec,
+            Arc::clone(&schema),
+        )?;
+
+        let mut stream = GroupedHashAggregateStream::new(
+            &aggregate_exec,
+            &Arc::new(TaskContext::default()),
+            0,
+        )?;
+        let batch = stream.next().await.unwrap()?;
+        assert_eq!(batch.num_rows(), 257);
+        assert_eq!(
+            batch.schema().field(0).data_type(),
+            &DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8))
+        );
+        assert!(batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
+            .is_some());
+        assert!(stream.next().await.is_none());
+        Ok(())
+    }
 
     // Migrated to PartialHashAggregateStream coverage in hash_stream.rs;
     // kept here for the legacy GroupedHashAggregateStream implementation.
