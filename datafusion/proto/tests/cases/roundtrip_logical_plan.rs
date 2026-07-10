@@ -3010,7 +3010,7 @@ fn roundtrip_higher_order_udf_extension_codec() {
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
             .expect("parse expr");
 
-    assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
+    assert_eq!(format!("{:?}", test_expr), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 
