@@ -1,0 +1,50 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Each input batch can be encoded with UInt8, but the complete GROUP BY result
+# has 257 distinct values and therefore requires UInt16 dictionary keys.
+statement ok
+SET datafusion.execution.batch_size = 128;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+query I
+SELECT COUNT(*)
+FROM (
+  SELECT k
+  FROM (
+    SELECT arrow_cast(CAST(value AS VARCHAR), 'Dictionary(UInt8, Utf8)') AS k
+    FROM generate_series(0, 256)
+  )
+  GROUP BY k
+);
+----
+257
+
+query T rowsort
+SELECT DISTINCT arrow_typeof(k)
+FROM (
+  SELECT k
+  FROM (
+    SELECT arrow_cast(CAST(value AS VARCHAR), 'Dictionary(UInt8, Utf8)') AS k
+    FROM generate_series(0, 256)
+  )
+  GROUP BY k
+);
+----
+Dictionary(UInt16, Utf8)
