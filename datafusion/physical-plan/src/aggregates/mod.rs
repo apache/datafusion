@@ -465,10 +465,7 @@ impl PhysicalGroupBy {
     fn output_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
         let mut fields = self.group_fields(input_schema)?;
         fields.truncate(self.num_output_exprs());
-        Ok(fields
-            .iter()
-            .map(|field| group_values::group_value_output_field(field.as_ref()))
-            .collect())
+        Ok(fields)
     }
 
     /// Returns the `PhysicalGroupBy` for a final aggregation if `self` is used for a partial
@@ -7017,31 +7014,6 @@ mod tests {
             lit(true),
         ));
         assert!(agg.with_dynamic_filter_expr(df).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn aggregate_output_schema_widens_dictionary_group_key_type() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "k",
-            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
-            false,
-        )]));
-        let group_by =
-            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]);
-
-        let group_schema = group_by.group_schema(&schema)?;
-        assert_eq!(
-            group_schema.field(0).data_type(),
-            &DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8))
-        );
-
-        let output_schema = create_schema(&schema, &group_by, &[], AggregateMode::Final)?;
-        assert_eq!(
-            output_schema.field(0).data_type(),
-            &DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8))
-        );
-
         Ok(())
     }
 }
