@@ -2204,11 +2204,24 @@ impl Expr {
                               )?;
                           }
                           _ => {
-                              return plan_err!(
-                                  "InSubquery should only return one column, but found {}: {}",
-                                  subquery_schema.fields().len(),
-                                  subquery_schema.field_names().join(", ")
+                              // Multi-column IN like `(a, b) IN (SELECT x, y ...)`
+                              // lowers the left side to a `struct` ScalarFunction.
+                              // That form is valid (handled by the join lowering),
+                              // so don't reject it here. The tuple elements are
+                              // explicit exprs, not a bare placeholder bound to a
+                              // single subquery column, so there is nothing to
+                              // infer for placeholders.
+                              let is_struct = matches!(
+                                  expr.as_ref(),
+                                  Expr::ScalarFunction(func) if func.func.name() == "struct"
                               );
+                              if !is_struct {
+                                  return plan_err!(
+                                      "InSubquery should only return one column, but found {}: {}",
+                                      subquery_schema.fields().len(),
+                                      subquery_schema.field_names().join(", ")
+                                  );
+                              }
                           }
                       }
                 }

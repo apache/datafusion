@@ -52,7 +52,8 @@ use arrow::buffer::NullBuffer;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
-    JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
+    JoinSide, JoinType, NullEquality, Result, ScalarValue, internal_datafusion_err,
+    internal_err,
 };
 use datafusion_physical_expr::PhysicalExprRef;
 
@@ -465,6 +466,116 @@ fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
     count
 }
 
+/// For multi-column null-aware anti join: checks if the comparison between
+/// a build-side row and a probe-side row produces an UNKNOWN (NULL) result.
+///
+/// A multi-column comparison `(a1, a2, ...) = (b1, b2, ...)` is UNKNOWN when:
+/// - No column pair has a definite mismatch (both non-NULL and different)
+/// - At least one column pair involves NULL
+///
+/// For example: `(NULL, 8) = (1, 2)` → `UNKNOWN AND FALSE` → `FALSE` (not unknown)
+/// But: `(NULL, 2) = (1, 2)` → `UNKNOWN AND TRUE` → `UNKNOWN` (is unknown)
+fn is_naaj_comparison_unknown(
+    build_values: &[ArrayRef],
+    probe_values: &[ArrayRef],
+    build_idx: usize,
+    probe_idx: usize,
+) -> Result<bool> {
+    let mut has_null = false;
+    for (build_col, probe_col) in build_values.iter().zip(probe_values.iter()) {
+        let build_null = build_col.is_null(build_idx);
+        let probe_null = probe_col.is_null(probe_idx);
+
+        if build_null || probe_null {
+            has_null = true;
+            continue;
+        }
+
+        // Both non-NULL: check if values are equal
+        let build_val = ScalarValue::try_from_array(build_col, build_idx)?;
+        let probe_val = ScalarValue::try_from_array(probe_col, probe_idx)?;
+        if build_val != probe_val {
+            return Ok(false); // Definite mismatch → comparison is FALSE, not UNKNOWN
+        }
+    }
+    Ok(has_null)
+}
+
+/// For multi-column null-aware anti join: performs secondary checks to find
+/// UNKNOWN comparisons between build and probe rows.
+///
+/// This handles cases that hash probing misses:
+/// 1. Probe rows with NULLs: checked against ALL build rows
+/// 2. Non-NULL probe rows: checked against build rows with NULL keys only
+///
+/// Updates the unknown bitmap for any build row that has an UNKNOWN match.
+fn check_multi_column_naaj_unknown(
+    build_values: &[ArrayRef],
+    probe_values: &[ArrayRef],
+    unknown_bitmap: &crate::joins::SharedBitmapBuilder,
+    build_null_row_indices: &[usize],
+    build_size: usize,
+    probe_size: usize,
+) -> Result<()> {
+    if probe_size == 0 || build_size == 0 {
+        return Ok(());
+    }
+
+    // Identify which probe rows have NULLs in any key column
+    let mut probe_has_null = vec![false; probe_size];
+    for col in probe_values {
+        for (i, has_null) in probe_has_null.iter_mut().enumerate() {
+            if col.is_null(i) {
+                *has_null = true;
+            }
+        }
+    }
+
+    let mut bitmap = unknown_bitmap.lock();
+
+    // Case 1: Probe rows WITH NULLs — check against ALL build rows
+    for (probe_idx, has_null) in probe_has_null.iter().enumerate() {
+        if !has_null {
+            continue;
+        }
+        for build_idx in 0..build_size {
+            if bitmap.get_bit(build_idx) {
+                continue; // Already marked as unknown
+            }
+            if is_naaj_comparison_unknown(
+                build_values,
+                probe_values,
+                build_idx,
+                probe_idx,
+            )? {
+                bitmap.set_bit(build_idx, true);
+            }
+        }
+    }
+
+    // Case 2: Probe rows WITHOUT NULLs — check against build rows with NULL keys only
+    for (probe_idx, has_null) in probe_has_null.iter().enumerate() {
+        if *has_null {
+            continue; // Already handled in Case 1
+        }
+        for &build_idx in build_null_row_indices {
+            if bitmap.get_bit(build_idx) {
+                continue; // Already marked as unknown
+            }
+            if is_naaj_comparison_unknown(
+                build_values,
+                probe_values,
+                build_idx,
+                probe_idx,
+            )? {
+                bitmap.set_bit(build_idx, true);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 impl HashJoinStream {
     #[expect(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -743,12 +854,20 @@ impl HashJoinStream {
 
         // Null-aware anti join semantics:
         // For LeftAnti: output LEFT (build) rows where LEFT.key NOT IN RIGHT.key
-        // 1. If RIGHT (probe) contains NULL in any batch, no LEFT rows should be output
-        // 2. LEFT rows with NULL keys should not be output (handled in final stage)
+        //
+        // Single-column NAAJ:
+        //   1. If RIGHT (probe) contains NULL in any batch, no LEFT rows should be output
+        //   2. LEFT rows with NULL keys should not be output (handled in final stage)
+        //
+        // Multi-column NAAJ:
+        //   NULL handling is more nuanced. A NULL in one column doesn't automatically
+        //   make the comparison UNKNOWN — if another column definitively doesn't match,
+        //   the comparison is FALSE. So we can't just short-circuit.
+        //   Instead, we perform secondary UNKNOWN checks after hash probing.
+        let is_multi_column_naaj = self.null_aware && self.on_right.len() > 1;
+
         if self.null_aware {
             // Mark that we've seen a probe batch with actual rows (probe side is non-empty)
-            // Only set this if batch has rows - empty batches don't count
-            // Use shared atomic state so all partitions can see this global information
             if state.batch.num_rows() > 0 {
                 build_side
                     .left_data
@@ -756,26 +875,25 @@ impl HashJoinStream {
                     .store(true, Ordering::Relaxed);
             }
 
-            // Check if probe side (RIGHT) contains NULL
-            // Since null_aware validation ensures single column join, we only check the first column
-            let probe_key_column = &state.values[0];
-            if probe_key_column.null_count() > 0 {
-                // Found NULL in probe side - set shared flag to prevent any output
-                build_side
+            if !is_multi_column_naaj {
+                // Single-column NAAJ: use fast-path short-circuit
+                let has_null = state.values.iter().any(|col| col.null_count() > 0);
+                if has_null {
+                    build_side
+                        .left_data
+                        .probe_side_has_null
+                        .store(true, Ordering::Relaxed);
+                }
+
+                if build_side
                     .left_data
                     .probe_side_has_null
-                    .store(true, Ordering::Relaxed);
-            }
-
-            // If probe side has NULL (detected in this or any other partition), return empty result
-            if build_side
-                .left_data
-                .probe_side_has_null
-                .load(Ordering::Relaxed)
-            {
-                timer.done();
-                self.state = HashJoinStreamState::FetchProbeBatch;
-                return Ok(StatefulStreamResult::Continue);
+                    .load(Ordering::Relaxed)
+                {
+                    timer.done();
+                    self.state = HashJoinStreamState::FetchProbeBatch;
+                    return Ok(StatefulStreamResult::Continue);
+                }
             }
         }
 
@@ -861,6 +979,22 @@ impl HashJoinStream {
             left_indices.iter().flatten().for_each(|x| {
                 bitmap.set_bit(x as usize, true);
             });
+        }
+
+        // Multi-column NAAJ: perform secondary check for UNKNOWN comparisons.
+        // Hash probing only finds exact (TRUE) matches. We also need to detect
+        // UNKNOWN comparisons where NULLs are involved but non-NULL columns match.
+        if is_multi_column_naaj {
+            let build_size = build_side.left_data.batch().num_rows();
+            let probe_size = state.batch.num_rows();
+            check_multi_column_naaj_unknown(
+                build_side.left_data.values(),
+                &state.values,
+                build_side.left_data.left_unknown_bitmap(),
+                build_side.left_data.left_null_row_indices(),
+                build_size,
+                probe_size,
+            )?;
         }
 
         // The goals of index alignment for different join types are:
@@ -960,9 +1094,12 @@ impl HashJoinStream {
 
         let build_side = self.build_side.try_as_ready()?;
 
-        // For null-aware anti join, if probe side had NULL, no rows should be output
-        // Check shared atomic state to get global knowledge across all partitions
+        let is_multi_column_naaj = self.null_aware && self.on_right.len() > 1;
+
+        // For single-column null-aware anti join, if probe side had NULL, no rows
+        // should be output. Multi-column NAAJ uses the unknown bitmap instead.
         if self.null_aware
+            && !is_multi_column_naaj
             && build_side
                 .left_data
                 .probe_side_has_null
@@ -984,10 +1121,6 @@ impl HashJoinStream {
             true,
         );
 
-        // For null-aware anti join, filter out LEFT rows with NULL in join keys
-        // BUT only if the probe side (RIGHT) was non-empty. If probe side is empty,
-        // NULL NOT IN (empty) = TRUE, so NULL rows should be returned.
-        // Use shared atomic state to get global knowledge across all partitions
         if self.null_aware
             && self.join_type == JoinType::LeftAnti
             && build_side
@@ -995,28 +1128,51 @@ impl HashJoinStream {
                 .probe_side_non_empty
                 .load(Ordering::Relaxed)
         {
-            // Since null_aware validation ensures single column join, we only check the first column
-            let build_key_column = &build_side.left_data.values()[0];
+            if is_multi_column_naaj {
+                // Multi-column NAAJ: use the unknown bitmap to filter out rows
+                // that have UNKNOWN comparisons with some probe row.
+                // The unknown bitmap was populated during probe processing.
+                let unknown_bitmap = build_side.left_data.left_unknown_bitmap().lock();
 
-            // Filter out indices where the key is NULL
-            let filtered_indices: Vec<u64> = left_side
-                .iter()
-                .filter_map(|idx| {
-                    let idx_usize = idx.unwrap() as usize;
-                    if build_key_column.is_null(idx_usize) {
-                        None // Skip rows with NULL keys
-                    } else {
-                        Some(idx.unwrap())
-                    }
-                })
-                .collect();
+                let filtered_indices: Vec<u64> = left_side
+                    .iter()
+                    .filter_map(|idx| {
+                        let idx_usize = idx.unwrap() as usize;
+                        if unknown_bitmap.get_bit(idx_usize) {
+                            None // Has UNKNOWN comparison → NOT IN result is UNKNOWN → exclude
+                        } else {
+                            Some(idx.unwrap())
+                        }
+                    })
+                    .collect();
 
-            left_side = UInt64Array::from(filtered_indices);
+                left_side = UInt64Array::from(filtered_indices);
 
-            // Update right_side to match the new length
-            let mut builder = arrow::array::UInt32Builder::with_capacity(left_side.len());
-            builder.append_nulls(left_side.len());
-            right_side = builder.finish();
+                let mut builder =
+                    arrow::array::UInt32Builder::with_capacity(left_side.len());
+                builder.append_nulls(left_side.len());
+                right_side = builder.finish();
+            } else {
+                // Single-column NAAJ: filter out rows with NULL keys
+                let build_key_columns = build_side.left_data.values();
+
+                let filtered_indices: Vec<u64> = left_side
+                    .iter()
+                    .filter_map(|idx| {
+                        let idx_usize = idx.unwrap() as usize;
+                        let has_null =
+                            build_key_columns.iter().any(|col| col.is_null(idx_usize));
+                        if has_null { None } else { Some(idx.unwrap()) }
+                    })
+                    .collect();
+
+                left_side = UInt64Array::from(filtered_indices);
+
+                let mut builder =
+                    arrow::array::UInt32Builder::with_capacity(left_side.len());
+                builder.append_nulls(left_side.len());
+                right_side = builder.finish();
+            }
         }
 
         self.join_metrics.input_batches.add(1);
