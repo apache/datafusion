@@ -27,7 +27,9 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    GroupByMetrics, GroupValues, new_group_values, schema_with_group_values,
+};
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
@@ -233,11 +235,16 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                     let emit_to = EmitTo::All;
                     let timer = self.group_by_metrics.emitting_time.timer();
                     let mut columns = state.group_values.emit(emit_to)?;
+                    let num_group_columns = columns.len();
                     for acc in state.accumulators.iter_mut() {
                         columns.extend(materialize_accumulator_fn(acc, emit_to)?);
                     }
                     drop(timer);
 
+                    let output_schema = schema_with_group_values(
+                        &output_schema,
+                        &columns[..num_group_columns],
+                    );
                     let batch = RecordBatch::try_new(output_schema, columns)?;
                     debug_assert!(batch.num_rows() > 0);
                     MaterializedAggregateOutput::new(batch)
@@ -336,7 +343,7 @@ pub(super) type AggregateAccumulator = HashAggregateAccumulator;
 /// Arguments:
 /// * accumulator to update.
 /// * accumulator's evaluated arguments and optional filter.
-/// * one group index per input row, mapping each row to its interned group.
+/// * group index per input row, mapping each row to its interned group.
 /// * total number of groups currently interned in that buffer, including newly
 ///   interned groups.
 pub(super) type AggregateBatchFn = fn(
