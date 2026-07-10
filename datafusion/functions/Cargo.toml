@@ -308,6 +308,11 @@ required-features = ["unicode_expressions"]
 
 [[bench]]
 harness = false
+name = "find_in_set_literal"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
 name = "contains"
 required-features = ["string_expressions"]
 
