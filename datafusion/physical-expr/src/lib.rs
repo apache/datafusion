@@ -80,6 +80,8 @@ pub use datafusion_physical_expr_common::sort_expr::{
 pub use higher_order_function::HigherOrderFunctionExpr;
 pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
+#[cfg(feature = "proto")]
+pub use scalar_function::{ScalarUdfProtoDecoder, ScalarUdfProtoEncoder};
 pub use simplifier::PhysicalExprSimplifier;
 pub use utils::{conjunction, conjunction_opt, split_conjunction};
 
