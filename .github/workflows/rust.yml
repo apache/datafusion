@@ -642,60 +642,6 @@ jobs:
         run: |
           ci/scripts/rust_fmt.sh
 
-  # Coverage runs as part of linux-test to avoid executing the same tests twice.
-  #
-  # coverage:
-  #   name: coverage
-  #   needs: linux-build-lib
-  #   runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
-  #   container:
-  #     image: amd64/rust
-  #     volumes:
-  #       - /usr/local:/host/usr/local
-  #   steps:
-  #     - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-  #     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-  #       with:
-  #         submodules: true
-  #         fetch-depth: 1
-  #     - name: Setup Rust toolchain
-  #       uses: ./.github/actions/setup-builder
-  #       with:
-  #         rust-version: stable
-  #     - name: Install llvm-tools-preview
-  #       run: rustup component add llvm-tools-preview
-  #     - name: Install cargo-llvm-cov
-  #       uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6  # v2.82.6
-  #       with:
-  #         tool: cargo-llvm-cov
-  #     - name: Rust Dependency Cache
-  #       uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
-  #       with:
-  #         save-if: ${{ github.ref_name == 'main' }}
-  #         shared-key: "amd-coverage"
-  #     - name: Generate code coverage
-  #       env:
-  #         RUST_BACKTRACE: 1
-  #       run: |
-  #         cargo llvm-cov \
-  #           --profile ci \
-  #           --workspace \
-  #           --exclude datafusion-examples \
-  #           --exclude ffi_example_table_provider \
-  #           --exclude datafusion-cli \
-  #           --lib \
-  #           --tests \
-  #           --bins \
-  #           --features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
-  #           --codecov \
-  #           --output-path codecov.json
-  #     - name: Upload coverage to codecov.io
-  #       uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5
-  #       with:
-  #         files: codecov.json
-  #         fail_ci_if_error: false
-  #         token: ${{ secrets.CODECOV_TOKEN }}
-
   clippy:
     name: clippy
     needs: linux-build-lib
