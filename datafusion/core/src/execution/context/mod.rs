@@ -2831,7 +2831,7 @@ mod tests {
         async fn create_physical_plan(
             &self,
             _logical_plan: &LogicalPlan,
-            _session_state: &SessionState,
+            _session_state: &dyn Session,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             not_impl_err!("query not supported")
         }
@@ -2840,7 +2840,7 @@ mod tests {
             &self,
             _expr: &Expr,
             _input_dfschema: &DFSchema,
-            _session_state: &SessionState,
+            _session_state: &dyn Session,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             unimplemented!()
         }

@@ -26,6 +26,7 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_session::{QueryPlanner, Session};
 
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
 use crate::query_planner::FFI_QueryPlanner;
 
 #[derive(Debug)]
@@ -44,7 +45,12 @@ impl QueryPlanner for EmptyQueryPlanner {
 }
 
 pub extern "C" fn create_query_planner(
-    codec: FFI_LogicalExtensionCodec,
+    logical_codec: FFI_LogicalExtensionCodec,
+    physical_codec: FFI_PhysicalExtensionCodec,
 ) -> FFI_QueryPlanner {
-    FFI_QueryPlanner::new_with_ffi_codec(Arc::new(EmptyQueryPlanner), None, codec)
+    FFI_QueryPlanner::new_with_ffi_codecs(
+        Arc::new(EmptyQueryPlanner),
+        logical_codec,
+        physical_codec,
+    )
 }

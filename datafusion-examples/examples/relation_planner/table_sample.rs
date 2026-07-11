@@ -588,7 +588,7 @@ impl ExtensionPlanner for TableSampleExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        _session_state: &dyn Session,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let Some(sample_node) = node.as_any().downcast_ref::<TableSamplePlanNode>()
         else {

@@ -43,6 +43,7 @@ use crate::execution_plan::FFI_ExecutionPlan;
 use crate::execution_plan::tests::EmptyExec;
 use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
 use crate::query_planner::FFI_QueryPlanner;
 use crate::table_provider::FFI_TableProvider;
 use crate::table_provider_factory::FFI_TableProviderFactory;
@@ -119,8 +120,10 @@ pub struct ForeignLibraryModule {
 
     pub create_context_aware_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
 
-    pub create_query_planner:
-        extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_QueryPlanner,
+    pub create_query_planner: extern "C" fn(
+        logical_codec: FFI_LogicalExtensionCodec,
+        physical_codec: FFI_PhysicalExtensionCodec,
+    ) -> FFI_QueryPlanner,
 
     pub version: extern "C" fn() -> u64,
 }

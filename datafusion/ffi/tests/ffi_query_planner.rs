@@ -22,17 +22,28 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion_common::DataFusionError;
+    use datafusion_execution::TaskContextProvider;
     use datafusion_expr::LogicalPlanBuilder;
+    use datafusion_ffi::execution::FFI_TaskContextProvider;
+    use datafusion_ffi::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
     use datafusion_ffi::query_planner::ForeignQueryPlanner;
     use datafusion_ffi::tests::utils::get_module;
+    use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
     use datafusion_session::QueryPlanner;
 
     #[tokio::test]
     async fn test_ffi_query_planner() -> Result<(), DataFusionError> {
         let module = get_module()?;
-        let (ctx, codec) = crate::utils::ctx_and_codec();
+        let (ctx, logical_codec) = crate::utils::ctx_and_codec();
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+        let physical_codec = FFI_PhysicalExtensionCodec::new(
+            Arc::new(DefaultPhysicalExtensionCodec {}),
+            None,
+            task_ctx_provider,
+        );
 
-        let ffi_planner = (module.create_query_planner)(codec);
+        let ffi_planner = (module.create_query_planner)(logical_codec, physical_codec);
         let planner: Arc<dyn QueryPlanner + Send + Sync> = (&ffi_planner).into();
 
         let any_ref: &dyn std::any::Any = planner.as_ref();
@@ -43,6 +54,7 @@ mod tests {
         let physical_plan = planner.create_physical_plan(&logical_plan, &state).await?;
 
         assert_eq!(physical_plan.name(), "EmptyExec");
+        assert!(physical_plan.is::<datafusion_physical_plan::empty::EmptyExec>());
 
         Ok(())
     }

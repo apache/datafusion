@@ -145,7 +145,7 @@ impl ExtensionPlanner for CacheNodePlanner {
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
+        session: &dyn Session,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(cache_node) = node.as_any().downcast_ref::<CacheNode>() {
             assert_eq!(logical_inputs.len(), 1, "Inconsistent number of inputs");
@@ -157,7 +157,7 @@ impl ExtensionPlanner for CacheNodePlanner {
                 .get(&cache_node.input)
                 .is_none()
             {
-                let ctx = session_state.task_ctx();
+                let ctx = session.task_ctx();
                 println!("caching in memory");
                 let batches =
                     collect_partitioned(physical_inputs[0].clone(), ctx).await?;
