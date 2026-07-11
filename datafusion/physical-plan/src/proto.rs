@@ -38,19 +38,23 @@
 //! `datafusion-physical-plan` depends on the pure prost types in
 //! `datafusion-proto-models` (feature `proto`), never on `datafusion-proto`.
 //!
-//! # Scope: self-contained plans only
+//! # Function-carrying plans
 //!
-//! These hooks are for plans that are *self-contained*: everything they need to
-//! round-trip is reachable from their child plans, their child expressions and
-//! their input schema. Plans that reference session-scoped machinery only
-//! `datafusion-proto` owns — the [`PhysicalExtensionCodec`] (for UDAF/UDWF and
-//! extension nodes) — stay as typed dispatch arms inside `datafusion-proto`,
-//! exactly as `ScalarFunctionExpr` does on the expression side. The decode
-//! context intentionally exposes the [`TaskContext`] (for function-registry and
-//! session-config lookups reachable from `datafusion-execution`) but *not* the
-//! extension codec.
+//! Plans that reference UD(A/W)Fs (`AggregateExec`, the window execs, …) also
+//! ride the hook: the context exposes typed, *bytes-only* function serde —
+//! [`encode_udaf`](ExecutionPlanEncodeCtx::encode_udaf) /
+//! [`decode_udaf`](ExecutionPlanDecodeCtx::decode_udaf) and the udf/udwf
+//! siblings. These take/return `datafusion-expr` types plus `Vec<u8>` and never
+//! name a proto type, so the `PhysicalExtensionCodec` (which only
+//! `datafusion-proto` can name) stays fully encapsulated behind the adapter that
+//! backs these traits. The lookup-order policy (payload → codec; else registry →
+//! codec fallback) lives once, in that adapter, rather than in every plan.
 //!
-//! [`PhysicalExtensionCodec`]: (owned by `datafusion-proto`)
+//! This is possible because `datafusion-physical-plan` sits *above*
+//! `datafusion-expr` in the crate graph; the expression-side ctx (in
+//! `physical-expr-common`, *below* `datafusion-expr`) cannot do this, which is
+//! why `ScalarFunctionExpr` remains special-cased there.
+//!
 //! [`ExecutionPlan`]: crate::ExecutionPlan
 
 use std::sync::Arc;
@@ -58,6 +62,7 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_execution::TaskContext;
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 
@@ -74,6 +79,18 @@ pub trait ExecutionPlanEncode {
 
     /// Serialize a physical expression owned by the plan.
     fn encode_expr(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode>;
+
+    /// Serialize a scalar UDF to an opaque payload. `None` means "decodable by
+    /// name alone" (built-ins). Bytes-only: no proto types cross this boundary.
+    fn encode_udf(&self, udf: &ScalarUDF) -> Result<Option<Vec<u8>>>;
+
+    /// Serialize an aggregate UDF to an opaque payload. `None` means "decodable
+    /// by name alone".
+    fn encode_udaf(&self, udaf: &AggregateUDF) -> Result<Option<Vec<u8>>>;
+
+    /// Serialize a window UDF to an opaque payload. `None` means "decodable by
+    /// name alone".
+    fn encode_udwf(&self, udwf: &WindowUDF) -> Result<Option<Vec<u8>>>;
 }
 
 /// Internal dispatch trait backing [`ExecutionPlanDecodeCtx`].
@@ -95,6 +112,21 @@ pub trait ExecutionPlanDecode {
     /// The session task context, used by plans that need the function registry
     /// or session configuration. Never exposes the proto extension codec.
     fn task_ctx(&self) -> &TaskContext;
+
+    /// Reconstruct a scalar UDF from its name and optional payload. Encapsulates
+    /// the lookup-order policy (payload → codec; else registry → codec fallback)
+    /// so no plan re-derives it. Bytes-only: no proto types cross this boundary.
+    fn decode_udf(&self, name: &str, payload: Option<&[u8]>) -> Result<Arc<ScalarUDF>>;
+
+    /// Reconstruct an aggregate UDF from its name and optional payload.
+    fn decode_udaf(
+        &self,
+        name: &str,
+        payload: Option<&[u8]>,
+    ) -> Result<Arc<AggregateUDF>>;
+
+    /// Reconstruct a window UDF from its name and optional payload.
+    fn decode_udwf(&self, name: &str, payload: Option<&[u8]>) -> Result<Arc<WindowUDF>>;
 }
 
 /// Context handed to [`ExecutionPlan::try_to_proto`](crate::ExecutionPlan::try_to_proto).
@@ -139,6 +171,23 @@ impl<'a> ExecutionPlanEncodeCtx<'a> {
         I: IntoIterator<Item = &'b Arc<dyn PhysicalExpr>>,
     {
         exprs.into_iter().map(|e| self.encode_expr(e)).collect()
+    }
+
+    /// Serialize a scalar UDF to an opaque payload (`None` = built-in, decodable
+    /// by name). No proto types cross this boundary.
+    pub fn encode_udf(&self, udf: &ScalarUDF) -> Result<Option<Vec<u8>>> {
+        self.encoder.encode_udf(udf)
+    }
+
+    /// Serialize an aggregate UDF to an opaque payload (`None` = decodable by
+    /// name).
+    pub fn encode_udaf(&self, udaf: &AggregateUDF) -> Result<Option<Vec<u8>>> {
+        self.encoder.encode_udaf(udaf)
+    }
+
+    /// Serialize a window UDF to an opaque payload (`None` = decodable by name).
+    pub fn encode_udwf(&self, udwf: &WindowUDF) -> Result<Option<Vec<u8>>> {
+        self.encoder.encode_udwf(udwf)
     }
 }
 
@@ -203,10 +252,38 @@ impl<'a> ExecutionPlanDecodeCtx<'a> {
     }
 
     /// The session task context (function registry + session config). Never
-    /// exposes the proto extension codec — session-codec-dependent plans stay as
-    /// typed dispatch arms in `datafusion-proto`.
+    /// exposes the proto extension codec.
     pub fn task_ctx(&self) -> &TaskContext {
         self.decoder.task_ctx()
+    }
+
+    /// Reconstruct a scalar UDF from its name and optional payload. The
+    /// lookup-order policy is owned by `datafusion-proto`; no proto types cross
+    /// this boundary.
+    pub fn decode_udf(
+        &self,
+        name: &str,
+        payload: Option<&[u8]>,
+    ) -> Result<Arc<ScalarUDF>> {
+        self.decoder.decode_udf(name, payload)
+    }
+
+    /// Reconstruct an aggregate UDF from its name and optional payload.
+    pub fn decode_udaf(
+        &self,
+        name: &str,
+        payload: Option<&[u8]>,
+    ) -> Result<Arc<AggregateUDF>> {
+        self.decoder.decode_udaf(name, payload)
+    }
+
+    /// Reconstruct a window UDF from its name and optional payload.
+    pub fn decode_udwf(
+        &self,
+        name: &str,
+        payload: Option<&[u8]>,
+    ) -> Result<Arc<WindowUDF>> {
+        self.decoder.decode_udwf(name, payload)
     }
 }
 

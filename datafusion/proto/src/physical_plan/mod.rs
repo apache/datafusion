@@ -4365,6 +4365,26 @@ impl ExecutionPlanEncode for ConverterPlanEncoder<'_> {
         self.proto_converter
             .physical_expr_to_proto(expr, self.codec)
     }
+
+    // Bytes-only function serde. `(!buf.is_empty()).then_some(buf)` preserves the
+    // existing `fun_definition` wire semantics (empty payload == encode-by-name).
+    fn encode_udf(&self, udf: &ScalarUDF) -> Result<Option<Vec<u8>>> {
+        let mut buf = vec![];
+        self.codec.try_encode_udf(udf, &mut buf)?;
+        Ok((!buf.is_empty()).then_some(buf))
+    }
+
+    fn encode_udaf(&self, udaf: &AggregateUDF) -> Result<Option<Vec<u8>>> {
+        let mut buf = vec![];
+        self.codec.try_encode_udaf(udaf, &mut buf)?;
+        Ok((!buf.is_empty()).then_some(buf))
+    }
+
+    fn encode_udwf(&self, udwf: &WindowUDF) -> Result<Option<Vec<u8>>> {
+        let mut buf = vec![];
+        self.codec.try_encode_udwf(udwf, &mut buf)?;
+        Ok((!buf.is_empty()).then_some(buf))
+    }
 }
 
 /// Adapter backing [`ExecutionPlanDecodeCtx`] for plans migrated to the
@@ -4395,5 +4415,45 @@ impl ExecutionPlanDecode for ConverterPlanDecoder<'_, '_> {
 
     fn task_ctx(&self) -> &TaskContext {
         self.ctx.task_ctx()
+    }
+
+    // Lookup-order policy, owned here so no plan re-derives it: an explicit
+    // payload is decoded by the codec; otherwise resolve by name from the
+    // registry, falling back to the codec with an empty buffer.
+    fn decode_udf(&self, name: &str, payload: Option<&[u8]>) -> Result<Arc<ScalarUDF>> {
+        match payload {
+            Some(buf) => self.ctx.codec().try_decode_udf(name, buf),
+            None => self
+                .ctx
+                .task_ctx()
+                .udf(name)
+                .or_else(|_| self.ctx.codec().try_decode_udf(name, &[])),
+        }
+    }
+
+    fn decode_udaf(
+        &self,
+        name: &str,
+        payload: Option<&[u8]>,
+    ) -> Result<Arc<AggregateUDF>> {
+        match payload {
+            Some(buf) => self.ctx.codec().try_decode_udaf(name, buf),
+            None => self
+                .ctx
+                .task_ctx()
+                .udaf(name)
+                .or_else(|_| self.ctx.codec().try_decode_udaf(name, &[])),
+        }
+    }
+
+    fn decode_udwf(&self, name: &str, payload: Option<&[u8]>) -> Result<Arc<WindowUDF>> {
+        match payload {
+            Some(buf) => self.ctx.codec().try_decode_udwf(name, buf),
+            None => self
+                .ctx
+                .task_ctx()
+                .udwf(name)
+                .or_else(|_| self.ctx.codec().try_decode_udwf(name, &[])),
+        }
     }
 }
