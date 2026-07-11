@@ -579,7 +579,7 @@ SELECT MAP { 'a': 1, 'b': 2, 'c': 3 }['a'];
 
 # accessing map with non-string key in case expression
 query I
-SELECT (CASE WHEN 1 > 0 THEN MAP {'x': 100} ELSE MAP {'y': 200} END)['x']; 
+SELECT (CASE WHEN 1 > 0 THEN MAP {'x': 100} ELSE MAP {'y': 200} END)['x'];
 ----
 100
 

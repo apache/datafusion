@@ -613,7 +613,8 @@ impl SingleRowListArrayBuilder {
     /// Build a single element [`FixedSizeListArray`]
     pub fn build_fixed_size_list_array(self, list_size: usize) -> FixedSizeListArray {
         let (field, arr) = self.into_field_and_arr();
-        FixedSizeListArray::new(field, list_size as i32, arr, None)
+        FixedSizeListArray::try_new_with_length(field, list_size as i32, arr, None, 1)
+            .unwrap()
     }
 
     /// Build a single element [`FixedSizeListArray`] and wrap as [`ScalarValue::FixedSizeList`]
@@ -1288,11 +1289,11 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
             let (valid_or_empty, _nulls) = valid_or_empty.into_parts();
 
             for (start, end) in valid_or_empty.set_slices() {
-                mutable_array_data.extend(
+                mutable_array_data.try_extend(
                     0,
                     offsets[start].as_usize(),
                     offsets[end].as_usize(),
-                );
+                )?;
             }
 
             let lengths = std::iter::zip(offsets.lengths(), nulls)

@@ -687,14 +687,11 @@ impl DataFusionError {
                         return Some(diagnostics);
                     }
 
-                    if let Some(source) = self
-                        .head
-                        .source()
-                        .and_then(|source| source.downcast_ref::<DataFusionError>())
                     {
+                        let source = self.head.source().and_then(|source| {
+                            source.downcast_ref::<DataFusionError>()
+                        })?;
                         self.head = source;
-                    } else {
-                        return None;
                     }
                 }
             }

@@ -775,6 +775,9 @@ impl PgJsonExecutionPlanVisitor<'_> {
             }
             MetricValue::Count { count, .. } => serde_json::Value::from(count.value()),
             MetricValue::Gauge { gauge, .. } => serde_json::Value::from(gauge.value()),
+            MetricValue::PeakMemoryUsage { gauge, .. } => {
+                serde_json::Value::from(gauge.value())
+            }
             MetricValue::Time { time, .. } => {
                 let ms = (time.value() as f64) / 1_000_000.0;
                 serde_json::Value::from(ms)
@@ -1008,7 +1011,7 @@ impl TreeRenderVisitor<'_, '_> {
                     continue;
                 }
                 // there are nodes next to this, fill the space
-                write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH))?;
+                write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH))?;
             }
         }
         writeln!(self.f)?;
@@ -1198,13 +1201,13 @@ impl TreeRenderVisitor<'_, '_> {
                 )?;
                 write!(self.f, "{}", Self::RDCORNER)?;
             } else if root.has_node(x, y + 1) {
-                write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
+                write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
                 write!(self.f, "{}", Self::VERTICAL)?;
                 if has_adjacent_nodes || Self::should_render_whitespace(root, x, y) {
-                    write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
+                    write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
                 }
             } else if has_adjacent_nodes || Self::should_render_whitespace(root, x, y) {
-                write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH))?;
+                write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH))?;
             }
         }
         writeln!(self.f)?;

@@ -200,10 +200,6 @@ SELECT foo_schema.bar.a FROM foo_schema.bar;
 ----
 1
 
-# TODO: Drop schema for cleanup, see #6027
-# statement ok
-# DROP SCHEMA foo_schema;
-
 ##########
 # Drop view error tests
 ##########

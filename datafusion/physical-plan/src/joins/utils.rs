@@ -145,12 +145,10 @@ pub fn adjust_right_output_partitioning(
                 .collect::<Result<_>>()?;
             Partitioning::Hash(new_exprs, *size)
         }
-        Partitioning::Range(_) => {
+        Partitioning::Range(range) => {
             // Range partitioning optimizer propagation is tracked in
             // https://github.com/apache/datafusion/issues/22395
-            return not_impl_err!(
-                "Join output partitioning with range partitioning is not implemented"
-            );
+            Partitioning::UnknownPartitioning(range.partition_count())
         }
         result => result.clone(),
     };
@@ -1798,9 +1796,8 @@ impl BuildProbeJoinMetrics {
             .with_category(MetricCategory::Rows)
             .counter("build_input_rows", partition);
 
-        let build_mem_used = MetricBuilder::new(metrics)
-            .with_category(MetricCategory::Bytes)
-            .gauge("build_mem_used", partition);
+        let build_mem_used =
+            MetricBuilder::new(metrics).peak_memory_usage("build_mem_used", partition);
 
         let input_batches = MetricBuilder::new(metrics)
             .with_category(MetricCategory::Rows)

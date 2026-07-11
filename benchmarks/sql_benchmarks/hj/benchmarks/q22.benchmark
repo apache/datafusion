@@ -1,0 +1,28 @@
+name Q22
+group hj
+
+init sql_benchmarks/hj/init/set_config.sql
+
+load sql_benchmarks/hj/init/load.sql
+
+assert I
+SELECT count(*) > 0 FROM lineitem
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q22: RightSemi, Medium build (100K rows), ~1% Hit rate, fanout ~100
+-- Build Side: supplier (100K rows) collapsed onto 1K distinct keys
+-- Probe Side: lineitem (60M rows)
+SELECT l.k
+FROM (
+  SELECT CAST(((s_suppkey - 1) % 1000) + 1 AS INT) as k
+  FROM supplier
+) s
+RIGHT SEMI JOIN (
+  SELECT CAST(l_suppkey AS INT) as k
+  FROM lineitem
+) l
+ON s.k = l.k;

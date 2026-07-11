@@ -236,53 +236,24 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             }
             return Poll::Ready(None);
         }
+
         // Once all partitions have set their corresponding cursors for the loser tree,
         // we skip the following block. Until then, this function may be called multiple
         // times and can return Poll::Pending if any partition returns Poll::Pending.
-
         if self.loser_tree.is_empty() {
-            // Manual indexing since we're iterating over the vector and shrinking it in the loop
-            let mut idx = 0;
-            while idx < self.uninitiated_partitions.len() {
-                let partition_idx = self.uninitiated_partitions[idx];
-                match self.maybe_poll_stream(cx, partition_idx) {
-                    Poll::Ready(Err(e)) => {
-                        self.done = true;
-                        return Poll::Ready(Some(Err(e)));
-                    }
-                    Poll::Pending => {
-                        // The polled stream is pending which means we're already set up to
-                        // be woken when necessary
-                        // Try the next stream
-                        idx += 1;
-                    }
-                    _ => {
-                        // The polled stream is ready
-                        // Remove it from uninitiated_partitions
-                        // Don't bump idx here, since a new element will have taken its
-                        // place which we'll try in the next loop iteration
-                        // swap_remove will change the partition poll order, but that shouldn't
-                        // make a difference since we're waiting for all streams to be ready.
-                        self.uninitiated_partitions.swap_remove(idx);
-                    }
-                }
-            }
+            ready!(self.initialize_all_partitions(cx))?;
+            assert_eq!(
+                self.uninitiated_partitions.len(),
+                0,
+                "all partitions should be initialized"
+            );
 
-            if self.uninitiated_partitions.is_empty() {
-                // If there are no more uninitiated partitions, set up the loser tree and continue
-                // to the next phase.
+            // If there are no more uninitiated partitions, set up the loser tree and continue
+            // to the next phase.
 
-                // Claim the memory for the uninitiated partitions
-                self.uninitiated_partitions.shrink_to_fit();
-                self.init_loser_tree();
-            } else {
-                // There are still uninitiated partitions so return pending.
-                // We only get here if we've polled all uninitiated streams and at least one of them
-                // returned pending itself. That means we will be woken as soon as one of the
-                // streams would like to be polled again.
-                // There is no need to reschedule ourselves eagerly.
-                return Poll::Pending;
-            }
+            // Claim the memory for the uninitiated partitions
+            self.uninitiated_partitions.shrink_to_fit();
+            self.init_loser_tree();
         }
 
         // NB timer records time taken on drop, so there are no
@@ -294,9 +265,17 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             // Adjust the loser tree if necessary, returning control if needed
             if !self.loser_tree_adjusted {
                 let winner = self.loser_tree[0];
-                if let Err(e) = ready!(self.maybe_poll_stream(cx, winner)) {
-                    self.done = true;
-                    return Poll::Ready(Some(Err(e)));
+                // Fast path: skip the `maybe_poll_stream` call (and its `Poll`
+                // plumbing) unless the winner's cursor is exhausted and needs a
+                // fresh batch — it is live for almost every row.
+                if self.cursors[winner].is_none() {
+                    match ready!(self.maybe_poll_stream(cx, winner)) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            self.done = true;
+                            return Poll::Ready(Some(Err(e)));
+                        }
+                    }
                 }
                 self.update_loser_tree();
             }
@@ -316,6 +295,56 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             }
 
             return Poll::Ready(self.emit_in_progress_batch().transpose());
+        }
+    }
+
+    /// Initialize all partitions, return `Poll::Pending` if any partition returns `Poll::Pending`
+    ///
+    /// This DOES NOT return `Poll::Pending` as soon as the first uninitiated partition returns `Poll::Pending`
+    /// so we can continue to initialize the remaining partitions
+    fn initialize_all_partitions(&mut self, cx: &mut Context) -> Poll<Result<()>> {
+        assert_eq!(
+            self.loser_tree.len(),
+            0,
+            "loser tree must be empty when initializing"
+        );
+
+        // Manual indexing since we're iterating over the vector and shrinking it in the loop
+        let mut idx = 0;
+        while idx < self.uninitiated_partitions.len() {
+            let partition_idx = self.uninitiated_partitions[idx];
+            match self.maybe_poll_stream(cx, partition_idx) {
+                Poll::Ready(Err(e)) => {
+                    self.done = true;
+                    return Poll::Ready(Err(e));
+                }
+                Poll::Pending => {
+                    // The polled stream is pending which means we're already set up to
+                    // be woken when necessary
+                    // Try the next stream
+                    idx += 1;
+                }
+                _ => {
+                    // The polled stream is ready
+                    // Remove it from uninitiated_partitions
+                    // Don't bump idx here, since a new element will have taken its
+                    // place which we'll try in the next loop iteration
+                    // swap_remove will change the partition poll order, but that shouldn't
+                    // make a difference since we're waiting for all streams to be ready.
+                    self.uninitiated_partitions.swap_remove(idx);
+                }
+            }
+        }
+
+        if self.uninitiated_partitions.is_empty() {
+            Poll::Ready(Ok(()))
+        } else {
+            // There are still uninitiated partitions so return pending.
+            // We only get here if we've polled all uninitiated streams and at least one of them
+            // returned pending itself. That means we will be woken as soon as one of the
+            // streams would like to be polled again.
+            // There is no need to reschedule ourselves eagerly.
+            Poll::Pending
         }
     }
 
