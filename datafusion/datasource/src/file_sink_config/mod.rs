@@ -15,6 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+/// Shared `FileSinkConfig` <-> proto conversion, gated on the `proto` feature.
+/// Attaches inherent `to_proto` / `from_proto` helpers to [`FileSinkConfig`]
+/// (plus a `parse_sink_sort_order` helper) used by every file sink's
+/// `try_to_proto` / `try_from_proto` hook.
+#[cfg(feature = "proto")]
+pub(crate) mod proto;
+
+/// Re-exported so each file sink's `try_from_proto` can decode the shared,
+/// optional required output ordering without naming the internal `proto` module.
+#[cfg(feature = "proto")]
+pub use proto::parse_sink_sort_order;
+
 use std::sync::Arc;
 
 use crate::ListingTableUrl;

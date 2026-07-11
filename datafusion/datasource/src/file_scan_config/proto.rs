@@ -474,7 +474,9 @@ fn file_group_from_proto(group: &protobuf::FileGroup) -> Result<FileGroup> {
     Ok(FileGroup::new(files))
 }
 
-fn partitioned_file_to_proto(pf: &PartitionedFile) -> Result<protobuf::PartitionedFile> {
+pub(crate) fn partitioned_file_to_proto(
+    pf: &PartitionedFile,
+) -> Result<protobuf::PartitionedFile> {
     let last_modified = pf.object_meta.last_modified;
     let last_modified_ns = last_modified.timestamp_nanos_opt().ok_or_else(|| {
         DataFusionError::Plan(format!(
@@ -503,7 +505,7 @@ fn partitioned_file_to_proto(pf: &PartitionedFile) -> Result<protobuf::Partition
     })
 }
 
-fn partitioned_file_from_proto(
+pub(crate) fn partitioned_file_from_proto(
     val: &protobuf::PartitionedFile,
 ) -> Result<PartitionedFile> {
     let mut pf = PartitionedFile::new_from_meta(ObjectMeta {

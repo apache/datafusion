@@ -24,7 +24,7 @@ pub(crate) mod sort_pushdown;
 /// Attaches inherent `to_proto_conf` / `from_proto_conf` / `parse_table_schema_from_proto`
 /// helpers to [`FileScanConfig`] used by every file source's `try_to_proto` hook.
 #[cfg(feature = "proto")]
-mod proto;
+pub(crate) mod proto;
 
 use crate::file_groups::FileGroup;
 use crate::{

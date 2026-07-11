@@ -34,10 +34,6 @@ use datafusion_datasource::file_scan_config::{
 };
 use datafusion_datasource::file_sink_config::FileSinkConfig;
 use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile, TableSchema};
-use datafusion_datasource_csv::file_format::CsvSink;
-use datafusion_datasource_json::file_format::JsonSink;
-#[cfg(feature = "parquet")]
-use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
@@ -67,7 +63,7 @@ use super::{
 };
 use crate::convert::TryFromProto;
 use crate::protobuf::physical_expr_node::ExprType;
-use crate::{convert_required, convert_required_proto, protobuf};
+use crate::{convert_required, protobuf};
 use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 
 /// Parses a physical sort expression from a protobuf.
@@ -702,41 +698,7 @@ impl TryFromProto<&protobuf::FileGroup> for FileGroup {
         Ok(FileGroup::new(files))
     }
 }
-
-impl TryFromProto<&protobuf::JsonSink> for JsonSink {
-    type Error = DataFusionError;
-
-    fn try_from_proto(value: &protobuf::JsonSink) -> Result<Self, Self::Error> {
-        Ok(Self::new(
-            convert_required_proto!(FileSinkConfig, value.config)?,
-            convert_required!(value.writer_options)?,
-        ))
-    }
-}
-
 #[cfg(feature = "parquet")]
-impl TryFromProto<&protobuf::ParquetSink> for ParquetSink {
-    type Error = DataFusionError;
-
-    fn try_from_proto(value: &protobuf::ParquetSink) -> Result<Self, Self::Error> {
-        Ok(Self::new(
-            convert_required_proto!(FileSinkConfig, value.config)?,
-            convert_required!(value.parquet_options)?,
-        ))
-    }
-}
-
-impl TryFromProto<&protobuf::CsvSink> for CsvSink {
-    type Error = DataFusionError;
-
-    fn try_from_proto(value: &protobuf::CsvSink) -> Result<Self, Self::Error> {
-        Ok(Self::new(
-            convert_required_proto!(FileSinkConfig, value.config)?,
-            convert_required!(value.writer_options)?,
-        ))
-    }
-}
-
 impl TryFromProto<&protobuf::FileSinkConfig> for FileSinkConfig {
     type Error = DataFusionError;
 
