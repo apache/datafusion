@@ -2003,6 +2003,95 @@ SELECT approx_distinct(l) FROM approx_distinct_list_test;
 ----
 4
 
+# LargeList non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeList(Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# LargeList grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'LargeList(Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeList(Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+# ListView non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'ListView(Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# ListView grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'ListView(Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'ListView(Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+# LargeListView non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeListView(Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# LargeListView grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'LargeListView(Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeListView(Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+
+# FixedSizeList non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'FixedSizeList(2, Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# FixedSizeList grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'FixedSizeList(2, Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'FixedSizeList(2, Int32)')) FROM approx_distinct_list_test;
+----
+4
+
 statement ok
 DROP TABLE approx_distinct_list_test;
 
