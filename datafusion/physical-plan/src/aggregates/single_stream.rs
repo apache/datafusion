@@ -171,6 +171,10 @@ impl SingleHashAggregateStream {
         })
     }
 
+    /// Moves the aggregate hash table's inner state to `Outputting`.
+    ///
+    /// The caller guarantees that input is fully consumed, so this function can
+    /// eagerly release the input stream.
     fn start_output(
         &mut self,
         hash_table: &mut AggregateHashTable<SingleMarker>,
