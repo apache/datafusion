@@ -613,11 +613,6 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
             Arc::new(Float64Array::new(m2s.into(), None)),
         ])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.m2s.capacity() * size_of::<f64>()
             + self.means.capacity() * size_of::<f64>()

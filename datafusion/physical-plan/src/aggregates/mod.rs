@@ -3422,6 +3422,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn partial_hash_skip_aggregation_uses_required_convert_to_state() -> Result<()>
+    {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+        let input_batches = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3])),
+                    Arc::new(Int32Array::from(vec![10, 20, 30])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![4, 5, 6])),
+                    Arc::new(Int32Array::from(vec![40, 50, 60])),
+                ],
+            )?,
+        ];
+        let input =
+            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let udaf = Arc::new(AggregateUDF::from(NoFirstEmitUdaf::new()));
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(udaf, vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("no_first_emit(value)")
+                .build()?,
+        )];
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggregates,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .set_bool("datafusion.execution.enable_migration_aggregate", true)
+                    .set(
+                        "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                        &ScalarValue::Int64(Some(2)),
+                    )
+                    .set(
+                        "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                        &ScalarValue::Float64(Some(0.1)),
+                    ),
+            ),
+        );
+
+        let output = collect(aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+
+        assert_snapshot!(batches_to_sort_string(&output), @r"
+        +-----+-----------------------------+
+        | key | no_first_emit(value)[count] |
+        +-----+-----------------------------+
+        | 1   | 1                           |
+        | 2   | 1                           |
+        | 3   | 1                           |
+        | 4   | 1                           |
+        | 5   | 1                           |
+        | 6   | 1                           |
+        +-----+-----------------------------+
+        ");
+        let metrics = aggregate.metrics().unwrap();
+        let skipped_rows = metrics
+            .sum_by_name("skipped_aggregation_rows")
+            .map(|m| m.as_usize())
+            .unwrap_or(0);
+        assert_eq!(skipped_rows, 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn limited_distinct_aggregate_uses_migrated_hash_streams() -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, false)]));
@@ -6899,6 +6980,22 @@ mod tests {
 
         fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
             Ok(vec![self.emit_counts(emit_to)?])
+        }
+
+        fn convert_to_state(
+            &self,
+            values: &[ArrayRef],
+            opt_filter: Option<&BooleanArray>,
+        ) -> Result<Vec<ArrayRef>> {
+            assert_eq!(values.len(), 1, "one argument to convert_to_state");
+            let counts = match opt_filter {
+                Some(filter) => filter
+                    .iter()
+                    .map(|value| i64::from(value.unwrap_or(false)))
+                    .collect::<Vec<_>>(),
+                None => vec![1; values[0].len()],
+            };
+            Ok(vec![Arc::new(Int64Array::from(counts))])
         }
 
         fn merge_batch(

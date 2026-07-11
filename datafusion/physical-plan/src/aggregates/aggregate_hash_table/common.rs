@@ -567,10 +567,6 @@ impl HashAggregateAccumulator {
         self.accumulator.state(emit_to)
     }
 
-    pub(super) fn supports_convert_to_state(&self) -> bool {
-        self.accumulator.supports_convert_to_state()
-    }
-
     pub(super) fn convert_to_state(
         &mut self,
         values: &EvaluatedAccumulatorArgs,

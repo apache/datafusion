@@ -964,11 +964,6 @@ where
 
         Ok(vec![Arc::new(counts) as ArrayRef, Arc::new(sums)])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         // Heap buffers
         self.counts.capacity() * size_of::<u64>()
