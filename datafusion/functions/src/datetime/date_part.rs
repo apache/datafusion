@@ -19,9 +19,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
-use arrow::array::{
-    Array, ArrayRef, Date32Array, Date64Array, Float64Array, Int32Array, Int64Array,
-};
+use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, Int64Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{DatePart, binary, date_part};
 use arrow::datatypes::DataType::{
@@ -400,7 +398,7 @@ fn part_normalization(part: &str) -> &str {
 
 /// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
 /// result to a total number of seconds, milliseconds, microseconds or
-/// nanoseconds
+/// nanoseconds as an `Int32Array`
 fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     // Nanosecond is neither supported in Postgres nor DuckDB, to avoid dealing
     // with overflow and precision issue we don't support nanosecond
@@ -419,7 +417,7 @@ fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
             return if array.null_count() == 0 {
                 Ok(Arc::new(Int32Array::from_value(0, array.len())))
             } else {
-                let r: Date32Array = as_date32_array(array)?.unary(|_| 0);
+                let r: Int32Array = as_date32_array(array)?.unary(|_| 0);
                 Ok(Arc::new(r))
             };
         }
@@ -427,7 +425,7 @@ fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
             return if array.null_count() == 0 {
                 Ok(Arc::new(Int32Array::from_value(0, array.len())))
             } else {
-                let r: Date64Array = as_date64_array(array)?.unary(|_| 0);
+                let r: Int32Array = as_date64_array(array)?.unary(|_| 0);
                 Ok(Arc::new(r))
             };
         }
@@ -581,7 +579,7 @@ fn seconds_ns(array: &dyn Array) -> Result<ArrayRef> {
             return if array.null_count() == 0 {
                 Ok(Arc::new(Int64Array::from_value(0, array.len())))
             } else {
-                let r: Int64Array = as_date32_array(array)?.unary(|_| 0);
+                let r: Int64Array = as_date32_array(array)?.unary(|_| 0i64);
                 Ok(Arc::new(r))
             };
         }
@@ -589,7 +587,7 @@ fn seconds_ns(array: &dyn Array) -> Result<ArrayRef> {
             return if array.null_count() == 0 {
                 Ok(Arc::new(Int64Array::from_value(0, array.len())))
             } else {
-                let r: Int64Array = as_date64_array(array)?.unary(|_| 0);
+                let r: Int64Array = as_date64_array(array)?.unary(|_| 0i64);
                 Ok(Arc::new(r))
             };
         }
