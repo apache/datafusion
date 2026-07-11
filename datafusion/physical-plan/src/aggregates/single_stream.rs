@@ -35,7 +35,7 @@ use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{AggregateHashTable, SingleMarker};
-use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
+use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 
@@ -269,9 +269,15 @@ impl SingleHashAggregateStream {
 
         match result {
             Ok(Some(batch)) => {
-                let _ = self
+                if let Err(e) = self
                     .reservation
-                    .try_resize(original_state.hash_table().memory_size());
+                    .try_resize(original_state.hash_table().memory_size())
+                {
+                    return ControlFlow::Break((
+                        Poll::Ready(Some(Err(e))),
+                        original_state,
+                    ));
+                }
                 debug_assert!(batch.num_rows() > 0);
                 let next_state = if original_state.hash_table().is_done() {
                     original_state.into_done()
