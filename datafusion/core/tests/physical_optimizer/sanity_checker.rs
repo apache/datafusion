@@ -443,6 +443,32 @@ fn test_partitioned_hash_join_requires_co_partitioned_children() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_partitioned_right_hash_join_requires_co_partitioned_children() -> Result<()> {
+    let schema = create_test_schema2();
+    let join_on = vec![(col("a", &schema)?, col("a", &schema)?)];
+
+    let compatible_join = hash_join_exec(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [10])?,
+        join_on.clone(),
+        None,
+        &JoinType::Right,
+    )?;
+    assert_sanity_check(&compatible_join, true);
+
+    let incompatible_join = hash_join_exec(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [20])?,
+        join_on,
+        None,
+        &JoinType::Right,
+    )?;
+    assert_sanity_check(&incompatible_join, false);
+
+    Ok(())
+}
+
 #[tokio::test]
 /// Tests that plan is valid when the sort requirements are satisfied.
 async fn test_bounded_window_agg_sort_requirement() -> Result<()> {

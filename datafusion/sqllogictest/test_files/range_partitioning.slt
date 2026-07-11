@@ -395,9 +395,10 @@ ORDER BY l.non_range_key, l.value, r.value;
 2 350 350
 
 ##########
-# TEST 12: Non-Inner Range Join Repartitions
-# Only inner partitioned hash joins opt in to Range satisfying KeyPartitioned
-# requirements. Non-inner joins keep using Hash repartitioning.
+# TEST 12: Left Range Join Repartitions
+# Only inner and right-side (Right/RightSemi/RightAnti/RightMark) partitioned
+# hash joins opt in to Range satisfying KeyPartitioned requirements. Other
+# join types, such as Left, keep using Hash repartitioning.
 ##########
 
 query TT
@@ -634,6 +635,190 @@ ORDER BY l.range_key;
 30 600
 35 700
 
+##########
+# TEST 18: Right Join on Range Partition Column
+# Right-side partitioned hash joins also opt in to Range satisfying
+# KeyPartitioned requirements. Compatible Range layouts satisfy both the
+# per-child key requirements and the cross-child layout requirement, so no
+# Hash repartitioning is inserted. The filter on the left input keeps its
+# Range partitioning and leaves the right rows above 150 unmatched.
+##########
+
+query TT
+EXPLAIN SELECT l.value, r.range_key, r.value
+FROM (SELECT range_key, value FROM range_partitioned WHERE value <= 150) l
+RIGHT JOIN range_partitioned r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(range_key@0, range_key@0)], projection=[value@1, range_key@2, value@3]
+02)--FilterExec: value@1 <= 150
+03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query III
+SELECT l.value, r.range_key, r.value
+FROM (SELECT range_key, value FROM range_partitioned WHERE value <= 150) l
+RIGHT JOIN range_partitioned r ON l.range_key = r.range_key
+ORDER BY r.range_key;
+----
+10 1 10
+50 5 50
+100 10 100
+150 15 150
+NULL 20 200
+NULL 25 250
+NULL 30 300
+NULL 35 350
+
+##########
+# TEST 19: Right Semi Join on Range Partition Column
+# Compatible Range inputs avoid Hash repartitioning for RightSemi joins.
+# Only right rows with a match on the filtered left side are returned.
+##########
+
+query TT
+EXPLAIN SELECT r.range_key, r.value
+FROM (SELECT range_key FROM range_partitioned WHERE value <= 150) l
+RIGHT SEMI JOIN range_partitioned r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(range_key@0, range_key@0)]
+02)--FilterExec: value@1 <= 150, projection=[range_key@0]
+03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT r.range_key, r.value
+FROM (SELECT range_key FROM range_partitioned WHERE value <= 150) l
+RIGHT SEMI JOIN range_partitioned r ON l.range_key = r.range_key
+ORDER BY r.range_key;
+----
+1 10
+5 50
+10 100
+15 150
+
+##########
+# TEST 20: Right Anti Join on Range Partition Column
+# Compatible Range inputs avoid Hash repartitioning for RightAnti joins.
+# Only right rows without a match on the filtered left side are returned.
+##########
+
+query TT
+EXPLAIN SELECT r.range_key, r.value
+FROM (SELECT range_key FROM range_partitioned WHERE value <= 150) l
+RIGHT ANTI JOIN range_partitioned r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=RightAnti, on=[(range_key@0, range_key@0)]
+02)--FilterExec: value@1 <= 150, projection=[range_key@0]
+03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT r.range_key, r.value
+FROM (SELECT range_key FROM range_partitioned WHERE value <= 150) l
+RIGHT ANTI JOIN range_partitioned r ON l.range_key = r.range_key
+ORDER BY r.range_key;
+----
+20 200
+25 250
+30 300
+35 350
+
+##########
+# TEST 21: Incompatible Range Right Join Repartitions
+# The split points of the two inputs differ, so the co-partitioned layout
+# requirement cannot be satisfied and Hash repartitioning repairs both sides
+# of the right join. Results stay correct on the repartitioned path.
+##########
+
+query TT
+EXPLAIN SELECT l.value, r.range_key, r.value
+FROM (SELECT range_key, value FROM range_partitioned WHERE value <= 150) l
+RIGHT JOIN range_partitioned_shifted r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(range_key@0, range_key@0)], projection=[value@1, range_key@2, value@3]
+02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+03)----FilterExec: value@1 <= 150
+04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+05)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+06)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=csv, has_header=false
+
+query III
+SELECT l.value, r.range_key, r.value
+FROM (SELECT range_key, value FROM range_partitioned WHERE value <= 150) l
+RIGHT JOIN range_partitioned_shifted r ON l.range_key = r.range_key
+ORDER BY r.range_key;
+----
+10 1 10
+50 5 50
+100 10 100
+150 15 150
+NULL 20 200
+NULL 25 250
+NULL 30 300
+NULL 35 350
+
+##########
+# TEST 22: Mark Join Marker Semantics over Range Partitioned Inputs
+# SQL IN subqueries decorrelate to LeftMark joins, which stay on the Hash
+# repartition path (RightMark only arises when a statistical swap turns a
+# LeftMark join around; RightMark plan coverage lives in the
+# enforce_distribution tests). These queries pin the marker semantics --
+# matched, unmatched, and NULL join keys -- for mark joins over range
+# partitioned inputs.
+##########
+
+query TT
+EXPLAIN SELECT r.range_key, r.value
+FROM range_partitioned r
+WHERE r.non_range_key = 2 OR r.range_key IN (
+  SELECT range_key FROM range_partitioned WHERE value <= 150);
+----
+physical_plan
+01)FilterExec: non_range_key@1 = 2 OR mark@3, projection=[range_key@0, value@2]
+02)--HashJoinExec: mode=Partitioned, join_type=LeftMark, on=[(range_key@0, range_key@0)]
+03)----RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+05)----RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+06)------FilterExec: value@1 <= 150, projection=[range_key@0]
+07)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+# Matched rows have mark=true and are returned; unmatched rows have
+# mark=false and are only returned when non_range_key = 2.
+query II
+SELECT r.range_key, r.value
+FROM range_partitioned r
+WHERE r.non_range_key = 2 OR r.range_key IN (
+  SELECT range_key FROM range_partitioned WHERE value <= 150)
+ORDER BY r.range_key;
+----
+1 10
+5 50
+10 100
+15 150
+25 250
+35 350
+
+# NULL join keys on the build side never match: rows whose keys only "match"
+# the NULL entries keep a non-true marker and are filtered out unless the
+# non_range_key = 2 disjunct covers them.
+query II
+SELECT r.range_key, r.value
+FROM range_partitioned r
+WHERE r.non_range_key = 2 OR r.range_key IN (
+  SELECT CASE WHEN value <= 150 THEN range_key ELSE NULL END FROM range_partitioned)
+ORDER BY r.range_key;
+----
+1 10
+5 50
+10 100
+15 150
+25 250
+35 350
+
 statement ok
 reset datafusion.optimizer.prefer_hash_join;
 
@@ -644,7 +829,7 @@ statement ok
 reset datafusion.optimizer.preserve_file_partitions;
 
 ##########
-# TEST 18: Union of Range Partitioned Inputs
+# TEST 23: Union of Range Partitioned Inputs
 # Each input exposes Range partitioning on range_key. These changes do not add a
 # cross-child Range relationship for UNION ALL.
 ##########
