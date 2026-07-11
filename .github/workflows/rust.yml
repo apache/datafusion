@@ -333,12 +333,6 @@ jobs:
             --features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
             --codecov \
             --output-path target/codecov.json
-      - name: Upload coverage to codecov.io
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5
-        with:
-          files: target/codecov.json
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Verify Working Directory Clean
         run: git diff --exit-code
         # Check no temporary directories created during test.
@@ -350,6 +344,12 @@ jobs:
             echo "$STATUS"
             exit 1
           fi
+      - name: Upload coverage to codecov.io
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5
+        with:
+          files: target/codecov.json
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   # datafusion-cli tests
   linux-test-datafusion-cli:
