@@ -283,6 +283,128 @@ impl ExecutionPlan for UnnestExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        // `self.schema()` is `arrow::Schema`; the proto field is
+        // datafusion-proto-common's `Schema`, so `try_into` resolves to that
+        // crate's `TryFrom<&Schema>` impl.
+        let schema = self.schema().as_ref().try_into()?;
+        let list_type_columns = self
+            .list_column_indices()
+            .iter()
+            .map(|c| protobuf::ListUnnest {
+                index_in_input_schema: c.index_in_input_schema as _,
+                depth: c.depth as _,
+            })
+            .collect();
+        let struct_type_columns = self
+            .struct_column_indices()
+            .iter()
+            .map(|c| *c as _)
+            .collect();
+        // `UnnestOptions::from_proto` lives in datafusion-proto (unreachable
+        // here), so inline the same field-by-field conversion. The nested
+        // `Column`s ride datafusion-proto-common's `From<&Column>` impl.
+        let options = self.options();
+        let options = protobuf::UnnestOptions {
+            preserve_nulls: options.preserve_nulls,
+            recursions: options
+                .recursions
+                .iter()
+                .map(|r| protobuf::RecursionUnnestOption {
+                    input_column: Some((&r.input_column).into()),
+                    output_column: Some((&r.output_column).into()),
+                    depth: r.depth as u32,
+                })
+                .collect(),
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Unnest(Box::new(
+                    protobuf::UnnestExecNode {
+                        input: Some(Box::new(input)),
+                        schema: Some(schema),
+                        list_type_columns,
+                        struct_type_columns,
+                        options: Some(options),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl UnnestExec {
+    /// Reconstruct an [`UnnestExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`].
+    ///
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let unnest = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Unnest,
+            "UnnestExec",
+        );
+        let input =
+            ctx.decode_required_child(unnest.input.as_deref(), "UnnestExec", "input")?;
+        // The proto field type is datafusion-proto-common's `Schema`, so
+        // `try_into` resolves to that crate's `TryFrom<&Schema>` impl.
+        let schema: Schema = unnest
+            .schema
+            .as_ref()
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "UnnestExec is missing required field 'schema'"
+                )
+            })?
+            .try_into()?;
+        let list_column_indices = unnest
+            .list_type_columns
+            .iter()
+            .map(|c| ListUnnest {
+                index_in_input_schema: c.index_in_input_schema as _,
+                depth: c.depth as _,
+            })
+            .collect();
+        let struct_column_indices =
+            unnest.struct_type_columns.iter().map(|c| *c as _).collect();
+        let options = unnest.options.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "UnnestExec is missing required field 'options'"
+            )
+        })?;
+        let options = UnnestOptions {
+            preserve_nulls: options.preserve_nulls,
+            recursions: options
+                .recursions
+                .iter()
+                .map(|r| datafusion_common::RecursionUnnestOption {
+                    input_column: r.input_column.as_ref().unwrap().into(),
+                    output_column: r.output_column.as_ref().unwrap().into(),
+                    depth: r.depth as usize,
+                })
+                .collect(),
+        };
+        Ok(Arc::new(UnnestExec::new(
+            input,
+            list_column_indices,
+            struct_column_indices,
+            Arc::new(schema),
+            options,
+        )?))
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -303,6 +303,106 @@ impl ExecutionPlan for AnalyzeExec {
             futures::stream::once(output),
         )))
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        let (has_metric_categories, metric_categories) = match self.metric_categories() {
+            Some(cats) => (true, cats.iter().map(|c| c.to_string()).collect()),
+            None => (false, vec![]),
+        };
+        // Inline by-NAME match: the wire field is an i32; map the common enum to
+        // the proto enum by variant (never a numeric cast) so a byte-identical
+        // discriminant is written and a future variant is a compile error.
+        let format = match self.format() {
+            ExplainFormat::Indent => protobuf::ExplainFormat::Indent,
+            ExplainFormat::Tree => protobuf::ExplainFormat::Tree,
+            ExplainFormat::PostgresJSON => protobuf::ExplainFormat::Pgjson,
+            ExplainFormat::Graphviz => protobuf::ExplainFormat::Graphviz,
+        } as i32;
+        let schema = self.schema().as_ref().try_into()?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Analyze(Box::new(
+                    protobuf::AnalyzeExecNode {
+                        verbose: self.verbose(),
+                        show_statistics: self.show_statistics(),
+                        input: Some(Box::new(input)),
+                        schema: Some(schema),
+                        has_metric_categories,
+                        metric_categories,
+                        format,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl AnalyzeExec {
+    /// Reconstruct an [`AnalyzeExec`] from its protobuf representation.
+    ///
+    /// The inverse of [`ExecutionPlan::try_to_proto`]: it takes the whole
+    /// [`PhysicalPlanNode`], decodes the single child recursively via the
+    /// [`ExecutionPlanDecodeCtx`], and reads back the flags, metric categories
+    /// and output format.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    /// [`ExecutionPlanDecodeCtx`]: crate::proto::ExecutionPlanDecodeCtx
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let analyze = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Analyze,
+            "AnalyzeExec",
+        );
+        let input =
+            ctx.decode_required_child(analyze.input.as_deref(), "AnalyzeExec", "input")?;
+        let metric_categories = if analyze.has_metric_categories {
+            let cats: Result<Vec<MetricCategory>> = analyze
+                .metric_categories
+                .iter()
+                .map(|s| s.parse::<MetricCategory>())
+                .collect();
+            Some(cats?)
+        } else {
+            None
+        };
+        let pb_format =
+            protobuf::ExplainFormat::try_from(analyze.format).map_err(|_| {
+                DataFusionError::Internal(format!(
+                    "Received an AnalyzeExecNode message with unknown ExplainFormat {}",
+                    analyze.format
+                ))
+            })?;
+        let format = match pb_format {
+            protobuf::ExplainFormat::Indent => ExplainFormat::Indent,
+            protobuf::ExplainFormat::Tree => ExplainFormat::Tree,
+            protobuf::ExplainFormat::Pgjson => ExplainFormat::PostgresJSON,
+            protobuf::ExplainFormat::Graphviz => ExplainFormat::Graphviz,
+        };
+        let schema = analyze.schema.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "AnalyzeExec is missing required field 'schema'"
+            )
+        })?;
+        let schema = Arc::new(arrow::datatypes::Schema::try_from(schema)?);
+        Ok(Arc::new(
+            AnalyzeExec::builder(analyze.verbose, analyze.show_statistics, input, schema)
+                .with_metric_categories(metric_categories)
+                .with_format(format)
+                .build(),
+        ))
+    }
 }
 
 /// Creates the output of AnalyzeExec as a RecordBatch

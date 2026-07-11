@@ -628,6 +628,342 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             Ok(None)
         }
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let left = ctx.encode_child(self.left())?;
+        let right = ctx.encode_child(self.right())?;
+
+        let on = self
+            .on()
+            .iter()
+            .map(|(l, r)| -> Result<protobuf::JoinOn> {
+                Ok(protobuf::JoinOn {
+                    left: Some(ctx.encode_expr(l)?),
+                    right: Some(ctx.encode_expr(r)?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // The `*::from_proto` conversions live in `datafusion-proto`, which sits
+        // above this crate in the dependency graph and is therefore unreachable.
+        // Inline an exhaustive by-name match from the `datafusion_common` enum to
+        // the proto enum for each enum this node carries.
+        let join_type = match self.join_type() {
+            JoinType::Inner => protobuf::JoinType::Inner,
+            JoinType::Left => protobuf::JoinType::Left,
+            JoinType::Right => protobuf::JoinType::Right,
+            JoinType::Full => protobuf::JoinType::Full,
+            JoinType::LeftSemi => protobuf::JoinType::Leftsemi,
+            JoinType::RightSemi => protobuf::JoinType::Rightsemi,
+            JoinType::LeftAnti => protobuf::JoinType::Leftanti,
+            JoinType::RightAnti => protobuf::JoinType::Rightanti,
+            JoinType::LeftMark => protobuf::JoinType::Leftmark,
+            JoinType::RightMark => protobuf::JoinType::Rightmark,
+        };
+        let null_equality = match self.null_equality() {
+            NullEquality::NullEqualsNothing => protobuf::NullEquality::NullEqualsNothing,
+            NullEquality::NullEqualsNull => protobuf::NullEquality::NullEqualsNull,
+        };
+        let partition_mode = match self.partition_mode() {
+            StreamJoinPartitionMode::SinglePartition => {
+                protobuf::StreamPartitionMode::SinglePartition
+            }
+            StreamJoinPartitionMode::Partitioned => {
+                protobuf::StreamPartitionMode::PartitionedExec
+            }
+        };
+
+        let filter = self
+            .filter()
+            .map(|f| -> Result<protobuf::JoinFilter> {
+                let expression = ctx.encode_expr(f.expression())?;
+                let column_indices = f
+                    .column_indices()
+                    .iter()
+                    .map(|i| {
+                        let side = match i.side {
+                            JoinSide::Left => protobuf::JoinSide::LeftSide,
+                            JoinSide::Right => protobuf::JoinSide::RightSide,
+                            JoinSide::None => protobuf::JoinSide::None,
+                        };
+                        protobuf::ColumnIndex {
+                            index: i.index as u32,
+                            side: side.into(),
+                        }
+                    })
+                    .collect();
+                // `JoinFilter::schema` is `arrow::Schema`; the proto field is
+                // datafusion-proto-common's `Schema`, so this resolves to the
+                // `TryFrom<&Schema>` impl in datafusion-proto-common.
+                let schema = f.schema().as_ref().try_into()?;
+                Ok(protobuf::JoinFilter {
+                    expression: Some(expression),
+                    column_indices,
+                    schema: Some(schema),
+                })
+            })
+            .transpose()?;
+
+        // A `PhysicalSortExpr` is a `PhysicalExpr` + `SortOptions`. The expr goes
+        // through the ctx; the asc/nulls_first wrapping into a
+        // `PhysicalSortExprNode` is plain data inlined here. `None` and an empty
+        // ordering both encode to an empty `repeated`, matching the original
+        // `.unwrap_or(vec![])` wire format.
+        let encode_sort_exprs =
+            |exprs: Option<&LexOrdering>| -> Result<Vec<protobuf::PhysicalSortExprNode>> {
+                exprs
+                    .map(|exprs| {
+                        exprs
+                            .iter()
+                            .map(|expr| {
+                                Ok(protobuf::PhysicalSortExprNode {
+                                    expr: Some(Box::new(ctx.encode_expr(&expr.expr)?)),
+                                    asc: !expr.options.descending,
+                                    nulls_first: expr.options.nulls_first,
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()
+                    .map(|v| v.unwrap_or_default())
+            };
+        let left_sort_exprs = encode_sort_exprs(self.left_sort_exprs())?;
+        let right_sort_exprs = encode_sort_exprs(self.right_sort_exprs())?;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::SymmetricHashJoin(
+                    Box::new(protobuf::SymmetricHashJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        on,
+                        join_type: join_type.into(),
+                        partition_mode: partition_mode.into(),
+                        null_equality: null_equality.into(),
+                        filter,
+                        left_sort_exprs,
+                        right_sort_exprs,
+                    }),
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl SymmetricHashJoinExec {
+    /// Reconstruct a [`SymmetricHashJoinExec`] from its protobuf representation.
+    ///
+    /// The inverse of [`ExecutionPlan::try_to_proto`]. It takes the whole
+    /// [`PhysicalPlanNode`] (so every plan's `try_from_proto` shares one
+    /// signature) and drives child-plan / child-expression recursion through the
+    /// [`ExecutionPlanDecodeCtx`].
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    /// [`ExecutionPlanDecodeCtx`]: crate::proto::ExecutionPlanDecodeCtx
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::internal_datafusion_err;
+        use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+        use datafusion_proto_models::protobuf;
+
+        let sym_join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::SymmetricHashJoin,
+            "SymmetricHashJoinExec",
+        );
+
+        let left = ctx.decode_required_child(
+            sym_join.left.as_deref(),
+            "SymmetricHashJoinExec",
+            "left",
+        )?;
+        let right = ctx.decode_required_child(
+            sym_join.right.as_deref(),
+            "SymmetricHashJoinExec",
+            "right",
+        )?;
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+
+        // The `on` pairs decode against their respective child schemas.
+        let on: Vec<(PhysicalExprRef, PhysicalExprRef)> = sym_join
+            .on
+            .iter()
+            .map(|col| {
+                let l = ctx.decode_required_expr(
+                    col.left.as_ref(),
+                    left_schema.as_ref(),
+                    "SymmetricHashJoinExec",
+                    "on.left",
+                )?;
+                let r = ctx.decode_required_expr(
+                    col.right.as_ref(),
+                    right_schema.as_ref(),
+                    "SymmetricHashJoinExec",
+                    "on.right",
+                )?;
+                Ok((l, r))
+            })
+            .collect::<Result<_>>()?;
+
+        // Inline exhaustive proto -> `datafusion_common` enum conversions (the
+        // `from_proto` helpers live in the unreachable datafusion-proto crate).
+        let join_type =
+            match protobuf::JoinType::try_from(sym_join.join_type).map_err(|_| {
+                internal_datafusion_err!(
+                    "SymmetricHashJoinExec: unknown JoinType {}",
+                    sym_join.join_type
+                )
+            })? {
+                protobuf::JoinType::Inner => JoinType::Inner,
+                protobuf::JoinType::Left => JoinType::Left,
+                protobuf::JoinType::Right => JoinType::Right,
+                protobuf::JoinType::Full => JoinType::Full,
+                protobuf::JoinType::Leftsemi => JoinType::LeftSemi,
+                protobuf::JoinType::Rightsemi => JoinType::RightSemi,
+                protobuf::JoinType::Leftanti => JoinType::LeftAnti,
+                protobuf::JoinType::Rightanti => JoinType::RightAnti,
+                protobuf::JoinType::Leftmark => JoinType::LeftMark,
+                protobuf::JoinType::Rightmark => JoinType::RightMark,
+            };
+        let null_equality = match protobuf::NullEquality::try_from(sym_join.null_equality)
+            .map_err(|_| {
+                internal_datafusion_err!(
+                    "SymmetricHashJoinExec: unknown NullEquality {}",
+                    sym_join.null_equality
+                )
+            })? {
+            protobuf::NullEquality::NullEqualsNothing => NullEquality::NullEqualsNothing,
+            protobuf::NullEquality::NullEqualsNull => NullEquality::NullEqualsNull,
+        };
+        let partition_mode =
+            match protobuf::StreamPartitionMode::try_from(sym_join.partition_mode)
+                .map_err(|_| {
+                    internal_datafusion_err!(
+                        "SymmetricHashJoinExec: unknown StreamPartitionMode {}",
+                        sym_join.partition_mode
+                    )
+                })? {
+                protobuf::StreamPartitionMode::SinglePartition => {
+                    StreamJoinPartitionMode::SinglePartition
+                }
+                protobuf::StreamPartitionMode::PartitionedExec => {
+                    StreamJoinPartitionMode::Partitioned
+                }
+            };
+
+        let filter = sym_join
+            .filter
+            .as_ref()
+            .map(|f| -> Result<JoinFilter> {
+                // The `JoinFilter` carries its own intermediate schema; the filter
+                // expression and column indices are relative to it. The proto
+                // schema type is datafusion-proto-common's, so `try_into` resolves
+                // to that crate's `TryFrom<&Schema>` impl.
+                let schema: Schema = f
+                    .schema
+                    .as_ref()
+                    .ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "SymmetricHashJoinExec: JoinFilter missing schema"
+                        )
+                    })?
+                    .try_into()?;
+                let expression = ctx.decode_required_expr(
+                    f.expression.as_ref(),
+                    &schema,
+                    "SymmetricHashJoinExec",
+                    "filter.expression",
+                )?;
+                let column_indices = f
+                    .column_indices
+                    .iter()
+                    .map(|i| {
+                        let side =
+                            match protobuf::JoinSide::try_from(i.side).map_err(|_| {
+                                internal_datafusion_err!(
+                                    "SymmetricHashJoinExec: unknown JoinSide {}",
+                                    i.side
+                                )
+                            })? {
+                                protobuf::JoinSide::LeftSide => JoinSide::Left,
+                                protobuf::JoinSide::RightSide => JoinSide::Right,
+                                protobuf::JoinSide::None => JoinSide::None,
+                            };
+                        Ok(ColumnIndex {
+                            index: i.index as usize,
+                            side,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(JoinFilter::new(
+                    expression,
+                    column_indices,
+                    Arc::new(schema),
+                ))
+            })
+            .transpose()?;
+
+        // Each side's ordering decodes against the matching child schema. An
+        // empty `repeated` maps back to `None` (via `LexOrdering::new`), the
+        // inverse of the encoder's empty-vec-for-`None`.
+        let decode_sort_exprs = |protos: &[protobuf::PhysicalSortExprNode],
+                                 schema: &Schema,
+                                 field: &str|
+         -> Result<Option<LexOrdering>> {
+            let exprs = protos
+                .iter()
+                .map(|sort_expr| {
+                    let expr_node = sort_expr.expr.as_deref().ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "SymmetricHashJoinExec: {field} missing its inner expr"
+                        )
+                    })?;
+                    Ok(PhysicalSortExpr {
+                        expr: ctx.decode_expr(expr_node, schema)?,
+                        options: arrow::compute::SortOptions {
+                            descending: !sort_expr.asc,
+                            nulls_first: sort_expr.nulls_first,
+                        },
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LexOrdering::new(exprs))
+        };
+        let left_sort_exprs = decode_sort_exprs(
+            &sym_join.left_sort_exprs,
+            left_schema.as_ref(),
+            "left_sort_exprs",
+        )?;
+        let right_sort_exprs = decode_sort_exprs(
+            &sym_join.right_sort_exprs,
+            right_schema.as_ref(),
+            "right_sort_exprs",
+        )?;
+
+        SymmetricHashJoinExec::try_new(
+            left,
+            right,
+            on,
+            filter,
+            &join_type,
+            null_equality,
+            left_sort_exprs,
+            right_sort_exprs,
+            partition_mode,
+        )
+        .map(|e| Arc::new(e) as _)
+    }
 }
 
 /// A stream that issues [RecordBatch]es as they arrive from the right  of the join.

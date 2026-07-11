@@ -748,8 +748,8 @@ pub trait PhysicalPlanNodeExt: Sized {
         };
         let decode_ctx = ExecutionPlanDecodeCtx::new(&plan_decoder);
         match plan {
-            PhysicalPlanType::Explain(explain) => {
-                self.try_into_explain_physical_plan(explain, ctx, proto_converter)
+            PhysicalPlanType::Explain(_) => {
+                ExplainExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Projection(_) => {
                 ProjectionExec::try_from_proto(self.node(), &decode_ctx)
@@ -779,47 +779,44 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::CoalesceBatches(_) => {
                 CoalesceBatchesExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Merge(merge) => {
-                self.try_into_merge_physical_plan(merge, ctx, proto_converter)
+            PhysicalPlanType::Merge(_) => {
+                CoalescePartitionsExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Repartition(_) => {
                 RepartitionExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::GlobalLimit(limit) => {
-                self.try_into_global_limit_physical_plan(limit, ctx, proto_converter)
+            PhysicalPlanType::GlobalLimit(_) => {
+                GlobalLimitExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::LocalLimit(limit) => {
-                self.try_into_local_limit_physical_plan(limit, ctx, proto_converter)
+            PhysicalPlanType::LocalLimit(_) => {
+                LocalLimitExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Window(window_agg) => {
                 self.try_into_window_physical_plan(window_agg, ctx, proto_converter)
             }
-            PhysicalPlanType::Aggregate(hash_agg) => {
-                self.try_into_aggregate_physical_plan(hash_agg, ctx, proto_converter)
+            PhysicalPlanType::Aggregate(_) => {
+                AggregateExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::HashJoin(_) => {
                 HashJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::SymmetricHashJoin(sym_join) => self
-                .try_into_symmetric_hash_join_physical_plan(
-                    sym_join,
-                    ctx,
-                    proto_converter,
-                ),
+            PhysicalPlanType::SymmetricHashJoin(_) => {
+                SymmetricHashJoinExec::try_from_proto(self.node(), &decode_ctx)
+            }
             PhysicalPlanType::Union(_) => {
                 UnionExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Interleave(_) => {
                 InterleaveExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::CrossJoin(crossjoin) => {
-                self.try_into_cross_join_physical_plan(crossjoin, ctx, proto_converter)
+            PhysicalPlanType::CrossJoin(_) => {
+                CrossJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Empty(_) => {
                 EmptyExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::PlaceholderRow(placeholder) => {
-                self.try_into_placeholder_row_physical_plan(placeholder, ctx)
+            PhysicalPlanType::PlaceholderRow(_) => {
+                PlaceholderRowExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Sort(_) => {
                 SortExec::try_from_proto(self.node(), &decode_ctx)
@@ -829,11 +826,11 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Extension(extension) => {
                 self.try_into_extension_physical_plan(extension, ctx, proto_converter)
             }
-            PhysicalPlanType::NestedLoopJoin(join) => {
-                self.try_into_nested_loop_join_physical_plan(join, ctx, proto_converter)
+            PhysicalPlanType::NestedLoopJoin(_) => {
+                NestedLoopJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Analyze(analyze) => {
-                self.try_into_analyze_physical_plan(analyze, ctx, proto_converter)
+            PhysicalPlanType::Analyze(_) => {
+                AnalyzeExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::JsonSink(sink) => {
                 self.try_into_json_sink_physical_plan(sink, ctx, proto_converter)
@@ -845,23 +842,23 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::ParquetSink(sink) => {
                 self.try_into_parquet_sink_physical_plan(sink, ctx, proto_converter)
             }
-            PhysicalPlanType::Unnest(unnest) => {
-                self.try_into_unnest_physical_plan(unnest, ctx, proto_converter)
+            PhysicalPlanType::Unnest(_) => {
+                UnnestExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Cooperative(cooperative) => {
-                self.try_into_cooperative_physical_plan(cooperative, ctx, proto_converter)
+            PhysicalPlanType::Cooperative(_) => {
+                CooperativeExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::GenerateSeries(generate_series) => {
                 self.try_into_generate_series_physical_plan(generate_series)
             }
-            PhysicalPlanType::SortMergeJoin(sort_join) => {
-                self.try_into_sort_join(sort_join, ctx, proto_converter)
+            PhysicalPlanType::SortMergeJoin(_) => {
+                SortMergeJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::AsyncFunc(async_func) => {
                 self.try_into_async_func_physical_plan(async_func, ctx, proto_converter)
             }
-            PhysicalPlanType::Buffer(buffer) => {
-                self.try_into_buffer_physical_plan(buffer, ctx, proto_converter)
+            PhysicalPlanType::Buffer(_) => {
+                BufferExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::ScalarSubquery(sq) => {
                 self.try_into_scalar_subquery_physical_plan(sq, ctx, proto_converter)
@@ -905,72 +902,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             return Ok(node);
         }
 
-        if let Some(exec) = plan.downcast_ref::<ExplainExec>() {
-            return protobuf::PhysicalPlanNode::try_from_explain_exec(exec, codec);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<AnalyzeExec>() {
-            return protobuf::PhysicalPlanNode::try_from_analyze_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(limit) = plan.downcast_ref::<GlobalLimitExec>() {
-            return protobuf::PhysicalPlanNode::try_from_global_limit_exec(
-                limit,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(limit) = plan.downcast_ref::<LocalLimitExec>() {
-            return protobuf::PhysicalPlanNode::try_from_local_limit_exec(
-                limit,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<SymmetricHashJoinExec>() {
-            return protobuf::PhysicalPlanNode::try_from_symmetric_hash_join_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<SortMergeJoinExec>() {
-            return protobuf::PhysicalPlanNode::try_from_sort_merge_join_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<CrossJoinExec>() {
-            return protobuf::PhysicalPlanNode::try_from_cross_join_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<AggregateExec>() {
-            return protobuf::PhysicalPlanNode::try_from_aggregate_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(empty) = plan.downcast_ref::<PlaceholderRowExec>() {
-            return protobuf::PhysicalPlanNode::try_from_placeholder_row_exec(
-                empty, codec,
-            );
-        }
-
         if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>()
             && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_source_exec(
                 data_source_exec,
@@ -981,24 +912,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             return Ok(node);
         }
 
-        if let Some(exec) = plan.downcast_ref::<CoalescePartitionsExec>() {
-            return protobuf::PhysicalPlanNode::try_from_coalesce_partitions_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
         if let Some(exec) = plan.downcast_ref::<SortPreservingMergeExec>() {
             return protobuf::PhysicalPlanNode::try_from_sort_preserving_merge_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<NestedLoopJoinExec>() {
-            return protobuf::PhysicalPlanNode::try_from_nested_loop_join_exec(
                 exec,
                 codec,
                 proto_converter,
@@ -1031,22 +946,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             return Ok(node);
         }
 
-        if let Some(exec) = plan.downcast_ref::<UnnestExec>() {
-            return protobuf::PhysicalPlanNode::try_from_unnest_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<CooperativeExec>() {
-            return protobuf::PhysicalPlanNode::try_from_cooperative_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
         if let Some(exec) = plan.downcast_ref::<LazyMemoryExec>()
             && let Some(node) =
                 protobuf::PhysicalPlanNode::try_from_lazy_memory_exec(exec)?
@@ -1056,14 +955,6 @@ pub trait PhysicalPlanNodeExt: Sized {
 
         if let Some(exec) = plan.downcast_ref::<AsyncFuncExec>() {
             return protobuf::PhysicalPlanNode::try_from_async_func_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<BufferExec>() {
-            return protobuf::PhysicalPlanNode::try_from_buffer_exec(
                 exec,
                 codec,
                 proto_converter,
