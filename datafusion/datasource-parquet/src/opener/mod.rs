@@ -46,7 +46,7 @@ use datafusion_physical_expr_adapter::rewrite::{
     expr_references_scalar_udf, rewrite_input_file_name_in_projection,
 };
 use std::collections::{HashMap, VecDeque};
-use std::fmt;
+use std::fmt::{self, Display};
 use std::future::Future;
 use std::mem;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -319,9 +319,11 @@ impl fmt::Debug for ParquetMorselizer {
 /// with the same adapted expression inputs and physical schema.
 #[derive(Debug, Default)]
 pub(super) struct ParquetPruningSetupCache {
-    entries:
-        Mutex<HashMap<ParquetPruningSetupCacheKey, Arc<ParquetPruningSetupCacheEntry>>>,
+    entries: Mutex<ParquetPruningSetupEntries>,
 }
+
+type ParquetPruningSetupEntries =
+    HashMap<ParquetPruningSetupCacheKey, Arc<ParquetPruningSetupCacheEntry>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParquetPruningSetupCacheKey {
@@ -387,26 +389,21 @@ impl ParquetPruningSetupCacheEntry {
 
     fn state(&self) -> Result<MutexGuard<'_, ParquetPruningSetupCacheEntryState>> {
         self.state.lock().map_err(|e| {
-            DataFusionError::External(Box::new(std::io::Error::other(format!(
-                "Parquet pruning setup cache entry lock poisoned: {e}"
-            ))))
+            cache_lock_poisoned("Parquet pruning setup cache entry lock poisoned", e)
         })
     }
 }
 
+fn cache_lock_poisoned(context: &str, err: impl Display) -> DataFusionError {
+    DataFusionError::External(Box::new(std::io::Error::other(format!(
+        "{context}: {err}"
+    ))))
+}
+
 impl ParquetPruningSetupCache {
-    fn entries(
-        &self,
-    ) -> Result<
-        MutexGuard<
-            '_,
-            HashMap<ParquetPruningSetupCacheKey, Arc<ParquetPruningSetupCacheEntry>>,
-        >,
-    > {
+    fn entries(&self) -> Result<MutexGuard<'_, ParquetPruningSetupEntries>> {
         self.entries.lock().map_err(|e| {
-            DataFusionError::External(Box::new(std::io::Error::other(format!(
-                "Parquet pruning setup cache lock poisoned: {e}"
-            ))))
+            cache_lock_poisoned("Parquet pruning setup cache lock poisoned", e)
         })
     }
 
@@ -452,11 +449,10 @@ impl ParquetPruningSetupCache {
                 match &*state {
                     ParquetPruningSetupCacheEntryState::Pending => {
                         state = entry.ready.wait(state).map_err(|e| {
-                            DataFusionError::External(Box::new(std::io::Error::other(
-                                format!(
-                                    "Parquet pruning setup cache entry lock poisoned: {e}"
-                                ),
-                            )))
+                            cache_lock_poisoned(
+                                "Parquet pruning setup cache entry lock poisoned",
+                                e,
+                            )
                         })?;
                     }
                     ParquetPruningSetupCacheEntryState::Ready(setup) => {
@@ -473,6 +469,21 @@ impl ParquetPruningSetupCache {
 
 fn physical_expr_ptr(expr: &Arc<dyn PhysicalExpr>) -> usize {
     Arc::as_ptr(expr) as *const () as usize
+}
+
+fn is_pruning_setup_reusable(
+    projection: &ProjectionExprs,
+    predicate: Option<&Arc<dyn PhysicalExpr>>,
+    has_literal_columns: bool,
+) -> bool {
+    let has_dynamic_predicate = predicate.is_some_and(|predicate| {
+        DynamicFilterTracking::classify(predicate).contains_dynamic_filter()
+    });
+    let has_input_file_name_projection = projection
+        .iter()
+        .any(|expr| expr_references_scalar_udf::<InputFileNameFunc>(&expr.expr));
+
+    !has_literal_columns && !has_dynamic_predicate && !has_input_file_name_projection
 }
 
 impl Morselizer for ParquetMorselizer {
@@ -957,15 +968,11 @@ impl ParquetMorselizer {
         let mut projection = self.projection.clone();
         let mut predicate = self.predicate.clone();
         let has_literal_columns = !literal_columns.is_empty();
-        let has_dynamic_predicate = predicate.as_ref().is_some_and(|predicate| {
-            DynamicFilterTracking::classify(predicate).contains_dynamic_filter()
-        });
-        let has_input_file_name_projection = projection
-            .iter()
-            .any(|expr| expr_references_scalar_udf::<InputFileNameFunc>(&expr.expr));
-        let pruning_setup_reusable = !has_literal_columns
-            && !has_dynamic_predicate
-            && !has_input_file_name_projection;
+        let pruning_setup_reusable = is_pruning_setup_reusable(
+            &projection,
+            predicate.as_ref(),
+            has_literal_columns,
+        );
         if has_literal_columns {
             projection = projection.try_map_exprs(|expr| {
                 replace_columns_with_literals(Arc::clone(&expr), &literal_columns)
@@ -2314,6 +2321,19 @@ mod test {
         }
     }
 
+    async fn open_files_and_assert_row_count(
+        morselizer: &ParquetMorselizer,
+        files: impl IntoIterator<Item = PartitionedFile>,
+        expected_rows: usize,
+    ) {
+        for file in files {
+            let stream = open_file(morselizer, file).await.unwrap();
+            let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+            assert_eq!(num_batches, 1);
+            assert_eq!(num_rows, expected_rows);
+        }
+    }
+
     fn input_file_name_expr() -> Arc<dyn PhysicalExpr> {
         Arc::new(ScalarFunctionExpr::new(
             "input_file_name",
@@ -2547,16 +2567,15 @@ mod test {
             .with_expr_adapter_factory(factory)
             .build();
 
-        let files = [
-            PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
-            PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
-        ];
-        for file in files {
-            let stream = open_file(&morselizer, file).await.unwrap();
-            let (num_batches, num_rows) = count_batches_and_rows(stream).await;
-            assert_eq!(num_batches, 1);
-            assert_eq!(num_rows, 3);
-        }
+        open_files_and_assert_row_count(
+            &morselizer,
+            [
+                PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
+                PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
+            ],
+            3,
+        )
+        .await;
 
         assert_eq!(
             create_count.load(Ordering::SeqCst),
@@ -2592,16 +2611,15 @@ mod test {
             .with_expr_adapter_factory(factory)
             .build();
 
-        let files = [
-            PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
-            PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
-        ];
-        for file in files {
-            let stream = open_file(&morselizer, file).await.unwrap();
-            let (num_batches, num_rows) = count_batches_and_rows(stream).await;
-            assert_eq!(num_batches, 1);
-            assert_eq!(num_rows, 3);
-        }
+        open_files_and_assert_row_count(
+            &morselizer,
+            [
+                PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
+                PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
+            ],
+            3,
+        )
+        .await;
 
         assert_eq!(
             create_count.load(Ordering::SeqCst),
@@ -2634,16 +2652,15 @@ mod test {
             .with_projection(projection)
             .build();
 
-        let files = [
-            PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
-            PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
-        ];
-        for file in files {
-            let stream = open_file(&morselizer, file).await.unwrap();
-            let (num_batches, num_rows) = count_batches_and_rows(stream).await;
-            assert_eq!(num_batches, 1);
-            assert_eq!(num_rows, 3);
-        }
+        open_files_and_assert_row_count(
+            &morselizer,
+            [
+                PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
+                PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
+            ],
+            3,
+        )
+        .await;
 
         assert_eq!(
             morselizer.pruning_setup_cache.entries().unwrap().len(),
@@ -2724,16 +2741,15 @@ mod test {
             .with_expr_adapter_factory(factory)
             .build();
 
-        let files = [
-            PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
-            PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
-        ];
-        for file in files {
-            let stream = open_file(&morselizer, file).await.unwrap();
-            let (num_batches, num_rows) = count_batches_and_rows(stream).await;
-            assert_eq!(num_batches, 1);
-            assert_eq!(num_rows, 3);
-        }
+        open_files_and_assert_row_count(
+            &morselizer,
+            [
+                PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
+                PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
+            ],
+            3,
+        )
+        .await;
 
         assert_eq!(
             create_count.load(Ordering::SeqCst),
@@ -3782,10 +3798,7 @@ mod test {
         use super::*;
         use arrow::array::{Array, Int64Array, StringArray};
         use arrow::datatypes::FieldRef;
-        use datafusion_common::config::ConfigOptions;
-        use datafusion_expr::ScalarUDF;
-        use datafusion_functions::core::input_file_name::InputFileNameFunc;
-        use datafusion_physical_expr::{ScalarFunctionExpr, projection::ProjectionExpr};
+        use datafusion_physical_expr::projection::ProjectionExpr;
         use parquet::arrow::RowNumber;
 
         /// Build a parquet `row_number` virtual column field. Spark's
@@ -3797,16 +3810,6 @@ mod test {
                 Field::new(name, DataType::Int64, nullable)
                     .with_extension_type(RowNumber),
             )
-        }
-
-        fn input_file_name_expr() -> Arc<dyn PhysicalExpr> {
-            Arc::new(ScalarFunctionExpr::new(
-                "input_file_name",
-                Arc::new(ScalarUDF::from(InputFileNameFunc::new())),
-                vec![],
-                Arc::new(Field::new("input_file_name", DataType::Utf8, true)),
-                Arc::new(ConfigOptions::default()),
-            ))
         }
 
         /// Collect every `Int64` value from the given column in every batch
