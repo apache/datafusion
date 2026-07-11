@@ -26,6 +26,7 @@ use datafusion::assert_batches_eq;
 use datafusion::common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
+use datafusion::common::config::ParquetPushdownFilterMode;
 use datafusion::common::{Result, assert_contains, exec_datafusion_err};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
@@ -92,6 +93,11 @@ pub async fn json_shredding() -> Result<()> {
     // Set up query execution
     let mut cfg = SessionConfig::new();
     cfg.options_mut().execution.parquet.pushdown_filters = true;
+    // This example needs the filter pushed into the scan so the JSON
+    // shredding rewriter can rewrite it into direct shredded-column
+    // access. Force pushdown regardless of the projection width.
+    cfg.options_mut().execution.parquet.pushdown_filter_mode =
+        ParquetPushdownFilterMode::Always;
     let ctx = SessionContext::new_with_config(cfg);
     ctx.runtime_env().register_object_store(
         ObjectStoreUrl::parse("memory://")?.as_ref(),
