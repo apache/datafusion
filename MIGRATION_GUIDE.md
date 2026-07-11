@@ -84,14 +84,49 @@ so join filter/left/right schemas all work).
   expose the codec. Those stay as typed arms. If your plan needs it — STOP and
   report it as a blocker.
 
+## Reference migrations already in the tree (READ THE CLOSEST ONE)
+
+- Single child + exprs: `projection.rs`, `filter.rs`.
+- N children: `union.rs`.
+- Sort expressions (inline `PhysicalSortExprNode`): `sorts/sort.rs`.
+- Partitioning / ScalarValue / range: `repartition/mod.rs`.
+- Two children + on-columns + `JoinFilter` + enum conversions + projection
+  sentinel: `joins/hash_join/exec.rs` (the join template).
+
+## Function-carrying plans (Aggregate / window) — use the ctx, NOT the codec
+
+The decode ctx does NOT expose the `PhysicalExtensionCodec`. Instead the ctx has
+typed, bytes-only function serde — use these:
+
+- Encode: `ctx.encode_udaf(&AggregateUDF) -> Result<Option<Vec<u8>>>` (and
+  `encode_udf` / `encode_udwf`). Store the returned `Option<Vec<u8>>` straight
+  into the node's `fun_definition` field — the `(!buf.is_empty()).then_some(buf)`
+  semantics are already applied, so the wire bytes are identical to today.
+- Decode: `ctx.decode_udaf(name, payload) -> Result<Arc<AggregateUDF>>` (and
+  `decode_udf` / `decode_udwf`). Pass `node.fun_definition.as_deref()` as
+  `payload`. The payload→codec / else registry→codec lookup-order policy is
+  handled inside the ctx method — do NOT re-implement it, and do NOT call
+  `task_ctx().udaf(...)` yourself for this.
+
+Everything else in these plans (group-by exprs, aggregate/window arg exprs,
+ordering, filter exprs, modes, frames) goes through `ctx.encode_expr` /
+`ctx.decode_expr` (against the input schema) and inline enum matches, exactly
+like the join/sort references. Sort expressions inline as `PhysicalSortExprNode`
+(see `sorts/sort.rs`).
+
 ## KNOWN BLOCKER — enum conversions
 
 Conversions like `JoinType::from_proto`, `NullEquality::from_proto`,
-`PartitionMode`, `JoinSide` live in `datafusion-proto` (`crate::convert`) and are
-NOT reachable from `datafusion-physical-plan`. The proto enums themselves
+`PartitionMode`, `JoinSide`, `AggregateMode`, window frame enums live in
+`datafusion-proto` (`crate::convert`) and are NOT reachable from
+`datafusion-physical-plan`. The proto enums themselves
 (`datafusion_proto_models::protobuf::JoinType`, etc.) ARE reachable. So write the
 conversion as an inline exhaustive `match` from the proto enum to the
-`datafusion_common` enum. Example:
+`datafusion_common` enum — **by name, one arm per variant. Do NOT use a numeric
+cast (`x as i32` / `from(i32)`): the proto and common enums are numbered
+differently** (e.g. JoinType proto orders semi/anti/semi/anti, common orders
+semi/semi/anti/anti — a cast silently corrupts the type). The exhaustive match is
+also what makes a future added variant a compile error. Example:
 
 ```rust
 let join_type = match protobuf::JoinType::try_from(node.join_type)
