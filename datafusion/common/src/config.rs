@@ -1201,7 +1201,7 @@ config_namespace! {
 
         /// (reading) If true, filter expressions are be applied during the parquet decoding operation to
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
-        pub pushdown_filters: bool, default = false
+        pub pushdown_filters: bool, default = true
 
         /// (reading) When `pushdown_filters` is enabled, determines how DataFusion
         /// pushes each filter into the Parquet scan. Options are `auto` (the default)

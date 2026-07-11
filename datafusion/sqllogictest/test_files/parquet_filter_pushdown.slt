@@ -939,7 +939,7 @@ A 78
 
 # Cleanup
 statement ok
-set datafusion.execution.parquet.pushdown_filters = false;
+RESET datafusion.execution.parquet.pushdown_filters;
 
 statement ok
 set datafusion.execution.parquet.reorder_filters = false;
