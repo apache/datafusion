@@ -62,6 +62,31 @@ impl ScalarSubqueryExpr {
     pub fn results(&self) -> &ScalarSubqueryResults {
         &self.results
     }
+
+    #[deprecated(
+        since = "55.0.0",
+        note = "was only used for proto serialization, which no longer needs it; use `return_field` for type/nullability. It will be removed in 61.0.0 or 6 months after 55.0.0 is released, whichever is longer."
+    )]
+    pub fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+
+    #[deprecated(
+        since = "55.0.0",
+        note = "was only used for proto serialization, which no longer needs it; use `return_field` for type/nullability. It will be removed in 61.0.0 or 6 months after 55.0.0 is released, whichever is longer."
+    )]
+    pub fn nullable(&self) -> bool {
+        self.nullable
+    }
+
+    /// Returns the index of this subquery in the shared results container.
+    #[deprecated(
+        since = "55.0.0",
+        note = "was only used for proto serialization, which no longer needs it. It will be removed in 61.0.0 or 6 months after 55.0.0 is released, whichever is longer."
+    )]
+    pub fn index(&self) -> SubqueryIndex {
+        self.index
+    }
 }
 
 impl fmt::Display for ScalarSubqueryExpr {
