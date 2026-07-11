@@ -26,8 +26,6 @@ use arrow::datatypes::{DataType, FieldRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::ColumnarValue;
-use datafusion_expr_common::placement::ExpressionPlacement;
-use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
 pub fn sql_similar_to_regex(pattern: &str) -> String {
@@ -127,16 +125,8 @@ impl PhysicalExpr for SqlSimilarToPattern {
         Ok(Arc::new(SqlSimilarToPattern::new(Arc::clone(&children[0]))))
     }
 
-    fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
-        Ok(children[0].clone())
-    }
-
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "sql_similar_to_regex({})", fmt_sql(self.expr.as_ref()))
-    }
-
-    fn placement(&self) -> ExpressionPlacement {
-        ExpressionPlacement::KeepInPlace
     }
 }
 
