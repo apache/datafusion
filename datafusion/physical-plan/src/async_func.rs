@@ -246,6 +246,80 @@ impl ExecutionPlan for AsyncFuncExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        let async_exprs =
+            ctx.encode_expressions(self.async_exprs.iter().map(|e| &e.func))?;
+        let async_expr_names = self.async_exprs.iter().map(|e| e.name.clone()).collect();
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::AsyncFunc(Box::new(
+                    protobuf::AsyncFuncExecNode {
+                        input: Some(Box::new(input)),
+                        async_exprs,
+                        async_expr_names,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl AsyncFuncExec {
+    /// Reconstruct an [`AsyncFuncExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`], taking the whole
+    /// [`PhysicalPlanNode`] so every plan's `try_from_proto` shares one
+    /// signature.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let async_func = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::AsyncFunc,
+            "AsyncFuncExec",
+        );
+        let input = ctx.decode_required_child(
+            async_func.input.as_deref(),
+            "AsyncFuncExec",
+            "input",
+        )?;
+
+        if async_func.async_exprs.len() != async_func.async_expr_names.len() {
+            return datafusion_common::internal_err!(
+                "AsyncFuncExecNode async_exprs length does not match async_expr_names"
+            );
+        }
+
+        let input_schema = input.schema();
+        let async_exprs = async_func
+            .async_exprs
+            .iter()
+            .zip(async_func.async_expr_names.iter())
+            .map(|(expr, name)| {
+                let physical_expr = ctx.decode_expr(expr, input_schema.as_ref())?;
+                Ok(Arc::new(AsyncFuncExpr::try_new(
+                    name.clone(),
+                    physical_expr,
+                    input_schema.as_ref(),
+                )?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Arc::new(AsyncFuncExec::try_new(async_exprs, input)?))
+    }
 }
 
 struct CoalesceInputStream {

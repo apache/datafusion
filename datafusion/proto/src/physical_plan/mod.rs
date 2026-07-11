@@ -866,14 +866,14 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::SortMergeJoin(_) => {
                 SortMergeJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::AsyncFunc(async_func) => {
-                self.try_into_async_func_physical_plan(async_func, ctx, proto_converter)
+            PhysicalPlanType::AsyncFunc(_) => {
+                AsyncFuncExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Buffer(_) => {
                 BufferExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::ScalarSubquery(sq) => {
-                self.try_into_scalar_subquery_physical_plan(sq, ctx, proto_converter)
+            PhysicalPlanType::ScalarSubquery(_) => {
+                ScalarSubqueryExec::try_from_proto(self.node(), &decode_ctx)
             }
         }
     }
@@ -947,22 +947,6 @@ pub trait PhysicalPlanNodeExt: Sized {
                 protobuf::PhysicalPlanNode::try_from_lazy_memory_exec(exec)?
         {
             return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<AsyncFuncExec>() {
-            return protobuf::PhysicalPlanNode::try_from_async_func_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<ScalarSubqueryExec>() {
-            return protobuf::PhysicalPlanNode::try_from_scalar_subquery_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
         }
 
         let mut buf: Vec<u8> = vec![];
@@ -4645,6 +4629,15 @@ impl ExecutionPlanDecode for ConverterPlanDecoder<'_, '_> {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         self.proto_converter
             .proto_to_physical_expr(node, input_schema, self.ctx)
+    }
+
+    fn decode_plan_with_scalar_subquery_results(
+        &self,
+        node: &protobuf::PhysicalPlanNode,
+        results: ScalarSubqueryResults,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let scoped = self.ctx.with_scalar_subquery_results(results);
+        self.proto_converter.proto_to_execution_plan(node, &scoped)
     }
 
     fn task_ctx(&self) -> &TaskContext {
