@@ -33,6 +33,7 @@ mod literal;
 mod negative;
 mod no_op;
 mod not;
+mod similar_to_pattern;
 mod try_cast;
 mod unknown_column;
 
@@ -59,6 +60,8 @@ pub use literal::{Literal, lit};
 pub use negative::{NegativeExpr, negative};
 pub use no_op::NoOp;
 pub use not::{NotExpr, not};
+pub use similar_to_pattern::SqlSimilarToPattern;
+pub use similar_to_pattern::{sql_similar_to_regex, translate_scalar};
 pub use try_cast::{TryCastExpr, try_cast};
 pub use unknown_column::UnKnownColumn;
 

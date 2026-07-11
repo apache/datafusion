@@ -18,6 +18,8 @@
 mod kernels;
 
 use crate::PhysicalExpr;
+use crate::expressions::SqlSimilarToPattern;
+use crate::expressions::translate_scalar;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -1099,41 +1101,6 @@ pub fn binary(
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
 }
 
-// Translates a SQL `SIMILAR TO` pattern to a Rust regex. `%` and `_` are
-// LIKE-style wildcards (wrapped in `(?s:...)` so they match newlines).
-// The POSIX metacharacters `| * + ? ( ) { } [ ]` pass through to the
-// regex. `. ^ $ \` are SQL literals and are escaped.
-fn sql_similar_to_regex(pattern: &str) -> String {
-    let mut result = String::with_capacity(pattern.len() + 10);
-    result.push_str("^(?:");
-    let mut in_bracket = false;
-    for ch in pattern.chars() {
-        match (ch, in_bracket) {
-            ('%', false) => result.push_str("(?s:.*)"),
-            ('_', false) => result.push_str("(?s:.)"),
-            ('[', false) => {
-                result.push('[');
-                in_bracket = true;
-            }
-            (']', true) => {
-                result.push(']');
-                in_bracket = false;
-            }
-            // `. ^ $` are SQL literals but regex metachars when not inside
-            // a `[...]` bracket expression (inside one, regex already treats
-            // them as literals). `\` is a regex escape character in all
-            // positions, so it always needs escaping.
-            ('.' | '^' | '$', false) | ('\\', _) => {
-                result.push('\\');
-                result.push(ch);
-            }
-            (c, _) => result.push(c),
-        }
-    }
-    result.push_str(")$");
-    result
-}
-
 /// Create a similar to expression
 pub fn similar_to(
     negated: bool,
@@ -1149,30 +1116,10 @@ pub fn similar_to(
     };
 
     let translated_pattern = match pattern.downcast_ref::<crate::expressions::Literal>() {
-        Some(literal) => match literal.value() {
-            ScalarValue::Utf8(Some(s)) => Arc::new(crate::expressions::Literal::new(
-                ScalarValue::Utf8(Some(sql_similar_to_regex(s.as_str()))),
-            )) as Arc<dyn PhysicalExpr>,
-            ScalarValue::LargeUtf8(Some(s)) => Arc::new(crate::expressions::Literal::new(
-                ScalarValue::LargeUtf8(Some(sql_similar_to_regex(s.as_str()))),
-            )) as Arc<dyn PhysicalExpr>,
-            ScalarValue::Utf8View(Some(s)) => Arc::new(crate::expressions::Literal::new(
-                ScalarValue::Utf8View(Some(sql_similar_to_regex(s.as_str()))),
-            )) as Arc<dyn PhysicalExpr>,
-            ScalarValue::Utf8(None)
-            | ScalarValue::LargeUtf8(None)
-            | ScalarValue::Utf8View(None) => pattern,
-            other => {
-                return not_impl_err!(
-                    "SIMILAR TO with a non-string literal pattern is not supported: {other:?}"
-                );
-            }
-        },
-        None => {
-            return not_impl_err!(
-                "SIMILAR TO with a non-literal pattern is not yet supported"
-            );
-        }
+        Some(literal) => Arc::new(crate::expressions::Literal::new(translate_scalar(
+            literal.value(),
+        )?)) as Arc<dyn PhysicalExpr>,
+        None => Arc::new(SqlSimilarToPattern::new(pattern)) as Arc<dyn PhysicalExpr>,
     };
 
     Ok(Arc::new(BinaryExpr::new(
@@ -5061,21 +5008,44 @@ mod tests {
 
     #[test]
     fn test_similar_to_non_literal_pattern_errors() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Utf8, false),
-            Field::new("b", DataType::Utf8, false),
-        ]));
-        let err = similar_to(
-            false,
-            false,
-            col("a", &schema).unwrap(),
-            col("b", &schema).unwrap(),
-        )
-        .expect_err("non-literal pattern should error");
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        // Non-string literal patterns still error.
+        let err = similar_to(false, false, col("a", &schema).unwrap(), lit(1i32))
+            .expect_err("non-string literal pattern should error");
         assert!(
-            err.to_string().contains("non-literal pattern"),
+            err.to_string()
+                .contains("SIMILAR TO pattern must be a string type, got Int32(1)"),
             "unexpected error message: {err}"
         );
+    }
+
+    #[test]
+    fn test_similar_to_dynamic_pattern() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("text", DataType::Utf8, false),
+            Field::new("pattern", DataType::Utf8, false),
+        ]));
+        let text = StringArray::from(vec!["abc", "ab", "x"]);
+        let pattern = StringArray::from(vec!["a%", "a.", "_"]);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(text), Arc::new(pattern)],
+        )
+        .unwrap();
+
+        let op = similar_to(
+            false,
+            false,
+            col("text", &schema).unwrap(),
+            col("pattern", &schema).unwrap(),
+        )
+        .unwrap();
+        let result = op.evaluate(&batch).unwrap();
+        let result_array = result.into_array(batch.num_rows()).unwrap();
+        let result = as_boolean_array(&result_array).unwrap();
+        assert!(result.value(0)); // "abc" ~ ^(?:a(?s:.*))$
+        assert!(!result.value(1)); // "ab"  ~ ^(?:a\.)$
+        assert!(result.value(2)); // "x"   ~ ^(?:a(?s:.))$
     }
 
     #[test]
