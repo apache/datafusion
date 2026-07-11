@@ -779,7 +779,37 @@ SELECT non_range_key, value, SUM(value) OVER (PARTITION BY non_range_key ORDER B
 
 
 ##########
-# TEST 22: Window Subset Satisfaction on Range Partition Column
+# TEST 22: Unbounded-Frame Window on Non-Range Column Rehashes
+# The unbounded frame makes DataFusion use WindowAggExec; Range([range_key])
+# does not colocate non_range_key values, so PARTITION BY non_range_key
+# still requires a hash repartition.
+##########
+
+query TT
+EXPLAIN SELECT non_range_key, SUM(value) OVER (PARTITION BY non_range_key ORDER BY value ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM range_partitioned;
+----
+physical_plan
+01)ProjectionExec: expr=[non_range_key@0 as non_range_key, sum(range_partitioned.value) PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as sum(range_partitioned.value) PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
+02)--WindowAggExec: wdw=[sum(range_partitioned.value) PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(range_partitioned.value) PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+03)----SortExec: expr=[non_range_key@0 ASC NULLS LAST, value@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
+05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[non_range_key, value], output_partitioning=UnknownPartitioning(4), file_type=csv, has_header=false
+
+query III
+SELECT non_range_key, value, SUM(value) OVER (PARTITION BY non_range_key ORDER BY value ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM range_partitioned ORDER BY non_range_key, value;
+----
+1 10 610
+1 100 610
+1 200 610
+1 300 610
+2 50 800
+2 150 800
+2 250 800
+2 350 800
+
+
+##########
+# TEST 23: Window Subset Satisfaction on Range Partition Column
 # With the subset threshold met, Range([range_key]) satisfies
 # PARTITION BY (range_key, non_range_key): equal composite keys share the
 # same range_key, so they are already colocated.
@@ -811,7 +841,7 @@ SELECT range_key, SUM(value) OVER (PARTITION BY range_key, non_range_key ORDER B
 
 
 ##########
-# TEST 23: Exact Range Window Below Subset Threshold
+# TEST 24: Exact Range Window Below Subset Threshold
 # Even when subset satisfaction is disabled, exact Range([range_key])
 # satisfies PARTITION BY range_key when repartitioning would not increase
 # partition count.
@@ -837,7 +867,7 @@ physical_plan
 
 
 ##########
-# TEST 24: Window Subset Rehashes Below Subset Threshold
+# TEST 25: Window Subset Rehashes Below Subset Threshold
 # Range([range_key]) is only a subset of PARTITION BY
 # (range_key, non_range_key), so it should not satisfy the window key when
 # subset satisfaction is disabled.
@@ -873,7 +903,7 @@ reset datafusion.optimizer.subset_repartition_threshold;
 
 
 ##########
-# TEST 25: Window Preserves Range When Preserve File Threshold Met
+# TEST 26: Window Preserves Range When Preserve File Threshold Met
 # With the subset threshold not met, preserve-file threshold 1 still
 # preserves Range even though target_partitions is 5.
 ##########
@@ -916,7 +946,7 @@ reset datafusion.optimizer.preserve_file_partitions;
 
 
 ##########
-# TEST 26: Window Keeps Range When Preserve File Threshold Not Met
+# TEST 27: Window Keeps Range When Preserve File Threshold Not Met
 # With the subset threshold met, the window reuses Range even though the
 # preserve-file threshold is not met and target_partitions is 5.
 ##########
@@ -959,7 +989,7 @@ reset datafusion.optimizer.preserve_file_partitions;
 
 
 ##########
-# TEST 27: Window Rehashes Below Subset Threshold
+# TEST 28: Window Rehashes Below Subset Threshold
 # With subset threshold 5 and only 4 input partitions, planning repartitions
 # to increase parallelism instead of reusing Range partitioning.
 ##########
@@ -994,7 +1024,7 @@ reset datafusion.optimizer.preserve_file_partitions;
 
 
 ##########
-# TEST 28: Window Without Partition Keys Uses a Single Partition
+# TEST 29: Window Without Partition Keys Uses a Single Partition
 # A window with no PARTITION BY requires a single partition; range
 # partitioning is not applicable.
 ##########

@@ -36,8 +36,9 @@ use crate::windows::{
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, InputOrderMode, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, WindowExpr, check_if_same_properties,
+    ExecutionPlanProperties, InputDistributionRequirements, InputOrderMode,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
+    check_if_same_properties,
 };
 
 use arrow::compute::take_record_batch;
@@ -324,12 +325,12 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self.input_distribution_requirements().into_per_child()
     }
 
-    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         if self.partition_keys().is_empty() {
             debug!("No partition defined for BoundedWindowAggExec!!!");
-            crate::InputDistributionRequirements::new(vec![Distribution::SinglePartition])
+            InputDistributionRequirements::new(vec![Distribution::SinglePartition])
         } else {
-            crate::InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(
+            InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(
                 self.partition_keys(),
             )])
             .allow_range_satisfaction_for_key_partitioning()
