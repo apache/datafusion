@@ -153,7 +153,8 @@ pub fn translate_scalar(scalar: &ScalarValue) -> Result<ScalarValue> {
         }
         ScalarValue::Utf8(None)
         | ScalarValue::LargeUtf8(None)
-        | ScalarValue::Utf8View(None) => Ok(scalar.clone()),
+        | ScalarValue::Utf8View(None)
+        | ScalarValue::Null => Ok(ScalarValue::Utf8(None)),
         other => internal_err!("SIMILAR TO pattern must be a string type, got {other:?}"),
     }
 }
@@ -205,6 +206,14 @@ mod tests {
         assert_eq!(
             translate_scalar(&ScalarValue::Utf8(Some("a.b".to_string())))?,
             ScalarValue::Utf8(Some(r"^(?:a\.b)$".to_string()))
+        );
+        assert!(
+            translate_scalar(&ScalarValue::Null).is_ok(),
+            "NULL pattern should pass through"
+        );
+        assert_eq!(
+            translate_scalar(&ScalarValue::Null).unwrap(),
+            ScalarValue::Utf8(None)
         );
         assert!(translate_scalar(&ScalarValue::Int32(Some(1))).is_err());
         Ok(())

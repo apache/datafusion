@@ -260,6 +260,12 @@ SELECT 'X' SIMILAR TO lower('X');
 ----
 false
 
+# SIMILAR TO NULL pattern returns NULL.
+query B
+SELECT 'a' SIMILAR TO NULL;
+----
+NULL
+
 # NOT LIKE
 query T rowsort
 SELECT s FROM test WHERE s NOT LIKE 'p1%';
