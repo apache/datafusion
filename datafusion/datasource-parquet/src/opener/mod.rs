@@ -388,6 +388,11 @@ impl ParquetPruningSetupCache {
             return Ok(setup.clone());
         }
 
+        // Compute outside the cache lock. Concurrent first misses for the same
+        // key may duplicate this CPU-only setup, but the first completed insert
+        // still makes subsequent files reuse the cached entry. Reintroduce
+        // single-flight coordination only if profiling shows duplicate setup is
+        // material.
         let setup = make_setup()?;
         self.entries()?.insert(key.clone(), setup.clone());
         Ok(setup)
