@@ -256,6 +256,94 @@ impl DataSource for MemorySourceConfig {
             })
             .transpose()
     }
+
+    /// Emit a `MemoryScan` node describing these in-memory partitions. Kept
+    /// byte-identical to the former `try_from_data_source_exec`
+    /// `MemorySourceConfig` branch in `datafusion-proto` (#22419).
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::DataFusionError;
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        let partitions = self
+            .partitions
+            .iter()
+            .map(|batches| proto_serialize_record_batches(batches))
+            .collect::<Result<Vec<_>>>()?;
+
+        let projection = self.projection.as_ref().map_or_else(Vec::new, |v| {
+            v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
+        });
+
+        let sort_information = self
+            .sort_information
+            .iter()
+            .map(|ordering| {
+                let physical_sort_expr_nodes = ordering
+                    .iter()
+                    .map(|sort_expr| {
+                        Ok::<_, DataFusionError>(protobuf::PhysicalSortExprNode {
+                            expr: Some(Box::new(ctx.encode_expr(&sort_expr.expr)?)),
+                            asc: !sort_expr.options.descending,
+                            nulls_first: sort_expr.options.nulls_first,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok::<_, DataFusionError>(protobuf::PhysicalSortExprNodeCollection {
+                    physical_sort_expr_nodes,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::MemoryScan(
+                protobuf::MemoryScanExecNode {
+                    partitions,
+                    schema: Some((&*self.schema).try_into()?),
+                    projection,
+                    sort_information,
+                    show_sizes: self.show_sizes,
+                    fetch: self.fetch.map(|f| f as u32),
+                },
+            )),
+        }))
+    }
+}
+
+/// Serialize a partition's record batches to Arrow IPC stream bytes. Local copy
+/// of `datafusion-proto`'s `serialize_record_batches`; kept byte-identical so the
+/// `MemoryScan` wire format is unchanged. The batch IPC bytes are fully portable
+/// (pure Arrow), so no `datafusion-proto` type is required here.
+#[cfg(feature = "proto")]
+fn proto_serialize_record_batches(batches: &[RecordBatch]) -> Result<Vec<u8>> {
+    if batches.is_empty() {
+        return Ok(vec![]);
+    }
+    let schema = batches[0].schema();
+    let mut buf = Vec::new();
+    let mut writer = arrow::ipc::writer::StreamWriter::try_new(&mut buf, &schema)?;
+    for batch in batches {
+        writer.write(batch)?;
+    }
+    writer.finish()?;
+    Ok(buf)
+}
+
+/// Parse a partition's Arrow IPC stream bytes back into record batches. Local
+/// copy of `datafusion-proto`'s `parse_record_batches`; kept byte-identical.
+#[cfg(feature = "proto")]
+fn proto_parse_record_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
+    if buf.is_empty() {
+        return Ok(vec![]);
+    }
+    let reader = arrow::ipc::reader::StreamReader::try_new(buf, None)?;
+    reader
+        .map(|batch| batch.map_err(Into::into))
+        .collect::<Result<Vec<_>>>()
 }
 
 impl MemorySourceConfig {
@@ -604,6 +692,88 @@ impl MemorySourceConfig {
         }
 
         Ok(Some(partitions))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl MemorySourceConfig {
+    /// Reconstruct a `DataSourceExec` wrapping a `MemorySourceConfig` from a
+    /// `MemoryScan` [`PhysicalPlanNode`]. The inverse of
+    /// [`DataSource::try_to_proto`] on `MemorySourceConfig`; kept
+    /// byte-compatible with the former `try_into_memory_scan_physical_plan` in
+    /// `datafusion-proto` (#22419).
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
+        use datafusion_common::{DataFusionError, internal_datafusion_err};
+        use datafusion_physical_expr::PhysicalSortExpr;
+        use datafusion_proto_models::protobuf;
+
+        let scan = match &node.physical_plan_type {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::MemoryScan(scan)) => {
+                scan
+            }
+            _ => {
+                return datafusion_common::internal_err!(
+                    "PhysicalPlanNode is not a MemoryScan"
+                );
+            }
+        };
+
+        let partitions = scan
+            .partitions
+            .iter()
+            .map(|p| proto_parse_record_batches(p))
+            .collect::<Result<Vec<_>>>()?;
+
+        let proto_schema = scan.schema.as_ref().ok_or_else(|| {
+            internal_datafusion_err!("schema in MemoryScanExecNode is missing.")
+        })?;
+        let schema: SchemaRef = SchemaRef::new(proto_schema.try_into()?);
+
+        let projection = if !scan.projection.is_empty() {
+            Some(
+                scan.projection
+                    .iter()
+                    .map(|i| *i as usize)
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+
+        let mut sort_information = vec![];
+        for ordering in &scan.sort_information {
+            let sort_exprs = ordering
+                .physical_sort_expr_nodes
+                .iter()
+                .map(|sort_expr| {
+                    let expr_node = sort_expr.expr.as_deref().ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "PhysicalSortExprNode is missing required field 'expr'"
+                        )
+                    })?;
+                    Ok::<_, DataFusionError>(PhysicalSortExpr {
+                        expr: ctx.decode_expr(expr_node, schema.as_ref())?,
+                        options: arrow::compute::SortOptions {
+                            descending: !sort_expr.asc,
+                            nulls_first: sort_expr.nulls_first,
+                        },
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            sort_information.extend(LexOrdering::new(sort_exprs));
+        }
+
+        let source = Self::try_new(&partitions, schema, projection)?
+            .with_limit(scan.fetch.map(|f| f as usize))
+            .with_show_sizes(scan.show_sizes);
+        let source = source.try_with_sort_information(sort_information)?;
+
+        Ok(DataSourceExec::from_data_source(source))
     }
 }
 

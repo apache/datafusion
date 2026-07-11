@@ -34,7 +34,7 @@ use datafusion_common::{
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::sink::DataSinkExec;
-use datafusion_datasource::source::{DataSource, DataSourceExec};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
 use datafusion_datasource_avro::source::AvroSource;
@@ -111,8 +111,7 @@ use crate::physical_plan::from_proto::{
 };
 use crate::physical_plan::to_proto::{
     serialize_maybe_filter, serialize_physical_aggr_expr,
-    serialize_physical_expr_with_converter, serialize_physical_sort_exprs,
-    serialize_physical_window_expr, serialize_record_batches,
+    serialize_physical_expr_with_converter, serialize_physical_window_expr,
 };
 use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
@@ -781,8 +780,8 @@ pub trait PhysicalPlanNodeExt: Sized {
                     "Unable to process a Avro PhysicalPlan when `avro` feature is not enabled"
                 )
             }
-            PhysicalPlanType::MemoryScan(scan) => {
-                self.try_into_memory_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::MemoryScan(_) => {
+                MemorySourceConfig::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::ArrowScan(_) => {
                 ArrowSource::try_from_proto(self.node(), &decode_ctx)
@@ -911,16 +910,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             hook_target = delegate;
         }
         if let Some(node) = hook_target.try_to_proto(&encode_ctx)? {
-            return Ok(node);
-        }
-
-        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>()
-            && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_source_exec(
-                data_source_exec,
-                codec,
-                proto_converter,
-            )?
-        {
             return Ok(node);
         }
 
@@ -3337,67 +3326,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             ))),
         })
     }
-
-    fn try_from_data_source_exec(
-        data_source_exec: &DataSourceExec,
-        codec: &dyn PhysicalExtensionCodec,
-        proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Option<protobuf::PhysicalPlanNode>> {
-        let data_source = data_source_exec.data_source();
-        // Csv/Json/Arrow/Avro/Parquet file sources serialize themselves via the
-        // `FileSource::try_to_proto` hook (#22419); their inline branches are
-        // deleted to prove the hook is reached. Only MemorySourceConfig (not a
-        // FileSource) remains here.
-
-        if let Some(source_conf) = data_source.downcast_ref::<MemorySourceConfig>() {
-            let proto_partitions = source_conf
-                .partitions()
-                .iter()
-                .map(|p| serialize_record_batches(p))
-                .collect::<Result<Vec<_>>>()?;
-
-            let proto_schema: protobuf::Schema =
-                source_conf.original_schema().as_ref().try_into()?;
-
-            let proto_projection = source_conf
-                .projection()
-                .as_ref()
-                .map_or_else(Vec::new, |v| {
-                    v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
-                });
-
-            let proto_sort_information = source_conf
-                .sort_information()
-                .iter()
-                .map(|ordering| {
-                    let sort_exprs = serialize_physical_sort_exprs(
-                        ordering.to_owned(),
-                        codec,
-                        proto_converter,
-                    )?;
-                    Ok::<_, DataFusionError>(protobuf::PhysicalSortExprNodeCollection {
-                        physical_sort_expr_nodes: sort_exprs,
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::MemoryScan(
-                    protobuf::MemoryScanExecNode {
-                        partitions: proto_partitions,
-                        schema: Some(proto_schema),
-                        projection: proto_projection,
-                        sort_information: proto_sort_information,
-                        show_sizes: source_conf.show_sizes(),
-                        fetch: source_conf.fetch().map(|f| f as u32),
-                    },
-                )),
-            }));
-        }
-
-        Ok(None)
-    }
-
     fn try_from_coalesce_partitions_exec(
         exec: &CoalescePartitionsExec,
         codec: &dyn PhysicalExtensionCodec,
