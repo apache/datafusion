@@ -2712,6 +2712,11 @@ mod test {
             collect_int32_values(open_file(&morselizer, second_file).await.unwrap())
                 .await;
         assert_eq!(values, vec![10, 11, 12]);
+        assert_eq!(
+            morselizer.pruning_setup_cache.entries().unwrap().len(),
+            0,
+            "dynamic predicates snapshot pruning state and should not populate the reusable setup cache"
+        );
     }
 
     #[tokio::test]
