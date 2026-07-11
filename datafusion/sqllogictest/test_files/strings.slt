@@ -266,6 +266,10 @@ SELECT 'a' SIMILAR TO NULL;
 ----
 NULL
 
+# SIMILAR TO with a non-string pattern is rejected at plan time.
+statement error Invalid pattern in SIMILAR TO expression
+SELECT 'a' SIMILAR TO 1;
+
 # NOT LIKE
 query T rowsort
 SELECT s FROM test WHERE s NOT LIKE 'p1%';

@@ -24,7 +24,7 @@ use crate::PhysicalExpr;
 use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
 use arrow::datatypes::{DataType, FieldRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -155,7 +155,7 @@ pub fn translate_scalar(scalar: &ScalarValue) -> Result<ScalarValue> {
         | ScalarValue::LargeUtf8(None)
         | ScalarValue::Utf8View(None)
         | ScalarValue::Null => Ok(ScalarValue::Utf8(None)),
-        other => internal_err!("SIMILAR TO pattern must be a string type, got {other:?}"),
+        other => exec_err!("SIMILAR TO pattern must be a string type, got {other:?}"),
     }
 }
 
@@ -185,7 +185,7 @@ fn translate_array(array: &ArrayRef) -> Result<ColumnarValue> {
                 .collect();
             Ok(ColumnarValue::Array(Arc::new(translated)))
         }
-        other => internal_err!("SIMILAR TO pattern must be a string type, got {other:?}"),
+        other => exec_err!("SIMILAR TO pattern must be a string type, got {other:?}"),
     }
 }
 
