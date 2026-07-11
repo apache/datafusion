@@ -831,8 +831,9 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Sort(_) => {
                 SortExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::SortPreservingMerge(sort) => self
-                .try_into_sort_preserving_merge_physical_plan(sort, ctx, proto_converter),
+            PhysicalPlanType::SortPreservingMerge(_) => {
+                SortPreservingMergeExec::try_from_proto(self.node(), &decode_ctx)
+            }
             PhysicalPlanType::Extension(extension) => {
                 self.try_into_extension_physical_plan(extension, ctx, proto_converter)
             }
@@ -916,14 +917,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         }
         if let Some(node) = hook_target.try_to_proto(&encode_ctx)? {
             return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<SortPreservingMergeExec>() {
-            return protobuf::PhysicalPlanNode::try_from_sort_preserving_merge_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
         }
 
         if let Some(exec) = plan.downcast_ref::<LazyMemoryExec>()
