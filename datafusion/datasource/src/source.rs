@@ -264,6 +264,30 @@ pub trait DataSource: Any + Send + Sync + Debug {
     fn open_with_args(&self, args: OpenArgs) -> Result<SendableRecordBatchStream> {
         self.open(args.partition, args.context)
     }
+
+    /// Serialize this data source to a full [`PhysicalPlanNode`] (a
+    /// `DataSourceExec` wrapping this source), if it knows how.
+    ///
+    /// This is the `DataSource` analog of
+    /// [`ExecutionPlan::try_to_proto`](datafusion_physical_plan::ExecutionPlan::try_to_proto).
+    /// [`DataSourceExec::try_to_proto`](crate::source::DataSourceExec) delegates
+    /// to this hook, which for file scans forwards to
+    /// [`FileSource::try_to_proto`](crate::file::FileSource::try_to_proto)
+    /// through the shared [`FileScanConfig`](crate::file_scan_config::FileScanConfig)
+    /// spine.
+    ///
+    /// * `Ok(None)` (the default) — "I don't serialize myself"; the caller falls
+    ///   back to the central downcast chain in `datafusion-proto`.
+    /// * `Ok(Some(node))` — fully serialized; the caller must not fall back.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        Ok(None)
+    }
 }
 
 /// Arguments for [`DataSource::open_with_args`]
@@ -552,6 +576,18 @@ impl ExecutionPlan for DataSourceExec {
         let mut new_exec = Arc::unwrap_or_clone(self);
         new_exec.execution_state = Arc::new(OnceLock::new());
         Ok(Arc::new(new_exec))
+    }
+
+    /// Delegates serialization to the wrapped [`DataSource`]. For file scans the
+    /// concrete [`FileSource`](crate::file::FileSource) emits the node via its
+    /// own `try_to_proto` hook, keeping the format-specific wire logic in the
+    /// format crate.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        self.data_source().try_to_proto(ctx)
     }
 }
 

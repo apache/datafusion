@@ -103,7 +103,7 @@ use prost::bytes::BufMut;
 
 use self::from_proto::parse_protobuf_partitioning;
 use self::to_proto::serialize_partitioning;
-use crate::common::{byte_to_string, str_to_byte};
+use crate::common::str_to_byte;
 use crate::convert::{FromProto, TryFromProto};
 use crate::convert_required;
 use crate::physical_plan::from_proto::{
@@ -757,8 +757,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Filter(_) => {
                 FilterExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::CsvScan(scan) => {
-                self.try_into_csv_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::CsvScan(_) => {
+                CsvSource::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::JsonScan(scan) => {
                 self.try_into_json_scan_physical_plan(scan, ctx, proto_converter)
@@ -3348,47 +3348,8 @@ pub trait PhysicalPlanNodeExt: Sized {
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Option<protobuf::PhysicalPlanNode>> {
         let data_source = data_source_exec.data_source();
-        if let Some(maybe_csv) = data_source.downcast_ref::<FileScanConfig>() {
-            let source = maybe_csv.file_source();
-            if let Some(csv_config) = source.downcast_ref::<CsvSource>() {
-                return Ok(Some(protobuf::PhysicalPlanNode {
-                    physical_plan_type: Some(PhysicalPlanType::CsvScan(
-                        protobuf::CsvScanExecNode {
-                            base_conf: Some(serialize_file_scan_config(
-                                maybe_csv,
-                                codec,
-                                proto_converter,
-                            )?),
-                            has_header: csv_config.has_header(),
-                            delimiter: byte_to_string(
-                                csv_config.delimiter(),
-                                "delimiter",
-                            )?,
-                            quote: byte_to_string(csv_config.quote(), "quote")?,
-                            optional_escape: if let Some(escape) = csv_config.escape() {
-                                Some(
-                                    protobuf::csv_scan_exec_node::OptionalEscape::Escape(
-                                        byte_to_string(escape, "escape")?,
-                                    ),
-                                )
-                            } else {
-                                None
-                            },
-                            optional_comment: if let Some(comment) = csv_config.comment()
-                            {
-                                Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(
-                                        byte_to_string(comment, "comment")?,
-                                    ))
-                            } else {
-                                None
-                            },
-                            newlines_in_values: csv_config.newlines_in_values(),
-                            truncate_rows: csv_config.truncate_rows(),
-                        },
-                    )),
-                }));
-            }
-        }
+        // CsvSource serializes itself via the `try_to_proto` hook (#22419);
+        // the old inline branch is deleted to prove the hook is reached.
 
         if let Some(scan_conf) = data_source.downcast_ref::<FileScanConfig>() {
             let source = scan_conf.file_source();

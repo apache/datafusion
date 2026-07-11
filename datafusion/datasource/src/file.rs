@@ -351,6 +351,31 @@ pub trait FileSource: Any + Send + Sync {
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         None
     }
+
+    /// Serialize this file source into a full [`PhysicalPlanNode`] (a
+    /// `DataSourceExec` wrapping the `FileScanConfig`), if it knows how.
+    ///
+    /// `base` is the shared [`FileScanConfig`] this source is wrapped in; the
+    /// format-agnostic parts (file groups, schema, statistics, ordering,
+    /// projection, …) are encoded via
+    /// [`FileScanConfig::to_proto_conf`](crate::file_scan_config::FileScanConfig::to_proto_conf),
+    /// and the concrete source appends its format-specific fields (e.g. CSV
+    /// delimiter/quote) around it.
+    ///
+    /// * `Ok(None)` (the default) — this source has no proto hook yet; the
+    ///   caller falls back to the central downcast chain in `datafusion-proto`.
+    /// * `Ok(Some(node))` — fully serialized; the caller must not fall back.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`FileScanConfig`]: crate::file_scan_config::FileScanConfig
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _base: &FileScanConfig,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        Ok(None)
+    }
 }
 
 impl dyn FileSource {
