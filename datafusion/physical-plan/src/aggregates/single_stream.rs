@@ -148,9 +148,6 @@ impl SingleHashAggregateStream {
         let batch_size = context.session_config().batch_size();
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
 
-        // Preserve the existing aggregate metric surface for this plan node.
-        let _spill_metrics = SpillMetrics::new(&agg.metrics, partition);
-
         let hash_table = AggregateHashTable::<SingleMarker>::new(
             agg,
             partition,
