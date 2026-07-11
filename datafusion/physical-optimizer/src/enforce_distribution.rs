@@ -25,7 +25,6 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::optimizer::PhysicalOptimizerRule;
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
@@ -60,6 +59,7 @@ use datafusion_physical_plan::union::{InterleaveExec, UnionExec, can_interleave}
 use datafusion_physical_plan::windows::WindowAggExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, get_best_fitting_window};
 use datafusion_physical_plan::{Distribution, ExecutionPlan, Partitioning};
+use datafusion_session::PhysicalOptimizerRule;
 
 use itertools::izip;
 

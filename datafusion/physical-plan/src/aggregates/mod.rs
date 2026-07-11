@@ -550,7 +550,7 @@ impl From<StreamType> for SendableRecordBatchStream {
 /// The filter is kept in the `DataSourceExec`, and it will gets update during execution,
 /// the reader will interpret it as "the upstream only needs rows that such filter
 /// predicate is evaluated to true", and certain scanner implementation like `parquet`
-/// can evalaute column statistics on those dynamic filters, to decide if they can
+/// can evaluate column statistics on those dynamic filters, to decide if they can
 /// prune a whole range.
 ///
 /// ### Examples

@@ -93,8 +93,6 @@ pub struct ForeignLibraryModule {
 
     pub create_timezone_udf: extern "C" fn() -> FFI_ScalarUDF,
 
-    pub create_placement_udf: extern "C" fn() -> FFI_ScalarUDF,
-
     pub create_table_function:
         extern "C" fn(FFI_LogicalExtensionCodec) -> FFI_TableFunction,
 
@@ -117,8 +115,6 @@ pub struct ForeignLibraryModule {
         extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProvider,
 
     pub create_physical_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
-
-    pub create_context_aware_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
 
     pub create_query_planner: extern "C" fn(
         logical_codec: FFI_LogicalExtensionCodec,
@@ -261,7 +257,6 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_scalar_udf: create_ffi_abs_func,
         create_nullary_udf: create_ffi_random_func,
         create_timezone_udf: udf_udaf_udwf::create_timezone_func,
-        create_placement_udf: udf_udaf_udwf::create_placement_func,
         create_table_function: create_ffi_table_func,
         create_sum_udaf: create_ffi_sum_func,
         create_stddev_udaf: create_ffi_stddev_func,
@@ -272,8 +267,6 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_table_with_statistics,
         create_physical_optimizer_rule:
             physical_optimizer::create_physical_optimizer_rule,
-        create_context_aware_optimizer_rule:
-            physical_optimizer::create_context_aware_optimizer_rule,
         create_query_planner: query_planner::create_query_planner,
         version: super::version,
     }
