@@ -164,7 +164,12 @@ impl PhysicalExpr for ScalarSubqueryExpr {
                 protobuf::PhysicalScalarSubqueryExprNode {
                     data_type: Some((&self.data_type).try_into()?),
                     nullable: self.nullable,
-                    index: self.index.as_usize() as u32,
+                    index: u32::try_from(self.index.as_usize()).map_err(|_| {
+                        internal_datafusion_err!(
+                            "scalar subquery index {} does not fit in u32",
+                            self.index.as_usize()
+                        )
+                    })?,
                 },
             )),
         }))
