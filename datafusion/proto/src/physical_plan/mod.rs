@@ -754,8 +754,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Projection(_) => {
                 ProjectionExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Filter(filter) => {
-                self.try_into_filter_physical_plan(filter, ctx, proto_converter)
+            PhysicalPlanType::Filter(_) => {
+                FilterExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::CsvScan(scan) => {
                 self.try_into_csv_scan_physical_plan(scan, ctx, proto_converter)
@@ -775,17 +775,15 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::ArrowScan(scan) => {
                 self.try_into_arrow_scan_physical_plan(scan, ctx, proto_converter)
             }
-            PhysicalPlanType::CoalesceBatches(coalesce_batches) => self
-                .try_into_coalesce_batches_physical_plan(
-                    coalesce_batches,
-                    ctx,
-                    proto_converter,
-                ),
+            #[expect(deprecated)]
+            PhysicalPlanType::CoalesceBatches(_) => {
+                CoalesceBatchesExec::try_from_proto(self.node(), &decode_ctx)
+            }
             PhysicalPlanType::Merge(merge) => {
                 self.try_into_merge_physical_plan(merge, ctx, proto_converter)
             }
-            PhysicalPlanType::Repartition(repart) => {
-                self.try_into_repartition_physical_plan(repart, ctx, proto_converter)
+            PhysicalPlanType::Repartition(_) => {
+                RepartitionExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::GlobalLimit(limit) => {
                 self.try_into_global_limit_physical_plan(limit, ctx, proto_converter)
@@ -799,8 +797,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Aggregate(hash_agg) => {
                 self.try_into_aggregate_physical_plan(hash_agg, ctx, proto_converter)
             }
-            PhysicalPlanType::HashJoin(hashjoin) => {
-                self.try_into_hash_join_physical_plan(hashjoin, ctx, proto_converter)
+            PhysicalPlanType::HashJoin(_) => {
+                HashJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::SymmetricHashJoin(sym_join) => self
                 .try_into_symmetric_hash_join_physical_plan(
@@ -808,23 +806,23 @@ pub trait PhysicalPlanNodeExt: Sized {
                     ctx,
                     proto_converter,
                 ),
-            PhysicalPlanType::Union(union) => {
-                self.try_into_union_physical_plan(union, ctx, proto_converter)
+            PhysicalPlanType::Union(_) => {
+                UnionExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Interleave(interleave) => {
-                self.try_into_interleave_physical_plan(interleave, ctx, proto_converter)
+            PhysicalPlanType::Interleave(_) => {
+                InterleaveExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::CrossJoin(crossjoin) => {
                 self.try_into_cross_join_physical_plan(crossjoin, ctx, proto_converter)
             }
-            PhysicalPlanType::Empty(empty) => {
-                self.try_into_empty_physical_plan(empty, ctx, proto_converter)
+            PhysicalPlanType::Empty(_) => {
+                EmptyExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::PlaceholderRow(placeholder) => {
                 self.try_into_placeholder_row_physical_plan(placeholder, ctx)
             }
-            PhysicalPlanType::Sort(sort) => {
-                self.try_into_sort_physical_plan(sort, ctx, proto_converter)
+            PhysicalPlanType::Sort(_) => {
+                SortExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::SortPreservingMerge(sort) => self
                 .try_into_sort_preserving_merge_physical_plan(sort, ctx, proto_converter),
@@ -890,12 +888,20 @@ pub trait PhysicalPlanNodeExt: Sized {
         // Self-serializing plans handle themselves via the `try_to_proto` hook
         // (#22419). `Ok(None)` means "not migrated" and falls through to the
         // central downcast chain below.
+        //
+        // The hook is a trait method dispatched on the concrete type, so — like
+        // the `downcast_ref::<T>()` arms below — it must first follow
+        // `downcast_delegate()` so a wrapper plan serializes as its delegate.
         let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
         };
         let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
-        if let Some(node) = plan.try_to_proto(&encode_ctx)? {
+        let mut hook_target = plan;
+        while let Some(delegate) = hook_target.downcast_delegate() {
+            hook_target = delegate;
+        }
+        if let Some(node) = hook_target.try_to_proto(&encode_ctx)? {
             return Ok(node);
         }
 
@@ -905,14 +911,6 @@ pub trait PhysicalPlanNodeExt: Sized {
 
         if let Some(exec) = plan.downcast_ref::<AnalyzeExec>() {
             return protobuf::PhysicalPlanNode::try_from_analyze_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<FilterExec>() {
-            return protobuf::PhysicalPlanNode::try_from_filter_exec(
                 exec,
                 codec,
                 proto_converter,
@@ -930,14 +928,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         if let Some(limit) = plan.downcast_ref::<LocalLimitExec>() {
             return protobuf::PhysicalPlanNode::try_from_local_limit_exec(
                 limit,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<HashJoinExec>() {
-            return protobuf::PhysicalPlanNode::try_from_hash_join_exec(
-                exec,
                 codec,
                 proto_converter,
             );
@@ -975,22 +965,9 @@ pub trait PhysicalPlanNodeExt: Sized {
             );
         }
 
-        if let Some(empty) = plan.downcast_ref::<EmptyExec>() {
-            return protobuf::PhysicalPlanNode::try_from_empty_exec(empty, codec);
-        }
-
         if let Some(empty) = plan.downcast_ref::<PlaceholderRowExec>() {
             return protobuf::PhysicalPlanNode::try_from_placeholder_row_exec(
                 empty, codec,
-            );
-        }
-
-        #[expect(deprecated)]
-        if let Some(coalesce_batches) = plan.downcast_ref::<CoalesceBatchesExec>() {
-            return protobuf::PhysicalPlanNode::try_from_coalesce_batches_exec(
-                coalesce_batches,
-                codec,
-                proto_converter,
             );
         }
 
@@ -1007,38 +984,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         if let Some(exec) = plan.downcast_ref::<CoalescePartitionsExec>() {
             return protobuf::PhysicalPlanNode::try_from_coalesce_partitions_exec(
                 exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<RepartitionExec>() {
-            return protobuf::PhysicalPlanNode::try_from_repartition_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<SortExec>() {
-            return protobuf::PhysicalPlanNode::try_from_sort_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(union) = plan.downcast_ref::<UnionExec>() {
-            return protobuf::PhysicalPlanNode::try_from_union_exec(
-                union,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(interleave) = plan.downcast_ref::<InterleaveExec>() {
-            return protobuf::PhysicalPlanNode::try_from_interleave_exec(
-                interleave,
                 codec,
                 proto_converter,
             );

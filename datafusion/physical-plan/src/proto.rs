@@ -215,6 +215,16 @@ impl<'a> ExecutionPlanDecodeCtx<'a> {
         self.decoder.decode_plan(node)
     }
 
+    /// Deserialize a slice of child plans (the repeated-`inputs` shape used by
+    /// `UnionExec`, `InterleaveExec`, …). Symmetric with
+    /// [`ExecutionPlanEncodeCtx::encode_children`].
+    pub fn decode_children<'b, I>(&self, nodes: I) -> Result<Vec<Arc<dyn ExecutionPlan>>>
+    where
+        I: IntoIterator<Item = &'b PhysicalPlanNode>,
+    {
+        nodes.into_iter().map(|n| self.decode_child(n)).collect()
+    }
+
     /// Deserialize a required child plan, producing a uniform "missing required
     /// field" error when the optional wire field is absent.
     pub fn decode_required_child(
