@@ -85,7 +85,11 @@ use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
 use datafusion_physical_plan::metrics::MetricCategory;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::proto::{
+    ExecutionPlanDecode, ExecutionPlanDecodeCtx, ExecutionPlanEncode,
+    ExecutionPlanEncodeCtx,
+};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -312,12 +316,20 @@ pub trait PhysicalPlanNodeExt: Sized {
                 self.node(),
             ))
         })?;
+        // Decode context for plans migrated to the `try_from_proto` pattern
+        // (#22419). Arms for migrated plans are one-liners delegating to the
+        // plan's own crate; un-migrated arms keep their inline bodies.
+        let plan_decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&plan_decoder);
         match plan {
             PhysicalPlanType::Explain(explain) => {
                 self.try_into_explain_physical_plan(explain, ctx, proto_converter)
             }
-            PhysicalPlanType::Projection(projection) => {
-                self.try_into_projection_physical_plan(projection, ctx, proto_converter)
+            PhysicalPlanType::Projection(_) => {
+                ProjectionExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Filter(filter) => {
                 self.try_into_filter_physical_plan(filter, ctx, proto_converter)
@@ -444,16 +456,20 @@ pub trait PhysicalPlanNodeExt: Sized {
         let plan_clone = Arc::clone(&plan);
         let plan = plan.as_ref();
 
-        if let Some(exec) = plan.downcast_ref::<ExplainExec>() {
-            return protobuf::PhysicalPlanNode::try_from_explain_exec(exec, codec);
+        // Self-serializing plans handle themselves via the `try_to_proto` hook
+        // (#22419). `Ok(None)` means "not migrated" and falls through to the
+        // central downcast chain below.
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        if let Some(node) = plan.try_to_proto(&encode_ctx)? {
+            return Ok(node);
         }
 
-        if let Some(exec) = plan.downcast_ref::<ProjectionExec>() {
-            return protobuf::PhysicalPlanNode::try_from_projection_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
+        if let Some(exec) = plan.downcast_ref::<ExplainExec>() {
+            return protobuf::PhysicalPlanNode::try_from_explain_exec(exec, codec);
         }
 
         if let Some(exec) = plan.downcast_ref::<AnalyzeExec>() {
@@ -729,36 +745,6 @@ pub trait PhysicalPlanNodeExt: Sized {
                 .collect(),
             explain.verbose,
         )))
-    }
-
-    fn try_into_projection_physical_plan(
-        &self,
-        projection: &protobuf::ProjectionExecNode,
-        ctx: &PhysicalPlanDecodeContext<'_>,
-        proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&projection.input, ctx, proto_converter)?;
-        let exprs = projection
-            .expr
-            .iter()
-            .zip(projection.expr_name.iter())
-            .map(|(expr, name)| {
-                Ok((
-                    proto_converter.proto_to_physical_expr(
-                        expr,
-                        input.schema().as_ref(),
-                        ctx,
-                    )?,
-                    name.to_string(),
-                ))
-            })
-            .collect::<Result<Vec<(Arc<dyn PhysicalExpr>, String)>>>()?;
-        let proj_exprs: Vec<ProjectionExpr> = exprs
-            .into_iter()
-            .map(|(expr, alias)| ProjectionExpr { expr, alias })
-            .collect();
-        Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
     }
 
     fn try_into_filter_physical_plan(
@@ -2427,39 +2413,6 @@ pub trait PhysicalPlanNodeExt: Sized {
                     verbose: exec.verbose(),
                 },
             )),
-        })
-    }
-
-    fn try_from_projection_exec(
-        exec: &ProjectionExec,
-        codec: &dyn PhysicalExtensionCodec,
-        proto_converter: &dyn PhysicalProtoConverterExtension,
-    ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
-            codec,
-            proto_converter,
-        )?;
-        let expr = exec
-            .expr()
-            .iter()
-            .map(|proj_expr| {
-                proto_converter.physical_expr_to_proto(&proj_expr.expr, codec)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let expr_name = exec
-            .expr()
-            .iter()
-            .map(|proj_expr| proj_expr.alias.clone())
-            .collect();
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Projection(Box::new(
-                protobuf::ProjectionExecNode {
-                    input: Some(Box::new(input)),
-                    expr,
-                    expr_name,
-                },
-            ))),
         })
     }
 
@@ -4385,5 +4338,62 @@ fn into_physical_plan(
         proto_converter.proto_to_execution_plan(field, ctx)
     } else {
         Err(proto_error("Missing required field in protobuf"))
+    }
+}
+
+/// Adapter backing [`ExecutionPlanEncodeCtx`] for plans migrated to the
+/// `try_to_proto` hook (#22419). Routes child-plan and child-expr encoding back
+/// through the central converter so nested plans honor their own hooks.
+struct ConverterPlanEncoder<'a> {
+    codec: &'a dyn PhysicalExtensionCodec,
+    proto_converter: &'a dyn PhysicalProtoConverterExtension,
+}
+
+impl ExecutionPlanEncode for ConverterPlanEncoder<'_> {
+    fn encode_plan(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+    ) -> Result<protobuf::PhysicalPlanNode> {
+        self.proto_converter
+            .execution_plan_to_proto(plan, self.codec)
+    }
+
+    fn encode_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        self.proto_converter
+            .physical_expr_to_proto(expr, self.codec)
+    }
+}
+
+/// Adapter backing [`ExecutionPlanDecodeCtx`] for plans migrated to the
+/// `try_from_proto` pattern (#22419). Routes child-plan and child-expr decoding
+/// back through the central converter, and exposes the session task context
+/// (never the extension codec).
+struct ConverterPlanDecoder<'a, 'ctx> {
+    ctx: &'a PhysicalPlanDecodeContext<'ctx>,
+    proto_converter: &'a dyn PhysicalProtoConverterExtension,
+}
+
+impl ExecutionPlanDecode for ConverterPlanDecoder<'_, '_> {
+    fn decode_plan(
+        &self,
+        node: &protobuf::PhysicalPlanNode,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.proto_converter.proto_to_execution_plan(node, self.ctx)
+    }
+
+    fn decode_expr(
+        &self,
+        node: &protobuf::PhysicalExprNode,
+        input_schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        self.proto_converter
+            .proto_to_physical_expr(node, input_schema, self.ctx)
+    }
+
+    fn task_ctx(&self) -> &TaskContext {
+        self.ctx.task_ctx()
     }
 }
