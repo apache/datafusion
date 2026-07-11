@@ -130,7 +130,7 @@ impl PhysicalExpr for SqlSimilarToPattern {
     }
 }
 
-pub fn translate_scalar(scalar: &ScalarValue) -> Result<ScalarValue> {
+pub(crate) fn translate_scalar(scalar: &ScalarValue) -> Result<ScalarValue> {
     match scalar {
         ScalarValue::Utf8(Some(s)) => {
             Ok(ScalarValue::Utf8(Some(sql_similar_to_regex(s))))
