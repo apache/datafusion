@@ -23,9 +23,9 @@ use arrow::datatypes::DataType::{
     Int64, UInt8, UInt16, UInt32, UInt64,
 };
 use arrow::datatypes::{
-    ArrowNativeTypeOp, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
-    Decimal256Type, DecimalType, Float32Type, Float64Type, Int8Type, Int16Type,
-    Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    ArrowNativeTypeOp, ArrowPrimitiveType, DataType, Decimal32Type, Decimal64Type,
+    Decimal128Type, Decimal256Type, DecimalType, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::datatypes::{Field, FieldRef};
 use arrow::error::ArrowError;
@@ -495,22 +495,8 @@ fn round_columnar(
                 )?,
             }
         }
-        (Float64, _) => {
-            let result = calculate_binary_math::<Float64Type, Int32Type, Float64Type, _>(
-                value_array.as_ref(),
-                decimal_places,
-                round_float::<f64>,
-            )?;
-            result as _
-        }
-        (Float32, _) => {
-            let result = calculate_binary_math::<Float32Type, Int32Type, Float32Type, _>(
-                value_array.as_ref(),
-                decimal_places,
-                round_float::<f32>,
-            )?;
-            result as _
-        }
+        (Float64, _) => round_float_column::<Float64Type>(&value_array, decimal_places)?,
+        (Float32, _) => round_float_column::<Float32Type>(&value_array, decimal_places)?,
         (Decimal32(input_precision, scale), Decimal32(precision, new_scale)) => {
             // reduce scale to reclaim integer precision
             let result = calculate_binary_decimal_math_cast::<
@@ -859,15 +845,84 @@ fn round_integer_array(
     }
 }
 
+/// Rounds a float array to `decimal_places`, taking the hoisted-factor fast
+/// path when it applies and falling back to the shared binary-math kernel
+/// otherwise.
+fn round_float_column<PT>(
+    value_array: &ArrayRef,
+    decimal_places: &ColumnarValue,
+) -> Result<ArrayRef>
+where
+    PT: ArrowPrimitiveType,
+    PT::Native: num_traits::Float,
+{
+    if let Some(arr) = round_float_fast::<PT>(value_array, decimal_places)? {
+        return Ok(arr);
+    }
+    let result = calculate_binary_math::<PT, Int32Type, PT, _>(
+        value_array.as_ref(),
+        decimal_places,
+        round_float::<PT::Native>,
+    )?;
+    Ok(result as _)
+}
+
+/// Fast path for rounding a float array to a scalar number of `decimal_places`.
+///
+/// The shared `calculate_binary_math` kernel routes through `try_unary` and
+/// re-evaluates `round_float` (including `10f64.powi(decimal_places)` and a
+/// `Result` check) for every element. When `decimal_places` is a non-null
+/// scalar and the value column has no nulls, we can hoist the scaling factor
+/// out of the loop and use the infallible `unary` kernel instead, which the
+/// compiler can autovectorize. Requiring no null slots keeps the output
+/// bit-identical to the fallible kernel: `unary` writes a computed value into
+/// every slot while `try_unary` leaves null slots zeroed, so the two only agree
+/// when there are no null slots. Returns `Ok(None)` when the fast path does not
+/// apply, so the caller falls back to the shared kernel.
+fn round_float_fast<PT>(
+    value_array: &ArrayRef,
+    decimal_places: &ColumnarValue,
+) -> Result<Option<ArrayRef>>
+where
+    PT: ArrowPrimitiveType,
+    PT::Native: num_traits::Float,
+{
+    // Bring `Float` into scope so `.round()` resolves on the `PT::Native`
+    // projection below.
+    use num_traits::Float;
+
+    let ColumnarValue::Scalar(ScalarValue::Int32(Some(decimal_places))) = decimal_places
+    else {
+        return Ok(None);
+    };
+
+    let prim = value_array.as_primitive::<PT>();
+    if prim.null_count() != 0 {
+        return Ok(None);
+    }
+
+    // Compute the scaling factor once, via the same helper `round_float` uses,
+    // so the arithmetic (and therefore every rounded bit) is identical.
+    let factor = round_factor::<PT::Native>(*decimal_places)?;
+
+    let result = prim.unary::<_, PT>(|value| (value * factor).round() / factor);
+    Ok(Some(Arc::new(result) as ArrayRef))
+}
+
+/// Computes the power-of-ten scaling factor used to round to `decimal_places`.
+fn round_factor<T: num_traits::Float>(decimal_places: i32) -> Result<T, ArrowError> {
+    T::from(10_f64.powi(decimal_places)).ok_or_else(|| {
+        ArrowError::ComputeError(format!(
+            "Invalid value for decimal places: {decimal_places}"
+        ))
+    })
+}
+
 fn round_float<T>(value: T, decimal_places: i32) -> Result<T, ArrowError>
 where
     T: num_traits::Float,
 {
-    let factor = T::from(10_f64.powi(decimal_places)).ok_or_else(|| {
-        ArrowError::ComputeError(format!(
-            "Invalid value for decimal places: {decimal_places}"
-        ))
-    })?;
+    let factor = round_factor::<T>(decimal_places)?;
     Ok((value * factor).round() / factor)
 }
 
