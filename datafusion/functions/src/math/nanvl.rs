@@ -174,8 +174,7 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// This produces output identical to collecting an iterator of `Option`s but
 /// splits out a null-free fast path that iterates the raw value slices,
 /// skipping per-element validity checks and `Option` handling. The null-aware
-/// path builds its null buffer lazily via [`NullBufferBuilder`] exactly as the
-/// `FromIterator` implementation does, so the result is byte-for-byte the same.
+/// path builds its null buffer lazily via [`NullBufferBuilder`].
 fn nanvl_impl<T>(x: &PrimitiveArray<T>, y: &PrimitiveArray<T>) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
