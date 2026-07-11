@@ -140,7 +140,9 @@ pub(crate) fn lcm_signed_int(x: i64, y: i64) -> Result<i64, ArrowError> {
     let a = x.unsigned_abs();
     let b = y.unsigned_abs();
 
-    let gcd = gcd_helper::<u64>(a, b)?;
+    // Use the binary GCD, matching `gcd_signed_int` and avoiding the
+    // per-iteration division of the Euclidean `gcd_helper`.
+    let gcd = unsigned_gcd(a, b);
     // gcd is not zero since both a and b are not zero, so the division is safe.
     (a / gcd)
         .checked_mul(b)
