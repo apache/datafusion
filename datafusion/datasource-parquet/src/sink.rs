@@ -32,7 +32,7 @@ use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
-use datafusion_datasource::sink::DataSink;
+use datafusion_datasource::sink::{DataSink, FileWriteMetadata};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::{
     ObjectWriterBuilder, SharedBuffer, get_writer_schema,
@@ -411,6 +411,31 @@ impl DataSink for ParquetSink {
     ) -> Result<u64> {
         FileSink::write_all(self, data, context).await
     }
+
+    fn file_metadata(&self) -> Vec<FileWriteMetadata> {
+        let written = self.written.lock();
+        written
+            .iter()
+            .map(|(path, parquet_meta)| {
+                let row_count = parquet_meta.file_metadata().num_rows() as u64;
+                let byte_size: u64 = parquet_meta
+                    .row_groups()
+                    .iter()
+                    .map(|rg| rg.compressed_size() as u64)
+                    .sum();
+
+                FileWriteMetadata {
+                    path: path.to_string(),
+                    row_count,
+                    byte_size,
+                    // Full Parquet metadata is accessible via ParquetSink::written()
+                    // for Rust consumers. Thrift serialization for FFI consumers can
+                    // be added when a concrete use case (e.g. Python via PyO3) needs it.
+                    format_metadata: None,
+                }
+            })
+            .collect()
+    }
 }
 
 /// Consumes a stream of [ArrowLeafColumn] via a channel and serializes them using an [ArrowColumnWriter]
@@ -751,4 +776,279 @@ async fn output_single_parquet_file_parallelized(
         .await
         .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
     Ok(parquet_meta_data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{ArrayRef, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::config::TableParquetOptions;
+    use datafusion_datasource::PartitionedFile;
+    use datafusion_datasource::file_groups::FileGroup;
+    use datafusion_datasource::file_sink_config::{FileOutputMode, FileSinkConfig};
+    use datafusion_datasource::sink::{DataSink, DataSinkExec};
+    use datafusion_datasource::url::ListingTableUrl;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::object_store::ObjectStoreUrl;
+    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_expr::dml::InsertOp;
+    use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+    use object_store::local::LocalFileSystem;
+
+    fn build_test_ctx(store_url: &ObjectStoreUrl) -> Arc<TaskContext> {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let local = Arc::new(
+            LocalFileSystem::new_with_prefix(&tmp_dir)
+                .expect("should create object store"),
+        );
+
+        let session = SessionConfig::default();
+        let runtime = RuntimeEnv::default();
+        runtime
+            .object_store_registry
+            .register_store(store_url.as_ref(), local);
+
+        Arc::new(
+            TaskContext::default()
+                .with_session_config(session)
+                .with_runtime(Arc::new(runtime)),
+        )
+    }
+
+    fn create_test_sink() -> (Arc<ParquetSink>, SchemaRef, ObjectStoreUrl) {
+        let field_a = Field::new("a", DataType::Utf8, false);
+        let field_b = Field::new("b", DataType::Utf8, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+        let object_store_url = ObjectStoreUrl::local_filesystem();
+
+        let file_sink_config = FileSinkConfig {
+            original_url: String::default(),
+            object_store_url: object_store_url.clone(),
+            file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
+            table_paths: vec![ListingTableUrl::parse("file:///tmp/test/").unwrap()],
+            output_schema: Arc::clone(&schema),
+            table_partition_cols: vec![],
+            insert_op: InsertOp::Overwrite,
+            keep_partition_by_columns: false,
+            file_extension: "parquet".into(),
+            file_output_mode: FileOutputMode::Automatic,
+        };
+
+        let parquet_sink = Arc::new(ParquetSink::new(
+            file_sink_config,
+            TableParquetOptions::default(),
+        ));
+
+        (parquet_sink, schema, object_store_url)
+    }
+
+    fn make_test_batch(schema: &SchemaRef) -> RecordBatch {
+        let col_a: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
+        let col_b: ArrayRef = Arc::new(StringArray::from(vec!["one", "two", "three"]));
+        RecordBatch::try_new(Arc::clone(schema), vec![col_a, col_b]).unwrap()
+    }
+
+    #[test]
+    fn file_metadata_empty_before_write() {
+        let (sink, _schema, _url) = create_test_sink();
+        assert!(
+            sink.file_metadata().is_empty(),
+            "file_metadata should be empty before any write"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_metadata_populated_after_write() {
+        let (sink, schema, object_store_url) = create_test_sink();
+        let ctx = build_test_ctx(&object_store_url);
+        let batch = make_test_batch(&schema);
+
+        let data: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::iter(vec![Ok(batch)]),
+        ));
+
+        let count = DataSink::write_all(sink.as_ref(), data, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(count, 3, "should have written 3 rows");
+
+        let metadata = sink.file_metadata();
+        assert_eq!(metadata.len(), 1, "should have one file metadata entry");
+        assert_eq!(metadata[0].row_count, 3);
+        assert!(metadata[0].byte_size > 0, "byte_size should be non-zero");
+        assert!(!metadata[0].path.is_empty(), "path should be non-empty");
+        assert!(metadata[0].format_metadata.is_none());
+    }
+
+    #[tokio::test]
+    async fn file_metadata_count_equals_write_all_count() {
+        let (sink, schema, object_store_url) = create_test_sink();
+        let ctx = build_test_ctx(&object_store_url);
+        let batch = make_test_batch(&schema);
+
+        let data: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::iter(vec![Ok(batch)]),
+        ));
+
+        let count = DataSink::write_all(sink.as_ref(), data, &ctx)
+            .await
+            .unwrap();
+
+        let sum_rows: u64 = sink.file_metadata().iter().map(|f| f.row_count).sum();
+        assert_eq!(
+            count, sum_rows,
+            "write_all count must equal sum of per-file row_counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_metadata_consistent_with_written() {
+        let (sink, schema, object_store_url) = create_test_sink();
+        let ctx = build_test_ctx(&object_store_url);
+        let batch = make_test_batch(&schema);
+
+        let data: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::iter(vec![Ok(batch)]),
+        ));
+
+        DataSink::write_all(sink.as_ref(), data, &ctx)
+            .await
+            .unwrap();
+
+        let file_meta = sink.file_metadata();
+        let written = sink.written();
+
+        assert_eq!(
+            file_meta.len(),
+            written.len(),
+            "file_metadata and written() should have same number of entries"
+        );
+
+        for fm in &file_meta {
+            let path = Path::from(fm.path.as_str());
+            let parquet_meta = written
+                .get(&path)
+                .expect("file_metadata path should exist in written()");
+            assert_eq!(fm.row_count, parquet_meta.file_metadata().num_rows() as u64);
+
+            let expected_bytes: u64 = parquet_meta
+                .row_groups()
+                .iter()
+                .map(|rg| rg.compressed_size() as u64)
+                .sum();
+            assert_eq!(fm.byte_size, expected_bytes);
+        }
+    }
+
+    #[tokio::test]
+    async fn file_metadata_is_idempotent() {
+        let (sink, schema, object_store_url) = create_test_sink();
+        let ctx = build_test_ctx(&object_store_url);
+        let batch = make_test_batch(&schema);
+
+        let data: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::iter(vec![Ok(batch)]),
+        ));
+
+        DataSink::write_all(sink.as_ref(), data, &ctx)
+            .await
+            .unwrap();
+
+        let first = sink.file_metadata();
+        let second = sink.file_metadata();
+        assert_eq!(first, second);
+    }
+
+    #[tokio::test]
+    async fn partitioned_write_produces_multiple_metadata_entries() {
+        let field_a = Field::new("a", DataType::Utf8, false);
+        let field_b = Field::new("b", DataType::Utf8, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+        let object_store_url = ObjectStoreUrl::local_filesystem();
+
+        let file_sink_config = FileSinkConfig {
+            original_url: String::default(),
+            object_store_url: object_store_url.clone(),
+            file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
+            table_paths: vec![
+                ListingTableUrl::parse("file:///tmp/partitioned/").unwrap(),
+            ],
+            output_schema: Arc::clone(&schema),
+            table_partition_cols: vec![("a".to_string(), DataType::Utf8)],
+            insert_op: InsertOp::Overwrite,
+            keep_partition_by_columns: false,
+            file_extension: "parquet".into(),
+            file_output_mode: FileOutputMode::Automatic,
+        };
+
+        let sink = Arc::new(ParquetSink::new(
+            file_sink_config,
+            TableParquetOptions::default(),
+        ));
+
+        let col_a: ArrayRef = Arc::new(StringArray::from(vec!["x", "y", "x"]));
+        let col_b: ArrayRef = Arc::new(StringArray::from(vec!["one", "two", "three"]));
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![col_a, col_b]).unwrap();
+
+        let ctx = build_test_ctx(&object_store_url);
+        let data: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::iter(vec![Ok(batch)]),
+        ));
+
+        let count = DataSink::write_all(sink.as_ref(), data, &ctx)
+            .await
+            .unwrap();
+
+        let metadata = sink.file_metadata();
+        assert_eq!(
+            metadata.len(),
+            2,
+            "partitioned write with 2 partition values should produce 2 files"
+        );
+
+        assert_eq!(count, 3);
+        let sum_rows: u64 = metadata.iter().map(|f| f.row_count).sum();
+        assert_eq!(sum_rows, 3);
+    }
+
+    /// Verifies that `DataSinkExec::file_metadata()` returns the correct
+    /// metadata when the underlying `ParquetSink` has written files.
+    /// This tests the `Arc<dyn DataSink>` dispatch path that real consumers use.
+    #[tokio::test]
+    async fn data_sink_exec_e2e_file_metadata_after_execute() {
+        let (sink, schema, object_store_url) = create_test_sink();
+        let ctx = build_test_ctx(&object_store_url);
+        let batch = make_test_batch(&schema);
+
+        let data: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::iter(vec![Ok(batch)]),
+        ));
+
+        // Write through the DataSink trait (same call DataSinkExec::execute makes)
+        let count = DataSink::write_all(sink.as_ref(), data, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(count, 3);
+
+        // Wrap in DataSinkExec and verify file_metadata is accessible
+        // through the exec's convenience accessor (the Arc<dyn DataSink> path)
+        let input: Arc<dyn datafusion_physical_plan::ExecutionPlan> = Arc::new(
+            datafusion_physical_plan::empty::EmptyExec::new(Arc::clone(&schema)),
+        );
+        let exec = DataSinkExec::new(input, sink, None);
+
+        let metadata = exec.file_metadata();
+        assert_eq!(metadata.len(), 1, "should have one file after write");
+        assert_eq!(metadata[0].row_count, 3);
+        assert!(metadata[0].byte_size > 0);
+        assert!(!metadata[0].path.is_empty());
+    }
 }
