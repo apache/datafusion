@@ -39,9 +39,12 @@ use crate::{
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
+use datafusion_functions::core::input_file_name::InputFileNameFunc;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
-use datafusion_physical_expr_adapter::rewrite::rewrite_input_file_name_in_projection;
+use datafusion_physical_expr_adapter::rewrite::{
+    expr_references_scalar_udf, rewrite_input_file_name_in_projection,
+};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
@@ -954,7 +957,15 @@ impl ParquetMorselizer {
         let mut projection = self.projection.clone();
         let mut predicate = self.predicate.clone();
         let has_literal_columns = !literal_columns.is_empty();
-        let pruning_setup_reusable = !has_literal_columns;
+        let has_dynamic_predicate = predicate.as_ref().is_some_and(|predicate| {
+            DynamicFilterTracking::classify(predicate).contains_dynamic_filter()
+        });
+        let has_input_file_name_projection = projection
+            .iter()
+            .any(|expr| expr_references_scalar_udf::<InputFileNameFunc>(&expr.expr));
+        let pruning_setup_reusable = !has_literal_columns
+            && !has_dynamic_predicate
+            && !has_input_file_name_projection;
         if has_literal_columns {
             projection = projection.try_map_exprs(|expr| {
                 replace_columns_with_literals(Arc::clone(&expr), &literal_columns)
@@ -1909,8 +1920,8 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
-        ColumnStatistics, Result, ScalarValue, Statistics, assert_contains, internal_err,
-        record_batch, stats::Precision,
+        ColumnStatistics, Result, ScalarValue, Statistics, assert_contains,
+        config::ConfigOptions, internal_err, record_batch, stats::Precision,
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema, TableSchemaBuilder};
@@ -1918,12 +1929,12 @@ mod test {
         CachedFileMetadataEntry, FileMetadataCache,
     };
     use datafusion_execution::cache::default_cache::DefaultCache;
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{ScalarUDF, col, lit};
     use datafusion_physical_expr::{
-        PhysicalExpr,
+        PhysicalExpr, ScalarFunctionExpr,
         expressions::{Column, DynamicFilterPhysicalExpr, Literal},
         planner::logical2physical,
-        projection::ProjectionExprs,
+        projection::{ProjectionExpr, ProjectionExprs},
     };
     use datafusion_physical_expr_adapter::{
         DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
@@ -2303,6 +2314,16 @@ mod test {
         }
     }
 
+    fn input_file_name_expr() -> Arc<dyn PhysicalExpr> {
+        Arc::new(ScalarFunctionExpr::new(
+            "input_file_name",
+            Arc::new(ScalarUDF::from(InputFileNameFunc::new())),
+            vec![],
+            Arc::new(Field::new("input_file_name", DataType::Utf8, true)),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
     #[derive(Debug)]
     struct CountingPhysicalExprAdapterFactory {
         create_count: Arc<AtomicUsize>,
@@ -2587,6 +2608,93 @@ mod test {
             2,
             "non-cache-safe adapters should not reuse pruning setup"
         );
+    }
+
+    #[tokio::test]
+    async fn test_pruning_setup_cache_skips_input_file_name_projection() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap();
+        let data_size1 = write_parquet(Arc::clone(&store), "file1.parquet", batch1).await;
+        let data_size2 = write_parquet(Arc::clone(&store), "file2.parquet", batch2).await;
+
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(input_file_name_expr(), "file"),
+        ]);
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(table_schema)
+            .with_projection(projection)
+            .build();
+
+        let files = [
+            PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
+            PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
+        ];
+        for file in files {
+            let stream = open_file(&morselizer, file).await.unwrap();
+            let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+            assert_eq!(num_batches, 1);
+            assert_eq!(num_rows, 3);
+        }
+
+        assert_eq!(
+            morselizer.pruning_setup_cache.entries().unwrap().len(),
+            0,
+            "input_file_name() projections are per-file and should not populate the reusable setup cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pruning_setup_cache_does_not_reuse_dynamic_filter_snapshot() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(10), Some(11), Some(12)])).unwrap();
+        let data_size1 = write_parquet(Arc::clone(&store), "file1.parquet", batch1).await;
+        let data_size2 = write_parquet(Arc::clone(&store), "file2.parquet", batch2).await;
+
+        let initial = logical2physical(&col("a").lt(lit(5i32)), &schema);
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            initial.children().into_iter().map(Arc::clone).collect(),
+            initial,
+        ));
+        let predicate = Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>;
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_row_group_stats_pruning(true)
+            .build();
+
+        let first_file =
+            PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap());
+        let values =
+            collect_int32_values(open_file(&morselizer, first_file).await.unwrap()).await;
+        assert_eq!(values, vec![1, 2, 3]);
+
+        dynamic_filter
+            .update(logical2physical(&col("a").lt(lit(100i32)), &schema))
+            .unwrap();
+
+        let second_file =
+            PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap());
+        let values =
+            collect_int32_values(open_file(&morselizer, second_file).await.unwrap())
+                .await;
+        assert_eq!(values, vec![10, 11, 12]);
     }
 
     #[tokio::test]
