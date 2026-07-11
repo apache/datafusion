@@ -392,6 +392,67 @@ impl FileSource for ArrowSource {
     fn projection(&self) -> Option<&ProjectionExprs> {
         Some(&self.projection.source)
     }
+
+    /// Emit an `ArrowScan` node wrapping the shared base config. Arrow is
+    /// base_conf-only (no format-specific fields). Kept byte-identical to the
+    /// former `try_from_data_source_exec` ArrowScan branch in `datafusion-proto`.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        base: &FileScanConfig,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::ArrowScan(
+                protobuf::ArrowScanExecNode {
+                    base_conf: Some(base.to_proto_conf(ctx)?),
+                },
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ArrowSource {
+    /// Reconstruct a `DataSourceExec` (wrapping a `FileScanConfig` over an
+    /// `ArrowSource`) from an `ArrowScan` [`PhysicalPlanNode`].
+    ///
+    /// The inverse of [`FileSource::try_to_proto`] on `ArrowSource`; kept
+    /// byte-compatible with the former `try_into_arrow_scan_physical_plan` in
+    /// `datafusion-proto`.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
+        use datafusion_datasource::file_scan_config::FileScanConfig;
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_proto_models::protobuf;
+
+        let scan = match &node.physical_plan_type {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::ArrowScan(scan)) => scan,
+            _ => {
+                return datafusion_common::internal_err!(
+                    "PhysicalPlanNode is not an ArrowScan"
+                );
+            }
+        };
+
+        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "base_conf in ArrowScanExecNode is missing."
+            )
+        })?;
+
+        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
+        let source = Arc::new(ArrowSource::new_file_source(table_schema));
+        let scan_conf = FileScanConfig::from_proto_conf(base_conf, ctx, source)?;
+        Ok(DataSourceExec::from_data_source(scan_conf))
+    }
 }
 
 /// `FileOpener` wrapper for both Arrow IPC file and stream formats

@@ -31,10 +31,8 @@ use datafusion_common::{
     DataFusionError, JoinType, NullEquality, Result, internal_datafusion_err,
     internal_err, not_impl_err,
 };
-#[cfg(feature = "parquet")]
-use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::{DataSource, DataSourceExec};
 use datafusion_datasource_arrow::source::ArrowSource;
@@ -112,7 +110,7 @@ use crate::physical_plan::from_proto::{
     parse_protobuf_file_scan_config, parse_record_batches, parse_table_schema_from_proto,
 };
 use crate::physical_plan::to_proto::{
-    serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
+    serialize_maybe_filter, serialize_physical_aggr_expr,
     serialize_physical_expr_with_converter, serialize_physical_sort_exprs,
     serialize_physical_window_expr, serialize_record_batches,
 };
@@ -760,20 +758,34 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::CsvScan(_) => {
                 CsvSource::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::JsonScan(scan) => {
-                self.try_into_json_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::JsonScan(_) => {
+                JsonSource::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::ParquetScan(scan) => {
-                self.try_into_parquet_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::ParquetScan(_) => {
+                #[cfg(feature = "parquet")]
+                {
+                    ParquetSource::try_from_proto(self.node(), &decode_ctx)
+                }
+                #[cfg(not(feature = "parquet"))]
+                panic!(
+                    "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
+                )
             }
-            PhysicalPlanType::AvroScan(scan) => {
-                self.try_into_avro_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::AvroScan(_) => {
+                #[cfg(feature = "avro")]
+                {
+                    AvroSource::try_from_proto(self.node(), &decode_ctx)
+                }
+                #[cfg(not(feature = "avro"))]
+                panic!(
+                    "Unable to process a Avro PhysicalPlan when `avro` feature is not enabled"
+                )
             }
             PhysicalPlanType::MemoryScan(scan) => {
                 self.try_into_memory_scan_physical_plan(scan, ctx, proto_converter)
             }
-            PhysicalPlanType::ArrowScan(scan) => {
-                self.try_into_arrow_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::ArrowScan(_) => {
+                ArrowSource::try_from_proto(self.node(), &decode_ctx)
             }
             #[expect(deprecated)]
             PhysicalPlanType::CoalesceBatches(_) => {
@@ -3348,83 +3360,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Option<protobuf::PhysicalPlanNode>> {
         let data_source = data_source_exec.data_source();
-        // CsvSource serializes itself via the `try_to_proto` hook (#22419);
-        // the old inline branch is deleted to prove the hook is reached.
-
-        if let Some(scan_conf) = data_source.downcast_ref::<FileScanConfig>() {
-            let source = scan_conf.file_source();
-            if let Some(_json_source) = source.downcast_ref::<JsonSource>() {
-                return Ok(Some(protobuf::PhysicalPlanNode {
-                    physical_plan_type: Some(PhysicalPlanType::JsonScan(
-                        protobuf::JsonScanExecNode {
-                            base_conf: Some(serialize_file_scan_config(
-                                scan_conf,
-                                codec,
-                                proto_converter,
-                            )?),
-                        },
-                    )),
-                }));
-            }
-        }
-
-        if let Some(scan_conf) = data_source.downcast_ref::<FileScanConfig>() {
-            let source = scan_conf.file_source();
-            if let Some(_arrow_source) = source.downcast_ref::<ArrowSource>() {
-                return Ok(Some(protobuf::PhysicalPlanNode {
-                    physical_plan_type: Some(PhysicalPlanType::ArrowScan(
-                        protobuf::ArrowScanExecNode {
-                            base_conf: Some(serialize_file_scan_config(
-                                scan_conf,
-                                codec,
-                                proto_converter,
-                            )?),
-                        },
-                    )),
-                }));
-            }
-        }
-
-        #[cfg(feature = "parquet")]
-        if let Some((maybe_parquet, conf)) =
-            data_source_exec.downcast_to_file_source::<ParquetSource>()
-        {
-            let predicate = conf
-                .filter()
-                .map(|pred| proto_converter.physical_expr_to_proto(&pred, codec))
-                .transpose()?;
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::ParquetScan(
-                    protobuf::ParquetScanExecNode {
-                        base_conf: Some(serialize_file_scan_config(
-                            maybe_parquet,
-                            codec,
-                            proto_converter,
-                        )?),
-                        predicate,
-                        parquet_options: Some(conf.table_parquet_options().try_into()?),
-                    },
-                )),
-            }));
-        }
-
-        #[cfg(feature = "avro")]
-        if let Some(maybe_avro) = data_source.downcast_ref::<FileScanConfig>() {
-            let source = maybe_avro.file_source();
-            if source.downcast_ref::<AvroSource>().is_some() {
-                return Ok(Some(protobuf::PhysicalPlanNode {
-                    physical_plan_type: Some(PhysicalPlanType::AvroScan(
-                        protobuf::AvroScanExecNode {
-                            base_conf: Some(serialize_file_scan_config(
-                                maybe_avro,
-                                codec,
-                                proto_converter,
-                            )?),
-                        },
-                    )),
-                }));
-            }
-        }
+        // Csv/Json/Arrow/Avro/Parquet file sources serialize themselves via the
+        // `FileSource::try_to_proto` hook (#22419); their inline branches are
+        // deleted to prove the hook is reached. Only MemorySourceConfig (not a
+        // FileSource) remains here.
 
         if let Some(source_conf) = data_source.downcast_ref::<MemorySourceConfig>() {
             let proto_partitions = source_conf
