@@ -791,8 +791,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::LocalLimit(_) => {
                 LocalLimitExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Window(window_agg) => {
-                self.try_into_window_physical_plan(window_agg, ctx, proto_converter)
+            PhysicalPlanType::Window(_) => {
+                WindowAggExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Aggregate(_) => {
                 AggregateExec::try_from_proto(self.node(), &decode_ctx)
@@ -914,22 +914,6 @@ pub trait PhysicalPlanNodeExt: Sized {
 
         if let Some(exec) = plan.downcast_ref::<SortPreservingMergeExec>() {
             return protobuf::PhysicalPlanNode::try_from_sort_preserving_merge_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
-            return protobuf::PhysicalPlanNode::try_from_window_agg_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<BoundedWindowAggExec>() {
-            return protobuf::PhysicalPlanNode::try_from_bounded_window_agg_exec(
                 exec,
                 codec,
                 proto_converter,
