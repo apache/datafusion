@@ -1693,23 +1693,6 @@ mod tests {
     }
 
     #[test]
-    fn test_first_group_acc_merge_rejects_null_filter_with_true_value_bit() -> Result<()>
-    {
-        let mut group_acc = new_int64_first_last_group_acc(true)?;
-
-        let states: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![10, 20])),
-            Arc::new(Int64Array::from(vec![1, 2])),
-            Arc::new(BooleanArray::from(vec![true, true])),
-        ];
-        let filter = nullable_bool_filter(vec![true, true], vec![false, true]);
-
-        group_acc.merge_batch(&states, &[0, 0], Some(&filter), 1)?;
-
-        assert_group_acc_int64_result(&mut group_acc, Int64Array::from(vec![Some(20)]))
-    }
-
-    #[test]
     fn test_group_acc_size_of_ordering() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, true),

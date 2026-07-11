@@ -223,3 +223,43 @@ pub fn set_nulls_dyn(input: &dyn Array, nulls: Option<NullBuffer>) -> Result<Arr
 
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_filter_to_validity_rejects_null_filter_with_true_value_bit() {
+        let filter = BooleanArray::new(
+            BooleanBuffer::from(vec![true, true, false, false]),
+            Some(NullBuffer::from(vec![true, false, true, false])),
+        );
+
+        let validity = filter_to_validity(&filter);
+
+        assert_eq!(
+            validity.iter().collect::<Vec<_>>(),
+            vec![true, false, false, false]
+        );
+    }
+
+    #[test]
+    fn test_filter_to_validity_respects_sliced_filter_offsets() {
+        let filter = BooleanArray::new(
+            BooleanBuffer::from(vec![false, true, true, false, true, false]),
+            Some(NullBuffer::from(vec![true, true, false, true, true, false])),
+        );
+        let sliced_filter = filter.slice(1, 4);
+        let sliced_filter = sliced_filter
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+
+        let validity = filter_to_validity(sliced_filter);
+
+        assert_eq!(
+            validity.iter().collect::<Vec<_>>(),
+            vec![true, false, false, true]
+        );
+    }
+}
