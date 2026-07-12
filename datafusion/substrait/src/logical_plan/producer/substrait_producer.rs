@@ -450,9 +450,12 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_placeholder(self, placeholder)
     }
 
-    // Outer Schema Stack
-    // These methods manage a stack of outer schemas for correlated subquery support.
-    // When entering a subquery, the enclosing query's schema is pushed onto the stack.
+    // Outer Schema management API.
+    //
+    // These methods manage a stack of outer schemas for correlated subquery support
+    // such as when entering a subquery, the enclosing query's schema is pushed onto
+    // the stack.
+    //
     // Serializing an Expr::OuterReferenceColumn uses these to resolve the column
     // against the correct enclosing query and emit an OuterReference field reference
     // with the corresponding `steps_out`.
