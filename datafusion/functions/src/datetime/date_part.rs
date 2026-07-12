@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::iter::repeat_n;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -412,24 +413,11 @@ fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     }
 
     // Fast path for Date32 and Date64 - no seconds
-    match array.data_type() {
-        Date32 => {
-            return if array.null_count() == 0 {
-                Ok(Arc::new(Int32Array::from_value(0, array.len())))
-            } else {
-                let r: Int32Array = as_date32_array(array)?.unary(|_| 0);
-                Ok(Arc::new(r))
-            };
-        }
-        Date64 => {
-            return if array.null_count() == 0 {
-                Ok(Arc::new(Int32Array::from_value(0, array.len())))
-            } else {
-                let r: Int32Array = as_date64_array(array)?.unary(|_| 0);
-                Ok(Arc::new(r))
-            };
-        }
-        _ => {}
+    if array.data_type() == &Date32 || array.data_type() == &Date64 {
+        return Ok(Arc::new(Int32Array::from_iter_values_with_nulls(
+            repeat_n(0, array.len()),
+            array.nulls().cloned(),
+        )));
     }
 
     let conversion_factor = match unit {
@@ -574,24 +562,11 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
 /// nanoseconds can be values up to 60 billion, which does not fit in Int32.
 fn seconds_ns(array: &dyn Array) -> Result<ArrayRef> {
     // Fast path for Date32 and Date64 - no nanoseconds
-    match array.data_type() {
-        Date32 => {
-            return if array.null_count() == 0 {
-                Ok(Arc::new(Int64Array::from_value(0, array.len())))
-            } else {
-                let r: Int64Array = as_date32_array(array)?.unary(|_| 0i64);
-                Ok(Arc::new(r))
-            };
-        }
-        Date64 => {
-            return if array.null_count() == 0 {
-                Ok(Arc::new(Int64Array::from_value(0, array.len())))
-            } else {
-                let r: Int64Array = as_date64_array(array)?.unary(|_| 0i64);
-                Ok(Arc::new(r))
-            };
-        }
-        _ => {}
+    if array.data_type() == &Date32 || array.data_type() == &Date64 {
+        return Ok(Arc::new(Int64Array::from_iter_values_with_nulls(
+            repeat_n(0, array.len()),
+            array.nulls().cloned(),
+        )));
     }
 
     let secs = date_part(array, DatePart::Second)?;
