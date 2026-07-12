@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::logical_plan::producer::SubstraitProducer;
+use datafusion::arrow::datatypes::FieldRef;
 use datafusion::common::{Column, DFSchemaRef, substrait_err};
 use datafusion::logical_expr::Expr;
 use substrait::proto::Expression;
 use substrait::proto::expression::field_reference::{
-    ReferenceType, RootReference, RootType,
+    OuterReference, ReferenceType, RootReference, RootType,
 };
 use substrait::proto::expression::{
     FieldReference, ReferenceSegment, RexType, reference_segment,
@@ -36,6 +38,13 @@ pub fn from_column(
 pub(crate) fn substrait_field_ref(
     index: usize,
 ) -> datafusion::common::Result<Expression> {
+    substrait_field_ref_with_root(index, RootType::RootReference(RootReference {}))
+}
+
+fn substrait_field_ref_with_root(
+    index: usize,
+    root_type: RootType,
+) -> datafusion::common::Result<Expression> {
     Ok(Expression {
         rex_type: Some(RexType::Selection(Box::new(FieldReference {
             reference_type: Some(ReferenceType::DirectReference(ReferenceSegment {
@@ -46,7 +55,7 @@ pub(crate) fn substrait_field_ref(
                     }),
                 )),
             })),
-            root_type: Some(RootType::RootReference(RootReference {})),
+            root_type: Some(root_type),
         }))),
     })
 }
@@ -76,20 +85,37 @@ pub(crate) fn try_to_substrait_field_reference(
     }
 }
 
-/// Convert an outer reference column to a Substrait field reference.
-/// Outer reference columns reference columns from an outer query scope in correlated subqueries.
-/// We convert them the same way as regular columns since the subquery plan will be
-/// reconstructed with the proper schema context during consumption.
+/// Convert an outer reference column to a Substrait field reference with an
+/// `OuterReference` root type.
+///
+/// Outer reference columns reference columns from an enclosing query scope in
+/// correlated subqueries. The column is resolved against the producer's stack
+/// of outer schemas (pushed at each subquery boundary), innermost first, and
+/// the resulting `steps_out` records how many query boundaries the reference
+/// crosses (`steps_out = 1` is the immediately enclosing query).
 pub fn from_outer_reference_column(
+    producer: &mut impl SubstraitProducer,
+    _field: &FieldRef,
     col: &Column,
-    schema: &DFSchemaRef,
+    _schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    // OuterReferenceColumn is converted similarly to a regular column reference.
-    // The schema provided should be the schema context in which the outer reference
-    // column appears. During Substrait round-trip, the consumer will reconstruct
-    // the outer reference based on the subquery context.
-    let index = schema.index_of_column(col)?;
-    substrait_field_ref(index)
+    let mut steps_out = 1;
+    while let Some(outer_schema) = producer.get_outer_schema(steps_out) {
+        if let Some(index) = outer_schema.maybe_index_of_column(col) {
+            return substrait_field_ref_with_root(
+                index,
+                RootType::OuterReference(OuterReference {
+                    steps_out: steps_out as u32,
+                }),
+            );
+        }
+        steps_out += 1;
+    }
+    substrait_err!(
+        "Outer reference column '{col}' could not be resolved against any outer \
+         query schema. If using a custom SubstraitProducer, ensure it maintains \
+         the outer schema stack (push_outer_schema/pop_outer_schema/get_outer_schema)"
+    )
 }
 
 #[cfg(test)]

@@ -751,6 +751,141 @@ async fn roundtrip_not_exists_substrait() -> Result<()> {
     Ok(())
 }
 
+/// Assert that the Substrait plan contains a field reference with an
+/// `OuterReference` root type at the given `steps_out` depth.
+fn assert_contains_outer_reference(proto: &Plan, steps_out: u32) {
+    let proto_str = format!("{proto:?}");
+    let expected = format!("OuterReference {{ steps_out: {steps_out} }}");
+    assert!(
+        proto_str.contains(&expected),
+        "expected Substrait plan to contain an outer reference with steps_out={steps_out}"
+    );
+}
+
+#[tokio::test]
+async fn roundtrip_correlated_exists() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT b FROM data WHERE EXISTS (SELECT 1 FROM data2 WHERE data2.a = data.a)")
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_contains_outer_reference(&proto, 1);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.b
+      Filter: EXISTS (<subquery>)
+        Subquery:
+          Projection: Int64(1)
+            Filter: data2.a = outer_ref(data.a)
+              TableScan: data2
+        TableScan: data
+    "
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_correlated_in_subquery() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT b FROM data WHERE a IN (SELECT data2.a FROM data2 WHERE data2.d = data.d)")
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_contains_outer_reference(&proto, 1);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.b
+      Filter: data.a IN (<subquery>)
+        Subquery:
+          Projection: data2.a
+            Filter: data2.d = outer_ref(data.d)
+              TableScan: data2
+        TableScan: data
+    "
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_correlated_scalar_subquery() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT a FROM data WHERE a < (SELECT sum(data2.a) FROM data2 WHERE data2.a = data.a)")
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_contains_outer_reference(&proto, 1);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.a
+      Filter: data.a < (<subquery>)
+        Subquery:
+          Projection: sum(data2.a)
+            Aggregate: groupBy=[[]], aggr=[[sum(data2.a)]]
+              Filter: data2.a = outer_ref(data.a)
+                TableScan: data2
+        TableScan: data
+    "
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_nested_correlated_subquery() -> Result<()> {
+    let ctx = create_context().await?;
+    // The innermost subquery references `data.a` from the outermost query,
+    // two subquery boundaries out.
+    let plan = ctx
+        .sql(
+            "SELECT b FROM data WHERE EXISTS (\
+               SELECT 1 FROM data2 WHERE data2.a = data.a AND EXISTS (\
+                 SELECT 1 FROM book WHERE book.isbn = data.a))",
+        )
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_contains_outer_reference(&proto, 1);
+    assert_contains_outer_reference(&proto, 2);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.b
+      Filter: EXISTS (<subquery>)
+        Subquery:
+          Projection: Int64(1)
+            Filter: data2.a = outer_ref(data.a) AND EXISTS (<subquery>)
+              Subquery:
+                Projection: Int64(1)
+                  Filter: book.isbn = outer_ref(data.a)
+                    TableScan: book
+              TableScan: data2
+        TableScan: data
+    "
+            );
+    Ok(())
+}
+
 #[tokio::test]
 async fn roundtrip_not_exists_filter_left_anti_join() -> Result<()> {
     let plan = generate_plan_from_sql(
