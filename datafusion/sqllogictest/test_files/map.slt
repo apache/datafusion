@@ -1073,6 +1073,12 @@ SELECT * FROM map_null_concrete_first;
 {k1: 1, k2: 2}
 {k1: NULL}
 
+# the NULL value type is coerced to the concrete value type (Int64)
+query T
+SELECT arrow_typeof(column1) FROM map_null_concrete_first LIMIT 1;
+----
+Map("entries": non-null Struct("key": non-null Utf8, "value": Int64), unsorted)
+
 statement ok
 DROP TABLE map_null_concrete_first;
 
