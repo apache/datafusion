@@ -44,7 +44,7 @@ use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionMapping};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::coop::cooperative;
@@ -204,17 +204,6 @@ pub struct FileScanConfig {
     /// would be incorrect if there are filters being applied, thus this should be accessed
     /// via [`FileScanConfig::statistics`].
     pub(crate) statistics: Statistics,
-    /// When true, file_groups are organized by partition column values
-    /// and output_partitioning will return Hash partitioning on partition columns.
-    /// This allows the optimizer to skip hash repartitioning for aggregates and joins
-    /// on partition columns.
-    ///
-    /// If the number of file partitions > target_partitions, the file partitions will be grouped
-    /// in a round-robin fashion such that number of file partitions = target_partitions.
-    ///
-    /// Follow-up: remove this redundant field in favor of
-    /// `output_partitioning`, see <https://github.com/apache/datafusion/issues/23099>.
-    pub partitioned_by_file_group: bool,
     /// Declared physical output partitioning for this scan.
     ///
     /// Expressions are against the full table schema, before scan projection or
@@ -294,7 +283,6 @@ pub struct FileScanConfigBuilder {
     file_compression_type: Option<FileCompressionType>,
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
-    partitioned_by_file_group: bool,
 }
 
 impl FileScanConfigBuilder {
@@ -321,7 +309,6 @@ impl FileScanConfigBuilder {
             constraints: None,
             batch_size: None,
             expr_adapter_factory: None,
-            partitioned_by_file_group: false,
         }
     }
 
@@ -519,18 +506,6 @@ impl FileScanConfigBuilder {
         self
     }
 
-    /// Set whether file groups are organized by partition column values.
-    ///
-    /// When set to true, the output partitioning will be declared as Hash partitioning
-    /// on the partition columns.
-    pub fn with_partitioned_by_file_group(
-        mut self,
-        partitioned_by_file_group: bool,
-    ) -> Self {
-        self.partitioned_by_file_group = partitioned_by_file_group;
-        self
-    }
-
     /// Build the final [`FileScanConfig`] with all the configured settings.
     ///
     /// This method takes ownership of the builder and returns the constructed `FileScanConfig`.
@@ -552,7 +527,6 @@ impl FileScanConfigBuilder {
             file_compression_type,
             batch_size,
             expr_adapter_factory: expr_adapter,
-            partitioned_by_file_group,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
@@ -577,7 +551,6 @@ impl FileScanConfigBuilder {
             batch_size,
             expr_adapter_factory: expr_adapter,
             statistics,
-            partitioned_by_file_group,
             output_partitioning,
         }
     }
@@ -598,12 +571,15 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
-            partitioned_by_file_group: config.partitioned_by_file_group,
         }
     }
 }
 
-fn hash_partitioning_from_partition_fields(
+/// Builds output partitioning over `partition_cols` (resolved to their indices in
+/// `schema`) with `partition_count` partitions. Returns `None` when there are no
+/// partition columns. Callers use this to declare the output partitioning of a scan
+/// whose file groups are organized by partition column values.
+pub fn output_partitioning_from_partition_fields(
     schema: &Schema,
     partition_cols: &Fields,
     partition_count: usize,
@@ -647,6 +623,51 @@ fn project_output_partitioning(
             partitioning.project(mapping, &input_eq_properties)
         }
     }
+}
+
+/// Returns `true` if merging `outer` into `inner` would duplicate a volatile
+/// expression; the caller should then decline the merge.
+///
+/// `inner` is the scan's current projection and `outer` the projection being
+/// pushed into it; merging substitutes each `inner` expression into every
+/// `outer` reference to it. If a volatile `inner` expression (e.g. `random()`,
+/// `uuid()`) is referenced more than once, that single value gets inlined at
+/// each site and re-evaluated independently, so references meant to share a
+/// "locked-in" value diverge. This is the volatility guard the physical
+/// `ProjectionPushdown` and `FilterPushdown` rules already apply (see
+/// `datafusion_physical_expr_common::physical_expr::is_volatile`).
+///
+/// References are counted with multiplicity by walking each `outer` expression
+/// (as `try_collapse_projection_chain` does), so a self-duplicating expression
+/// such as `r + r` counts as two references. A volatile expression referenced
+/// exactly once has nothing to duplicate and is left to merge.
+fn would_duplicate_volatile_exprs(
+    inner: &ProjectionExprs,
+    outer: &ProjectionExprs,
+) -> bool {
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+
+    let inner_exprs = inner.as_ref();
+
+    let mut ref_counts = vec![0usize; inner_exprs.len()];
+    for proj_expr in outer.as_ref() {
+        proj_expr
+            .expr
+            .apply(|e| {
+                if let Some(col) = e.as_ref().downcast_ref::<Column>()
+                    && let Some(count) = ref_counts.get_mut(col.index())
+                {
+                    *count += 1;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .expect("infallible closure should not fail");
+    }
+
+    ref_counts
+        .iter()
+        .enumerate()
+        .any(|(idx, &count)| count > 1 && is_volatile(&inner_exprs[idx].expr))
 }
 
 impl DataSource for FileScanConfig {
@@ -765,7 +786,7 @@ impl DataSource for FileScanConfig {
     ) -> Result<Option<Arc<dyn DataSource>>> {
         // When file groups define output partitioning, repartitioning files
         // would invalidate the partition-to-file-group mapping.
-        if self.output_partitioning.is_some() || self.partitioned_by_file_group {
+        if self.output_partitioning.is_some() {
             return Ok(None);
         }
 
@@ -782,10 +803,8 @@ impl DataSource for FileScanConfig {
     /// Returns the output partitioning for this file scan.
     ///
     /// When `output_partitioning` is set, this returns the declared partitioning
-    /// after applying scan projection. When `partitioned_by_file_group` is true,
-    /// this returns `Partitioning::Hash` on the Hive partition columns, allowing
-    /// the optimizer to skip hash repartitioning for aggregates and joins on
-    /// those columns.
+    /// after applying scan projection, allowing the optimizer to skip hash
+    /// repartitioning for aggregates and joins on the partitioning columns.
     ///
     /// If projection or partition count validation fails, this returns
     /// `UnknownPartitioning`.
@@ -801,15 +820,7 @@ impl DataSource for FileScanConfig {
     /// - Idea: Could allow byte-range splitting within partition-aware groups,
     ///   preserving I/O parallelism while maintaining partition semantics.
     fn output_partitioning(&self) -> Partitioning {
-        let Some(output_partitioning) = self.output_partitioning.clone().or_else(|| {
-            self.partitioned_by_file_group.then(|| {
-                hash_partitioning_from_partition_fields(
-                    self.file_source.table_schema().table_schema(),
-                    self.table_partition_cols(),
-                    self.file_groups.len(),
-                )
-            })?
-        }) else {
+        let Some(output_partitioning) = self.output_partitioning.clone() else {
             return Partitioning::UnknownPartitioning(self.file_groups.len());
         };
         if output_partitioning.partition_count() != self.file_groups.len() {
@@ -945,6 +956,15 @@ impl DataSource for FileScanConfig {
         &self,
         projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn DataSource>>> {
+        // Don't merge a projection into the scan if it would inline a volatile
+        // expression that the outer projection references, which would turn a
+        // single "locked-in" value (e.g. `random()` aliased in a subquery) into
+        // multiple independent evaluations. See #23220.
+        if let Some(inner) = self.file_source.projection()
+            && would_duplicate_volatile_exprs(inner, projection)
+        {
+            return Ok(None);
+        }
         match self.file_source.try_pushdown_projection(projection)? {
             Some(new_source) => {
                 let mut new_file_scan_config = self.clone();
@@ -1140,7 +1160,6 @@ impl DataSource for FileScanConfig {
     ) -> Option<Arc<dyn Any + Send + Sync>> {
         if self.preserve_order
             || self.output_partitioning.is_some()
-            || self.partitioned_by_file_group
             || !config.execution.enable_file_stream_work_stealing
         {
             return None;
@@ -2553,7 +2572,7 @@ mod tests {
             vec![partition_col],
         );
 
-        // partitioned_by_file_group defaults to false
+        // output_partitioning defaults to None
         let partitioning = config.output_partitioning();
         assert!(matches!(partitioning, Partitioning::UnknownPartitioning(_)));
     }
@@ -2613,13 +2632,12 @@ mod tests {
     #[test]
     fn test_output_partitioning_no_partition_columns() {
         let file_schema = aggr_test_schema();
-        let mut config = config_for_projection(
+        let config = config_for_projection(
             Arc::clone(&file_schema),
             None,
             Statistics::new_unknown(&file_schema),
             vec![], // No partition columns
         );
-        config.partitioned_by_file_group = true;
 
         let partitioning = config.output_partitioning();
         assert!(matches!(partitioning, Partitioning::UnknownPartitioning(_)));
@@ -2642,12 +2660,16 @@ mod tests {
             Statistics::new_unknown(&file_schema),
             single_partition_col,
         );
-        config.partitioned_by_file_group = true;
         config.file_groups = vec![
             FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f3.parquet".to_string(), 1024)]),
         ];
+        config.output_partitioning = output_partitioning_from_partition_fields(
+            config.file_source.table_schema().table_schema(),
+            config.table_partition_cols(),
+            config.file_groups.len(),
+        );
 
         let partitioning = config.output_partitioning();
         match partitioning {
@@ -2671,11 +2693,15 @@ mod tests {
             Statistics::new_unknown(&file_schema),
             multiple_partition_cols,
         );
-        config.partitioned_by_file_group = true;
         config.file_groups = vec![
             FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
         ];
+        config.output_partitioning = output_partitioning_from_partition_fields(
+            config.file_source.table_schema().table_schema(),
+            config.table_partition_cols(),
+            config.file_groups.len(),
+        );
 
         let partitioning = config.output_partitioning();
         match partitioning {
@@ -3341,5 +3367,180 @@ mod tests {
             "Expected Exact (no NULLs), got {result:?}"
         );
         Ok(())
+    }
+
+    /// Helper: build a `ProjectionExprs` from `(expr, alias)` pairs.
+    fn make_projection(pairs: Vec<(Arc<dyn PhysicalExpr>, &str)>) -> ProjectionExprs {
+        ProjectionExprs::new(
+            pairs
+                .into_iter()
+                .map(|(expr, alias)| ProjectionExpr::new(expr, alias)),
+        )
+    }
+
+    /// Helper: create a volatile (non-deterministic) function expression,
+    /// e.g. `random()`.
+    fn make_volatile_expr() -> Arc<dyn PhysicalExpr> {
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::ScalarUDF;
+        use datafusion_functions::math::random::RandomFunc;
+        use datafusion_physical_expr::ScalarFunctionExpr;
+
+        Arc::new(ScalarFunctionExpr::new(
+            "random",
+            Arc::new(ScalarUDF::from(RandomFunc::new())),
+            vec![],
+            Arc::new(Field::new("random", DataType::Float64, false)),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
+    /// Column-only inner projections always merge safely, even when
+    /// the outer projection references them multiple times.
+    #[test]
+    fn test_would_duplicate_allows_column_only_inner() {
+        let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let col_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 1));
+
+        let inner =
+            make_projection(vec![(Arc::clone(&col_a), "a"), (Arc::clone(&col_b), "b")]);
+
+        // Outer references col 0 twice
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("a", 0)), "x"),
+            (Arc::new(Column::new("a", 0)), "y"),
+        ]);
+
+        assert!(!would_duplicate_volatile_exprs(&inner, &outer));
+    }
+
+    /// Deterministic computed expressions (arithmetic) referenced multiple
+    /// times are allowed to merge — only volatile expressions are protected.
+    #[test]
+    fn test_would_duplicate_allows_deterministic_computed_multi_ref() {
+        let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let col_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 1));
+        // Inner: [a + b, b]  (index 0 is deterministic computed)
+        let inner = make_projection(vec![
+            (
+                Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_a),
+                    Operator::Plus,
+                    Arc::clone(&col_b),
+                )),
+                "sum",
+            ),
+            (Arc::clone(&col_b), "b"),
+        ]);
+
+        // Outer references index 0 twice
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("sum", 0)), "x"),
+            (Arc::new(Column::new("sum", 0)), "y"),
+        ]);
+
+        // Deterministic arithmetic → allow merge even though duplicated
+        assert!(!would_duplicate_volatile_exprs(&inner, &outer));
+    }
+
+    /// A volatile expression the outer projection does not reference is
+    /// safe to merge (it is projected away, not duplicated).
+    #[test]
+    fn test_would_duplicate_allows_unreferenced_volatile() {
+        let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        // Inner: [random(), a]
+        let inner =
+            make_projection(vec![(make_volatile_expr(), "r"), (Arc::clone(&col_a), "a")]);
+
+        // Outer references only index 1 (the column), not the volatile expr
+        let outer = make_projection(vec![(Arc::new(Column::new("a", 1)), "a")]);
+
+        assert!(!would_duplicate_volatile_exprs(&inner, &outer));
+    }
+
+    /// A volatile expression referenced multiple times must block merge:
+    /// this is the #23220 regression (`random()` aliased then referenced as
+    /// `x` and `y`).
+    #[test]
+    fn test_would_duplicate_blocks_multi_ref_volatile() {
+        // Inner: [random()]
+        let inner = make_projection(vec![(make_volatile_expr(), "r")]);
+
+        // Outer references index 0 twice
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("r", 0)), "x"),
+            (Arc::new(Column::new("r", 0)), "y"),
+        ]);
+
+        assert!(would_duplicate_volatile_exprs(&inner, &outer));
+    }
+
+    /// A volatile expression referenced exactly once has nothing to duplicate,
+    /// so the merge is allowed.
+    #[test]
+    fn test_would_duplicate_allows_single_ref_volatile() {
+        let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        // Inner: [random(), a]
+        let inner =
+            make_projection(vec![(make_volatile_expr(), "r"), (Arc::clone(&col_a), "a")]);
+
+        // Outer references the volatile expression exactly once
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("r", 0)), "x"),
+            (Arc::new(Column::new("a", 1)), "a"),
+        ]);
+
+        assert!(!would_duplicate_volatile_exprs(&inner, &outer));
+    }
+
+    /// References are counted with multiplicity, so a single outer expression
+    /// that duplicates the value (e.g. `r + r`) still blocks the merge.
+    #[test]
+    fn test_would_duplicate_blocks_single_expr_self_ref_volatile() {
+        // Inner: [random()]
+        let inner = make_projection(vec![(make_volatile_expr(), "r")]);
+
+        // Outer: [r + r] — one expression referencing `random()` twice
+        let outer = make_projection(vec![(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("r", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("r", 0)),
+            )),
+            "x",
+        )]);
+
+        assert!(would_duplicate_volatile_exprs(&inner, &outer));
+    }
+
+    /// A volatile expression buried inside a larger expression (e.g.
+    /// `random() + 1`) is still detected and blocks merge.
+    #[test]
+    fn test_would_duplicate_blocks_volatile_nested_in_arithmetic() {
+        // Inner: [random() + 1]
+        let inner = make_projection(vec![(
+            Arc::new(BinaryExpr::new(
+                make_volatile_expr(),
+                Operator::Plus,
+                Arc::new(Literal::new(ScalarValue::Float64(Some(1.0)))),
+            )),
+            "expr",
+        )]);
+
+        // Outer references index 0 twice
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("expr", 0)), "x"),
+            (Arc::new(Column::new("expr", 0)), "y"),
+        ]);
+
+        assert!(would_duplicate_volatile_exprs(&inner, &outer));
+    }
+
+    /// Empty projections should not block merging.
+    #[test]
+    fn test_would_duplicate_empty_projections() {
+        let inner = make_projection(vec![]);
+        let outer = make_projection(vec![]);
+        assert!(!would_duplicate_volatile_exprs(&inner, &outer));
     }
 }

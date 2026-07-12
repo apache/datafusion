@@ -974,8 +974,12 @@ impl ExecutionPlan for MockReqExec {
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![self.dist.clone()]
+    fn input_distribution_requirements(
+        &self,
+    ) -> datafusion_physical_plan::InputDistributionRequirements {
+        datafusion_physical_plan::InputDistributionRequirements::new(vec![
+            self.dist.clone(),
+        ])
     }
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![
