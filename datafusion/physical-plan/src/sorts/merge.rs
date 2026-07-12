@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use arrow::compute::BatchCoalescer;
 use crate::SendableRecordBatchStream;
-use crate::metrics::BaselineMetrics;
+use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use crate::sorts::builder::BatchBuilder;
 use crate::sorts::cursor::{Cursor, CursorValues};
 use crate::sorts::stream::PartitionedStream;
@@ -316,9 +316,22 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         }
 
-        drop(timer);
-
         let last_stream_idx = self.loser_tree[0];
+
+        // Push the last stream's buffered rows that were not added to in progress
+        if let Some(cursor) = self.cursors[last_stream_idx].as_mut() {
+            let mut remaining = cursor.len();
+            if let Some(fetch) = self.fetch {
+                remaining = remaining
+                  .min(fetch.saturating_sub(self.produced + self.in_progress.len()));
+            }
+            if remaining > 0 {
+                self.in_progress.push_n_rows(last_stream_idx, remaining);
+                cursor.advance_n(remaining);
+            }
+        }
+
+        drop(timer);
 
         self.passthrough_last_stream(co, last_stream_idx).await?;
 
@@ -378,9 +391,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             last_stream
         };
 
-        // TODO - Add memory accounting
-        let mut coalescer = CoalesceBatchesStream::new(last_stream, self.batch_size, self.fetch.map(|x| x - self.produced), self.metrics.clone())
-          // Use batch size as the coalescer
+        let mut coalescer = CoalesceBatchesStream::new(
+            last_stream,
+            self.batch_size,
+            self.fetch.map(|x| x - self.produced),
+            self.metrics.intermediate()
+        )
+          // Don't allow for passthrough of batches with sizes other than the provided batch size
           .with_biggest_coalesce_batch_size(None);
 
         drop(timer);
