@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::PlanProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -172,6 +172,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
             .unwrap_or_default();
 
         let partitioning = unsafe { (ffi_props.output_partitioning)(&ffi_props) };
+        let partitioning = Partitioning::try_from(partitioning)?;
 
         let eq_properties = if sort_exprs.is_empty() {
             EquivalenceProperties::new(Arc::new(schema))
@@ -187,7 +188,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
 
         Ok(PlanProperties::new(
             eq_properties,
-            (&partitioning).into(),
+            partitioning,
             emission_type,
             boundedness,
         ))
@@ -282,6 +283,29 @@ mod tests {
         ))
     }
 
+    fn create_range_test_props() -> Result<PlanProperties> {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::{ScalarValue, SplitPoint};
+        use datafusion_physical_expr::{LexOrdering, RangePartitioning};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let col = datafusion::physical_plan::expressions::col("a", &schema)?;
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(col)])
+            .expect("non-empty ordering");
+        let split_points = vec![
+            SplitPoint::new(vec![ScalarValue::Int64(Some(10))]),
+            SplitPoint::new(vec![ScalarValue::Int64(Some(20))]),
+        ];
+        let range = RangePartitioning::try_new(ordering, split_points)?;
+
+        Ok(PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::Range(range),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ))
+    }
+
     #[test]
     fn test_round_trip_ffi_plan_properties() -> Result<()> {
         let original_props = create_test_props()?;
@@ -311,6 +335,24 @@ mod tests {
         ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_plan: PlanProperties = ffi_plan.try_into()?;
         assert_eq!(format!("{foreign_plan:?}"), format!("{props:?}"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_ffi_plan_properties_range_partitioning() -> Result<()> {
+        let original_props = create_range_test_props()?;
+
+        let mut local_props_ptr = FFI_PlanProperties::from(&original_props);
+        local_props_ptr.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_props: PlanProperties = local_props_ptr.try_into()?;
+
+        assert_eq!(
+            format!("{:?}", foreign_props.output_partitioning()),
+            format!("{:?}", original_props.output_partitioning())
+        );
+        assert_eq!(format!("{foreign_props:?}"), format!("{original_props:?}"));
 
         Ok(())
     }
