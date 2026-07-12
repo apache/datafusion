@@ -920,6 +920,10 @@ SELECT map([column1, column1 * 10], ['x','y']) FROM (VALUES (1), (2), (3)) t;
 # tests for DISTINCT / GROUP BY / aggregation on map columns
 # https://github.com/apache/datafusion/issues/15428
 
+# NOTE: the CAST(NULL AS BIGINT) in the VALUES list below predates the fix for
+# https://github.com/apache/datafusion/issues/23474 and is no longer required.
+# It is kept as-is to document the historical workaround; the un-cast form is
+# exercised in the "map NULL value coercion in VALUES" section further below.
 statement ok
 CREATE TABLE map_distinct_table AS VALUES
   (MAP {'k1': 1, 'k2': 2}, 'a', 1),
@@ -1048,3 +1052,138 @@ PUT 25
 
 statement ok
 DROP TABLE map_data;
+
+# map NULL value coercion in VALUES
+# https://github.com/apache/datafusion/issues/23474
+# A bare NULL map value used to fail type unification across a VALUES list
+# ("Inconsistent data type across values list") and required an explicit
+# CAST(NULL AS <type>). The map value type now unifies with concrete value
+# types following the same rules as scalar VALUES coercion.
+
+# concrete-typed row first, NULL-valued row second (the issue reproducer)
+statement ok
+CREATE TABLE map_null_concrete_first AS VALUES
+  (MAP {'k1': 1, 'k2': 2}),
+  (MAP {'k1': NULL});
+
+# NULL must round-trip as NULL after coercion, not a default value
+query ? rowsort
+SELECT * FROM map_null_concrete_first;
+----
+{k1: 1, k2: 2}
+{k1: NULL}
+
+statement ok
+DROP TABLE map_null_concrete_first;
+
+# NULL-valued row first, concrete-typed row second (coercion is symmetric)
+statement ok
+CREATE TABLE map_null_first AS VALUES
+  (MAP {'k1': NULL}),
+  (MAP {'k1': 1, 'k2': 2});
+
+query ? rowsort
+SELECT * FROM map_null_first;
+----
+{k1: 1, k2: 2}
+{k1: NULL}
+
+statement ok
+DROP TABLE map_null_first;
+
+# every row has a NULL value: succeeds and the value type stays Null
+statement ok
+CREATE TABLE map_all_null_values AS VALUES
+  (MAP {'k': NULL}),
+  (MAP {'k': NULL});
+
+query ? rowsort
+SELECT * FROM map_all_null_values;
+----
+{k: NULL}
+{k: NULL}
+
+query T
+SELECT arrow_typeof(column1) FROM map_all_null_values LIMIT 1;
+----
+Map("entries": non-null Struct("key": non-null Utf8, "value": Null), unsorted)
+
+statement ok
+DROP TABLE map_all_null_values;
+
+# multiple keys where only one value is NULL
+query ? rowsort
+SELECT * FROM (VALUES
+  (MAP {'a': 1, 'b': NULL}),
+  (MAP {'a': 2, 'b': 3})) t(column1);
+----
+{a: 1, b: NULL}
+{a: 2, b: 3}
+
+# three rows with the NULL-valued row in the middle
+query ? rowsort
+SELECT * FROM (VALUES
+  (MAP {'k': 1}),
+  (MAP {'k': NULL}),
+  (MAP {'k': 2})) t(column1);
+----
+{k: 1}
+{k: 2}
+{k: NULL}
+
+# numeric widening across a NULL-valued row follows the scalar rule
+# (Int64 + Float64 -> Float64)
+statement ok
+CREATE TABLE map_null_widening AS VALUES
+  (MAP {'k': 1}),
+  (MAP {'k': NULL}),
+  (MAP {'k': 1.5});
+
+query ? rowsort
+SELECT * FROM map_null_widening;
+----
+{k: 1.0}
+{k: 1.5}
+{k: NULL}
+
+query T
+SELECT arrow_typeof(column1) FROM map_null_widening LIMIT 1;
+----
+Map("entries": non-null Struct("key": non-null Utf8, "value": Float64), unsorted)
+
+statement ok
+DROP TABLE map_null_widening;
+
+# incompatible concrete value types with a NULL-valued row in between still
+# error; Int64/Utf8 follows the scalar VALUES rule (coerce to the numeric
+# type, then fail to cast the non-numeric string)
+query error Cast error: Cannot cast string 'hello' to value of Int64 type
+SELECT * FROM (VALUES
+  (MAP {'k': 1}),
+  (MAP {'k': NULL}),
+  (MAP {'k': 'hello'})) t(column1);
+
+# NULL value type unification recurses into nested maps
+query ? rowsort
+SELECT * FROM (VALUES
+  (MAP {'outer': MAP {'inner': 1}}),
+  (MAP {'outer': MAP {'inner': NULL}})) t(column1);
+----
+{outer: {inner: 1}}
+{outer: {inner: NULL}}
+
+# INSERT INTO ... VALUES also accepts a NULL map value without a cast
+statement ok
+CREATE TABLE map_null_insert AS VALUES (MAP {'k1': 1, 'k2': 2});
+
+statement ok
+INSERT INTO map_null_insert VALUES (MAP {'k1': NULL});
+
+query ? rowsort
+SELECT * FROM map_null_insert;
+----
+{k1: 1, k2: 2}
+{k1: NULL}
+
+statement ok
+DROP TABLE map_null_insert;
