@@ -46,7 +46,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{DataFusionError, JoinSide, Result, internal_err};
+use datafusion_common::{DataFusionError, JoinSide, Result, internal_err, plan_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -642,6 +642,10 @@ pub struct JoinData {
     pub join_on: JoinOn,
 }
 
+#[deprecated(
+    since = "55.0.0",
+    note = "Use try_pushdown_through_join_with_column_indices instead"
+)]
 pub fn try_pushdown_through_join(
     projection: &ProjectionExec,
     join_left: &Arc<dyn ExecutionPlan>,
@@ -681,7 +685,25 @@ pub fn try_pushdown_through_join(
     )
 }
 
-pub(crate) fn try_pushdown_through_join_with_column_indices(
+/// Attempts to move a projection below a join by mapping each join output
+/// column to the child column that produced it.
+///
+/// `schema` is the complete output schema of the join, not either child's
+/// schema. `column_indices` must contain one entry for each field in `schema`.
+/// Each [`JoinSide::Left`] or [`JoinSide::Right`] entry identifies the source
+/// child and uses an index relative to that child's schema.
+///
+/// [`JoinSide::None`] identifies a column produced by the join itself, such as
+/// a mark column. If `projection` references such a column, this function
+/// returns `Ok(None)` because neither child can produce it.
+///
+/// Returns `Ok(None)` when the projection cannot be pushed down safely.
+///
+/// # Errors
+///
+/// Returns an error if `column_indices` does not match `schema` or contains an
+/// index outside the corresponding child schema.
+pub fn try_pushdown_through_join_with_column_indices(
     projection: &ProjectionExec,
     join_left: &Arc<dyn ExecutionPlan>,
     join_right: &Arc<dyn ExecutionPlan>,
@@ -690,6 +712,29 @@ pub(crate) fn try_pushdown_through_join_with_column_indices(
     filter: Option<&JoinFilter>,
     column_indices: &[ColumnIndex],
 ) -> Result<Option<JoinData>> {
+    if column_indices.len() != schema.fields().len() {
+        return plan_err!(
+            "Column index mapping has {} entries but join schema has {} fields",
+            column_indices.len(),
+            schema.fields().len()
+        );
+    }
+    // Validate each output-to-child mapping before using it to rewrite the
+    // projection. Synthetic outputs have no child index to validate.
+    for (output_index, column_index) in column_indices.iter().enumerate() {
+        let (side, child_field_count) = match column_index.side {
+            JoinSide::Left => ("left", join_left.schema().fields().len()),
+            JoinSide::Right => ("right", join_right.schema().fields().len()),
+            JoinSide::None => continue,
+        };
+        if column_index.index >= child_field_count {
+            return plan_err!(
+                "Join output column {output_index} maps to {side} child column {}, but the child has {child_field_count} fields",
+                column_index.index
+            );
+        }
+    }
+
     // Convert projected expressions to columns. We can not proceed if this is not possible.
     let Some(projection_as_columns) = physical_to_column_exprs(projection.expr()) else {
         return Ok(None);
@@ -702,7 +747,13 @@ pub(crate) fn try_pushdown_through_join_with_column_indices(
     let mut right_proj: Vec<(Column, String)> = Vec::new();
     let mut seen_right = false;
     for (col, alias) in &projection_as_columns {
-        let origin = &column_indices[col.index()];
+        let Some(origin) = column_indices.get(col.index()) else {
+            return plan_err!(
+                "Projection column {} is outside the {}-entry column index mapping",
+                col.index(),
+                column_indices.len()
+            );
+        };
         match origin.side {
             // Keep the "left block before right block" contiguity the current
             // pushdown supports; a left column after a right one is "mixed".
@@ -1257,6 +1308,7 @@ mod tests {
     use super::*;
 
     use crate::common::collect;
+    use crate::empty::EmptyExec;
 
     use crate::filter_pushdown::PushedDown;
     use crate::statistics::StatisticsArgs;
@@ -1289,6 +1341,113 @@ mod tests {
         }]);
         // Tree traversal order: b@7 is visited before a@1
         assert_eq!(column_indices, vec![7, 1]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_pushdown_through_join_validates_column_indices() -> Result<()> {
+        let child_schema =
+            Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        let left: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&child_schema)));
+        let right: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(child_schema));
+        let join_schema = Arc::new(Schema::new(vec![
+            Field::new("left_i", DataType::Int32, false),
+            Field::new("right_i", DataType::Int32, false),
+        ]));
+        let join: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&join_schema)));
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: Arc::new(Column::new("left_i", 0)),
+                alias: "left_i".to_string(),
+            }],
+            join,
+        )?;
+
+        let Err(error) = try_pushdown_through_join_with_column_indices(
+            &projection,
+            &left,
+            &right,
+            &[],
+            &join_schema,
+            None,
+            &[],
+        ) else {
+            panic!("expected a mismatched mapping length to return an error");
+        };
+        assert!(
+            error.to_string().contains(
+                "Column index mapping has 0 entries but join schema has 2 fields"
+            )
+        );
+
+        let invalid_child_index = [
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ];
+        let Err(error) = try_pushdown_through_join_with_column_indices(
+            &projection,
+            &left,
+            &right,
+            &[],
+            &join_schema,
+            None,
+            &invalid_child_index,
+        ) else {
+            panic!("expected an invalid child index to return an error");
+        };
+        assert!(error.to_string().contains(
+            "Join output column 0 maps to left child column 1, but the child has 1 fields"
+        ));
+
+        let wider_join_schema = Arc::new(Schema::new(vec![
+            Field::new("left_i", DataType::Int32, false),
+            Field::new("right_i", DataType::Int32, false),
+            Field::new("extra", DataType::Int32, false),
+        ]));
+        let wider_join: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(wider_join_schema));
+        let out_of_mapping_projection = ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: Arc::new(Column::new("extra", 2)),
+                alias: "extra".to_string(),
+            }],
+            wider_join,
+        )?;
+        let valid_child_indices = [
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ];
+        let Err(error) = try_pushdown_through_join_with_column_indices(
+            &out_of_mapping_projection,
+            &left,
+            &right,
+            &[],
+            &join_schema,
+            None,
+            &valid_child_indices,
+        ) else {
+            panic!("expected an out-of-mapping projection to return an error");
+        };
+        assert!(
+            error.to_string().contains(
+                "Projection column 2 is outside the 2-entry column index mapping"
+            )
+        );
+
         Ok(())
     }
 
