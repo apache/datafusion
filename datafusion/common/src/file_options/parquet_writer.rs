@@ -235,6 +235,7 @@ impl ParquetOptions {
             pruning: _,
             skip_metadata: _,
             metadata_size_hint: _,
+            prefetch_size: _,
             pushdown_filters: _,
             reorder_filters: _,
             force_filter_selections: _, // not used for writer props
@@ -491,6 +492,7 @@ mod tests {
             pruning: defaults.pruning,
             skip_metadata: defaults.skip_metadata,
             metadata_size_hint: defaults.metadata_size_hint,
+            prefetch_size: defaults.prefetch_size,
             pushdown_filters: defaults.pushdown_filters,
             reorder_filters: defaults.reorder_filters,
             force_filter_selections: defaults.force_filter_selections,
@@ -610,6 +612,7 @@ mod tests {
                 pruning: global_options_defaults.pruning,
                 skip_metadata: global_options_defaults.skip_metadata,
                 metadata_size_hint: global_options_defaults.metadata_size_hint,
+                prefetch_size: global_options_defaults.prefetch_size,
                 pushdown_filters: global_options_defaults.pushdown_filters,
                 reorder_filters: global_options_defaults.reorder_filters,
                 force_filter_selections: global_options_defaults.force_filter_selections,

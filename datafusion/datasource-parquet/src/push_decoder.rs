@@ -35,7 +35,8 @@
 //! The opener constructs both halves and hands the state off to
 //! [`PushDecoderStreamState::into_stream`] for consumption.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
@@ -244,6 +245,14 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) active_reader: Option<ParquetRecordBatchReader>,
     pub(crate) rg_plan: VecDeque<RgPlanEntry>,
     pub(crate) reader: Box<dyn AsyncFileReader>,
+    /// Parquet metadata used to identify projected column chunks belonging to
+    /// subsequent row groups.
+    pub(crate) parquet_metadata: Arc<ParquetMetaData>,
+    /// Maximum bytes that may be staged in the push decoder. Required ranges
+    /// are always fetched, even when they exceed this budget.
+    pub(crate) prefetch_size: Option<usize>,
+    /// Row groups whose projected ranges were already fetched speculatively.
+    pub(crate) prefetched_row_groups: HashSet<usize>,
     /// Per-file projection: the mask installed on every decoder and the
     /// per-batch transform applied by [`Self::project_batch`].
     pub(crate) decoder_projection: DecoderProjection,
@@ -373,6 +382,20 @@ impl PushDecoderStreamState {
             let decoder = self.decoder.as_mut().expect("decoder present");
             match decoder.try_next_reader() {
                 Ok(DecodeResult::NeedsData(ranges)) => {
+                    let buffered_bytes = self
+                        .decoder
+                        .as_ref()
+                        .expect("decoder present")
+                        .buffered_bytes();
+                    let ranges = prefetch_row_group_ranges(
+                        ranges,
+                        buffered_bytes,
+                        self.prefetch_size,
+                        &self.rg_plan,
+                        self.decoder_projection.projection_mask(),
+                        &self.parquet_metadata,
+                        &mut self.prefetched_row_groups,
+                    );
                     let data = self
                         .reader
                         .get_byte_ranges(ranges.clone())
@@ -423,6 +446,68 @@ impl PushDecoderStreamState {
     }
 }
 
+/// Append projected column chunks from subsequent row groups to a decoder
+/// request while staying within `prefetch_size`.
+///
+/// The first entry in `rg_plan` is the row group responsible for `ranges`.
+/// Complete projected ranges for later row groups are added in scan order so
+/// the push decoder can stage them for future calls to `try_next_reader`.
+fn prefetch_row_group_ranges(
+    mut ranges: Vec<Range<u64>>,
+    buffered_bytes: u64,
+    prefetch_size: Option<usize>,
+    rg_plan: &VecDeque<RgPlanEntry>,
+    projection: &ProjectionMask,
+    metadata: &ParquetMetaData,
+    prefetched_row_groups: &mut HashSet<usize>,
+) -> Vec<Range<u64>> {
+    let Some(prefetch_size) = prefetch_size.filter(|size| *size > 0) else {
+        return ranges;
+    };
+
+    let requested_bytes = ranges
+        .iter()
+        .map(|range| range.end - range.start)
+        .sum::<u64>();
+    let mut staged_bytes = buffered_bytes.saturating_add(requested_bytes);
+    let budget = prefetch_size as u64;
+    if staged_bytes >= budget {
+        return ranges;
+    }
+
+    for entry in rg_plan.iter().skip(1) {
+        if prefetched_row_groups.contains(&entry.rg_index) {
+            continue;
+        }
+
+        let row_group = metadata.row_group(entry.rg_index);
+        let row_group_ranges = row_group
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(column_idx, _)| projection.leaf_included(*column_idx))
+            .map(|(_, column)| {
+                let (start, len) = column.byte_range();
+                start..start + len
+            })
+            .collect::<Vec<_>>();
+        let row_group_bytes = row_group_ranges
+            .iter()
+            .map(|range| range.end - range.start)
+            .sum::<u64>();
+
+        if staged_bytes.saturating_add(row_group_bytes) > budget {
+            break;
+        }
+
+        ranges.extend(row_group_ranges);
+        staged_bytes += row_group_bytes;
+        prefetched_row_groups.insert(entry.rg_index);
+    }
+
+    ranges
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,6 +529,11 @@ mod tests {
     /// column statistics are disjoint: RG0 → 0..1000, RG1 → 1000..2000,
     /// RG2 → 2000..3000. Returns (metadata, schema).
     fn build_three_rg_file() -> (Arc<ParquetMetaData>, SchemaRef) {
+        let (_, metadata, schema) = build_three_rg_file_data();
+        (metadata, schema)
+    }
+
+    fn build_three_rg_file_data() -> (Bytes, Arc<ParquetMetaData>, SchemaRef) {
         let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
         let mut buf = Vec::new();
         let props = WriterProperties::builder()
@@ -474,12 +564,145 @@ mod tests {
             reason = "we want a single range covering the whole file"
         )]
         let ranges = vec![0..len];
-        md.push_ranges(ranges, vec![file]).unwrap();
+        md.push_ranges(ranges, vec![file.clone()]).unwrap();
         let DecodeResult::Data(meta) = md.try_decode().unwrap() else {
             panic!("decoding metadata");
         };
         assert_eq!(meta.num_row_groups(), 3, "test fixture must have 3 RGs");
-        (Arc::new(meta), schema)
+        (file, Arc::new(meta), schema)
+    }
+
+    fn column_range(metadata: &ParquetMetaData, row_group: usize) -> Range<u64> {
+        let (start, len) = metadata.row_group(row_group).column(0).byte_range();
+        start..start + len
+    }
+
+    #[test]
+    fn prefetch_packs_complete_row_groups_within_budget() {
+        let (metadata, _) = build_three_rg_file();
+        let rg0 = column_range(&metadata, 0);
+        let rg1 = column_range(&metadata, 1);
+        let rg2 = column_range(&metadata, 2);
+        let rg_plan = (0..3).map(|rg_index| RgPlanEntry { rg_index }).collect();
+        let budget = ((rg0.end - rg0.start) + (rg1.end - rg1.start)) as usize;
+        let mut prefetched = HashSet::new();
+
+        let ranges = prefetch_row_group_ranges(
+            vec![rg0.clone()],
+            0,
+            Some(budget),
+            &rg_plan,
+            &ProjectionMask::all(),
+            &metadata,
+            &mut prefetched,
+        );
+
+        assert_eq!(ranges, vec![rg0, rg1]);
+        assert_eq!(prefetched, HashSet::from([1]));
+        assert!(!ranges.contains(&rg2));
+    }
+
+    #[test]
+    fn prefetched_bytes_are_staged_for_the_next_push_decoder_reader() {
+        let (file, metadata, _) = build_three_rg_file_data();
+        let mut decoder =
+            ParquetPushDecoderBuilder::try_new_decoder(Arc::clone(&metadata))
+                .unwrap()
+                .build()
+                .unwrap();
+        let requested = match decoder.try_next_reader().unwrap() {
+            DecodeResult::NeedsData(ranges) => ranges,
+            other => panic!("expected initial byte request, got {other:?}"),
+        };
+        let rg_plan = (0..3).map(|rg_index| RgPlanEntry { rg_index }).collect();
+        let rg1 = column_range(&metadata, 1);
+        let budget = requested
+            .iter()
+            .map(|range| range.end - range.start)
+            .sum::<u64>()
+            + rg1.end
+            - rg1.start;
+        let mut prefetched = HashSet::new();
+        let ranges = prefetch_row_group_ranges(
+            requested,
+            decoder.buffered_bytes(),
+            Some(budget as usize),
+            &rg_plan,
+            &ProjectionMask::all(),
+            &metadata,
+            &mut prefetched,
+        );
+        let data = ranges
+            .iter()
+            .map(|range| file.slice(range.start as usize..range.end as usize))
+            .collect();
+        decoder.push_ranges(ranges, data).unwrap();
+
+        let DecodeResult::Data(first_reader) = decoder.try_next_reader().unwrap() else {
+            panic!("first row group should be ready");
+        };
+        assert_eq!(
+            first_reader
+                .map(|batch| batch.unwrap().num_rows())
+                .sum::<usize>(),
+            1000
+        );
+
+        let DecodeResult::Data(second_reader) = decoder.try_next_reader().unwrap() else {
+            panic!("prefetched second row group should not require more I/O");
+        };
+        assert_eq!(
+            second_reader
+                .map(|batch| batch.unwrap().num_rows())
+                .sum::<usize>(),
+            1000
+        );
+    }
+
+    #[test]
+    fn prefetch_accounts_for_already_buffered_bytes() {
+        let (metadata, _) = build_three_rg_file();
+        let rg0 = column_range(&metadata, 0);
+        let rg1 = column_range(&metadata, 1);
+        let rg_plan = (0..3).map(|rg_index| RgPlanEntry { rg_index }).collect();
+        let requested = rg0.end - rg0.start;
+        let next = rg1.end - rg1.start;
+        let budget = (requested + next) as usize;
+        let mut prefetched = HashSet::new();
+
+        let ranges = prefetch_row_group_ranges(
+            vec![rg0.clone()],
+            1,
+            Some(budget),
+            &rg_plan,
+            &ProjectionMask::all(),
+            &metadata,
+            &mut prefetched,
+        );
+
+        assert_eq!(ranges, vec![rg0]);
+        assert!(prefetched.is_empty());
+    }
+
+    #[test]
+    fn prefetch_disabled_leaves_request_unchanged() {
+        let (metadata, _) = build_three_rg_file();
+        let rg0 = column_range(&metadata, 0);
+        let rg_plan = (0..3).map(|rg_index| RgPlanEntry { rg_index }).collect();
+        let mut prefetched = HashSet::new();
+
+        let ranges = prefetch_row_group_ranges(
+            vec![rg0.clone()],
+            0,
+            None,
+            &rg_plan,
+            &ProjectionMask::all(),
+            &metadata,
+            &mut prefetched,
+        );
+
+        assert_eq!(ranges, vec![rg0]);
+        assert!(prefetched.is_empty());
     }
 
     /// Create a fresh `(creation_errors, evaluation_errors)` counter pair

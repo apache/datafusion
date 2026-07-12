@@ -252,6 +252,8 @@ pub(super) struct ParquetMorselizer {
     /// Optional hint for how large the initial request to read parquet metadata
     /// should be
     pub metadata_size_hint: Option<usize>,
+    /// Maximum number of bytes buffered by speculative row-group prefetching.
+    pub prefetch_size: Option<usize>,
     /// Metrics for reporting
     pub metrics: ExecutionPlanMetricsSet,
     /// Factory for instantiating parquet reader
@@ -425,6 +427,7 @@ struct PreparedParquetOpen {
     baseline_metrics: BaselineMetrics,
     file_pruner: Option<FilePruner>,
     metadata_size_hint: Option<usize>,
+    prefetch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
     async_file_reader: Box<dyn AsyncFileReader>,
@@ -828,6 +831,7 @@ impl ParquetMorselizer {
             baseline_metrics,
             file_pruner,
             metadata_size_hint,
+            prefetch_size: self.prefetch_size,
             metrics: self.metrics.clone(),
             parquet_file_reader_factory: Arc::clone(&self.parquet_file_reader_factory),
             async_file_reader,
@@ -1482,6 +1486,9 @@ impl RowGroupsPrunedParquetOpen {
             active_reader: None,
             rg_plan,
             reader: prepared.async_file_reader,
+            parquet_metadata: Arc::clone(&file_metadata),
+            prefetch_size: prepared.prefetch_size,
+            prefetched_row_groups: std::collections::HashSet::new(),
             decoder_projection,
             arrow_reader_metrics,
             predicate_cache_inner_records,
@@ -2014,6 +2021,7 @@ mod test {
                 predicate: self.predicate,
                 table_schema,
                 metadata_size_hint: self.metadata_size_hint,
+                prefetch_size: None,
                 metrics: self.metrics,
                 parquet_file_reader_factory: self
                     .parquet_file_reader_factory
