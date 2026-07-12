@@ -804,6 +804,13 @@ config_namespace! {
         /// See <https://github.com/apache/datafusion/issues/22710> for details.
         pub enable_migration_aggregate: bool, default = true
 
+        /// Hash aggregate subpartition fan-out used when repartitioning partial
+        /// aggregate output for final partitioned aggregation. This also controls
+        /// how many partitioned input batches the final aggregation buffers before
+        /// materializing those subpartitions. Higher values may reduce final
+        /// aggregate memory usage at the cost of more per-partition buffering work.
+        pub hash_aggregate_partition_factor: ConfigNonZeroUsize, default = non_zero_usize_default(16)
+
         /// Sets the compression codec used when spilling data to disk.
         ///
         /// Since datafusion writes spill files using the Arrow IPC Stream format,
@@ -4222,6 +4229,25 @@ mod tests {
         let err = config_file_decryption_properties.unwrap_err().to_string();
         assert!(err.contains("key retriever"));
         assert!(err.contains("Key metadata not provided"));
+    }
+
+    #[test]
+    fn test_hash_aggregate_partition_factor_config_rejects_zero() {
+        use crate::config::ConfigOptions;
+
+        let mut options = ConfigOptions::new();
+        assert_eq!(options.execution.hash_aggregate_partition_factor.get(), 16);
+
+        options
+            .set("datafusion.execution.hash_aggregate_partition_factor", "4")
+            .unwrap();
+        assert_eq!(options.execution.hash_aggregate_partition_factor.get(), 4);
+        assert!(
+            options
+                .set("datafusion.execution.hash_aggregate_partition_factor", "0")
+                .is_err()
+        );
+        assert_eq!(options.execution.hash_aggregate_partition_factor.get(), 4);
     }
 
     #[cfg(feature = "parquet")]

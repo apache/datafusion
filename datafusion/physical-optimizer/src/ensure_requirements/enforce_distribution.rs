@@ -723,6 +723,7 @@ fn add_hash_on_top(
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
     allow_subset_satisfy_partitioning: bool,
+    hash_aggregate_partition_factor: usize,
 ) -> Result<DistributionContext> {
     // Early return if hash repartition is unnecessary
     // `RepartitionExec: partitioning=Hash([...], 1), input_partitions=1` is unnecessary.
@@ -756,7 +757,8 @@ fn add_hash_on_top(
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.prefer_existing_sort`).
         let partitioning = dist.create_partitioning(n_target);
-        let max_aggr_partition_factor = hash_aggregate_partition_factor(&input.plan);
+        let max_aggr_partition_factor =
+            aggregate_partition_factor(&input.plan, hash_aggregate_partition_factor);
         let repartition = RepartitionExec::try_new_with_max_aggr_partition_factor(
             Arc::clone(&input.plan),
             partitioning,
@@ -771,13 +773,14 @@ fn add_hash_on_top(
     Ok(input)
 }
 
-fn hash_aggregate_partition_factor(input: &Arc<dyn ExecutionPlan>) -> usize {
-    const DEFAULT_HASH_AGGREGATE_PARTITION_FACTOR: usize = 16;
-
+fn aggregate_partition_factor(
+    input: &Arc<dyn ExecutionPlan>,
+    hash_aggregate_partition_factor: usize,
+) -> usize {
     input
         .downcast_ref::<AggregateExec>()
         .filter(|aggregate| aggregate.mode() == &AggregateMode::Partial)
-        .map(|_| DEFAULT_HASH_AGGREGATE_PARTITION_FACTOR)
+        .map(|_| hash_aggregate_partition_factor)
         .unwrap_or(1)
 }
 
@@ -1099,6 +1102,8 @@ pub fn ensure_distribution(
         .execution
         .use_row_number_estimates_to_optimize_partitioning;
     let subset_satisfaction_threshold = config.optimizer.subset_repartition_threshold;
+    let hash_aggregate_partition_factor =
+        config.execution.hash_aggregate_partition_factor.get();
     let unbounded_and_pipeline_friendly = dist_context.plan.boundedness().is_unbounded()
         && matches!(
             dist_context.plan.pipeline_behavior(),
@@ -1267,6 +1272,7 @@ pub fn ensure_distribution(
                             exprs.to_vec(),
                             target_partitions,
                             allow_subset_satisfy_partitioning,
+                            hash_aggregate_partition_factor,
                         )?;
                     }
                 }

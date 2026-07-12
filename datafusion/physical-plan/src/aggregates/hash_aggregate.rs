@@ -51,7 +51,6 @@ use crate::metrics::{
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metrics};
 
-const PARTITION_MATERIALIZE_WINDOW_SIZE: usize = 16;
 const PARTITION_MATERIALIZE_GROUP_SIZE: usize = 4;
 
 struct BucketStream {
@@ -110,12 +109,13 @@ struct FinalPartitionRunState {
     replaying_partition_id: Option<usize>,
     is_draining: bool,
     schema: Option<SchemaRef>,
+    partition_materialize_window_size: usize,
 }
 
 impl FinalPartitionRunState {
-    fn new() -> Self {
+    fn new(partition_materialize_window_size: usize) -> Self {
         Self {
-            buffered_batches: Vec::with_capacity(PARTITION_MATERIALIZE_WINDOW_SIZE),
+            buffered_batches: Vec::with_capacity(partition_materialize_window_size),
             staged_batches: BTreeMap::new(),
             staged_sizes: BTreeMap::new(),
             total_staged_size: 0,
@@ -124,6 +124,7 @@ impl FinalPartitionRunState {
             replaying_partition_id: None,
             is_draining: false,
             schema: None,
+            partition_materialize_window_size,
         }
     }
 
@@ -157,7 +158,7 @@ impl FinalPartitionRunState {
         self.buffered_batches
             .push(BufferedPartitionBatch { batch, runs });
 
-        if self.buffered_batches.len() >= PARTITION_MATERIALIZE_WINDOW_SIZE {
+        if self.buffered_batches.len() >= self.partition_materialize_window_size {
             self.flush_buffered_batches()?;
         }
 
@@ -1082,13 +1083,20 @@ impl FinalHashAggregateStream {
             MemoryConsumer::new(format!("FinalHashAggregateStream[{partition}]"))
                 .register(context.memory_pool());
         let uses_partition_runs = agg.mode == super::AggregateMode::FinalPartitioned;
+        let hash_aggregate_partition_factor = context
+            .session_config()
+            .options()
+            .execution
+            .hash_aggregate_partition_factor
+            .get();
 
         Ok(Self {
             schema,
             input,
             baseline_metrics,
             reservation,
-            partition_run_state: uses_partition_runs.then(FinalPartitionRunState::new),
+            partition_run_state: uses_partition_runs
+                .then(|| FinalPartitionRunState::new(hash_aggregate_partition_factor)),
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             state: Some(FinalHashAggregateState::ReadingInput { hash_table }),
         })
@@ -1620,6 +1628,8 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
+    use datafusion_common::config::ConfigNonZeroUsize;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
@@ -1682,7 +1692,13 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        let task_ctx = Arc::new(TaskContext::default());
+        let mut session_config = SessionConfig::new();
+        session_config
+            .options_mut()
+            .execution
+            .hash_aggregate_partition_factor = ConfigNonZeroUsize::try_new(1)?;
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
         let mut stream = FinalHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?;
         let mut actual = Vec::new();
         while let Some(batch) = stream.next().await {
@@ -1711,6 +1727,74 @@ mod tests {
                 .is_some_and(
                     |state| !state.has_buffered_partitions() && state.is_draining
                 )
+        );
+
+        Ok(())
+    }
+
+    // Covers final partitioned hash aggregation reading the materialization
+    // window size from `hash_aggregate_partition_factor`.
+    // Example: setting the factor to 3 buffers two batches without flushing.
+    #[tokio::test]
+    async fn test_final_hash_stream_uses_hash_aggregate_partition_factor_for_window()
+    -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![2])) as ArrayRef,
+            ],
+        )?;
+        let input_batches = vec![
+            append_subpartition_column(&batch, &[PartitionRun::new(0, 1)?])?,
+            append_subpartition_column(&batch, &[PartitionRun::new(0, 1)?])?,
+        ];
+        let input_schema = subpartition_schema(&schema);
+        let input = TestMemoryExec::try_new_exec(&[input_batches], input_schema, None)?;
+        let input =
+            Arc::new(TestMemoryExec::update_cache(&input)) as Arc<dyn ExecutionPlan>;
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            col("group_col", &schema)?,
+            "group_col".to_string(),
+        )]);
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(value)")
+                .build()?,
+        )];
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            group_by,
+            aggr_expr,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+
+        let mut session_config = SessionConfig::new();
+        session_config
+            .options_mut()
+            .execution
+            .hash_aggregate_partition_factor = ConfigNonZeroUsize::try_new(3)?;
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+        let mut stream = FinalHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?;
+        let first_batch = stream.input.next().await.unwrap()?;
+        assert!(stream.stage_partition_runs(&first_batch)?.is_some());
+        let second_batch = stream.input.next().await.unwrap()?;
+        assert!(stream.stage_partition_runs(&second_batch)?.is_some());
+
+        assert!(
+            stream
+                .partition_run_state
+                .as_ref()
+                .is_some_and(|state| state.buffered_batches.len() == 2
+                    && state.staged_batches.is_empty())
         );
 
         Ok(())
