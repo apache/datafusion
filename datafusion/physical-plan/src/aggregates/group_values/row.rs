@@ -267,7 +267,15 @@ impl GroupValues for GroupValuesRows {
     }
 }
 
-fn dictionary_encode_if_necessary(
+/// Re-apply dictionary / run-end encoding to `array` so it matches `expected`.
+///
+/// Arrow's [`RowConverter`] decodes dictionary and run-end-encoded values to
+/// their plain value type on the way out, so any group-value array produced
+/// from the row format must be re-encoded to the schema's expected type before
+/// being returned. Shared with the generic row-backed `GroupColumn`.
+///
+/// [`RowConverter`]: arrow::row::RowConverter
+pub(crate) fn dictionary_encode_if_necessary(
     array: &ArrayRef,
     expected: &DataType,
 ) -> Result<ArrayRef> {
