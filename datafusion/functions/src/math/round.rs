@@ -227,6 +227,10 @@ impl ScalarUDFImpl for RoundFunc {
         "round"
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

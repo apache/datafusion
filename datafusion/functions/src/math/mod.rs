@@ -336,12 +336,24 @@ mod strict_tests {
                 ],
             ),
             case("radians", radians(), vec![ScalarValue::Float64(Some(90.0))]),
+            case("round", round(), vec![ScalarValue::Float64(Some(1.5))]),
+            case(
+                "round",
+                round(),
+                vec![ScalarValue::Float64(Some(1.5)), ScalarValue::Int32(Some(1))],
+            ),
             case("signum", signum(), vec![ScalarValue::Float64(Some(-1.0))]),
             case("sin", sin(), vec![ScalarValue::Float64(Some(0.5))]),
             case("sinh", sinh(), vec![ScalarValue::Float64(Some(0.5))]),
             case("sqrt", sqrt(), vec![ScalarValue::Float64(Some(4.0))]),
             case("tan", tan(), vec![ScalarValue::Float64(Some(0.5))]),
             case("tanh", tanh(), vec![ScalarValue::Float64(Some(0.5))]),
+            case("trunc", trunc(), vec![ScalarValue::Float64(Some(1.5))]),
+            case(
+                "trunc",
+                trunc(),
+                vec![ScalarValue::Float64(Some(1.5)), ScalarValue::Int64(Some(1))],
+            ),
         ];
 
         for case in cases {
@@ -351,27 +363,39 @@ mod strict_tests {
                 case.name
             );
 
-            for null_arg_idx in 0..case.args.len() {
+            for null_mask in 0..(1 << case.args.len()) {
                 let mut args = case.args.clone();
-                let data_type = args[null_arg_idx].data_type();
-                args[null_arg_idx] = ScalarValue::try_new_null(&data_type).unwrap();
+                for (arg_idx, arg) in args.iter_mut().enumerate() {
+                    if null_mask & (1 << arg_idx) != 0 {
+                        *arg = ScalarValue::try_new_null(&arg.data_type()).unwrap();
+                    }
+                }
 
-                let result = invoke_with_scalars(&case.func, args)
-                    .unwrap_or_else(|error| panic!("{} failed: {error}", case.name));
+                let result =
+                    invoke_with_scalars(&case.func, args).unwrap_or_else(|error| {
+                        panic!(
+                            "{} failed for NULL mask {null_mask:b}: {error}",
+                            case.name
+                        )
+                    });
+                let expected_null = null_mask != 0;
                 match result {
                     ColumnarValue::Scalar(value) => {
-                        assert!(
+                        assert_eq!(
                             value.is_null(),
-                            "{} should return NULL when argument {null_arg_idx} is NULL, got {value:?}",
-                            case.name
+                            expected_null,
+                            "{} returned {value:?} for NULL mask {null_mask:0width$b}",
+                            case.name,
+                            width = case.args.len(),
                         );
                     }
                     ColumnarValue::Array(array) => {
                         assert_eq!(
-                            array.null_count(),
-                            array.len(),
-                            "{} should return only NULLs when argument {null_arg_idx} is NULL",
-                            case.name
+                            array.null_count() == array.len(),
+                            expected_null,
+                            "{} returned unexpected nulls for NULL mask {null_mask:0width$b}",
+                            case.name,
+                            width = case.args.len(),
                         );
                     }
                 }
