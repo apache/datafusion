@@ -114,6 +114,15 @@ impl BatchBuilder {
         self.indices.push((cursor.batch_idx, row_idx));
     }
 
+    /// Append the next `n` rows from `stream_idx`
+    pub fn push_n_rows(&mut self, stream_idx: usize, n: usize) {
+        let cursor = &mut self.cursors[stream_idx];
+        let row_idx = cursor.row_idx;
+
+        cursor.row_idx += n;
+        self.indices.extend((0..n).map(|i| (cursor.batch_idx, row_idx + i)));
+    }
+
     /// Returns the number of in-progress rows in this [`BatchBuilder`]
     pub fn len(&self) -> usize {
         self.indices.len()
