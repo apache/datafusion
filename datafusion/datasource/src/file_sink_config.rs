@@ -28,9 +28,71 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
+use datafusion_physical_plan::metrics::{
+    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, MetricsSet, Time,
+};
 
 use async_trait::async_trait;
 use object_store::ObjectStore;
+
+/// Common metrics exposed by file sinks.
+#[derive(Debug)]
+pub struct FileSinkMetrics {
+    metrics: ExecutionPlanMetricsSet,
+    rows_written: Count,
+    bytes_written: Count,
+    elapsed_compute: Time,
+}
+
+impl FileSinkMetrics {
+    /// Create a new set of file sink metrics.
+    pub fn new() -> Self {
+        let metrics = ExecutionPlanMetricsSet::new();
+        let rows_written = MetricBuilder::new(&metrics)
+            .with_category(MetricCategory::Rows)
+            .global_counter("rows_written");
+        let bytes_written = MetricBuilder::new(&metrics)
+            .with_category(MetricCategory::Bytes)
+            .global_counter("bytes_written");
+        let elapsed_compute = MetricBuilder::new(&metrics).elapsed_compute(0);
+        Self {
+            metrics,
+            rows_written,
+            bytes_written,
+            elapsed_compute,
+        }
+    }
+
+    /// Return the number of rows written.
+    pub fn rows_written(&self) -> &Count {
+        &self.rows_written
+    }
+
+    /// Return the number of bytes written.
+    ///
+    /// The exact meaning is format-specific. For stateless sinks, this is the
+    /// number of serialized bytes passed to the writer before any stream-level
+    /// compression is applied.
+    pub fn bytes_written(&self) -> &Count {
+        &self.bytes_written
+    }
+
+    /// Return the elapsed compute time.
+    pub fn elapsed_compute(&self) -> &Time {
+        &self.elapsed_compute
+    }
+
+    /// Return a snapshot of the metrics.
+    pub fn snapshot(&self) -> MetricsSet {
+        self.metrics.clone_inner()
+    }
+}
+
+impl Default for FileSinkMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Determines how `FileSink` output paths are interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
