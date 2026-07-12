@@ -2077,3 +2077,33 @@ SELECT s, id FROM simple_struct WHERE s['value'] > 100 AND id < 4;
 # reset it explicitly.
 statement ok
 SET datafusion.execution.target_partitions = 4;
+
+#####################
+# Section: volatile expressions are not duplicated by projection pushdown
+#
+# Regression test for #23220: a volatile expression (e.g. `random()`) aliased
+# once in a subquery and referenced multiple times must be evaluated once and
+# reused. Projection pushdown must not merge the outer projection into the file
+# scan when doing so would inline and duplicate the volatile expression.
+# Reproduces only against a file scan (not an in-memory table); if the volatile
+# expression is duplicated, the two references diverge and `x = y` is false.
+#####################
+
+statement ok
+COPY (SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3)
+TO 'test_files/scratch/projection_pushdown/volatile.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE volatile_scan STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/volatile.parquet';
+
+# The two references to the aliased `random()` value must be equal on every
+# row: the expression is evaluated once and reused, not inlined twice.
+query B rowsort
+SELECT s.x = s.y
+FROM (SELECT r AS x, r AS y FROM (SELECT random() AS r FROM volatile_scan) AS t) AS s;
+----
+true
+true
+true
