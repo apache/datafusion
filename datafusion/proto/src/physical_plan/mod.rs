@@ -891,31 +891,23 @@ pub trait PhysicalPlanNodeExt: Sized {
         let plan_clone = Arc::clone(&plan);
         let mut plan = plan.as_ref();
         // Resolve the downcast identity first so wrapper plans serialize as
-        // their delegate, matching how the `downcast_ref` chain below sees
-        // them. Without this a wrapper around a migrated plan would hit the
-        // wrapper's default `try_to_proto` (`Ok(None)`) and find no fallback
-        // arm for the delegate.
+        // their delegate, matching how `downcast_ref`-based dispatch sees
+        // them. Without this a wrapper around a self-serializing plan would
+        // hit the wrapper's default `try_to_proto` (`Ok(None)`) and fall
+        // through to the extension codec.
         while let Some(delegate) = plan.downcast_delegate() {
             plan = delegate;
         }
 
         // Self-serializing plans handle themselves via the `try_to_proto` hook
         // (#22419). `Ok(None)` means "not migrated" and falls through to the
-        // central downcast chain below.
-        //
-        // The hook is a trait method dispatched on the concrete type, so — like
-        // the `downcast_ref::<T>()` arms below — it must first follow
-        // `downcast_delegate()` so a wrapper plan serializes as its delegate.
+        // remaining special cases and the extension-codec fallback below.
         let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
         };
         let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
-        let mut hook_target = plan;
-        while let Some(delegate) = hook_target.downcast_delegate() {
-            hook_target = delegate;
-        }
-        if let Some(node) = hook_target.try_to_proto(&encode_ctx)? {
+        if let Some(node) = plan.try_to_proto(&encode_ctx)? {
             return Ok(node);
         }
 
