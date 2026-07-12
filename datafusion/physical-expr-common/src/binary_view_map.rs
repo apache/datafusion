@@ -26,7 +26,7 @@ use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
-use std::fmt::Debug;
+use std::{fmt::Debug, io::SeekFrom::Current};
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -396,7 +396,7 @@ where
     pub fn into_state(mut self) -> ArrayRef {
         // Flush any remaining in-progress buffer
         if !self.in_progress.is_empty() {
-            let flushed = std::mem::take(&mut self.in_progress);
+            let flushed = std::mem::replace(&mut self.in_progress, Vec::with_capacity(BYTE_VIEW_MAX_BLOCK_SIZE));
             self.completed.push(Buffer::from_vec(flushed));
         }
 
