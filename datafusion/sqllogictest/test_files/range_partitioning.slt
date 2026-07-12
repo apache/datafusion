@@ -395,9 +395,10 @@ ORDER BY l.non_range_key, l.value, r.value;
 2 350 350
 
 ##########
-# TEST 12: Non-Inner Range Join Repartitions
-# Only inner partitioned hash joins opt in to Range satisfying KeyPartitioned
-# requirements. Non-inner joins keep using Hash repartitioning.
+# TEST 12: Left Range Join Repartitions
+# Only inner and right-side (Right/RightSemi/RightAnti/RightMark) partitioned
+# hash joins opt in to Range satisfying KeyPartitioned requirements. Other
+# join types, such as Left, keep using Hash repartitioning.
 ##########
 
 query TT

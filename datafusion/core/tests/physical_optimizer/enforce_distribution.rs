@@ -979,6 +979,114 @@ fn left_mark_hash_join_uses_range_partitioning() -> Result<()> {
 }
 
 #[test]
+fn left_hash_join_range_rehash_incompatible_split_points() -> Result<()> {
+    let left = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 15, 30],
+        SortOptions::default(),
+    )?);
+    let right = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Left);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    println!("{}", displayable(plan.as_ref()).indent(true));
+
+    Ok(())
+}
+
+#[test]
+fn left_hash_join_range_rehash_incompatible_partition_counts() -> Result<()> {
+    let left = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let right = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20],
+        SortOptions::default(),
+    )?);
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::LeftSemi);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    println!("{}", displayable(plan.as_ref()).indent(true));
+
+    Ok(())
+}
+
+#[test]
+fn left_hash_join_range_rehash_incompatible_sort_options() -> Result<()> {
+    let left = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let right = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [30, 20, 10],
+        SortOptions::default().with_descending(true),
+    )?);
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::LeftAnti);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    println!("{}", displayable(plan.as_ref()).indent(true));
+
+    Ok(())
+}
+
+#[test]
+fn left_hash_join_range_rehash_incompatible_key_expressions() -> Result<()> {
+    let left = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let right = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("b", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::LeftMark);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    println!("{}", displayable(plan.as_ref()).indent(true));
+
+    Ok(())
+}
+
+#[test]
 fn multi_hash_joins() -> Result<()> {
     let left = parquet_exec();
     let alias_pairs: Vec<(String, String)> = vec![
