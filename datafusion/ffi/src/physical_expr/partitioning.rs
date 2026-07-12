@@ -21,7 +21,16 @@ use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use stabby::vec::Vec as SVec;
 
-use crate::physical_expr::FFI_PhysicalExpr;
+use crate::{arrow_wrappers::WrappedArray, physical_expr::{FFI_PhysicalExpr, sort::FFI_PhysicalSortExpr}};
+
+/// A stable struct for sharing [`RangePartitioning`] across FFI boundaries.
+/// See ['RangePartitioning'] for the descriptions of each field.
+#[repr(C)]
+#[derive(Debug)]
+pub struct FFI_RangePartitioning {
+    split_points: SVec<SVec<WrappedArray>>,
+    ordering: SVec<FFI_PhysicalSortExpr>,
+}
 
 /// A stable struct for sharing [`Partitioning`] across FFI boundaries.
 /// See ['Partitioning'] for the meaning of each variant.
@@ -31,6 +40,7 @@ pub enum FFI_Partitioning {
     RoundRobinBatch(usize),
     Hash(SVec<FFI_PhysicalExpr>, usize),
     UnknownPartitioning(usize),
+    Range(FFI_RangePartitioning),
 }
 
 impl From<&Partitioning> for FFI_Partitioning {
@@ -45,10 +55,10 @@ impl From<&Partitioning> for FFI_Partitioning {
                     .collect();
                 Self::Hash(exprs, *size)
             }
-            // FFI does not yet expose range partition metadata.
-            // See https://github.com/apache/datafusion/issues/22394
             Partitioning::Range(range) => {
-                Self::UnknownPartitioning(range.partition_count())
+                let split_points = range.split_points().iter().map(|s| s.values().iter().map(|v| v.try_into().expect("Fail") ).collect() ).collect();
+                let ordering = range.ordering().iter().map(|e| FFI_PhysicalSortExpr::from(e)).collect();
+                Self::Range(FFI_RangePartitioning { split_points, ordering})
             }
             Partitioning::UnknownPartitioning(size) => Self::UnknownPartitioning(*size),
         }
@@ -65,6 +75,7 @@ impl From<&FFI_Partitioning> for Partitioning {
                 let exprs = exprs.iter().map(<Arc<dyn PhysicalExpr>>::from).collect();
                 Self::Hash(exprs, *size)
             }
+            FFI_Partitioning::Range()
             FFI_Partitioning::UnknownPartitioning(size) => {
                 Self::UnknownPartitioning(*size)
             }
