@@ -41,9 +41,10 @@ use datafusion_physical_expr_common::metrics::{
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
 use std::fmt;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -122,17 +123,6 @@ impl BufferExec {
     pub fn capacity(&self) -> usize {
         self.capacity
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for BufferExec {
@@ -180,6 +170,17 @@ impl ExecutionPlan for BufferExec {
         Ok(Arc::new(Self::new(children.swap_remove(0), self.capacity)))
     }
 
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -194,8 +195,7 @@ impl ExecutionPlan for BufferExec {
         let curr_mem_out = Arc::clone(&curr_mem_in);
         let mut max_mem_in = 0;
         let max_mem = MetricBuilder::new(&self.metrics)
-            .with_category(MetricCategory::Bytes)
-            .gauge("max_mem_used", partition);
+            .peak_memory_usage("max_mem_used", partition);
 
         let curr_queued_in = Arc::new(AtomicUsize::new(0));
         let curr_queued_out = Arc::clone(&curr_queued_in);
@@ -338,11 +338,24 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
                 let item_or_err = tokio::select! {
                     biased;
                     _ = batch_tx.closed() => break,
-                    item_or_err = input.next() => {
-                        let Some(item_or_err) = item_or_err else {
-                            break; // stream finished
-                        };
-                        item_or_err
+                    // Catch a panic in the input poll so it surfaces as a stream error
+                    // instead of dropping `batch_tx` and looking like a clean EOF.
+                    polled = AssertUnwindSafe(input.next()).catch_unwind() => {
+                        match polled {
+                            Ok(Some(item_or_err)) => item_or_err,
+                            Ok(None) => break, // stream finished
+                            Err(panic) => {
+                                let msg = panic
+                                    .downcast_ref::<&str>()
+                                    .map(|s| s.to_string())
+                                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                                    .unwrap_or_else(|| "unknown panic".to_string());
+                                let _ = batch_tx.send(internal_err!(
+                                    "BufferExec input stream panicked: {msg}"
+                                ));
+                                break;
+                            }
+                        }
                     }
                 };
 
@@ -551,6 +564,29 @@ mod tests {
         pull_ok_msg(&mut buffered).await?;
         pull_ok_msg(&mut buffered).await?;
         pull_err_msg(&mut buffered).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn panic_in_input_is_propagated() -> Result<(), Box<dyn Error>> {
+        // A panic while polling the input must surface as a stream error, not a
+        // silent end-of-stream that drops the rest of the partition's output.
+        let input = futures::stream::iter([1, 2, 3, 4]).map(|v| {
+            if v == 3 {
+                panic!("boom on 3");
+            }
+            Ok(v)
+        });
+        let (_, res) = memory_pool_and_reservation();
+
+        let mut buffered = MemoryBufferedStream::new(input, 10, res);
+        wait_for_buffering().await;
+
+        pull_ok_msg(&mut buffered).await?;
+        pull_ok_msg(&mut buffered).await?;
+        let err = pull_err_msg(&mut buffered).await?;
+        assert_contains!(err.to_string(), "panicked");
 
         Ok(())
     }

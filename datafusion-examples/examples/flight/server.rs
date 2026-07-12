@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use arrow::ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator};
+use arrow::ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteContext};
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
@@ -112,7 +112,7 @@ impl FlightService for FlightServiceImpl {
 
                 // add an initial FlightData message that sends schema
                 let options = arrow::ipc::writer::IpcWriteOptions::default();
-                let mut compression_context = CompressionContext::default();
+                let mut compression_context = IpcWriteContext::default();
                 let schema_flight_data = SchemaAsIpc::new(&schema, &options);
 
                 let mut flights = vec![FlightData::from(schema_flight_data)];

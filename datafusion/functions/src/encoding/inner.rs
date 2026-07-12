@@ -24,7 +24,7 @@ use arrow::{
     },
     datatypes::DataType,
 };
-use arrow_buffer::{Buffer, OffsetBufferBuilder};
+use arrow_buffer::{Buffer, OffsetBuffer};
 use base64::{
     Engine as _,
     engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
@@ -410,11 +410,7 @@ impl Encoding {
                     .collect();
                 Ok(Arc::new(array))
             }
-            Self::Hex => {
-                let array: GenericStringArray<OutputOffset> =
-                    array.iter().map(|x| x.map(hex::encode)).collect();
-                Ok(Arc::new(array))
-            }
+            Self::Hex => hex_encode_array::<_, OutputOffset>(array),
         }
     }
 
@@ -459,6 +455,45 @@ impl Encoding {
     }
 }
 
+/// Hex-encode a binary array into a string array, writing the lowercase hex
+/// digits directly into a single pre-sized value buffer. Each input byte maps
+/// to exactly two hex characters, so the output size is known up front and no
+/// per-element `String` is allocated.
+fn hex_encode_array<'a, InputBinaryArray, OutputOffset>(
+    array: &InputBinaryArray,
+) -> Result<ArrayRef>
+where
+    InputBinaryArray: BinaryArrayType<'a>,
+    OutputOffset: OffsetSizeTrait,
+{
+    let total_input_bytes: usize = array.iter().flatten().map(|v| v.len()).sum();
+
+    let mut values = vec![0u8; total_input_bytes * 2];
+    let mut offsets = Vec::<OutputOffset>::with_capacity(array.len() + 1);
+    offsets.push(OutputOffset::zero());
+
+    let mut pos = 0usize;
+    for v in array.iter() {
+        if let Some(v) = v {
+            let out_len = v.len() * 2;
+            // The slice is sized to exactly `2 * v.len()`, which is the only
+            // condition under which `encode_to_slice` can fail, so this cannot
+            // error.
+            hex::encode_to_slice(v, &mut values[pos..pos + out_len])
+                .map_err(|e| exec_datafusion_err!("Failed to encode to hex: {e}"))?;
+            pos += out_len;
+        }
+        offsets.push(OutputOffset::usize_as(pos));
+    }
+
+    let array = GenericStringArray::<OutputOffset>::try_new(
+        OffsetBuffer::new(offsets.into()),
+        Buffer::from_vec(values),
+        array.nulls().cloned(),
+    )?;
+    Ok(Arc::new(array))
+}
+
 fn delegated_decode<'a, DecodeFunction, InputBinaryArray, OutputOffset>(
     decode: DecodeFunction,
     input: &InputBinaryArray,
@@ -470,22 +505,21 @@ where
     OutputOffset: OffsetSizeTrait,
 {
     let mut values = vec![0; conservative_upper_bound_size];
-    let mut offsets = OffsetBufferBuilder::new(input.len());
+    let mut offsets = Vec::<OutputOffset>::with_capacity(input.len() + 1);
+    offsets.push(OutputOffset::zero());
     let mut total_bytes_decoded = 0;
     for v in input.iter() {
         if let Some(v) = v {
             let cursor = &mut values[total_bytes_decoded..];
             let decoded = decode(v, cursor)?;
             total_bytes_decoded += decoded;
-            offsets.push_length(decoded);
-        } else {
-            offsets.push_length(0);
         }
+        offsets.push(OutputOffset::usize_as(total_bytes_decoded));
     }
     // We reserved an upper bound size for the values buffer, but we only use the actual size
     values.truncate(total_bytes_decoded);
     let binary_array = GenericBinaryArray::<OutputOffset>::try_new(
-        offsets.finish(),
+        OffsetBuffer::new(offsets.into()),
         Buffer::from_vec(values),
         input.nulls().cloned(),
     )?;
