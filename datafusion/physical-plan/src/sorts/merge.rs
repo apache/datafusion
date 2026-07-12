@@ -257,7 +257,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         let mut timer = elapsed_compute.timer();
 
         // Continue while we have more than 1 stream left
-        while self.number_of_exhausted_streams + 1 >= self.streams.partitions() {
+        while self.number_of_exhausted_streams + 1 < self.streams.partitions() {
             let stream_idx = self.loser_tree[0];
             if !self.advance_cursors(stream_idx) {
                 break;
