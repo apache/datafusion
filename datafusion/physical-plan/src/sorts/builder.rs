@@ -214,14 +214,27 @@ impl BatchBuilder {
     ///
     /// Returns `None` if no pending rows
     pub fn build_record_batch(&mut self) -> Result<Option<RecordBatch>> {
-        if self.is_empty() {
+        self.build_record_batch_with_up_to_n_rows(self.indices.len())
+    }
+
+    /// Drains the in_progress row indexes up to n rows, and builds a new RecordBatch from them
+    ///
+    /// Will then drop any batches for which all rows have been yielded to the output.
+    /// If an offset overflow occurs (e.g. string/list offsets exceed i32::MAX),
+    /// retries with progressively fewer rows until it succeeds.
+    ///
+    /// Returns `None` if no pending rows
+    pub(crate) fn build_record_batch_with_up_to_n_rows(&mut self, n: usize) -> Result<Option<RecordBatch>> {
+        if self.is_empty() || n == 0 {
             return Ok(None);
         }
 
+        let batch_size = self.indices.len().min(n);
+
         let (rows_to_emit, columns) =
-            retry_interleave(self.indices.len(), self.indices.len(), |rows_to_emit| {
-                self.try_interleave_columns(&self.indices[..rows_to_emit])
-            })?;
+          retry_interleave(batch_size, batch_size, |rows_to_emit| {
+              self.try_interleave_columns(&self.indices[..rows_to_emit])
+          })?;
 
         Ok(Some(self.finish_record_batch(rows_to_emit, columns)?))
     }

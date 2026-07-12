@@ -226,7 +226,10 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
     fn emit_in_progress_batch(&mut self) -> Result<Option<RecordBatch>> {
         let rows_before = self.in_progress.len();
-        let result = self.in_progress.build_record_batch();
+
+        // Only emit within limits
+        let rows_to_emit = (self.fetch.unwrap_or(usize::MAX) - self.produced).min(self.batch_size);
+        let result = self.in_progress.build_record_batch_with_up_to_n_rows(rows_to_emit);
         self.produced += rows_before - self.in_progress.len();
         result
     }
@@ -282,12 +285,35 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 drop(timer);
                 poll_fn(|cx| self.maybe_poll_stream(cx, winner)).await?;
 
-                // TODO - check if only 1 stream left
                 timer = elapsed_compute.timer();
+
+                // Adjusting the loser tree if necessary
+                self.update_loser_tree();
+
+                let new_winner = self.loser_tree[0];
+
+                // Fast path: skip comparing full batch if the last batch value is still the winner
+                // we do this if:
+                // 1. the winner did not change - so we can skip the full new batch rather than other partial batch
+                // 2. The new winner have more than 1 value
+                // 3. the last row in the new batch beat all other streams
+                if winner == new_winner && self.cursors[new_winner].as_ref().is_some_and(|c| c.len() > 1) && self.winner_batch_beats_all(new_winner) {
+                    let cursor = self.cursors[new_winner].as_mut().expect("already validated that has cursor");
+
+                    // TODO - avoid pushing n rows where we are above the limit or something
+                    // Skip less than the entire number of rows so we can keep the same code flow
+                    let number_of_rows_to_skip = cursor.len() - 1;
+                    // If so, add the indices and
+                    self.in_progress.push_n_rows(new_winner, number_of_rows_to_skip);
+
+                    // Move the cursor to the end
+                    cursor.advance_n(number_of_rows_to_skip);
+                }
+            } else {
+                // Adjusting the loser tree if necessary
+                self.update_loser_tree();
             }
 
-            // Adjusting the loser tree if necessary
-            self.update_loser_tree();
         }
 
         drop(timer);
@@ -416,6 +442,48 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             // There is no need to reschedule ourselves eagerly.
             Poll::Pending
         }
+    }
+
+
+
+    /// Returns `true` if every remaining row of `winner`'s current batch
+    /// sorts before every other stream's current row, using the same index
+    /// tie-breaking as [`Self::is_gt`]. Exhausted streams cannot compete.
+    fn winner_batch_beats_all(&self, winner: usize) -> bool {
+        let Some(winner_cursor) = &self.cursors[winner] else {
+            return false;
+        };
+
+        // Only the streams that lost *directly* to the winner can hold the
+        // overall runner-up, and those are exactly the losers stored on the
+        // winner's leaf-to-root path (every other stream lost to one of them
+        // transitively), so `O(log k)` comparisons suffice instead of `O(k)`.
+        let mut node = self.lt_leaf_node_index(winner);
+        while node != 0 {
+            let challenger = self.loser_tree[node];
+            if let Some(other) = &self.cursors[challenger] {
+                let beats = match winner_cursor.compare_last_to(other) {
+                    Ordering::Less => true,
+                    Ordering::Equal => {
+                        if self.enable_round_robin_tie_breaker {
+                            // true if in round-robin because the winner already decided in a
+                            // round-robin fashion
+                            true
+                        } else {
+                            // Keep sort stable
+                            winner < challenger
+                        }
+                    }
+                    Ordering::Greater => false,
+                };
+                if !beats {
+                    return false;
+                }
+            }
+            node = self.lt_parent_node_index(node);
+        }
+
+        true
     }
 
     /// For the given partition, updates the poll count. If the current value is the same
@@ -624,15 +692,15 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             if self.enable_round_robin_tie_breaker {
                 match (&self.cursors[winner], &self.cursors[challenger]) {
                     (Some(ac), Some(bc)) => match ac.cmp(bc) {
-                        std::cmp::Ordering::Equal => {
+                        Ordering::Equal => {
                             self.handle_tie(cmp_node, &mut winner, challenger);
                         }
-                        std::cmp::Ordering::Greater => {
+                        Ordering::Greater => {
                             // Ends of tie breaker
                             self.round_robin_tie_breaker_mode = false;
                             self.update_winner(cmp_node, &mut winner, challenger);
                         }
-                        std::cmp::Ordering::Less => {
+                        Ordering::Less => {
                             // Ends of tie breaker
                             self.round_robin_tie_breaker_mode = false;
                         }
