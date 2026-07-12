@@ -1060,6 +1060,11 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                     protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => Some(v as usize),
                 })
                 .unwrap_or(None),
+            prefetch_size: value.prefetch_size_opt.map(|opt| match opt {
+                protobuf::parquet_options::PrefetchSizeOpt::PrefetchSize(v) => {
+                    Some(v as usize)
+                }
+            }).unwrap_or(None),
             pushdown_filters: value.pushdown_filters,
             reorder_filters: value.reorder_filters,
             force_filter_selections: value.force_filter_selections,
@@ -1392,6 +1397,16 @@ mod tests {
             recovered.max_row_group_bytes.map(|v| v.get()),
             Some(64 * 1024 * 1024)
         );
+    }
+
+    #[test]
+    fn test_parquet_options_prefetch_size_round_trip() {
+        let opts = ParquetOptions {
+            prefetch_size: Some(20 * 1024 * 1024),
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts);
+        assert_eq!(recovered.prefetch_size, Some(20 * 1024 * 1024));
     }
 
     #[test]
