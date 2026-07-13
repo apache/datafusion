@@ -130,6 +130,9 @@ fn try_tx_rx<T, E>() -> (
     )
 }
 
+/// Value slot shared between [`Emitter`] and [`Receiver`].
+/// Use `Arc<Mutex>` to ensure the created `Stream` implementations
+/// are both `Send` and `Sync`.
 type SlotRef<T> = Arc<Mutex<Option<T>>>;
 
 /// A handle for emitting values from an [`async_stream`] generator.
