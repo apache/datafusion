@@ -282,8 +282,7 @@ impl ListingOptions {
         let resolved = table_path.resolve(state.runtime_env())?;
 
         let all_files: Vec<_> = resolved
-            .table_url
-            .list_all_files(state, resolved.store.as_ref(), &self.file_extension)
+            .list_all_files(state, &self.file_extension)
             .await?
             .try_collect()
             .await?;
@@ -383,8 +382,7 @@ impl ListingOptions {
         // This can fail to detect inconsistent partition keys
         // A DFS traversal approach of the store can help here
         let files: Vec<_> = resolved
-            .table_url
-            .list_all_files(state, resolved.store.as_ref(), &self.file_extension)
+            .list_all_files(state, &self.file_extension)
             .await?
             .take(10)
             .try_collect()

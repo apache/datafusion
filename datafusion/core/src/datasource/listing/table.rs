@@ -59,8 +59,7 @@ impl ListingTableConfigExt for ListingTableConfig {
         let resolved = first.resolve(state.runtime_env())?;
 
         let file = resolved
-            .table_url
-            .list_all_files(state, resolved.store.as_ref(), "")
+            .list_all_files(state, "")
             .await?
             .next()
             .await

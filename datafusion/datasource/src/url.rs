@@ -52,6 +52,22 @@ pub struct ResolvedTableUrl {
     pub table_url: ListingTableUrl,
 }
 
+impl ResolvedTableUrl {
+    /// Lists all files at [`table_url`](Self::table_url) using [`store`](Self::store).
+    ///
+    /// Convenience wrapper around [`ListingTableUrl::list_all_files`] so callers
+    /// don't need to thread `store` through separately after resolving.
+    pub async fn list_all_files<'a>(
+        &'a self,
+        ctx: &'a dyn Session,
+        file_extension: &'a str,
+    ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
+        self.table_url
+            .list_all_files(ctx, self.store.as_ref(), file_extension)
+            .await
+    }
+}
+
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
 /// for more information on the supported expressions
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -761,6 +777,41 @@ mod tests {
         let resolved = url.resolve(&env).unwrap();
         assert_eq!(resolved.identity.as_str(), "s3://bucket/us%20er");
         assert_eq!(resolved.table_url.prefix().as_ref(), "data.parquet");
+    }
+
+    #[test]
+    fn test_resolve_multiple_prefixed_stores() {
+        // Two stores registered under the same authority at different
+        // prefixes must resolve independently: each query gets its own
+        // identity and correctly-stripped rebased prefix, with no
+        // cross-contamination between the two registrations.
+        let registry = DefaultObjectStoreRegistry::new();
+        registry.register_store(
+            &Url::parse("s3://bucket/userA/repo1").unwrap(),
+            Arc::new(object_store::memory::InMemory::new()),
+        );
+        registry.register_store(
+            &Url::parse("s3://bucket/userB/repo2").unwrap(),
+            Arc::new(object_store::memory::InMemory::new()),
+        );
+        let env = RuntimeEnvBuilder::new()
+            .with_object_store_registry(Arc::new(registry))
+            .build_arc()
+            .unwrap();
+
+        let url1 =
+            ListingTableUrl::parse("s3://bucket/userA/repo1/data/f.parquet").unwrap();
+        let resolved1 = url1.resolve(&env).unwrap();
+        assert_eq!(resolved1.identity.as_str(), "s3://bucket/userA/repo1");
+        assert_eq!(resolved1.table_url.prefix().as_ref(), "data/f.parquet");
+
+        let url2 =
+            ListingTableUrl::parse("s3://bucket/userB/repo2/x/y.parquet").unwrap();
+        let resolved2 = url2.resolve(&env).unwrap();
+        assert_eq!(resolved2.identity.as_str(), "s3://bucket/userB/repo2");
+        assert_eq!(resolved2.table_url.prefix().as_ref(), "x/y.parquet");
+
+        assert_ne!(resolved1.identity, resolved2.identity);
     }
 
     #[test]
