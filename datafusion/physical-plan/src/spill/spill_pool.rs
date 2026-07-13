@@ -17,6 +17,7 @@
 
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
+use std::mem;
 use std::sync::Arc;
 use std::task::Waker;
 
@@ -55,14 +56,12 @@ struct SpillPoolShared {
     spill_manager: Arc<SpillManager>,
     /// Pool-level waker to notify when new files are available (single reader)
     waker: Option<Waker>,
-    /// Whether the writer has been dropped (no more files will be added)
-    writer_dropped: bool,
-    /// Writer's reference to the current file (shared by all cloned writers).
-    /// Has its own lock to allow I/O without blocking queue access.
-    current_write_file: Option<Arc<Mutex<ActiveSpillFileShared>>>,
-    /// Number of active writer clones. Only when this reaches zero should
-    /// `writer_dropped` be set to true. This prevents premature EOF signaling
-    /// when one writer clone is dropped while others are still active.
+    /// FIFO queue of open write files. The queue may contain multiple items when multiple
+    /// writers concurrently write to the pool.
+    /// Each write file has its own lock to allow I/O without blocking queue access.
+    current_write_files: VecDeque<Arc<Mutex<ActiveSpillFileShared>>>,
+    /// Number of active writer clones. As long as this value is greater than zero, readers should
+    /// assume batches may still be pushed. This prevents premature EOF signaling.
     active_writer_count: usize,
 }
 
@@ -73,8 +72,7 @@ impl SpillPoolShared {
             files: VecDeque::new(),
             spill_manager,
             waker: None,
-            writer_dropped: false,
-            current_write_file: None,
+            current_write_files: VecDeque::new(),
             active_writer_count: 1,
         }
     }
@@ -171,7 +169,9 @@ impl SpillPoolWriter {
         let mut shared = self.shared.lock();
 
         // Create new file if we don't have one yet
-        if shared.current_write_file.is_none() {
+        let current_write_file = if !shared.current_write_files.is_empty() {
+            shared.current_write_files.pop_front().unwrap()
+        } else {
             let spill_manager = Arc::clone(&shared.spill_manager);
             // Release shared lock before disk I/O (fine-grained locking)
             drop(shared);
@@ -194,52 +194,48 @@ impl SpillPoolWriter {
             // Re-acquire lock and push to shared queue
             shared = self.shared.lock();
             shared.files.push_back(Arc::clone(&file_shared));
-            shared.current_write_file = Some(file_shared);
             shared.wake(); // Wake readers waiting for new files
-        }
+            file_shared
+        };
 
-        let current_write_file = shared.current_write_file.take();
         // Release shared lock before file I/O (fine-grained locking)
         // This allows readers to access the queue while we do disk I/O
         drop(shared);
 
         // Write batch to current file - lock only the specific file
-        if let Some(current_file) = current_write_file {
-            // Now lock just this file for I/O (separate from shared lock)
-            let mut file_shared = current_file.lock();
+        let mut file_shared = current_write_file.lock();
 
-            // Append the batch
-            if let Some(ref mut writer) = file_shared.writer {
-                writer.append_batch(batch)?;
-                // make sure we flush the writer for readers
-                writer.flush()?;
-                file_shared.batches_written += 1;
-                file_shared.estimated_size += batch_size;
+        // Append the batch
+        if let Some(ref mut writer) = file_shared.writer {
+            writer.append_batch(batch)?;
+            // make sure we flush the writer for readers
+            writer.flush()?;
+            file_shared.batches_written += 1;
+            file_shared.estimated_size += batch_size;
+        }
+
+        // Wake reader waiting on this specific file
+        file_shared.wake();
+
+        // Check if we need to rotate
+        let needs_rotation = file_shared.estimated_size > self.max_file_size_bytes;
+
+        if needs_rotation {
+            // Finish the IPC writer
+            if let Some(mut writer) = file_shared.writer.take() {
+                writer.finish()?;
             }
-
-            // Wake reader waiting on this specific file
+            // Mark as finished so readers know not to wait for more data
+            file_shared.writer_finished = true;
+            // Wake reader waiting on this file (it's now finished)
             file_shared.wake();
-
-            // Check if we need to rotate
-            let needs_rotation = file_shared.estimated_size > self.max_file_size_bytes;
-
-            if needs_rotation {
-                // Finish the IPC writer
-                if let Some(mut writer) = file_shared.writer.take() {
-                    writer.finish()?;
-                }
-                // Mark as finished so readers know not to wait for more data
-                file_shared.writer_finished = true;
-                // Wake reader waiting on this file (it's now finished)
-                file_shared.wake();
-                // Don't put back current_write_file - let it rotate
-            } else {
-                // Release file lock
-                drop(file_shared);
-                // Put back the current file for further writing
-                let mut shared = self.shared.lock();
-                shared.current_write_file = Some(current_file);
-            }
+            // Don't put back current_write_file - let it rotate
+        } else {
+            // Release file lock
+            drop(file_shared);
+            // Put back the current file for further writing
+            let mut shared = self.shared.lock();
+            shared.current_write_files.push_back(current_write_file);
         }
 
         Ok(())
@@ -259,31 +255,33 @@ impl Drop for SpillPoolWriter {
             return;
         }
 
-        // Finalize the current file when the last writer is dropped
-        if let Some(current_file) = shared.current_write_file.take() {
-            // Release shared lock before locking file
+        // Finalize any spill files that were not finished yet
+
+        if !shared.current_write_files.is_empty() {
+            let files = mem::take(&mut shared.current_write_files);
             drop(shared);
 
-            let mut file_shared = current_file.lock();
+            for file in files {
+                let mut file_shared = file.lock();
 
-            // Finish the current writer if it exists
-            if let Some(mut writer) = file_shared.writer.take() {
-                // Ignore errors on drop - we're in destructor
-                let _ = writer.finish();
+                // Finish the current writer if it exists
+                if let Some(mut writer) = file_shared.writer.take() {
+                    // Ignore errors on drop - we're in destructor
+                    let _ = writer.finish();
+                }
+
+                // Mark as finished so readers know not to wait for more data
+                file_shared.writer_finished = true;
+
+                // Wake reader waiting on this file (it's now finished)
+                file_shared.wake();
+                drop(file_shared);
             }
 
-            // Mark as finished so readers know not to wait for more data
-            file_shared.writer_finished = true;
-
-            // Wake reader waiting on this file (it's now finished)
-            file_shared.wake();
-
-            drop(file_shared);
             shared = self.shared.lock();
         }
 
-        // Mark writer as dropped and wake pool-level readers
-        shared.writer_dropped = true;
+        // Wake pool-level readers
         shared.wake();
     }
 }
@@ -723,7 +721,7 @@ impl Stream for SpillPoolReader {
             }
 
             // No files in queue - check if writer is done
-            if shared.writer_dropped {
+            if shared.active_writer_count == 0 {
                 // Writer is done and no more files will be added - EOF
                 return Poll::Ready(None);
             }
