@@ -291,6 +291,10 @@ mod test {
     use futures::stream::FusedStream;
     use futures::{Stream, StreamExt, pin_mut};
     use std::assert_matches;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Poll};
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -367,8 +371,11 @@ mod test {
     #[should_panic]
     async fn emit_without_await() {
         let s = async_stream(|mut emitter| async move {
-            let _ = emitter.emit("hello");
-            let _ = emitter.emit("world");
+            #[expect(clippy::let_underscore_future)]
+            {
+                let _ = emitter.emit("hello");
+                let _ = emitter.emit("world");
+            }
         });
 
         let _: Vec<_> = s.collect().await;
@@ -503,7 +510,7 @@ mod test {
 
             pin_mut!(s);
             while let Some(v) = s.next().await {
-                println!("{}", v);
+                println!("{v}");
             }
         });
 
@@ -638,6 +645,82 @@ mod test {
         assert_eq!(
             std::iter::repeat_n(123, 9).map(Ok).collect::<Vec<_>>(),
             values
+        );
+    }
+
+    use pin_project_lite::pin_project;
+
+    pin_project! {
+        struct MyStream<T: Stream> {
+            #[pin]
+            input: T,
+        }
+    }
+
+    impl<T: Stream> Stream for MyStream<T> {
+        type Item = T::Item;
+
+        fn poll_next(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            let this = self.project();
+            this.input.poll_next(cx)
+        }
+    }
+
+    #[tokio::test]
+    async fn emit_does_not_hold_on_value() {
+        let waker = futures::task::noop_waker_ref();
+        let mut cx = Context::from_waker(waker);
+
+        let run = Arc::<AtomicUsize>::new(AtomicUsize::new(0));
+        let moved = Arc::clone(&run);
+        let s = async_stream(|mut emitter| async move {
+            for _ in 0..2 {
+                let before = moved.fetch_add(1, Ordering::SeqCst);
+                emitter.emit(before).await;
+            }
+        });
+
+        let mut my_stream = Box::pin(MyStream { input: s });
+
+        #[derive(Debug, PartialEq)]
+        struct Item {
+            before: usize,
+            result: Poll<Option<usize>>,
+            after: usize,
+        }
+
+        let mut results = vec![];
+
+        assert_eq!(run.load(Ordering::SeqCst), 0);
+
+        while run.load(Ordering::SeqCst) < 2 {
+            let before = run.load(Ordering::SeqCst);
+            let result = my_stream.poll_next_unpin(&mut cx);
+            let after = run.load(Ordering::SeqCst);
+            results.push(Item {
+                before,
+                result,
+                after,
+            });
+        }
+
+        assert_eq!(
+            results,
+            vec![
+                Item {
+                    before: 0,
+                    result: Poll::Ready(Some(0)),
+                    after: 1,
+                },
+                Item {
+                    before: 1,
+                    result: Poll::Ready(Some(1)),
+                    after: 2,
+                }
+            ]
         );
     }
 }
