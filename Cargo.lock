@@ -2438,6 +2438,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-pruning",
+ "futures",
  "insta",
  "itertools 0.15.0",
  "recursive",

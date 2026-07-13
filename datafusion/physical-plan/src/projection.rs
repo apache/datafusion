@@ -349,6 +349,12 @@ impl ExecutionPlan for ProjectionExec {
         Some(self.metrics.clone_inner())
     }
 
+    /// Passthrough: a projection doesn't change row count, so its
+    /// runtime row count equals its input's.
+    fn runtime_row_count(&self, partition: usize) -> Option<usize> {
+        self.input.runtime_row_count(partition)
+    }
+
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         let input_stats = Arc::unwrap_or_clone(
             args.compute_child_statistics(&self.input, args.partition())?,

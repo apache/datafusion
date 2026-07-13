@@ -536,6 +536,29 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         None
     }
 
+    /// Returns the number of rows this operator **will emit** on the given
+    /// output partition, if that count is knowable at the moment of the
+    /// call.
+    ///
+    /// Pipeline-breaking operators that absorb all input before emitting
+    /// (`AggregateExec`, `SortExec` once sorted, the build side of
+    /// `HashJoinExec` once built) know their true per-partition output
+    /// cardinality the moment their build phase completes — *before* any
+    /// output batch has been pulled. That is precisely the runtime stat
+    /// downstream adaptive-execution rules (build-side swap, partition
+    /// coalescing, skew handling) need.
+    ///
+    /// Callers that want a cross-partition total sum across all
+    /// `partition` indices.
+    ///
+    /// Streaming operators never have a meaningful answer and should
+    /// leave this as the default `None`. Pipeline-breaking operators
+    /// should return `None` *before* their barrier completes and
+    /// `Some(rows)` once it has.
+    fn runtime_row_count(&self, _partition: usize) -> Option<usize> {
+        None
+    }
+
     /// Returns statistics for a specific partition of this `ExecutionPlan` node.
     ///
     /// Deprecated: use [`Self::statistics_with_args`] instead,
