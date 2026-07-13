@@ -283,7 +283,6 @@ impl RunOpt {
     ) -> Result<Arc<dyn TableProvider>> {
         let path = self.path.to_str().unwrap();
         let table_format = self.file_format.as_str();
-        let target_partitions = self.partitions();
 
         // Obtain a snapshot of the SessionState
         let state = ctx.state();
@@ -320,10 +319,7 @@ impl RunOpt {
             };
 
         let table_path = ListingTableUrl::parse(path)?;
-        let options = ListingOptions::new(format)
-            .with_file_extension(extension)
-            .with_target_partitions(target_partitions)
-            .with_collect_stat(state.config().collect_statistics());
+        let options = ListingOptions::new(format).with_file_extension(extension);
 
         let schema = match table_format {
             "parquet" => options.infer_schema(&state, &table_path).await?,

@@ -732,7 +732,6 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");
@@ -2019,7 +2018,7 @@ mod tests {
 
         // Merge acc2's state into acc1
         let state = acc2.state(EmitTo::All)?;
-        acc1.merge_batch(&state, &[0, 1], None, 2)?;
+        acc1.merge_batch(&state, &[0, 1], 2)?;
 
         // Another update_batch on acc1 after the merge
         let values: ArrayRef = Arc::new(Int32Array::from(vec![5, 6]));
@@ -2088,7 +2087,7 @@ mod tests {
 
         // Feed state into a new accumulator via merge_batch
         let mut acc2 = ArrayAggGroupsAccumulator::new(DataType::Int32, false);
-        acc2.merge_batch(&state, &[0, 0, 1], None, 2)?;
+        acc2.merge_batch(&state, &[0, 0, 1], 2)?;
 
         // Group 0 received rows 0 ([1]) and 1 ([NULL]) → [1, NULL]
         let vals = eval_i32_lists(&mut acc2, EmitTo::All)?;
@@ -2118,7 +2117,7 @@ mod tests {
 
         // Feed state into a new accumulator via merge_batch
         let mut acc2 = ArrayAggGroupsAccumulator::new(DataType::Int32, true);
-        acc2.merge_batch(&state, &[0, 0, 1, 1], None, 2)?;
+        acc2.merge_batch(&state, &[0, 0, 1, 1], 2)?;
 
         // Group 0: received [1] and null (skipped) → [1]
         let vals = eval_i32_lists(&mut acc2, EmitTo::All)?;

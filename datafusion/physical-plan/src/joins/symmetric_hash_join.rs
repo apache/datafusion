@@ -44,7 +44,7 @@ use crate::joins::utils::{
     BatchSplitter, BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn,
     JoinOnRef, NoopBatchTransformer, StatefulStreamResult, apply_join_filter_to_indices,
     build_batch_from_indices, build_join_schema, check_join_is_valid, equal_rows_arr,
-    symmetric_join_output_partitioning, update_hash,
+    matchable_join_keys, symmetric_join_output_partitioning, update_hash,
 };
 use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
@@ -360,20 +360,6 @@ impl SymmetricHashJoinExec {
         }
         Ok(false)
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        let left = children.swap_remove(0);
-        let right = children.swap_remove(0);
-        Self {
-            left,
-            right,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for SymmetricHashJoinExec {
@@ -426,7 +412,11 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        match self.mode {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(match self.mode {
             StreamJoinPartitionMode::Partitioned => {
                 let (left_expr, right_expr) = self
                     .on
@@ -434,14 +424,14 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                     .map(|(l, r)| (Arc::clone(l) as _, Arc::clone(r) as _))
                     .unzip();
                 vec![
-                    Distribution::HashPartitioned(left_expr),
-                    Distribution::HashPartitioned(right_expr),
+                    Distribution::KeyPartitioned(left_expr),
+                    Distribution::KeyPartitioned(right_expr),
                 ]
             }
             StreamJoinPartitionMode::SinglePartition => {
                 vec![Distribution::SinglePartition, Distribution::SinglePartition]
             }
-        }
+        })
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -475,6 +465,20 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             self.right_sort_exprs.clone(),
             self.mode,
         )?))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+        Ok(Arc::new(Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -1113,8 +1117,20 @@ fn lookup_join_hashmap(
     //     (5,1)
     //
     // With this approach, the lexicographic order on both the probe side and the build side is preserved.
+    //
+    // Probe rows whose key contains a NULL cannot match any build row and are
+    // skipped without a map lookup.
+    let valid_keys = matchable_join_keys(&keys_values, null_equality);
     let (mut matched_probe, mut matched_build) = build_hashmap.get_matched_indices(
-        Box::new(hash_values.iter().enumerate().rev()),
+        Box::new(
+            hash_values
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| {
+                    valid_keys.as_ref().is_none_or(|valid| valid.is_valid(*i))
+                })
+                .rev(),
+        ),
         deleted_offset,
     );
 
@@ -1191,6 +1207,7 @@ impl OneSideHashJoiner {
     ///
     /// * `batch` - The incoming [RecordBatch] to be merged with the internal input buffer
     /// * `random_state` - The random state used to hash values
+    /// * `null_equality` - Null semantics to use
     ///
     /// # Returns
     ///
@@ -1199,6 +1216,7 @@ impl OneSideHashJoiner {
         &mut self,
         batch: &RecordBatch,
         random_state: &RandomState,
+        null_equality: NullEquality,
     ) -> Result<()> {
         // Merge the incoming batch with the existing input buffer:
         self.input_buffer = concat_batches(&batch.schema(), [&self.input_buffer, batch])?;
@@ -1215,6 +1233,7 @@ impl OneSideHashJoiner {
             &mut self.hashes_buffer,
             self.deleted_offset,
             false,
+            null_equality,
         )?;
         Ok(())
     }
@@ -1688,7 +1707,11 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
         probe_side_metrics.input_batches.add(1);
         probe_side_metrics.input_rows.add(probe_batch.num_rows());
         // Update the internal state of the hash joiner for the build side:
-        probe_hash_joiner.update_internal_state(probe_batch, &self.random_state)?;
+        probe_hash_joiner.update_internal_state(
+            probe_batch,
+            &self.random_state,
+            self.null_equality,
+        )?;
         // Join the two sides:
         let equal_result = join_with_probe_batch(
             build_hash_joiner,

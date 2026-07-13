@@ -90,7 +90,7 @@ macro_rules! downcast_supported_integer {
 /// ```
 /// The resulting `range` (10) correctly represents the size of the interval `[-5, 5]`.
 ///
-/// **2. Index Lookup (in `get_matched_indices`)**
+/// **2. Index Lookup (in `get_matched_indices_with_limit_offset`)**
 ///
 /// For a probe value of `0` (which is stored as `0u64`):
 /// ```text
@@ -173,7 +173,7 @@ impl ArrayMap {
     /// ignoring any rows where the key is `NULL`.
     ///
     pub(crate) fn try_new(array: &ArrayRef, min_val: u64, max_val: u64) -> Result<Self> {
-        let range = max_val.wrapping_sub(min_val);
+        let range = Self::calculate_range(min_val, max_val);
         if range >= usize::MAX as u64 {
             return internal_err!("ArrayMap key range is too large to be allocated.");
         }
@@ -273,16 +273,6 @@ impl ArrayMap {
         )
     }
 
-    /// Returns whether `key` (a raw probe value cast to `u64`) is present in the
-    /// build side, i.e. maps to a non-empty bucket.
-    #[inline]
-    fn key_present(&self, key: u64) -> bool {
-        let Some(idx) = Self::key_to_index(key, self.offset, self.data.len()) else {
-            return false;
-        };
-        self.data[idx] != 0
-    }
-
     pub fn get_probe_indices_with_any_match(
         &self,
         prob_side_keys: &[ArrayRef],
@@ -335,12 +325,22 @@ impl ArrayMap {
 
             // SAFETY: probe_idx is guaranteed to be within bounds by the loop range.
             let prob_val: u64 = unsafe { arr.value_unchecked(probe_idx) }.as_();
-            if self.key_present(prob_val) {
+            if self.get_value(prob_val).is_some() {
                 probe_indices.push(probe_idx as u32);
             }
         }
 
         Ok(())
+    }
+
+    /// Looks up `key` (a raw probe value cast to `u64`) in the build side,
+    /// returning the 1-based build-side slot if the key maps to a non-empty
+    /// bucket, or `None` otherwise.
+    #[inline]
+    fn get_value(&self, key: u64) -> Option<u32> {
+        let idx = Self::key_to_index(key, self.offset, self.data.len())?;
+        let value = self.data[idx];
+        (value != 0).then_some(value)
     }
 
     fn lookup_and_get_indices<T: ArrowNumericType>(
@@ -373,16 +373,10 @@ impl ArrayMap {
                 }
                 // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
                 let prob_val: u64 = unsafe { arr.value_unchecked(prob_idx) }.as_();
-                let Some(idx_in_build_side) =
-                    Self::key_to_index(prob_val, self.offset, self.data.len())
-                else {
+                let Some(build_value) = self.get_value(prob_val) else {
                     continue;
                 };
-
-                if self.data[idx_in_build_side] == 0 {
-                    continue;
-                }
-                build_indices.push((self.data[idx_in_build_side] - 1) as u64);
+                build_indices.push((build_value - 1) as u64);
                 probe_indices.push(prob_idx as u32);
             }
             Ok(None)
@@ -418,7 +412,7 @@ impl ArrayMap {
                     return Ok(Some((prob_side_idx, None)));
                 }
 
-                if arr.is_null(prob_side_idx) {
+                if have_null && arr.is_null(prob_side_idx) {
                     continue;
                 }
 
@@ -426,16 +420,9 @@ impl ArrayMap {
 
                 // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
                 let prob_val: u64 = unsafe { arr.value_unchecked(prob_side_idx) }.as_();
-                let Some(idx_in_build_side) =
-                    Self::key_to_index(prob_val, self.offset, self.data.len())
-                else {
+                let Some(build_idx) = self.get_value(prob_val) else {
                     continue;
                 };
-                if self.data[idx_in_build_side] == 0 {
-                    continue;
-                }
-
-                let build_idx = self.data[idx_in_build_side];
 
                 if let Some(offset) = traverse_chain(
                     &self.next,
@@ -464,14 +451,14 @@ impl ArrayMap {
 
         downcast_supported_integer!(
             array.data_type() => (
-                contain_hashes_helper,
+                contain_keys_helper,
                 self,
                 array
             )
         )
     }
 
-    fn contain_hashes_helper<T: ArrowNumericType>(
+    fn contain_keys_helper<T: ArrowNumericType>(
         &self,
         array: &ArrayRef,
     ) -> Result<BooleanArray>
@@ -485,7 +472,7 @@ impl ArrayMap {
             }
             // SAFETY: i is within bounds [0, arr.len())
             let key: u64 = unsafe { arr.value_unchecked(i) }.as_();
-            self.key_present(key)
+            self.get_value(key).is_some()
         });
         Ok(BooleanArray::new(buffer, None))
     }

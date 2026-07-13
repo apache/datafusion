@@ -34,7 +34,7 @@
 //! | Case | Types | Characteristics | List Sizes Tested |
 //! |------|-------|-----------------|-------------------|
 //! | Narrow integer cases | UInt8 | small value domain | 4, 16 |
-//! | Narrow integer cases | Int16 | larger value domain | 4, 64, 256 |
+//! | Narrow integer cases | Int16, Float16 | larger value domain | 4, 64, 256 |
 //! | 32-bit primitive cases | Int32, Float32 | small and large lists | 4, 32, 64, 256 |
 //! | 64-bit primitive cases | Int64, TimestampNs | small and large lists | 4, 16, 32, 128 |
 //! | Utf8 short-string cases | Utf8 | 8-byte strings | 4, 64, 256 |
@@ -51,6 +51,7 @@ use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::expressions::{col, in_list, lit};
+use half::f16;
 use rand::distr::Alphanumeric;
 use rand::prelude::*;
 use std::sync::Arc;
@@ -388,6 +389,23 @@ fn bench_narrow_integer(c: &mut Criterion) {
                     match_pct as f64 / 100.0,
                     |rng| rng.random(),
                     |v| ScalarValue::Int16(Some(v)),
+                ),
+            );
+        }
+    }
+
+    // Float16: same 65,536-value bit-pattern domain as Int16/UInt16.
+    for list_size in [4, 64, 256] {
+        for match_pct in MATCH_RATES {
+            bench_numeric::<f16, Float16Array>(
+                c,
+                "narrow_integer",
+                &format!("f16/list={list_size}/match={match_pct}%"),
+                &NumericBenchConfig::new(
+                    list_size,
+                    match_pct as f64 / 100.0,
+                    |rng| f16::from_f32(rng.random::<f32>() * 1000.0),
+                    |v| ScalarValue::Float16(Some(v)),
                 ),
             );
         }

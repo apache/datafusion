@@ -23,7 +23,7 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion::common::record_batch;
     use datafusion::error::Result;
-    use datafusion::logical_expr::{ScalarUDF, ScalarUDFImpl};
+    use datafusion::logical_expr::{ExpressionPlacement, ScalarUDF, ScalarUDFImpl};
     use datafusion::prelude::{SessionContext, col};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::lit;
@@ -86,6 +86,31 @@ mod tests {
         assert_eq!(
             result[0].column_by_name("time_now").unwrap().data_type(),
             &DataType::Float64
+        );
+
+        Ok(())
+    }
+
+    /// This test validates that a producer's `placement` override survives the
+    /// FFI boundary instead of collapsing to the default `KeepInPlace`.
+    #[tokio::test]
+    async fn test_scalar_udf_placement() -> Result<()> {
+        let module = get_module()?;
+
+        let ffi_placement_func = (module.create_placement_udf)();
+        let foreign_func: Arc<dyn ScalarUDFImpl> = (&ffi_placement_func).into();
+
+        // The override pushes to the leaves only for (Column, Literal), so these
+        // also check the arguments cross the boundary in order.
+        assert_eq!(
+            foreign_func
+                .placement(&[ExpressionPlacement::Column, ExpressionPlacement::Literal]),
+            ExpressionPlacement::MoveTowardsLeafNodes
+        );
+        assert_eq!(
+            foreign_func
+                .placement(&[ExpressionPlacement::Literal, ExpressionPlacement::Column]),
+            ExpressionPlacement::KeepInPlace
         );
 
         Ok(())

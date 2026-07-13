@@ -43,6 +43,7 @@ use crate::filter_pushdown::{
 };
 use crate::metrics::BaselineMetrics;
 use crate::projection::{ProjectionExec, make_with_child};
+use crate::statistics::StatisticsArgs;
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -110,24 +111,6 @@ pub struct UnionExec {
 }
 
 impl UnionExec {
-    /// Create a new UnionExec
-    #[deprecated(since = "44.0.0", note = "Use UnionExec::try_new instead")]
-    pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
-        let schema =
-            union_schema(&inputs).expect("UnionExec::new called with empty inputs");
-        // The schema of the inputs and the union schema is consistent when:
-        // - They have the same number of fields, and
-        // - Their fields have same types at the same indices.
-        // Here, we know that schemas are consistent and the call below can
-        // not return an error.
-        let cache = Self::compute_properties(&inputs, schema).unwrap();
-        UnionExec {
-            inputs,
-            metrics: ExecutionPlanMetricsSet::new(),
-            cache: Arc::new(cache),
-        }
-    }
-
     /// Try to create a new UnionExec.
     ///
     /// # Errors
@@ -147,9 +130,7 @@ impl UnionExec {
                 // The schema of the inputs and the union schema is consistent when:
                 // - They have the same number of fields, and
                 // - Their fields have same types at the same indices.
-                // Here, we know that schemas are consistent and the call below can
-                // not return an error.
-                let cache = Self::compute_properties(&inputs, schema).unwrap();
+                let cache = Self::compute_properties(&inputs, schema)?;
                 Ok(Arc::new(UnionExec {
                     inputs,
                     metrics: ExecutionPlanMetricsSet::new(),
@@ -188,17 +169,6 @@ impl UnionExec {
             emission_type_from_children(inputs),
             boundedness_from_children(inputs),
         ))
-    }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            inputs: children,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
     }
 }
 
@@ -276,6 +246,17 @@ impl ExecutionPlan for UnionExec {
         UnionExec::try_new(children)
     }
 
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            inputs: children,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
+    }
+
     fn execute(
         &self,
         mut partition: usize,
@@ -318,26 +299,35 @@ impl ExecutionPlan for UnionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if let Some(partition_idx) = partition {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        if let Some(partition_idx) = args.partition() {
             // For a specific partition, find which input it belongs to
             let mut remaining_idx = partition_idx;
-            for input in &self.inputs {
+            for (i, input) in self.inputs.iter().enumerate() {
                 let input_partition_count = input.output_partitioning().partition_count();
                 if remaining_idx < input_partition_count {
-                    // This partition belongs to this input
-                    return input.partition_statistics(Some(remaining_idx));
+                    // This partition belongs to this input - compute stats
+                    // for the specific child at the specific partition
+                    let child = &self.inputs[i];
+                    return args.compute_child_statistics(child, Some(remaining_idx));
                 }
                 remaining_idx -= input_partition_count;
             }
             // If we get here, the partition index is out of bounds
             Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         } else {
-            let schema = self.schema();
-            Ok(Arc::new(merge_input_statistics(
-                &self.inputs,
-                None,
-                schema.as_ref(),
+            // Collect overall stats for each input from the cache
+            let stats = self
+                .inputs
+                .iter()
+                .map(|input| args.compute_child_statistics(input, None))
+                .collect::<Result<Vec<_>>>()?;
+            let stats_refs = stats.iter().map(|s| s.as_ref()).collect::<Vec<_>>();
+
+            Ok(Arc::new(Statistics::try_merge_iter_with_ndv_fallback(
+                stats_refs,
+                self.schema().as_ref(),
+                NdvFallback::Sum,
             )?))
         }
     }
@@ -535,17 +525,6 @@ impl InterleaveExec {
             boundedness_from_children(inputs),
         ))
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            inputs: children,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for InterleaveExec {
@@ -592,6 +571,17 @@ impl ExecutionPlan for InterleaveExec {
         );
         check_if_same_properties!(self, children);
         Ok(Arc::new(InterleaveExec::try_new(children)?))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            inputs: children,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -641,12 +631,20 @@ impl ExecutionPlan for InterleaveExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let schema = self.schema();
-        Ok(Arc::new(merge_input_statistics(
-            &self.inputs,
-            partition,
-            schema.as_ref(),
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let stats = self
+            .inputs
+            .iter()
+            .map(|input| {
+                args.compute_child_statistics(input, args.partition())
+                    .map(Arc::unwrap_or_clone)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Arc::new(Statistics::try_merge_iter_with_ndv_fallback(
+            stats.iter(),
+            self.schema().as_ref(),
+            NdvFallback::Sum,
         )?))
     }
 
@@ -806,28 +804,12 @@ impl Stream for CombinedRecordBatchStream {
     }
 }
 
-fn merge_input_statistics(
-    inputs: &[Arc<dyn ExecutionPlan>],
-    partition: Option<usize>,
-    schema: &Schema,
-) -> Result<Statistics> {
-    let stats = inputs
-        .iter()
-        .map(|input| {
-            input
-                .partition_statistics(partition)
-                .map(Arc::unwrap_or_clone)
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    Statistics::try_merge_iter_with_ndv_fallback(stats.iter(), schema, NdvFallback::Sum)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::collect;
     use crate::repartition::RepartitionExec;
+    use crate::statistics::StatisticsArgs;
     use crate::test::exec::StatisticsExec;
     use crate::test::{self, TestMemoryExec};
 
@@ -1018,7 +1000,7 @@ mod tests {
             Arc::new(StatisticsExec::new(right, schema.as_ref().clone()));
 
         let union = UnionExec::try_new(vec![left, right])?;
-        let stats = union.partition_statistics(None)?;
+        let stats = union.statistics_with_args(&StatisticsArgs::new())?;
 
         assert_eq!(stats.as_ref(), &expected);
         Ok(())
@@ -1035,7 +1017,7 @@ mod tests {
             Arc::new(StatisticsExec::new(right, schema.as_ref().clone()));
 
         let union = UnionExec::try_new(vec![left, right])?;
-        let stats = union.partition_statistics(None)?;
+        let stats = union.statistics_with_args(&StatisticsArgs::new())?;
 
         assert_eq!(stats.as_ref(), &expected);
         Ok(())
@@ -1056,7 +1038,7 @@ mod tests {
         )?);
 
         let interleave = InterleaveExec::try_new(vec![left, right])?;
-        let stats = interleave.partition_statistics(None)?;
+        let stats = interleave.statistics_with_args(&StatisticsArgs::new())?;
 
         assert_eq!(stats.as_ref(), &expected);
         Ok(())
@@ -1078,7 +1060,8 @@ mod tests {
         )?);
 
         let interleave = InterleaveExec::try_new(vec![left, right])?;
-        let stats = interleave.partition_statistics(Some(0))?;
+        let stats = interleave
+            .statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))?;
 
         let expected = Statistics::default()
             .with_num_rows(Precision::Inexact(5))

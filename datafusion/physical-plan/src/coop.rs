@@ -84,6 +84,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation,
 };
 use crate::projection::ProjectionExec;
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, SortOrderPushdownResult, check_if_same_properties,
@@ -233,16 +234,6 @@ impl CooperativeExec {
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for CooperativeExec {
@@ -289,6 +280,16 @@ impl ExecutionPlan for CooperativeExec {
         Ok(Arc::new(CooperativeExec::new(children.swap_remove(0))))
     }
 
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            ..Self::clone(&*self)
+        }))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -298,8 +299,8 @@ impl ExecutionPlan for CooperativeExec {
         Ok(make_cooperative(child_stream))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(partition)
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        args.compute_child_statistics(&self.input, args.partition())
     }
 
     fn supports_limit_pushdown(&self) -> bool {

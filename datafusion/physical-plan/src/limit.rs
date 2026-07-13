@@ -27,6 +27,7 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::{Boundedness, CardinalityEffect};
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     check_if_same_properties,
@@ -108,17 +109,6 @@ impl GlobalLimitExec {
     pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
         self.required_ordering = required_ordering;
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for GlobalLimitExec {
@@ -162,7 +152,11 @@ impl ExecutionPlan for GlobalLimitExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![Distribution::SinglePartition])
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -183,6 +177,17 @@ impl ExecutionPlan for GlobalLimitExec {
             self.skip,
             self.fetch,
         )))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -219,8 +224,10 @@ impl ExecutionPlan for GlobalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.input, args.partition())?,
+        );
         Ok(Arc::new(stats.with_fetch(self.fetch, self.skip, 1)?))
     }
 
@@ -291,17 +298,6 @@ impl LocalLimitExec {
     pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
         self.required_ordering = required_ordering;
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for LocalLimitExec {
@@ -357,6 +353,17 @@ impl ExecutionPlan for LocalLimitExec {
         }
     }
 
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -382,8 +389,10 @@ impl ExecutionPlan for LocalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.input, args.partition())?,
+        );
         Ok(Arc::new(stats.with_fetch(Some(self.fetch), 0, 1)?))
     }
 
@@ -530,6 +539,7 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common::collect;
+    use crate::statistics::StatisticsArgs;
     use crate::test;
 
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -812,7 +822,9 @@ mod tests {
         let offset =
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
-        Ok(offset.partition_statistics(None)?.num_rows)
+        Ok(offset
+            .statistics_with_args(&StatisticsArgs::new())?
+            .num_rows)
     }
 
     pub fn build_group_by(
@@ -852,7 +864,9 @@ mod tests {
             fetch,
         );
 
-        Ok(offset.partition_statistics(None)?.num_rows)
+        Ok(offset
+            .statistics_with_args(&StatisticsArgs::new())?
+            .num_rows)
     }
 
     async fn row_number_statistics_for_local_limit(
@@ -865,7 +879,9 @@ mod tests {
 
         let offset = LocalLimitExec::new(csv, fetch);
 
-        Ok(offset.partition_statistics(None)?.num_rows)
+        Ok(offset
+            .statistics_with_args(&StatisticsArgs::new())?
+            .num_rows)
     }
 
     /// Return a RecordBatch with a single array with row_count sz

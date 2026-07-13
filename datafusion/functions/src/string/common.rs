@@ -24,10 +24,10 @@ use crate::strings::{
     StringViewArrayBuilder, append_view,
 };
 use arrow::array::{
-    Array, ArrayRef, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
     StringViewArray, new_null_array,
 };
-use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
+use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
@@ -348,63 +348,100 @@ fn case_conversion(
     name: &str,
 ) -> Result<ColumnarValue> {
     match &args[0] {
-        ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Utf8 => Ok(ColumnarValue::Array(case_conversion_array::<i32>(
-                array, lower,
-            )?)),
-            DataType::LargeUtf8 => Ok(ColumnarValue::Array(
-                case_conversion_array::<i64>(array, lower)?,
-            )),
-            DataType::Utf8View => {
-                let string_array = as_string_view_array(array)?;
-                if string_array.is_ascii() {
-                    return Ok(ColumnarValue::Array(Arc::new(
-                        case_conversion_utf8view_ascii(string_array, lower),
-                    )));
-                }
-                let item_len = string_array.len();
-                // Null-preserving: reuse the input null buffer as the output null buffer.
-                let nulls = string_array.nulls().cloned();
-                let mut builder = StringViewArrayBuilder::with_capacity(item_len);
-
-                if let Some(ref n) = nulls {
-                    for i in 0..item_len {
-                        if n.is_null(i) {
-                            builder.append_placeholder();
-                        } else {
-                            // SAFETY: `n.is_null(i)` was false in the branch above.
-                            let s = unsafe { string_array.value_unchecked(i) };
-                            builder.append_value(&unicode_case(s, lower));
-                        }
-                    }
-                } else {
-                    for i in 0..item_len {
-                        // SAFETY: no null buffer means every index is valid.
-                        let s = unsafe { string_array.value_unchecked(i) };
-                        builder.append_value(&unicode_case(s, lower));
-                    }
-                }
-
-                Ok(ColumnarValue::Array(Arc::new(builder.finish(nulls)?)))
-            }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
-        },
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) => {
-                let result = a.as_ref().map(|x| unicode_case(x, lower));
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
-            }
-            ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| unicode_case(x, lower));
-                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
-            }
-            ScalarValue::Utf8View(a) => {
-                let result = a.as_ref().map(|x| unicode_case(x, lower));
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(result)))
-            }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
-        },
+        ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
+            case_conversion_columnar_array(array, lower, name)?,
+        )),
+        ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
+            case_conversion_scalar(scalar, lower, name)?,
+        )),
     }
+}
+
+fn case_conversion_scalar(
+    scalar: &ScalarValue,
+    lower: bool,
+    name: &str,
+) -> Result<ScalarValue> {
+    match scalar {
+        ScalarValue::Utf8(a) => {
+            let result = a.as_ref().map(|x| unicode_case(x, lower));
+            Ok(ScalarValue::Utf8(result))
+        }
+        ScalarValue::LargeUtf8(a) => {
+            let result = a.as_ref().map(|x| unicode_case(x, lower));
+            Ok(ScalarValue::LargeUtf8(result))
+        }
+        ScalarValue::Utf8View(a) => {
+            let result = a.as_ref().map(|x| unicode_case(x, lower));
+            Ok(ScalarValue::Utf8View(result))
+        }
+        ScalarValue::Dictionary(key_type, value) => {
+            let converted = case_conversion_scalar(value.as_ref(), lower, name)?;
+            Ok(ScalarValue::Dictionary(
+                key_type.clone(),
+                Box::new(converted),
+            ))
+        }
+        other => exec_err!("Unsupported data type {other:?} for function {name}"),
+    }
+}
+
+fn case_conversion_columnar_array(
+    array: &ArrayRef,
+    lower: bool,
+    name: &str,
+) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::Utf8 => case_conversion_array::<i32>(array, lower),
+        DataType::LargeUtf8 => case_conversion_array::<i64>(array, lower),
+        DataType::Utf8View => case_conversion_utf8view(array, lower),
+        DataType::Dictionary(_, _) => case_conversion_dictionary(array, lower, name),
+        other => exec_err!("Unsupported data type {other:?} for function {name}"),
+    }
+}
+
+fn case_conversion_utf8view(array: &ArrayRef, lower: bool) -> Result<ArrayRef> {
+    let string_array = as_string_view_array(array)?;
+    if string_array.is_ascii() {
+        return Ok(Arc::new(case_conversion_utf8view_ascii(
+            string_array,
+            lower,
+        )));
+    }
+    let item_len = string_array.len();
+    // Null-preserving: reuse the input null buffer as the output null buffer.
+    let nulls = string_array.nulls().cloned();
+    let mut builder = StringViewArrayBuilder::with_capacity(item_len);
+
+    if let Some(ref n) = nulls {
+        for i in 0..item_len {
+            if n.is_null(i) {
+                builder.try_append_placeholder()?;
+            } else {
+                // SAFETY: `n.is_null(i)` was false in the branch above.
+                let s = unsafe { string_array.value_unchecked(i) };
+                builder.try_append_value(&unicode_case(s, lower))?;
+            }
+        }
+    } else {
+        for i in 0..item_len {
+            // SAFETY: no null buffer means every index is valid.
+            let s = unsafe { string_array.value_unchecked(i) };
+            builder.try_append_value(&unicode_case(s, lower))?;
+        }
+    }
+
+    Ok(Arc::new(builder.finish(nulls)?))
+}
+
+fn case_conversion_dictionary(
+    array: &ArrayRef,
+    lower: bool,
+    name: &str,
+) -> Result<ArrayRef> {
+    let dictionary = array.as_any_dictionary();
+    let converted = case_conversion_columnar_array(dictionary.values(), lower, name)?;
+    Ok(dictionary.with_values(converted))
 }
 
 fn case_conversion_array<O: OffsetSizeTrait>(
@@ -431,18 +468,18 @@ fn case_conversion_array<O: OffsetSizeTrait>(
     if let Some(ref n) = nulls {
         for i in 0..item_len {
             if n.is_null(i) {
-                builder.append_placeholder();
+                builder.try_append_placeholder()?;
             } else {
                 // SAFETY: `n.is_null(i)` was false in the branch above.
                 let s = unsafe { string_array.value_unchecked(i) };
-                builder.append_value(&unicode_case(s, lower));
+                builder.try_append_value(&unicode_case(s, lower))?;
             }
         }
     } else {
         for i in 0..item_len {
             // SAFETY: no null buffer means every index is valid.
             let s = unsafe { string_array.value_unchecked(i) };
-            builder.append_value(&unicode_case(s, lower));
+            builder.try_append_value(&unicode_case(s, lower))?;
         }
     }
     Ok(Arc::new(builder.finish(nulls)?))
@@ -599,15 +636,10 @@ fn case_conversion_ascii_array<O: OffsetSizeTrait>(
     let values = Buffer::from_vec(converted);
 
     // Shift offsets from `start`-based to 0-based so they index into `values`.
-    let offsets = if start == 0 {
-        string_array.offsets().clone()
-    } else {
-        let s = O::usize_as(start);
-        let rebased: Vec<O> = value_offsets.iter().map(|&o| o - s).collect();
-        // SAFETY: subtracting a constant from monotonic offsets preserves
-        // monotonicity, and `start` is the minimum offset, so no underflow.
-        unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(rebased)) }
-    };
+    let offsets = string_array
+        .offsets()
+        .clone()
+        .subtract(string_array.offsets()[0]);
 
     let nulls = string_array.nulls().cloned();
     // SAFETY: offsets are monotonic and in-bounds for `values`; nulls
