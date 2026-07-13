@@ -22,9 +22,10 @@ mod ordered_final_table;
 mod ordered_partial_table;
 mod partial_reduce_table;
 mod partial_table;
+mod single_table;
 
 pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialReduceMarker,
-    PartialSkipMarker,
+    PartialSkipMarker, SingleMarker,
 };
 pub(super) use common_ordered::OrderedAggregateTable;

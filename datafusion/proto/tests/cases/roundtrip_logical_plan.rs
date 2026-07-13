@@ -83,17 +83,17 @@ use datafusion_expr::dml::{
     MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
 };
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, NullTreatment,
-    ScalarFunction, Unnest, WildcardOptions,
+    self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, LambdaVariable, Like,
+    NullTreatment, ScalarFunction, Unnest, WildcardOptions,
 };
 use datafusion_expr::logical_plan::{
     ExplainOption, Extension, UserDefinedLogicalNodeCore,
 };
 use datafusion_expr::{
     Accumulator, AggregateUDF, ColumnarValue, DmlStatement, ExprFunctionExt,
-    ExprSchemable, LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder, Operator,
-    PartitionEvaluator, RangePartitioning, Repartition, ScalarUDF, Signature, TryCast,
-    Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    ExprSchemable, HigherOrderUDF, LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder,
+    Operator, PartitionEvaluator, RangePartitioning, Repartition, ScalarUDF, Signature,
+    TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition, WindowUDF, WindowUDFImpl, WriteOp,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
@@ -118,7 +118,10 @@ use datafusion_proto::logical_plan::{
 };
 use datafusion_proto::protobuf;
 
-use crate::cases::{MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf, MyRegexUdfNode};
+use crate::cases::{
+    MyAggregateUDF, MyAggregateUdfNode, MyHigherOrderUDF, MyHigherOrderUdfNode,
+    MyRegexUdf, MyRegexUdfNode,
+};
 
 #[cfg(feature = "json")]
 fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
@@ -1806,6 +1809,41 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
             .map_err(|err| internal_datafusion_err!("failed to encode udf: {err}"))?;
         Ok(())
     }
+
+    fn try_decode_higher_order_function(
+        &self,
+        name: &str,
+        buf: &[u8],
+    ) -> Result<Arc<HigherOrderUDF>> {
+        if name == "higher_order_udf" {
+            let proto = MyHigherOrderUdfNode::decode(buf).map_err(|err| {
+                internal_datafusion_err!("failed to decode higher_order_udf: {err}")
+            })?;
+
+            Ok(Arc::new(HigherOrderUDF::new_from_impl(
+                MyHigherOrderUDF::new(proto.payload),
+            )))
+        } else {
+            not_impl_err!("unrecognized higher order UDF implementation, cannot decode")
+        }
+    }
+
+    fn try_encode_higher_order_function(
+        &self,
+        node: &HigherOrderUDF,
+        buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        let hof = (node.inner().as_ref() as &dyn Any)
+            .downcast_ref::<MyHigherOrderUDF>()
+            .unwrap();
+        let proto = MyHigherOrderUdfNode {
+            payload: hof.payload.clone(),
+        };
+        proto
+            .encode(buf)
+            .map_err(|err| internal_datafusion_err!("failed to encode hof: {err}"))?;
+        Ok(())
+    }
 }
 
 #[test]
@@ -2857,6 +2895,115 @@ fn roundtrip_scalar_udf_extension_codec() {
 fn roundtrip_aggregate_udf_extension_codec() {
     let udf = AggregateUDF::from(MyAggregateUDF::new("DataFusion".to_owned()));
     let test_expr = udf.call(vec![42.lit()]);
+    let ctx = SessionContext::new();
+    let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
+    let round_trip =
+        from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
+            .expect("parse expr");
+
+    assert_eq!(format!("{:?}", test_expr), format!("{round_trip:?}"));
+    roundtrip_json_test(&proto);
+}
+
+fn dummy_higher_order_function_args() -> Vec<Expr> {
+    let list = ScalarValue::List(ScalarValue::new_list_nullable(
+        &[ScalarValue::Int32(Some(1))],
+        &DataType::Int32,
+    ));
+    let lambda_var_with_field = Expr::LambdaVariable(LambdaVariable::new(
+        "x".to_string(),
+        Some(Arc::new(Field::new("x", DataType::Int32, true))),
+    ));
+    let lambda_var_without_field =
+        Expr::LambdaVariable(LambdaVariable::new("x".into(), None));
+    let lambda = lambda(["x"], lambda_var_with_field + lambda_var_without_field);
+    vec![Expr::Literal(list, None), lambda]
+}
+
+#[test]
+fn roundtrip_higher_order_function() {
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
+
+    let test_expr = Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+        Arc::clone(&hof),
+        dummy_higher_order_function_args(),
+    ));
+
+    let ctx = SessionContext::new();
+    ctx.register_higher_order_function(hof);
+
+    roundtrip_expr_test(test_expr.clone(), ctx);
+
+    // Now test loading the HOF without registering it in the context, but rather creating it
+    // in the extension codec.
+    #[derive(Debug)]
+    struct DummyHigherOrderUDFExtensionCodec;
+
+    impl LogicalExtensionCodec for DummyHigherOrderUDFExtensionCodec {
+        fn try_decode(
+            &self,
+            _buf: &[u8],
+            _inputs: &[LogicalPlan],
+            _ctx: &TaskContext,
+        ) -> Result<Extension> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_decode_table_provider(
+            &self,
+            _buf: &[u8],
+            _table_ref: &TableReference,
+            _schema: SchemaRef,
+            _ctx: &TaskContext,
+        ) -> Result<Arc<dyn TableProvider>> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_encode_table_provider(
+            &self,
+            _table_ref: &TableReference,
+            _node: Arc<dyn TableProvider>,
+            _buf: &mut Vec<u8>,
+        ) -> Result<()> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_decode_higher_order_function(
+            &self,
+            name: &str,
+            _buf: &[u8],
+        ) -> Result<Arc<HigherOrderUDF>> {
+            if name == "higher_order_udf" {
+                Ok(Arc::new(HigherOrderUDF::new_from_impl(
+                    MyHigherOrderUDF::new("payload".to_string()),
+                )))
+            } else {
+                Err(internal_datafusion_err!("HOF {name} not found"))
+            }
+        }
+    }
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test_with_codec(test_expr, ctx, &DummyHigherOrderUDFExtensionCodec)
+}
+
+#[test]
+fn roundtrip_higher_order_udf_extension_codec() {
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
+
+    let test_expr = Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+        hof,
+        dummy_higher_order_function_args(),
+    ));
+
     let ctx = SessionContext::new();
     let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
     let round_trip =
