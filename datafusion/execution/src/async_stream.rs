@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::Stream;
 use futures::future::FusedFuture;
 use futures::stream::FusedStream;
-use futures::Stream;
 use parking_lot::Mutex;
 use pin_project_lite::pin_project;
 use std::ops::DerefMut;
@@ -289,7 +289,7 @@ mod test {
     use crate::async_stream::Emitter;
     use crate::{async_stream, async_try_stream};
     use futures::stream::FusedStream;
-    use futures::{pin_mut, Stream, StreamExt};
+    use futures::{Stream, StreamExt, pin_mut};
     use std::assert_matches;
     use tokio::sync::mpsc;
 
