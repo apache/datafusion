@@ -66,7 +66,6 @@ impl FilterState {
 /// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
 ///
 /// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
-#[derive(Debug)]
 pub struct DynamicFilterPhysicalExpr {
     /// The original children of this PhysicalExpr, if any.
     /// This is necessary because the dynamic filter may be initialized with a placeholder (e.g. `lit(true)`)
@@ -95,6 +94,23 @@ pub struct DynamicFilterPhysicalExpr {
     /// But this can have overhead in production, so it's only included in our tests.
     data_type: Arc<RwLock<Option<DataType>>>,
     nullable: Arc<RwLock<Option<bool>>>,
+}
+
+impl std::fmt::Debug for DynamicFilterPhysicalExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Manual impl deliberately omits `current_cache`: it is a pure
+        // optimization artifact whose contents depend on whether
+        // `current()` has been called, and roundtrip tests (e.g. in
+        // `datafusion-proto`) compare `format!("{:?}", ..)` output.
+        f.debug_struct("DynamicFilterPhysicalExpr")
+            .field("children", &self.children)
+            .field("remapped_children", &self.remapped_children)
+            .field("inner", &self.inner)
+            .field("state_watch", &self.state_watch)
+            .field("data_type", &self.data_type)
+            .field("nullable", &self.nullable)
+            .finish()
+    }
 }
 
 /// Atomic internal state of a [`DynamicFilterPhysicalExpr`].
