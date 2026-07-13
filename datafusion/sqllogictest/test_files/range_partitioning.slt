@@ -819,6 +819,76 @@ ORDER BY r.range_key;
 25 250
 35 350
 
+##########
+# TEST 23: Right Join with Mismatched Range Partition Counts Repartitions
+# Both inputs are range partitioned on range_key, but declare a different number
+# of partitions (four vs three). The per-child key requirements can be satisfied
+# by Range, but the co-partitioned layout requirement cannot, so Hash
+# repartitioning repairs both sides of the right join.
+##########
+
+query TT
+EXPLAIN SELECT l.value, r.range_key, r.value
+FROM range_partitioned l
+RIGHT JOIN range_partitioned_narrow r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(range_key@0, range_key@0)], projection=[value@1, range_key@2, value@3]
+02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=3
+05)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_narrow/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_narrow/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_narrow/part-2.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20)], 3), file_type=csv, has_header=false
+
+query III
+SELECT l.value, r.range_key, r.value
+FROM range_partitioned l
+RIGHT JOIN range_partitioned_narrow r ON l.range_key = r.range_key
+ORDER BY r.range_key;
+----
+10 1 10
+50 5 50
+100 10 100
+150 15 150
+200 20 200
+250 25 250
+300 30 300
+350 35 350
+
+##########
+# TEST 24: Right Join on Non-Range Key Repartitions
+# Both inputs expose Range([range_key]), but the join key is non_range_key.
+# Range([range_key]) does not satisfy KeyPartitioned([non_range_key]), so
+# planning inserts Hash repartitioning on the actual join key for the right join.
+##########
+
+query TT
+EXPLAIN SELECT l.value, r.range_key, r.value
+FROM (SELECT non_range_key, value FROM range_partitioned WHERE range_key < 10) l
+RIGHT JOIN range_partitioned r ON l.non_range_key = r.non_range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(non_range_key@0, non_range_key@1)], projection=[value@1, range_key@2, value@4]
+02)--RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
+03)----FilterExec: range_key@0 < 10, projection=[non_range_key@1, value@2]
+04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+05)--RepartitionExec: partitioning=Hash([non_range_key@1], 4), input_partitions=4
+06)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query III
+SELECT l.value, r.range_key, r.value
+FROM (SELECT non_range_key, value FROM range_partitioned WHERE range_key < 10) l
+RIGHT JOIN range_partitioned r ON l.non_range_key = r.non_range_key
+ORDER BY r.range_key;
+----
+10 1 10
+50 5 50
+10 10 100
+50 15 150
+10 20 200
+50 25 250
+10 30 300
+50 35 350
+
 statement ok
 reset datafusion.optimizer.prefer_hash_join;
 
@@ -829,7 +899,7 @@ statement ok
 reset datafusion.optimizer.preserve_file_partitions;
 
 ##########
-# TEST 23: Union of Range Partitioned Inputs
+# TEST 25: Union of Range Partitioned Inputs
 # Each input exposes Range partitioning on range_key. These changes do not add a
 # cross-child Range relationship for UNION ALL.
 ##########
