@@ -34,8 +34,8 @@ use datafusion_common::{
     exec_datafusion_err, exec_err,
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, EncodingPreservation, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#hex>
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -60,7 +60,8 @@ impl SparkHex {
 
         let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
 
-        let binary = Coercion::new_exact(TypeSignatureClass::Binary);
+        let binary = Coercion::new_exact(TypeSignatureClass::Binary)
+            .with_encoding_preservation(EncodingPreservation::dictionary());
 
         let variants = vec![
             // accepts numeric types
