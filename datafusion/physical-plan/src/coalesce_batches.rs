@@ -202,8 +202,8 @@ impl ExecutionPlan for CoalesceBatchesExec {
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(CoalesceBatchesStream::new(
             self.input.execute(partition, context)?,
-                self.target_batch_size,
-                self.fetch,
+            self.target_batch_size,
+            self.fetch,
             BaselineMetrics::new(&self.metrics, partition),
         )))
     }
@@ -312,7 +312,12 @@ impl Stream for CoalesceBatchesStream {
 }
 
 impl CoalesceBatchesStream {
-    pub(crate) fn new(input: SendableRecordBatchStream, target_batch_size: usize, fetch: Option<usize>, baseline_metrics: BaselineMetrics) -> Self {
+    pub(crate) fn new(
+        input: SendableRecordBatchStream,
+        target_batch_size: usize,
+        fetch: Option<usize>,
+        baseline_metrics: BaselineMetrics,
+    ) -> Self {
         CoalesceBatchesStream {
             coalescer: LimitedBatchCoalescer::new(
                 input.schema(),
@@ -325,9 +330,14 @@ impl CoalesceBatchesStream {
         }
     }
 
-    pub(crate) fn with_biggest_coalesce_batch_size(self, biggest_coalesce_batch_size: Option<usize>) -> Self {
+    pub(crate) fn with_biggest_coalesce_batch_size(
+        self,
+        biggest_coalesce_batch_size: Option<usize>,
+    ) -> Self {
         Self {
-            coalescer: self.coalescer.with_biggest_coalesce_batch_size(biggest_coalesce_batch_size),
+            coalescer: self
+                .coalescer
+                .with_biggest_coalesce_batch_size(biggest_coalesce_batch_size),
             ..self
         }
     }

@@ -18,28 +18,26 @@
 //! Merge that deals with an arbitrary size of streaming inputs.
 //! This is an order-preserving merge.
 
+use crate::SendableRecordBatchStream;
+use crate::metrics::BaselineMetrics;
+use crate::sorts::builder::BatchBuilder;
+use crate::sorts::cursor::{Cursor, CursorValues};
+use crate::sorts::stream::PartitionedStream;
+use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::future::poll_fn;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use arrow::compute::BatchCoalescer;
-use crate::SendableRecordBatchStream;
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
-use crate::sorts::builder::BatchBuilder;
-use crate::sorts::cursor::{Cursor, CursorValues};
-use crate::sorts::stream::PartitionedStream;
-use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use futures::{StreamExt, TryStreamExt};
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
+use futures::StreamExt;
 
-use genawaiter::sync::{Co, Gen};
-use crate::coalesce::LimitedBatchCoalescer;
 use crate::coalesce_batches::CoalesceBatchesStream;
+use genawaiter::sync::{Co, Gen};
 
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
 type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
@@ -215,7 +213,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                     self.number_of_exhausted_streams += 1;
                 }
                 Poll::Ready(Ok(()))
-            },
+            }
             Some(Err(e)) => Poll::Ready(Err(e)),
             Some(Ok((cursor, batch))) => {
                 self.cursors[idx] = Some(Cursor::new(cursor));
@@ -228,8 +226,11 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         let rows_before = self.in_progress.len();
 
         // Only emit within limits
-        let rows_to_emit = (self.fetch.unwrap_or(usize::MAX) - self.produced).min(self.batch_size);
-        let result = self.in_progress.build_record_batch_with_up_to_n_rows(rows_to_emit);
+        let rows_to_emit =
+            (self.fetch.unwrap_or(usize::MAX) - self.produced).min(self.batch_size);
+        let result = self
+            .in_progress
+            .build_record_batch_with_up_to_n_rows(rows_to_emit);
         self.produced += rows_before - self.in_progress.len();
         result
     }
@@ -297,14 +298,22 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 // 1. the winner did not change - so we can skip the full new batch rather than other partial batch
                 // 2. The new winner have more than 1 value
                 // 3. the last row in the new batch beat all other streams
-                if winner == new_winner && self.cursors[new_winner].as_ref().is_some_and(|c| c.len() > 1) && self.winner_batch_beats_all(new_winner) {
-                    let cursor = self.cursors[new_winner].as_mut().expect("already validated that has cursor");
+                if winner == new_winner
+                    && self.cursors[new_winner]
+                        .as_ref()
+                        .is_some_and(|c| c.len() > 1)
+                    && self.winner_batch_beats_all(new_winner)
+                {
+                    let cursor = self.cursors[new_winner]
+                        .as_mut()
+                        .expect("already validated that has cursor");
 
                     // TODO - avoid pushing n rows where we are above the limit or something
                     // Skip less than the entire number of rows so we can keep the same code flow
                     let number_of_rows_to_skip = cursor.len() - 1;
                     // If so, add the indices and
-                    self.in_progress.push_n_rows(new_winner, number_of_rows_to_skip);
+                    self.in_progress
+                        .push_n_rows(new_winner, number_of_rows_to_skip);
 
                     // Move the cursor to the end
                     cursor.advance_n(number_of_rows_to_skip);
@@ -313,7 +322,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 // Adjusting the loser tree if necessary
                 self.update_loser_tree();
             }
-
         }
 
         let last_stream_idx = self.loser_tree[0];
@@ -323,7 +331,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             let mut remaining = cursor.len();
             if let Some(fetch) = self.fetch {
                 remaining = remaining
-                  .min(fetch.saturating_sub(self.produced + self.in_progress.len()));
+                    .min(fetch.saturating_sub(self.produced + self.in_progress.len()));
             }
             if remaining > 0 {
                 self.in_progress.push_n_rows(last_stream_idx, remaining);
@@ -333,12 +341,18 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         drop(timer);
 
-        self.passthrough_last_stream(co, last_stream_idx).await?;
+        if self.fetch.is_none_or(|fetch| fetch > self.produced) {
+            self.passthrough_last_stream(co, last_stream_idx).await?;
+        }
 
         Ok(())
     }
 
-    async fn passthrough_last_stream(&mut self, co: &Co<Result<RecordBatch>>, last_stream_index: usize) -> Result<()> {
+    async fn passthrough_last_stream(
+        &mut self,
+        co: &Co<Result<RecordBatch>>,
+        last_stream_index: usize,
+    ) -> Result<()> {
         let elapsed_compute = self.metrics.elapsed_compute().clone();
         let mut timer = elapsed_compute.timer();
 
@@ -346,14 +360,10 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         let mut last_batch = None;
 
-        // When `build_record_batch()` hits an i32 offset overflow (e.g.
-        // combined string offsets exceed 2 GB), it emits a partial batch
-        // and keeps the remaining rows in `self.in_progress.indices`.
-        // Drain those leftover rows before terminating the stream,
-        // otherwise they would be silently dropped.
-        // Repeated overflows are fine — each poll emits another partial
-        // batch until `in_progress` is fully drained.
-        while !self.in_progress.is_empty() {
+        // Continue while we still have rows in the in progress builder and not reached fetch limit
+        while !self.in_progress.is_empty()
+            && self.fetch.is_none_or(|fetch| fetch > self.produced)
+        {
             // If still not empty and we have last_batch this mean that we were unable to emit a batch with the existing indices
             // and we fall back to emitting smaller one
             // in that case we emit that without coalescing so we won't have error coalescing
@@ -363,14 +373,23 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 timer = elapsed_compute.timer();
             }
 
+            // When `build_record_batch()` hits an i32 offset overflow (e.g.
+            // combined string offsets exceed 2 GB), it emits a partial batch
+            // and keeps the remaining rows in `self.in_progress.indices`.
+            // Drain those leftover rows before terminating the stream,
+            // otherwise they would be silently dropped.
+            // Repeated overflows are fine — each poll emits another partial
+            // batch until `in_progress` is fully drained.
             last_batch = self.emit_in_progress_batch()?;
         }
 
-        if last_stream.is_done() || self.fetch.is_some_and(|fetch| fetch <= self.produced) {
+        if last_stream.is_done() || self.fetch.is_some_and(|fetch| fetch <= self.produced)
+        {
             if let Some(last_batch) = last_batch.take() {
                 drop(timer);
                 co.yield_(Ok(last_batch)).await;
-                timer = elapsed_compute.timer();
+
+                // Not creating a timer since we are returning right away
             }
 
             return Ok(());
@@ -381,12 +400,14 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         let last_stream = last_stream.into_inner();
 
-
         let last_stream = if let Some(last_batch) = last_batch {
             let schema = last_stream.schema();
             let stream = futures::stream::iter(vec![Ok(last_batch)]);
 
-            Box::pin(RecordBatchStreamAdapter::new(schema, stream.chain(last_stream).boxed())) as SendableRecordBatchStream
+            Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                stream.chain(last_stream).boxed(),
+            )) as SendableRecordBatchStream
         } else {
             last_stream
         };
@@ -395,10 +416,10 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             last_stream,
             self.batch_size,
             self.fetch.map(|x| x - self.produced),
-            self.metrics.intermediate()
+            self.metrics.intermediate(),
         )
-          // Don't allow for passthrough of batches with sizes other than the provided batch size
-          .with_biggest_coalesce_batch_size(None);
+        // Don't allow for passthrough of batches with sizes other than the provided batch size
+        .with_biggest_coalesce_batch_size(None);
 
         drop(timer);
         while let Some(batch) = coalescer.next().await {
@@ -460,8 +481,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             Poll::Pending
         }
     }
-
-
 
     /// Returns `true` if every remaining row of `winner`'s current batch
     /// sorts before every other stream's current row, using the same index
@@ -746,6 +765,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::EmptyRecordBatchStream;
     use crate::metrics::ExecutionPlanMetricsSet;
     use crate::sorts::stream::PartitionedStream;
     use arrow::array::Int32Array;
@@ -754,9 +774,8 @@ mod tests {
         MemoryConsumer, MemoryPool, UnboundedMemoryPool,
     };
     use futures::TryStreamExt;
-    use std::cmp::Ordering;
     use futures::stream::Fuse;
-    use crate::EmptyRecordBatchStream;
+    use std::cmp::Ordering;
 
     #[derive(Debug)]
     struct EmptyPartitionedStream;
@@ -768,9 +787,14 @@ mod tests {
             1
         }
 
-        fn take_partition(&mut self, partition_idx: usize) -> Fuse<SendableRecordBatchStream> {
+        fn take_partition(
+            &mut self,
+            _partition_idx: usize,
+        ) -> Fuse<SendableRecordBatchStream> {
             // TODO - should not be empty schema
-            (Box::pin(EmptyRecordBatchStream::new(Arc::new(Schema::empty()))) as SendableRecordBatchStream).fuse()
+            (Box::pin(EmptyRecordBatchStream::new(Arc::new(Schema::empty())))
+                as SendableRecordBatchStream)
+                .fuse()
         }
 
         fn poll_next(

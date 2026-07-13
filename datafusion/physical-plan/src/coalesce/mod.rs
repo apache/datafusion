@@ -68,9 +68,14 @@ impl LimitedBatchCoalescer {
         }
     }
 
-    pub fn with_biggest_coalesce_batch_size(self, biggest_coalesce_batch_size: Option<usize>) -> Self {
+    pub fn with_biggest_coalesce_batch_size(
+        self,
+        biggest_coalesce_batch_size: Option<usize>,
+    ) -> Self {
         Self {
-            inner: self.inner.with_biggest_coalesce_batch_size(biggest_coalesce_batch_size),
+            inner: self
+                .inner
+                .with_biggest_coalesce_batch_size(biggest_coalesce_batch_size),
             ..self
         }
     }
