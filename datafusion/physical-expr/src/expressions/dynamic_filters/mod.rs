@@ -269,10 +269,22 @@ impl DynamicFilterPhysicalExpr {
         // Slow path: (re)compute the remap and store it under a write lock.
         let remapped =
             Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)?;
-        // A concurrent thread may have populated the cache with the same
-        // generation; either wins the write is fine — both are semantically
-        // equivalent because the inner generation hasn't changed.
-        *self.current_cache.write() = Some((generation, Arc::clone(&remapped)));
+        // Only publish our result if it is at least as fresh as whatever is
+        // currently cached. Without this guard a slow computation that
+        // observed an older `inner` could clobber a newer entry that a
+        // concurrent caller has already published (see #23532 review), which
+        // would force subsequent readers to redo the remap for the newer
+        // generation.
+        {
+            let mut cache = self.current_cache.write();
+            let should_write = match cache.as_ref() {
+                Some((cached_gen, _)) => generation >= *cached_gen,
+                None => true,
+            };
+            if should_write {
+                *cache = Some((generation, Arc::clone(&remapped)));
+            }
+        }
         Ok(remapped)
     }
 
