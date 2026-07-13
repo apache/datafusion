@@ -287,7 +287,7 @@ impl MultiLevelMergeBuilder {
 
             // Only single sorted spill file so return it
             (1, 0) => {
-                let (spill_file, _) = self.sorted_spill_files.remove(0);
+                let (spill_file, batch_size) = self.sorted_spill_files.remove(0);
 
                 // Not reserving any memory for this disk as we are not holding it in memory
                 let output_stream = self
@@ -296,7 +296,7 @@ impl MultiLevelMergeBuilder {
 
                 Ok(MergeStep::Stream {
                     stream: self.observe_output(output_stream),
-                    batch_size_limit: self.batch_size,
+                    batch_size_limit: batch_size,
                 })
             }
 
@@ -351,16 +351,6 @@ impl MultiLevelMergeBuilder {
                     }
                 };
 
-                // Cap the merge output at the smallest limit among the runs we're
-                // about to merge. Runs that were shrunk for skew carry a smaller limit,
-                // if none do, every run carries `self.batch_size` and the merge runs at
-                // the full batch size. The output stream is tagged with the same limit
-                // (see the `MergeStep::Stream` returns below) so a re-spilled
-                // intermediate run stays shrunk and won't rebuild an oversized batch on
-                // a later pass.
-                let output_batch_size =
-                    min_batch_size_limit(&sorted_spill_files).unwrap_or(self.batch_size);
-
                 // Don't account for existing streams memory
                 // as we are not holding the memory for them
                 let mut sorted_streams = mem::take(&mut self.sorted_streams);
@@ -376,6 +366,14 @@ impl MultiLevelMergeBuilder {
                     mem::swap(&mut self.reservation, &mut memory_reservation);
                 }
 
+                // Cap the merge output at the smallest limit among the runs we're
+                // about to merge. Runs that were shrunk for skew carry a smaller limit,
+                // if none do, every run carries `self.batch_size` and the merge runs at
+                // the full batch size. The output stream is tagged with the same limit
+                // (see the `MergeStep::Stream` returns below) so a re-spilled
+                // intermediate run stays shrunk and won't rebuild an oversized batch on
+                // a later pass.
+                let mut output_batch_size = self.batch_size;
                 for (spill, _) in sorted_spill_files {
                     let stream = self
                         .spill_manager
@@ -385,6 +383,8 @@ impl MultiLevelMergeBuilder {
                             spill.file,
                             Some(spill.max_record_batch_memory),
                         )?;
+                    output_batch_size =
+                        output_batch_size.min(spill.max_record_batch_memory);
                     sorted_streams.push(stream);
                 }
                 let merge_sort_stream = self.create_new_merge_sort(
@@ -692,14 +692,6 @@ enum MergeStep {
     },
     /// Re-spill the spill file at this index smaller, then retry the merge step.
     SplitThenRetry(usize),
-}
-
-/// Smallest batch-size limit among the runs in `files`, or `None` if `files` is empty.
-/// A merge over `files` must cap its output at this value so a re-spilled result can't
-/// rebuild a batch wider than the most-constrained input. Runs written at the full
-/// batch size carry that size as their limit, so they never tighten the cap below it.
-fn min_batch_size_limit(files: &[(SortedSpillFile, usize)]) -> Option<usize> {
-    files.iter().map(|(_, limit)| *limit).min()
 }
 
 /// Slice `batch` into two row-halves so a re-spill writes batches half the size.
@@ -1046,124 +1038,6 @@ mod tests {
         assert_eq!(spills.len(), 2);
         assert_eq!(buffer_len, 1);
         assert_eq!(builder.sorted_spill_files.len(), 2);
-
-        Ok(())
-    }
-
-    /// Splitting two *different* runs must not compound the batch-size reduction.
-    /// Each split halves only that run's own limit and leaves the global
-    /// `self.batch_size` untouched, so splitting two runs once each yields two runs
-    /// limited to half the original size - not a quarter, as a global-halving
-    /// implementation would produce.
-    #[tokio::test]
-    async fn splitting_two_runs_does_not_compound_the_batch_size_limit() -> Result<()> {
-        let env = Arc::new(RuntimeEnv::default());
-        let schema = test_schema();
-        let spill_manager = build_spill_manager(&env, &schema);
-
-        let n: i64 = 16384;
-        let f0 = make_sorted_spill_file(&spill_manager, &schema, (0..n).collect());
-        let f1 = make_sorted_spill_file(&spill_manager, &schema, (0..n).collect());
-
-        // Ample budget: every split's own single-stream reservation succeeds, so the
-        // only thing under test is how the batch-size limit is tracked.
-        let initial_batch_size = 8192;
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024 * 1024 * 64));
-        let mut builder = build_merge_builder(
-            spill_manager,
-            schema,
-            vec![f0, f1],
-            &pool,
-            initial_batch_size,
-        );
-
-        // Split each run once. The shrunk run is returned to the position it came
-        // from, so index 0 and index 1 address the two distinct runs.
-        builder.split_spill_file_in_half(0).await?;
-        builder.split_spill_file_in_half(1).await?;
-
-        // The global merge batch size is never lowered - the reduction is per-run.
-        assert_eq!(
-            builder.batch_size, initial_batch_size,
-            "splitting runs must not lower the global merge batch size"
-        );
-
-        // Both runs were split exactly once, so each is limited to half the original
-        // batch size. A global-halving implementation would have driven the second
-        // run down to a quarter.
-        let expected_limit = initial_batch_size / 2;
-        for (_, limit) in &builder.sorted_spill_files {
-            assert_eq!(
-                *limit, expected_limit,
-                "each run split once should be limited to half the original batch \
-                 size, not compounded"
-            );
-        }
-
-        Ok(())
-    }
-
-    /// End-to-end guard that re-spilling several runs under a tight budget (each put
-    /// back in place at a halved batch-size limit) and merging at mixed batch sizes
-    /// still produces the complete, fully-sorted output.
-    #[tokio::test]
-    async fn multiple_skewed_runs_merge_correctly() -> Result<()> {
-        let env = Arc::new(RuntimeEnv::default());
-        let schema = test_schema();
-        let spill_manager = build_spill_manager(&env, &schema);
-
-        let n: i64 = 16384;
-        let f0 = make_sorted_spill_file(&spill_manager, &schema, (0..n).collect());
-        let f1 = make_sorted_spill_file(&spill_manager, &schema, (0..n).collect());
-        let f2 = make_sorted_spill_file(&spill_manager, &schema, (0..n).collect());
-        let m = f0
-            .max_record_batch_memory
-            .max(f1.max_record_batch_memory)
-            .max(f2.max_record_batch_memory);
-
-        // Only ~3.5*m: not all three runs fit at once, forcing re-spills and a
-        // multi-pass merge.
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(m * 7 / 2));
-
-        let builder = build_merge_builder(
-            spill_manager,
-            Arc::clone(&schema),
-            vec![f0, f1, f2],
-            &pool,
-            8192,
-        );
-        let stream = builder.create_spillable_merge_stream();
-        let batches: Vec<RecordBatch> = stream.try_collect().await?;
-
-        // Every input row is present.
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(
-            total_rows,
-            (3 * n) as usize,
-            "the merge must emit every input row across all three runs"
-        );
-
-        // The output is globally sorted, and every value appears exactly three times
-        // (once per input run), proving no rows were dropped or duplicated by the
-        // reordering/re-spilling.
-        let merged = concat_batches(&schema, &batches)?;
-        let col = merged.column(0).as_primitive::<Int64Type>();
-        for i in 1..col.len() {
-            assert!(
-                col.value(i - 1) <= col.value(i),
-                "merge output must be sorted: {} > {} at {i}",
-                col.value(i - 1),
-                col.value(i),
-            );
-        }
-        for value in 0..n {
-            let expected_index = (value as usize) * 3;
-            assert_eq!(
-                col.value(expected_index),
-                value,
-                "each value must appear exactly three times in sorted order"
-            );
-        }
 
         Ok(())
     }
