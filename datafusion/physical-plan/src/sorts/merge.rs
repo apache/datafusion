@@ -33,11 +33,12 @@ use std::task::{Context, Poll};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use datafusion_execution::async_try_stream;
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::StreamExt;
 
 use crate::coalesce_batches::CoalesceBatchesStream;
-use genawaiter::sync::{Co, Gen};
+use futures::Stream;
 
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
 type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
@@ -181,14 +182,10 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         let cloned_metrics = self.metrics.clone();
 
-        let mut this = self;
-        let stream = Gen::new(|co| async move {
-            if let Err(e) = this.run(&co).await {
-                co.yield_(Err(e)).await;
-            }
-        });
-
-        let stream = Box::pin(RecordBatchStreamAdapter::new(schema_clone, stream));
+        let stream = Box::pin(RecordBatchStreamAdapter::new(
+            schema_clone,
+            self.create_stream(),
+        ));
 
         Box::pin(ObservedStream::new(stream, cloned_metrics, None))
     }
@@ -235,7 +232,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         result
     }
 
-    async fn run(&mut self, co: &Co<Result<RecordBatch>>) -> Result<()> {
+  fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
+    async_try_stream(|mut emitter| async move {
         // This vector contains the indices of the partitions that have not started emitting yet.
         let mut uninitiated_partitions =
             (0..self.streams.partitions()).collect::<Vec<_>>();
@@ -274,7 +272,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 && let Some(batch) = self.emit_in_progress_batch()?
             {
                 drop(timer);
-                co.yield_(Ok(batch)).await;
+                emitter.emit(batch).await;
                 timer = elapsed_compute.timer();
             }
 
@@ -346,11 +344,12 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
 
         Ok(())
+      })
     }
 
     async fn passthrough_last_stream(
         &mut self,
-        co: &Co<Result<RecordBatch>>,
+        emitter: &Emitter<Result<RecordBatch>>,
         last_stream_index: usize,
     ) -> Result<()> {
         let elapsed_compute = self.metrics.elapsed_compute().clone();
@@ -387,7 +386,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         {
             if let Some(last_batch) = last_batch.take() {
                 drop(timer);
-                co.yield_(Ok(last_batch)).await;
+                emitter.emit(last_batch).await;
 
                 // Not creating a timer since we are returning right away
             }
@@ -423,7 +422,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         drop(timer);
         while let Some(batch) = coalescer.next().await {
-            co.yield_(batch).await;
+            emitter.emit(batch?).await;
         }
 
         Ok(())
