@@ -628,6 +628,14 @@ jobs:
         run: |
           ci/scripts/rust_fmt.sh
 
+  check-workflow-tool-installs:
+    name: Check GitHub Actions install tooling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: Check workflow tool installs
+        run: ci/scripts/check_no_cargo_install_in_workflows.sh
+
   # Coverage job disabled due to
   # https://github.com/apache/datafusion/issues/3678
 
@@ -659,12 +667,15 @@ jobs:
   #         path: /home/runner/.cargo
   #         # this key is not equal because the user is different than on a container (runner vs github)
   #         key: cargo-coverage-cache3-
+  #     - name: Install cargo-tarpaulin
+  #       uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c  # v2.82.10
+  #       with:
+  #         tool: cargo-tarpaulin@0.20.1
   #     - name: Run coverage
   #       run: |
   #         export PATH=$PATH:$HOME/d/protoc/bin
   #         rustup toolchain install stable
   #         rustup default stable
-  #         cargo install --version 0.20.1 cargo-tarpaulin
   #         cargo tarpaulin --all --out Xml
   #     - name: Report coverage
   #       continue-on-error: true

@@ -45,6 +45,7 @@ pub mod array_any_match;
 pub mod array_avg;
 pub mod array_compact;
 pub mod array_filter;
+pub mod array_first;
 pub mod array_has;
 pub mod array_normalize;
 pub mod array_product;
@@ -99,6 +100,7 @@ pub mod expr_fn {
     pub use super::array_avg::array_avg;
     pub use super::array_compact::array_compact;
     pub use super::array_filter::array_filter;
+    pub use super::array_first::array_first;
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
@@ -222,6 +224,7 @@ pub fn all_default_higher_order_functions() -> Vec<Arc<HigherOrderUDF>> {
     vec![
         array_any_match::array_any_match_higher_order_function(),
         array_filter::array_filter_higher_order_function(),
+        array_first::array_first_higher_order_function(),
         array_transform::array_transform_higher_order_function(),
     ]
 }
