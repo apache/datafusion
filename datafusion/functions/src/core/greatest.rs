@@ -21,6 +21,7 @@ use arrow::buffer::BooleanBuffer;
 use arrow::compute::SortOptions;
 use arrow::compute::kernels::cmp;
 use arrow::datatypes::DataType;
+use datafusion_common::types::NativeType;
 use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err};
 use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
@@ -95,30 +96,69 @@ impl GreatestLeastOperator for GreatestFunc {
     /// Return boolean array where `arr[i] = lhs[i] >= rhs[i]` for all i, where `arr` is the result array
     /// Nulls are always considered smaller than any other value
     fn get_indexes_to_keep(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
-        // Fast path:
-        // If both arrays are not nested, have the same length and no nulls, we can use the faster vectorized kernel
-        // - If both arrays are not nested: Nested types, such as lists, are not supported as the null semantics are not well-defined.
-        // - both array does not have any nulls: cmp::gt_eq will return null if any of the input is null while we want to return false in that case
-        if !lhs.data_type().is_nested()
-            && lhs.logical_null_count() == 0
-            && rhs.logical_null_count() == 0
-        {
-            return cmp::gt_eq(&lhs, &rhs).map_err(|e| e.into());
-        }
-
-        let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
-
         assert_eq_or_internal_err!(
             lhs.len(),
             rhs.len(),
             "All arrays should have the same length for greatest comparison"
         );
 
+        if let Some(values) = vectorized_indexes_to_keep(lhs, rhs) {
+            return Ok(BooleanArray::new(values, None));
+        }
+
+        let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
+
         let values = BooleanBuffer::collect_bool(lhs.len(), |i| cmp(i, i).is_ge());
 
         // No nulls as we only want to keep the values that are larger, its either true or false
         Ok(BooleanArray::new(values, None))
     }
+}
+
+/// Computes `lhs[i] >= rhs[i]` with nulls ordered before every other value,
+/// using the vectorized comparison kernel rather than a per-row comparator.
+///
+/// Returns `None` when the inputs are not a good fit for the kernel and the
+/// caller should fall back to [`make_comparator`]:
+/// - nested types, such as lists, for which the kernel's null semantics are not
+///   well-defined, and
+/// - nullable floating point values, because `cmp::gt_eq` compares them with
+///   IEEE semantics (every comparison against `NaN` is false) while the
+///   comparator uses the total order in which `NaN` is the largest value.
+fn vectorized_indexes_to_keep(lhs: &dyn Array, rhs: &dyn Array) -> Option<BooleanBuffer> {
+    if lhs.data_type().is_nested() {
+        return None;
+    }
+
+    let (values, both_valid) = cmp::gt_eq(&lhs, &rhs).ok()?.into_parts();
+
+    // The kernel's validity is the intersection of both inputs', so an absent or
+    // fully set buffer means there is nothing to fix up: the values are already
+    // the answer.
+    let Some(both_valid) = both_valid.filter(|nulls| nulls.null_count() > 0) else {
+        return Some(values);
+    };
+
+    // `NativeType` looks through the encodings that wrap a value type, so this also
+    // catches dictionary and run-end encoded floats.
+    if NativeType::from(lhs.data_type()).is_float() {
+        return None;
+    }
+
+    // `cmp::gt_eq` yields null wherever either side is null, but a null must compare
+    // as smaller than any other value rather than propagate. So keep the left value
+    // where both sides are valid and it compares greater or equal, and wherever the
+    // right side is null (which includes both sides being null, where the values are
+    // equivalent and the left one is kept).
+    let both_valid_and_ge = &values & both_valid.inner();
+    Some(match rhs.logical_nulls() {
+        // `!rhs_valid` is all zeroes when the right side has no nulls, so the OR
+        // would be a no-op.
+        Some(rhs_nulls) if rhs_nulls.null_count() > 0 => {
+            &both_valid_and_ge | &!rhs_nulls.inner()
+        }
+        _ => both_valid_and_ge,
+    })
 }
 
 impl ScalarUDFImpl for GreatestFunc {
