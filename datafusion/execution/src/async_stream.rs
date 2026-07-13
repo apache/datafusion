@@ -368,7 +368,7 @@ mod test {
     }
 
     #[tokio::test]
-    #[should_panic]
+    #[should_panic = "await was not called after calling emit"]
     async fn emit_without_await() {
         let s = async_stream(|mut emitter| async move {
             #[expect(clippy::let_underscore_future)]
