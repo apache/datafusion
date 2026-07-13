@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use futures::Stream;
 use futures::future::FusedFuture;
 use futures::stream::FusedStream;
+use futures::Stream;
+use parking_lot::Mutex;
 use pin_project_lite::pin_project;
 use std::ops::DerefMut;
 use std::pin::Pin;
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::task::{Context, Poll};
-use parking_lot::Mutex;
 
 /// Creates a [`Stream`] from an async generator function.
 ///
@@ -143,7 +143,7 @@ pub struct Emitter<T> {
 ///
 /// The generator closure receives a `TryEmitter<T, E>` as its argument.
 pub struct TryEmitter<T, E> {
-    slot: SlotRef<T>,
+    slot: SlotRef<Result<T, E>>,
 }
 
 struct Receiver<T> {
@@ -289,7 +289,7 @@ mod test {
     use crate::async_stream::Emitter;
     use crate::{async_stream, async_try_stream};
     use futures::stream::FusedStream;
-    use futures::{Stream, StreamExt, pin_mut};
+    use futures::{pin_mut, Stream, StreamExt};
     use std::assert_matches;
     use tokio::sync::mpsc;
 
@@ -523,6 +523,23 @@ mod test {
         .await;
 
         assert_eq!(s, vec![0, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn should_not_call_handler_function_if_not_polled() {
+        let _ = async_stream(|_: Emitter<()>| async move {
+            panic!("should not be called");
+        });
+    }
+
+    #[tokio::test]
+    async fn should_not_continue_until_next_poll() {
+        let s = async_stream(|mut emitter| async move {
+            emitter.emit("hey").await;
+            panic!("make sure poll based and not push based");
+        });
+        pin_mut!(s);
+        let _ = s.next().await;
     }
 
     #[test]
