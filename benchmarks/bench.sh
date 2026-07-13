@@ -102,6 +102,7 @@ topk_tpch:              Benchmark of top-k (sorting with limit) queries on TPC-H
 topk_sorted_tpch:       Benchmark of top-k queries on TPC-H lineitem ordered by l_orderkey (SF=1)
 push_down_topk:         Benchmark of ORDER BY ... LIMIT over outer joins on TPC-H dataset (SF=1) — exercises pushing TopK through a join
 external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
+large_values:           Queries over very large row values (multi-KiB strings; batches within batch_size rows but 100MB+ in memory); data is generated on first run
 wide_schema:            Small-projection queries on a wide synthetic dataset (1024 cols × 256 files) — measures per-file metadata overhead
                           (runs both 'wide' and 'narrow' subgroups: narrow is an internal baseline; the wide-vs-narrow ratio is the signal)
 predicate_eval:         Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an
@@ -553,6 +554,9 @@ main() {
                     ;;
                 external_aggr)
                     run_external_aggr
+                    ;;
+                large_values)
+                    run_large_values
                     ;;
                 sort_pushdown)
                     run_sort_pushdown
@@ -1235,6 +1239,16 @@ run_h2o_window() {
 }
 
 # Runs the external aggregation benchmark
+# Runs the large_values benchmark: queries over multi-KiB string values whose
+# batches stay within batch_size rows but are 100MB+ in memory. The dfbench
+# subcommand generates its dataset on first use.
+run_large_values() {
+    RESULTS_FILE="${RESULTS_DIR}/large_values.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running large_values benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- large-values --iterations 5 --path "${DATA_DIR}/large_values" -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
 run_external_aggr() {
     # Use TPC-H SF1 dataset
     TPCH_DIR="${DATA_DIR}/tpch_sf1"

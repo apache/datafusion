@@ -306,6 +306,11 @@ pub(crate) struct GroupedHashAggregateStream {
     /// max rows in output RecordBatches
     batch_size: usize,
 
+    /// Soft byte-size target for spill and spill-merge batches (from
+    /// `datafusion.execution.target_batch_size_bytes`); `None` bounds
+    /// them by row count only
+    target_batch_size_bytes: Option<usize>,
+
     /// Optional soft limit on the number of `group_values` in a batch
     /// If the number of `group_values` in a single batch exceeds this value,
     /// the `GroupedHashAggregateStream` operation immediately switches to
@@ -390,6 +395,8 @@ impl GroupedHashAggregateStream {
         let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
         let batch_size = context.session_config().batch_size();
+        let target_batch_size_bytes =
+            crate::batch_normalizer::effective_target_batch_size_bytes(context);
         let input = agg.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
@@ -605,6 +612,7 @@ impl GroupedHashAggregateStream {
             baseline_metrics,
             group_by_metrics,
             batch_size,
+            target_batch_size_bytes,
             group_ordering,
             input_done: false,
             spill_state,
@@ -1204,6 +1212,7 @@ impl GroupedHashAggregateStream {
             emit,
             self.spill_state.spill_expr.clone(),
             self.batch_size,
+            self.target_batch_size_bytes,
         );
         let spillfile = self
             .spill_state
@@ -1297,6 +1306,7 @@ impl GroupedHashAggregateStream {
                 .with_expressions(&self.spill_state.spill_expr)
                 .with_metrics(self.baseline_metrics.clone())
                 .with_batch_size(self.batch_size)
+                .with_batch_size_bytes(self.target_batch_size_bytes)
                 .with_reservation(self.reservation.new_empty())
                 .build()?;
             self.input_done = false;

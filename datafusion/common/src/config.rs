@@ -732,6 +732,29 @@ config_namespace! {
         /// metadata memory consumption
         pub batch_size: ConfigNonZeroUsize, default = non_zero_usize_default(8192)
 
+        /// Soft target, in bytes, for the in-memory size of batches, in addition to
+        /// the row-based `batch_size` target. When set, data source output batches
+        /// are re-chunked towards both targets: batches much larger than this (by
+        /// in-memory size) are split into compact copies of roughly this size even
+        /// when within `batch_size` rows -- protecting downstream operators from
+        /// very large batches (e.g. wide rows with large string values) -- and
+        /// small batches are coalesced until they reach either target. Batches near
+        /// the targets are passed through without copying. Sorts, sort-preserving
+        /// merges and aggregation spills also bound their output and spill batches
+        /// to roughly this size instead of emitting `batch_size`-row batches of
+        /// unbounded byte size. When `None` (the default), batches are only
+        /// chunked by row count.
+        pub target_batch_size_bytes: Option<usize>, default = None
+
+        /// When `target_batch_size_bytes` is unset and the memory pool has a finite
+        /// limit, derive a byte-size target for batches automatically from the pool's
+        /// per-partition share, so queries whose batches are large relative to the
+        /// memory budget re-chunk them (and can complete) instead of failing with
+        /// ResourcesExhausted. Has no effect when there is no memory limit (nothing
+        /// to protect: batches pass through untouched) or when
+        /// `target_batch_size_bytes` is set explicitly.
+        pub adaptive_target_batch_size: bool, default = true
+
         /// A perfect hash join (see `HashJoinExec` for more details) will be considered
         /// if the range of keys (max - min) on the build side is < this threshold.
         /// This provides a fast path for joins with very small key ranges,

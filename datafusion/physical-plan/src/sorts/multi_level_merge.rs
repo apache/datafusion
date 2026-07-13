@@ -143,6 +143,7 @@ pub(crate) struct MultiLevelMergeBuilder {
     expr: LexOrdering,
     metrics: BaselineMetrics,
     batch_size: usize,
+    batch_size_bytes: Option<usize>,
     reservation: MemoryReservation,
     fetch: Option<usize>,
     enable_round_robin_tie_breaker: bool,
@@ -164,6 +165,7 @@ impl MultiLevelMergeBuilder {
         expr: LexOrdering,
         metrics: BaselineMetrics,
         batch_size: usize,
+        batch_size_bytes: Option<usize>,
         reservation: MemoryReservation,
         fetch: Option<usize>,
         enable_round_robin_tie_breaker: bool,
@@ -176,6 +178,7 @@ impl MultiLevelMergeBuilder {
             expr,
             metrics,
             batch_size,
+            batch_size_bytes,
             reservation,
             enable_round_robin_tie_breaker,
             fetch,
@@ -376,6 +379,7 @@ impl MultiLevelMergeBuilder {
             .with_schema(Arc::clone(&self.schema))
             .with_expressions(&self.expr)
             .with_batch_size(self.batch_size)
+            .with_batch_size_bytes(self.batch_size_bytes)
             .with_fetch(self.fetch)
             .with_metrics(if is_output {
                 // Only add the metrics to the last run
@@ -759,6 +763,7 @@ mod tests {
             expr,
             BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
             batch_size,
+            None,
             reservation,
             None,
             false,
@@ -938,6 +943,7 @@ mod tests {
             expr,
             metrics,
             1024,
+            None,
             reservation,
             None,
             false,

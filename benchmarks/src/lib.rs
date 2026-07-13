@@ -22,6 +22,7 @@ pub mod dict;
 pub mod h2o;
 pub mod hj;
 pub mod imdb;
+pub mod large_values;
 pub mod nlj;
 pub mod smj;
 pub mod sort_pushdown;
