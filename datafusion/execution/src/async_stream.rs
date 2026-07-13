@@ -60,7 +60,7 @@ impl<T> Emitter<T> {
     pub fn emit(&mut self, value: T) -> impl FusedFuture<Output = ()> {
         let mut guard = self.slot.lock();
         match guard.deref_mut() {
-            Some(_) => panic!("Misuse: call await immediately after calling emit"),
+            Some(_) => panic!("Misuse: await was not called after calling emit"),
             slot => *slot = Some(value),
         }
 
@@ -81,7 +81,7 @@ impl<T, E> TryEmitter<T, E> {
     pub fn emit(&mut self, value: T) -> impl FusedFuture<Output = ()> {
         let mut guard = self.slot.lock();
         match guard.deref_mut() {
-            Some(_) => panic!("Misuse: call await immediately after calling emit"),
+            Some(_) => panic!("Misuse: await was not called after calling emit"),
             slot => *slot = Some(Ok::<T, E>(value)),
         }
 
