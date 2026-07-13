@@ -2119,6 +2119,7 @@ dependencies = [
  "object_store",
  "parking_lot",
  "parquet",
+ "pin-project-lite",
  "rand 0.9.4",
  "tempfile",
  "tokio",
