@@ -845,9 +845,15 @@ fn round_integer_array(
     }
 }
 
-/// Rounds a float array to `decimal_places`, taking the hoisted-factor fast
-/// path when it applies and falling back to the shared binary-math kernel
-/// otherwise.
+/// Rounds a float array to `decimal_places`.
+///
+/// The shared `calculate_binary_math` kernel routes through `try_unary` and
+/// re-evaluates `round_float` (including `10f64.powi(decimal_places)` and a
+/// `Result` check) for every element. When `decimal_places` is a non-null
+/// scalar, the scaling factor can instead be hoisted out of the loop and the
+/// infallible `unary` kernel used, which the compiler can autovectorize.
+/// `unary` also computes over null slots, but it carries the input null buffer
+/// through to the output, so those values stay masked.
 fn round_float_column<PT>(
     value_array: &ArrayRef,
     decimal_places: &ColumnarValue,
@@ -856,57 +862,26 @@ where
     PT: ArrowPrimitiveType,
     PT::Native: num_traits::Float,
 {
-    if let Some(arr) = round_float_fast::<PT>(value_array, decimal_places)? {
-        return Ok(arr);
+    // Bring `Float` into scope so `.round()` resolves on the `PT::Native`
+    // projection below.
+    use num_traits::Float;
+
+    if let ColumnarValue::Scalar(ScalarValue::Int32(Some(decimal_places))) =
+        decimal_places
+    {
+        let factor = round_factor::<PT::Native>(*decimal_places)?;
+        let result = value_array
+            .as_primitive::<PT>()
+            .unary::<_, PT>(|value| (value * factor).round() / factor);
+        return Ok(Arc::new(result) as ArrayRef);
     }
+
     let result = calculate_binary_math::<PT, Int32Type, PT, _>(
         value_array.as_ref(),
         decimal_places,
         round_float::<PT::Native>,
     )?;
     Ok(result as _)
-}
-
-/// Fast path for rounding a float array to a scalar number of `decimal_places`.
-///
-/// The shared `calculate_binary_math` kernel routes through `try_unary` and
-/// re-evaluates `round_float` (including `10f64.powi(decimal_places)` and a
-/// `Result` check) for every element. When `decimal_places` is a non-null
-/// scalar and the value column has no nulls, we can hoist the scaling factor
-/// out of the loop and use the infallible `unary` kernel instead, which the
-/// compiler can autovectorize. Requiring no null slots keeps the output
-/// bit-identical to the fallible kernel: `unary` writes a computed value into
-/// every slot while `try_unary` leaves null slots zeroed, so the two only agree
-/// when there are no null slots. Returns `Ok(None)` when the fast path does not
-/// apply, so the caller falls back to the shared kernel.
-fn round_float_fast<PT>(
-    value_array: &ArrayRef,
-    decimal_places: &ColumnarValue,
-) -> Result<Option<ArrayRef>>
-where
-    PT: ArrowPrimitiveType,
-    PT::Native: num_traits::Float,
-{
-    // Bring `Float` into scope so `.round()` resolves on the `PT::Native`
-    // projection below.
-    use num_traits::Float;
-
-    let ColumnarValue::Scalar(ScalarValue::Int32(Some(decimal_places))) = decimal_places
-    else {
-        return Ok(None);
-    };
-
-    let prim = value_array.as_primitive::<PT>();
-    if prim.null_count() != 0 {
-        return Ok(None);
-    }
-
-    // Compute the scaling factor once, via the same helper `round_float` uses,
-    // so the arithmetic (and therefore every rounded bit) is identical.
-    let factor = round_factor::<PT::Native>(*decimal_places)?;
-
-    let result = prim.unary::<_, PT>(|value| (value * factor).round() / factor);
-    Ok(Some(Arc::new(result) as ArrayRef))
 }
 
 /// Computes the power-of-ten scaling factor used to round to `decimal_places`.
@@ -1012,6 +987,7 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array, Int64Array};
+    use arrow::datatypes::DataType;
     use datafusion_common::DataFusionError;
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
@@ -1073,6 +1049,35 @@ mod test {
         let expected = Float64Array::from(vec![
             125.0, 125.2, 125.23, 125.235, 125.2345, 125.2345, 130.0, 100.0, 0.0, 0.0,
         ]);
+
+        assert_eq!(floats, &expected);
+    }
+
+    /// A scalar `decimal_places` takes the hoisted-factor `unary` path, which
+    /// computes over null slots as well. The nulls must survive into the output.
+    #[test]
+    fn test_round_f64_scalar_decimal_places_preserves_nulls() {
+        let value: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(125.2345),
+            None,
+            Some(-1.555),
+            None,
+        ]));
+
+        let result = super::round_columnar(
+            &ColumnarValue::Array(value),
+            &ColumnarValue::Scalar(ScalarValue::Int32(Some(2))),
+            4,
+            &DataType::Float64,
+        )
+        .expect("failed to initialize function round");
+        let ColumnarValue::Array(result) = result else {
+            panic!("expected an array result");
+        };
+        let floats =
+            as_float64_array(&result).expect("failed to initialize function round");
+
+        let expected = Float64Array::from(vec![Some(125.23), None, Some(-1.56), None]);
 
         assert_eq!(floats, &expected);
     }
