@@ -175,7 +175,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         let cloned_metrics = self.metrics.clone();
 
         let mut this = self;
-        let stream = Gen::new(|co| async move {
+        let stream = async_try_stream(|co| async move {
             if let Err(e) = this.run(&co).await {
                 co.yield_(Err(e)).await;
             }

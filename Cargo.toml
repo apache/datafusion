@@ -159,7 +159,6 @@ datafusion-session = { path = "datafusion/session", version = "54.0.0" }
 datafusion-spark = { path = "datafusion/spark", version = "54.0.0" }
 datafusion-sql = { path = "datafusion/sql", version = "54.0.0" }
 datafusion-substrait = { path = "datafusion/substrait", version = "54.0.0" }
-genawaiter = { version = "0.99.1", default-features = false }
 
 doc-comment = "0.3"
 env_logger = "0.11"

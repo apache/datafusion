@@ -78,7 +78,6 @@ datafusion-physical-expr-common = { workspace = true }
 datafusion-proto-common = { workspace = true, optional = true }
 datafusion-proto-models = { workspace = true, optional = true }
 futures = { workspace = true }
-genawaiter = { workspace = true, features = ["futures03"] }
 half = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
