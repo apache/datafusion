@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`EliminateJoin`] rewrites inner joins to simpler forms to make them cheaper
-//! to evaluate. We implement two distinct rewrites:
+//! [`EliminateJoin`] rewrites joins to simpler forms to make them cheaper
+//! to evaluate. We implement three distinct rewrites:
 //!
 //! * An inner join can be rewritten to an empty relation if the join condition
 //!   is trivially false.
@@ -31,6 +31,16 @@
 //!        join's ancestors are duplicate-insensitive (e.g., DISTINCT) or we can use
 //!        functional dependencies to prove that each L row matches at most one R
 //!        row (R is provably unique on the join keys).
+//!
+//! * A left outer join `L ⟕ R` can be removed entirely, i.e. replaced by `L`,
+//!   under the same two conditions. Unlike an inner join, a left join
+//!   preserves every row of L whether or not it has a match in R, so when R's
+//!   columns are unused and R cannot multiply L's rows the join has no
+//!   observable effect at all. Such joins commonly appear in generated SQL
+//!   and in queries over views that join in lookup tables the query does not
+//!   read. A join filter does not prevent this rewrite: for a left join it
+//!   only decides whether a left row is matched or null-padded, and either
+//!   way the row is emitted.
 //!
 //! # Overview
 //!
@@ -142,8 +152,10 @@ impl LiveColumns {
     }
 }
 
-/// Rewrites an inner join to a semi join when one input only filters the other,
-/// and replaces an always-false inner join with an empty relation.
+/// Rewrites an inner join to a semi join when one input only filters the
+/// other, removes a left outer join whose right side is unused and cannot
+/// multiply left rows, and replaces an always-false inner join with an empty
+/// relation.
 #[derive(Default, Debug)]
 pub struct EliminateJoin;
 
@@ -393,6 +405,30 @@ fn rewrite_join(
     }
 
     let (visible_left, visible_right) = split_join_output_columns(&join, live);
+
+    // A LEFT JOIN preserves every left row, so when nothing above the join
+    // references the right side's columns and the right side cannot multiply
+    // left rows (the ancestors are duplicate-insensitive, or the right side
+    // is unique on the join keys), the join has no observable effect and can
+    // be replaced by its left input. A join filter cannot prevent this: it
+    // only decides whether a left row is matched or null-padded, and either
+    // way the row is emitted.
+    if join.join_type == JoinType::Left
+        && visible_right.is_empty()
+        && (duplicate_insensitive
+            || side_unique_on_join(
+                join.right.schema(),
+                join.on.iter().map(|(_, right)| right),
+                join.null_equality,
+            ))
+    {
+        let left = rewrite_subtree(
+            Arc::unwrap_or_clone(join.left),
+            visible_left,
+            duplicate_insensitive,
+        )?;
+        return Ok(Transformed::yes(left.data));
+    }
 
     let rewritten_join_type =
         rewritten_join_type(&join, &visible_left, &visible_right, duplicate_insensitive);

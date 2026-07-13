@@ -5635,15 +5635,8 @@ CREATE TABLE elim_orders (order_id INT, user_id INT, amount INT) AS VALUES
 query TT
 EXPLAIN SELECT order_id, amount FROM elim_orders LEFT JOIN elim_users ON user_id = id;
 ----
-logical_plan
-01)Projection: elim_orders.order_id, elim_orders.amount
-02)--Left Join: elim_orders.user_id = elim_users.id
-03)----TableScan: elim_orders projection=[order_id, user_id, amount]
-04)----TableScan: elim_users projection=[id]
-physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(id@0, user_id@1)], projection=[order_id@1, amount@3]
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--DataSourceExec: partitions=1, partition_sizes=[1]
+logical_plan TableScan: elim_orders projection=[order_id, amount]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
 # All orders are returned, including the one with no matching user.
 query II rowsort
@@ -5659,16 +5652,11 @@ EXPLAIN SELECT order_id FROM elim_orders LEFT JOIN elim_users ON user_id = id WH
 ----
 logical_plan
 01)Projection: elim_orders.order_id
-02)--Left Join: elim_orders.user_id = elim_users.id
-03)----Projection: elim_orders.order_id, elim_orders.user_id
-04)------Filter: elim_orders.amount > Int32(100)
-05)--------TableScan: elim_orders projection=[order_id, user_id, amount]
-06)----TableScan: elim_users projection=[id]
+02)--Filter: elim_orders.amount > Int32(100)
+03)----TableScan: elim_orders projection=[order_id, amount]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=Left, on=[(user_id@1, id@0)], projection=[order_id@0]
-02)--FilterExec: amount@2 > 100, projection=[order_id@0, user_id@1]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: amount@1 > 100, projection=[order_id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I rowsort
 SELECT order_id FROM elim_orders LEFT JOIN elim_users ON user_id = id WHERE amount > 100;
@@ -5681,18 +5669,8 @@ SELECT order_id FROM elim_orders LEFT JOIN elim_users ON user_id = id WHERE amou
 query TT
 EXPLAIN SELECT order_id FROM elim_orders LEFT JOIN elim_users ON user_id = id AND name <> 'bob';
 ----
-logical_plan
-01)Projection: elim_orders.order_id
-02)--Left Join: elim_orders.user_id = elim_users.id
-03)----TableScan: elim_orders projection=[order_id, user_id]
-04)----Projection: elim_users.id
-05)------Filter: elim_users.name != Utf8View("bob")
-06)--------TableScan: elim_users projection=[id, name]
-physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(id@0, user_id@1)], projection=[order_id@1]
-02)--FilterExec: name@1 != bob, projection=[id@0]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)--DataSourceExec: partitions=1, partition_sizes=[1]
+logical_plan TableScan: elim_orders projection=[order_id]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I rowsort
 SELECT order_id FROM elim_orders LEFT JOIN elim_users ON user_id = id AND name <> 'bob';
@@ -5709,19 +5687,10 @@ EXPLAIN SELECT count(*) FROM elim_orders LEFT JOIN elim_users ON user_id = id;
 logical_plan
 01)Projection: count(Int64(1)) AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-03)----Projection:
-04)------Left Join: elim_orders.user_id = elim_users.id
-05)--------TableScan: elim_orders projection=[user_id]
-06)--------TableScan: elim_users projection=[id]
+03)----TableScan: elim_orders projection=[]
 physical_plan
-01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
-02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
-03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(user_id@0, id@0)], projection=[]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
-08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[3 as count(*)]
+02)--PlaceholderRowExec
 
 query I
 SELECT count(*) FROM elim_orders LEFT JOIN elim_users ON user_id = id;
@@ -5734,21 +5703,9 @@ query TT
 EXPLAIN SELECT o.order_id FROM elim_orders o LEFT JOIN (SELECT DISTINCT user_id FROM elim_orders) d ON o.user_id = d.user_id;
 ----
 logical_plan
-01)Projection: o.order_id
-02)--Left Join: o.user_id = d.user_id
-03)----SubqueryAlias: o
-04)------TableScan: elim_orders projection=[order_id, user_id]
-05)----SubqueryAlias: d
-06)------Aggregate: groupBy=[[elim_orders.user_id]], aggr=[[]]
-07)--------TableScan: elim_orders projection=[user_id]
-physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(user_id@0, user_id@1)], projection=[order_id@1]
-02)--CoalescePartitionsExec
-03)----AggregateExec: mode=FinalPartitioned, gby=[user_id@0 as user_id], aggr=[]
-04)------RepartitionExec: partitioning=Hash([user_id@0], 4), input_partitions=1
-05)--------AggregateExec: mode=Partial, gby=[user_id@0 as user_id], aggr=[]
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)SubqueryAlias: o
+02)--TableScan: elim_orders projection=[order_id]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I rowsort
 SELECT o.order_id FROM elim_orders o LEFT JOIN (SELECT DISTINCT user_id FROM elim_orders) d ON o.user_id = d.user_id;
@@ -5804,18 +5761,12 @@ EXPLAIN SELECT DISTINCT name FROM elim_users LEFT JOIN elim_orders ON elim_users
 ----
 logical_plan
 01)Aggregate: groupBy=[[elim_users.name]], aggr=[[]]
-02)--Projection: elim_users.name
-03)----Left Join: elim_users.id = elim_orders.user_id
-04)------TableScan: elim_users projection=[id, name]
-05)------TableScan: elim_orders projection=[user_id]
+02)--TableScan: elim_users projection=[name]
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
-02)--RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
+02)--RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=1
 03)----AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------HashJoinExec: mode=CollectLeft, join_type=Right, on=[(user_id@0, id@0)], projection=[name@2]
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query T rowsort
 SELECT DISTINCT name FROM elim_users LEFT JOIN elim_orders ON elim_users.id = elim_orders.user_id;
@@ -5859,17 +5810,12 @@ EXPLAIN SELECT DISTINCT order_id FROM elim_orders LEFT JOIN elim_users ON true;
 ----
 logical_plan
 01)Aggregate: groupBy=[[elim_orders.order_id]], aggr=[[]]
-02)--Left Join:
-03)----TableScan: elim_orders projection=[order_id]
-04)----TableScan: elim_users projection=[]
+02)--TableScan: elim_orders projection=[order_id]
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[order_id@0 as order_id], aggr=[]
-02)--RepartitionExec: partitioning=Hash([order_id@0], 4), input_partitions=4
+02)--RepartitionExec: partitioning=Hash([order_id@0], 4), input_partitions=1
 03)----AggregateExec: mode=Partial, gby=[order_id@0 as order_id], aggr=[]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------NestedLoopJoinExec: join_type=Right
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I rowsort
 SELECT DISTINCT order_id FROM elim_orders LEFT JOIN elim_users ON true;
@@ -5933,15 +5879,8 @@ CREATE TABLE elim_null_lookup (ukey INT UNIQUE, payload INT) AS VALUES
 query TT
 EXPLAIN SELECT id FROM elim_null_keys LEFT JOIN elim_null_lookup ON k = ukey;
 ----
-logical_plan
-01)Projection: elim_null_keys.id
-02)--Left Join: elim_null_keys.k = elim_null_lookup.ukey
-03)----TableScan: elim_null_keys projection=[id, k]
-04)----TableScan: elim_null_lookup projection=[ukey]
-physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(ukey@0, k@1)], projection=[id@1]
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--DataSourceExec: partitions=1, partition_sizes=[1]
+logical_plan TableScan: elim_null_keys projection=[id]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
 # The NULL-keyed left row matches nothing and is emitted exactly once.
 query I rowsort
