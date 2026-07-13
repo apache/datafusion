@@ -17,12 +17,10 @@
 
 //! Input distribution requirements for physical execution plans.
 
-use std::sync::Arc;
-
 use datafusion_common::{Result, internal_err};
 use datafusion_physical_expr::{
     Distribution, EquivalenceProperties, Partitioning, PartitioningSatisfaction,
-    PhysicalExpr, physical_exprs_equal,
+    range_partitioning_satisfaction_for_key_partitioning,
 };
 
 use crate::execution_plan::{ExecutionPlan, ExecutionPlanProperties, InvariantLevel};
@@ -392,7 +390,7 @@ impl InputDistributionSatisfaction {
             return PartitioningSatisfaction::NotSatisfied;
         };
 
-        range_satisfies_key_partitioning(
+        range_partitioning_satisfaction_for_key_partitioning(
             partitioning,
             required_exprs,
             eq_properties,
@@ -425,54 +423,6 @@ fn validate_child_index(
 /// generally satisfies [`Distribution::KeyPartitioned`] through
 /// [`Partitioning::satisfaction`].
 /// <https://github.com/apache/datafusion/issues/23266>.
-fn range_satisfies_key_partitioning(
-    partitioning: &Partitioning,
-    required_exprs: &[Arc<dyn PhysicalExpr>],
-    eq_properties: &EquivalenceProperties,
-    allow_subset: bool,
-) -> PartitioningSatisfaction {
-    let Partitioning::Range(range) = partitioning else {
-        return PartitioningSatisfaction::NotSatisfied;
-    };
-
-    let partition_exprs = range
-        .ordering()
-        .iter()
-        .map(|sort_expr| Arc::clone(&sort_expr.expr))
-        .collect::<Vec<_>>();
-
-    if partition_exprs.is_empty() || required_exprs.is_empty() {
-        return PartitioningSatisfaction::NotSatisfied;
-    }
-
-    let eq_group = eq_properties.eq_group();
-    let normalized_partition_exprs = partition_exprs
-        .iter()
-        .map(|expr| eq_group.normalize_expr(Arc::clone(expr)))
-        .collect::<Vec<_>>();
-    let normalized_required_exprs = required_exprs
-        .iter()
-        .map(|expr| eq_group.normalize_expr(Arc::clone(expr)))
-        .collect::<Vec<_>>();
-
-    if physical_exprs_equal(&normalized_required_exprs, &normalized_partition_exprs) {
-        return PartitioningSatisfaction::Exact;
-    }
-
-    if allow_subset
-        && normalized_partition_exprs.len() < normalized_required_exprs.len()
-        && normalized_partition_exprs.iter().all(|partition_expr| {
-            normalized_required_exprs
-                .iter()
-                .any(|required_expr| partition_expr.eq(required_expr))
-        })
-    {
-        PartitioningSatisfaction::Subset
-    } else {
-        PartitioningSatisfaction::NotSatisfied
-    }
-}
-
 fn compatible_co_partitioning_layout(
     first: &ChildDistributionRequirement,
     first_partitioning: &Partitioning,
