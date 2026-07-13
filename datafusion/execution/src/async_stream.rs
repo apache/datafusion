@@ -21,8 +21,9 @@ use futures::stream::FusedStream;
 use pin_project_lite::pin_project;
 use std::ops::DerefMut;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use std::task::{Context, Poll};
+use parking_lot::Mutex;
 
 /// A handle for emitting values from an [`async_stream`] generator.
 ///
@@ -57,7 +58,7 @@ impl<T> Emitter<T> {
     /// been awaited, because doing so would silently overwrite the unconsumed
     /// value.
     pub fn emit(&mut self, value: T) -> impl FusedFuture<Output = ()> {
-        let mut guard = self.slot.lock().unwrap();
+        let mut guard = self.slot.lock();
         match guard.deref_mut() {
             Some(_) => panic!("Misuse: call await immediately after calling emit"),
             slot => *slot = Some(value),
@@ -78,7 +79,7 @@ impl<T, E> TryEmitter<T, E> {
     ///
     /// Panics if called before the previous emit future has been awaited.
     pub fn emit(&mut self, value: T) -> impl FusedFuture<Output = ()> {
-        let mut guard = self.slot.lock().unwrap();
+        let mut guard = self.slot.lock();
         match guard.deref_mut() {
             Some(_) => panic!("Misuse: call await immediately after calling emit"),
             slot => *slot = Some(Ok::<T, E>(value)),
@@ -156,11 +157,11 @@ where
 
         // The `Option::take` call below ensures the next time poll is called the slot is
         // already set to None
-        debug_assert!(this.rx.slot.lock().unwrap().is_none());
+        debug_assert!(this.rx.slot.lock().is_none());
         let res = this.generator.poll(cx);
         *this.done = res.is_ready();
 
-        match this.rx.slot.lock().unwrap().take() {
+        match this.rx.slot.lock().take() {
             // Generator filled slot -> return next stream item
             Some(v) => Poll::Ready(Some(v)),
             // Generator did not fill slot and completed -> return None to indicate end of stream
