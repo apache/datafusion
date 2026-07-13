@@ -374,7 +374,7 @@ impl MultiLevelMergeBuilder {
                 // intermediate run stays shrunk and won't rebuild an oversized batch on
                 // a later pass.
                 let mut output_batch_size = self.batch_size;
-                for (spill, _) in sorted_spill_files {
+                for (spill, batch_size_limit) in sorted_spill_files {
                     let stream = self
                         .spill_manager
                         .clone()
@@ -383,8 +383,7 @@ impl MultiLevelMergeBuilder {
                             spill.file,
                             Some(spill.max_record_batch_memory),
                         )?;
-                    output_batch_size =
-                        output_batch_size.min(spill.max_record_batch_memory);
+                    output_batch_size = output_batch_size.min(batch_size_limit);
                     sorted_streams.push(stream);
                 }
                 let merge_sort_stream = self.create_new_merge_sort(
@@ -970,6 +969,63 @@ mod tests {
 
         Ok(())
     }
+
+    /// Same as [`respill_halves_the_merge_output_batch_size`], but under a budget tight
+    /// enough that *both* runs must be re-spilled before the merge fits - the scenario
+    /// where the batch-size reduction could compound. Because the reduction is tracked
+    /// per-run (each run capped at half) rather than by halving the global batch size on
+    /// every split, the merged output is emitted in 4096-row batches - half, not a
+    /// quarter. A global-halving implementation would have halved once per re-spill and
+    /// emitted 2048-row batches.
+    #[tokio::test]
+    async fn respilling_two_skewed_runs_halves_the_output_without_compounding()
+    -> Result<()> {
+        let env = Arc::new(RuntimeEnv::default());
+        let schema = test_schema();
+        let spill_manager = build_spill_manager(&env, &schema);
+
+        let n: i64 = 16384;
+        let f0 = make_sorted_spill_file(&spill_manager, &schema, (0..n).collect());
+        let f1 = make_sorted_spill_file(&spill_manager, &schema, (0..n).collect());
+        let m = f0.max_record_batch_memory.max(f1.max_record_batch_memory);
+
+        // 2.5*m is tight enough that even after halving one run the two still don't
+        // fit, so *both* runs are re-spilled once before the merge succeeds. (3.5*m,
+        // as in the single-split test, would let the pair fit after one split.) This
+        // is exactly the scenario where a compounding, global-halving implementation
+        // would drive the output batch size down to a quarter.
+        let initial_batch_size = 8192;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(m * 5 / 2));
+
+        let builder = build_merge_builder(
+            spill_manager,
+            Arc::clone(&schema),
+            vec![f0, f1],
+            &pool,
+            initial_batch_size,
+        );
+        let stream = builder.create_spillable_merge_stream();
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+
+        // All rows are still present.
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, (2 * n) as usize);
+
+        // Each run was re-spilled once, so each is capped at half the original batch
+        // size and the merge caps its output at that half - NOT a quarter. A global
+        // halving-per-split implementation would have emitted 2048-row batches here.
+        let expected_batch_size = initial_batch_size / 2;
+        let max_batch_rows = batches.iter().map(|b| b.num_rows()).max().unwrap_or(0);
+        assert_eq!(
+            max_batch_rows, expected_batch_size,
+            "two re-spills must halve (not quarter) the output: expected \
+             {expected_batch_size}-row batches, got a largest batch of \
+             {max_batch_rows} rows"
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn spill_merge_fan_in_is_unlimited_by_default() {
         assert_eq!(effective_spill_merge_fan_in(0), usize::MAX);
