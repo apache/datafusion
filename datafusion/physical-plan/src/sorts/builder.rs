@@ -207,28 +207,14 @@ impl BatchBuilder {
         RecordBatch::try_new(Arc::clone(&self.schema), columns).map_err(Into::into)
     }
 
-    /// Drains the in_progress row indexes, and builds a new RecordBatch from them
+    /// Drains up to `n` in_progress row indexes, and builds a new RecordBatch from them
     ///
     /// Will then drop any batches for which all rows have been yielded to the output.
     /// If an offset overflow occurs (e.g. string/list offsets exceed i32::MAX),
     /// retries with progressively fewer rows until it succeeds.
     ///
     /// Returns `None` if no pending rows
-    pub fn build_record_batch(&mut self) -> Result<Option<RecordBatch>> {
-        self.build_record_batch_with_up_to_n_rows(self.indices.len())
-    }
-
-    /// Drains the in_progress row indexes up to n rows, and builds a new RecordBatch from them
-    ///
-    /// Will then drop any batches for which all rows have been yielded to the output.
-    /// If an offset overflow occurs (e.g. string/list offsets exceed i32::MAX),
-    /// retries with progressively fewer rows until it succeeds.
-    ///
-    /// Returns `None` if no pending rows
-    pub(crate) fn build_record_batch_with_up_to_n_rows(
-        &mut self,
-        n: usize,
-    ) -> Result<Option<RecordBatch>> {
+    pub fn build_record_batch(&mut self, n: usize) -> Result<Option<RecordBatch>> {
         if self.is_empty() || n == 0 {
             return Ok(None);
         }
