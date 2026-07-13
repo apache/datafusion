@@ -263,108 +263,82 @@ make_udf_function!(trunc::TruncFunc, trunc);
 #[cfg(test)]
 mod strict_tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::Field;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{
         ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
     };
     use std::sync::Arc;
 
-    struct StrictMathCase {
-        name: &'static str,
-        func: Arc<ScalarUDF>,
-        args: Vec<ScalarValue>,
-    }
-
     #[test]
     fn strict_math_functions_propagate_nulls() {
         let cases = vec![
-            case("abs", abs(), vec![ScalarValue::Float64(Some(1.0))]),
-            case("acos", acos(), vec![ScalarValue::Float64(Some(0.5))]),
-            case("acosh", acosh(), vec![ScalarValue::Float64(Some(1.5))]),
-            case("asin", asin(), vec![ScalarValue::Float64(Some(0.5))]),
-            case("asinh", asinh(), vec![ScalarValue::Float64(Some(0.5))]),
-            case("atan", atan(), vec![ScalarValue::Float64(Some(0.5))]),
-            case(
-                "atan2",
+            (abs(), vec![ScalarValue::from(1.0)]),
+            (acos(), vec![ScalarValue::from(0.5)]),
+            (acosh(), vec![ScalarValue::from(1.5)]),
+            (asin(), vec![ScalarValue::from(0.5)]),
+            (asinh(), vec![ScalarValue::from(0.5)]),
+            (atan(), vec![ScalarValue::from(0.5)]),
+            (
                 atan2(),
-                vec![
-                    ScalarValue::Float64(Some(0.5)),
-                    ScalarValue::Float64(Some(1.0)),
-                ],
+                vec![ScalarValue::from(0.5), ScalarValue::from(1.0)],
             ),
-            case("atanh", atanh(), vec![ScalarValue::Float64(Some(0.5))]),
-            case("cbrt", cbrt(), vec![ScalarValue::Float64(Some(8.0))]),
-            case("ceil", ceil(), vec![ScalarValue::Float64(Some(1.5))]),
-            case("cos", cos(), vec![ScalarValue::Float64(Some(0.5))]),
-            case("cosh", cosh(), vec![ScalarValue::Float64(Some(0.5))]),
-            case("cot", cot(), vec![ScalarValue::Float64(Some(0.5))]),
-            case("degrees", degrees(), vec![ScalarValue::Float64(Some(0.5))]),
-            case("exp", exp(), vec![ScalarValue::Float64(Some(0.5))]),
-            case("factorial", factorial(), vec![ScalarValue::Int64(Some(5))]),
-            case("floor", floor(), vec![ScalarValue::Float64(Some(1.5))]),
-            case(
-                "gcd",
+            (atanh(), vec![ScalarValue::from(0.5)]),
+            (cbrt(), vec![ScalarValue::from(8.0)]),
+            (ceil(), vec![ScalarValue::from(1.5)]),
+            (cos(), vec![ScalarValue::from(0.5)]),
+            (cosh(), vec![ScalarValue::from(0.5)]),
+            (cot(), vec![ScalarValue::from(0.5)]),
+            (degrees(), vec![ScalarValue::from(0.5)]),
+            (exp(), vec![ScalarValue::from(0.5)]),
+            (factorial(), vec![ScalarValue::from(5_i64)]),
+            (floor(), vec![ScalarValue::from(1.5)]),
+            (
                 gcd(),
-                vec![ScalarValue::Int64(Some(48)), ScalarValue::Int64(Some(18))],
+                vec![ScalarValue::from(48_i64), ScalarValue::from(18_i64)],
             ),
-            case("isnan", isnan(), vec![ScalarValue::Float64(Some(1.0))]),
-            case("iszero", iszero(), vec![ScalarValue::Float64(Some(1.0))]),
-            case(
-                "lcm",
+            (isnan(), vec![ScalarValue::from(1.0)]),
+            (iszero(), vec![ScalarValue::from(1.0)]),
+            (
                 lcm(),
-                vec![ScalarValue::Int64(Some(4)), ScalarValue::Int64(Some(5))],
+                vec![ScalarValue::from(4_i64), ScalarValue::from(5_i64)],
             ),
-            case("ln", ln(), vec![ScalarValue::Float64(Some(2.0))]),
-            case("log", log(), vec![ScalarValue::Float64(Some(10.0))]),
-            case(
-                "log",
+            (ln(), vec![ScalarValue::from(2.0)]),
+            (log(), vec![ScalarValue::from(10.0)]),
+            (
                 log(),
-                vec![
-                    ScalarValue::Float64(Some(10.0)),
-                    ScalarValue::Float64(Some(100.0)),
-                ],
+                vec![ScalarValue::from(10.0), ScalarValue::from(100.0)],
             ),
-            case("log2", log2(), vec![ScalarValue::Float64(Some(2.0))]),
-            case("log10", log10(), vec![ScalarValue::Float64(Some(10.0))]),
-            case(
-                "power",
+            (log2(), vec![ScalarValue::from(2.0)]),
+            (log10(), vec![ScalarValue::from(10.0)]),
+            (
                 power(),
-                vec![
-                    ScalarValue::Float64(Some(2.0)),
-                    ScalarValue::Float64(Some(3.0)),
-                ],
+                vec![ScalarValue::from(2.0), ScalarValue::from(3.0)],
             ),
-            case("radians", radians(), vec![ScalarValue::Float64(Some(90.0))]),
-            case("round", round(), vec![ScalarValue::Float64(Some(1.5))]),
-            case(
-                "round",
+            (radians(), vec![ScalarValue::from(90.0)]),
+            (round(), vec![ScalarValue::from(1.5)]),
+            (
                 round(),
-                vec![ScalarValue::Float64(Some(1.5)), ScalarValue::Int32(Some(1))],
+                vec![ScalarValue::from(1.5), ScalarValue::from(1_i32)],
             ),
-            case("signum", signum(), vec![ScalarValue::Float64(Some(-1.0))]),
-            case("sin", sin(), vec![ScalarValue::Float64(Some(0.5))]),
-            case("sinh", sinh(), vec![ScalarValue::Float64(Some(0.5))]),
-            case("sqrt", sqrt(), vec![ScalarValue::Float64(Some(4.0))]),
-            case("tan", tan(), vec![ScalarValue::Float64(Some(0.5))]),
-            case("tanh", tanh(), vec![ScalarValue::Float64(Some(0.5))]),
-            case("trunc", trunc(), vec![ScalarValue::Float64(Some(1.5))]),
-            case(
-                "trunc",
+            (signum(), vec![ScalarValue::from(-1.0)]),
+            (sin(), vec![ScalarValue::from(0.5)]),
+            (sinh(), vec![ScalarValue::from(0.5)]),
+            (sqrt(), vec![ScalarValue::from(4.0)]),
+            (tan(), vec![ScalarValue::from(0.5)]),
+            (tanh(), vec![ScalarValue::from(0.5)]),
+            (trunc(), vec![ScalarValue::from(1.5)]),
+            (
                 trunc(),
-                vec![ScalarValue::Float64(Some(1.5)), ScalarValue::Int64(Some(1))],
+                vec![ScalarValue::from(1.5), ScalarValue::from(1_i64)],
             ),
         ];
 
-        for case in cases {
-            assert!(
-                case.func.is_strict(),
-                "{} should be marked strict",
-                case.name
-            );
+        for (func, valid_args) in cases {
+            assert!(func.is_strict(), "{} should be marked strict", func.name());
 
-            for null_mask in 0..(1 << case.args.len()) {
-                let mut args = case.args.clone();
+            for null_mask in 0..(1 << valid_args.len()) {
+                let mut args = valid_args.clone();
                 for (arg_idx, arg) in args.iter_mut().enumerate() {
                     if null_mask & (1 << arg_idx) != 0 {
                         *arg = ScalarValue::try_new_null(&arg.data_type()).unwrap();
@@ -372,46 +346,26 @@ mod strict_tests {
                 }
 
                 let result =
-                    invoke_with_scalars(&case.func, args).unwrap_or_else(|error| {
+                    invoke_with_scalar_args(&func, args).unwrap_or_else(|error| {
                         panic!(
                             "{} failed for NULL mask {null_mask:b}: {error}",
-                            case.name
+                            func.name()
                         )
                     });
                 let expected_null = null_mask != 0;
-                match result {
-                    ColumnarValue::Scalar(value) => {
-                        assert_eq!(
-                            value.is_null(),
-                            expected_null,
-                            "{} returned {value:?} for NULL mask {null_mask:0width$b}",
-                            case.name,
-                            width = case.args.len(),
-                        );
-                    }
-                    ColumnarValue::Array(array) => {
-                        assert_eq!(
-                            array.null_count() == array.len(),
-                            expected_null,
-                            "{} returned unexpected nulls for NULL mask {null_mask:0width$b}",
-                            case.name,
-                            width = case.args.len(),
-                        );
-                    }
-                }
+                let result = result.into_array(1).unwrap();
+                assert_eq!(
+                    result.null_count() == result.len(),
+                    expected_null,
+                    "{} returned {result:?} for NULL mask {null_mask:0width$b}",
+                    func.name(),
+                    width = valid_args.len(),
+                );
             }
         }
     }
 
-    fn case(
-        name: &'static str,
-        func: Arc<ScalarUDF>,
-        args: Vec<ScalarValue>,
-    ) -> StrictMathCase {
-        StrictMathCase { name, func, args }
-    }
-
-    fn invoke_with_scalars(
+    fn invoke_with_scalar_args(
         func: &ScalarUDF,
         args: Vec<ScalarValue>,
     ) -> Result<ColumnarValue> {
@@ -431,16 +385,10 @@ mod strict_tests {
             arg_fields: &arg_fields,
             scalar_arguments: &scalar_arguments,
         })?;
-        let number_rows = args
-            .iter()
-            .filter(|arg| !matches!(arg.data_type(), DataType::Null))
-            .count()
-            .max(1);
-
         func.invoke_with_args(ScalarFunctionArgs {
             args: args.into_iter().map(ColumnarValue::Scalar).collect(),
             arg_fields,
-            number_rows,
+            number_rows: 1,
             return_field,
             config_options: Arc::new(Default::default()),
         })
