@@ -157,7 +157,96 @@ type PartitionedBatches = Vec<Vec<RecordBatch>>;
 type StreamGenerator = Box<dyn Fn(bool) -> PartitionedBatches>;
 
 fn criterion_benchmark(c: &mut Criterion) {
-    // s.be
+    for &(input_size, size_label) in INPUT_SIZES {
+        let cases: Vec<(&str, StreamGenerator)> = vec![
+            (
+                "i64",
+                Box::new(move |sorted| i64_streams(sorted, input_size)),
+            ),
+            // (
+            //     "f64",
+            //     Box::new(move |sorted| f64_streams(sorted, input_size)),
+            // ),
+            // (
+            //     "utf8 low cardinality",
+            //     Box::new(move |sorted| utf8_low_cardinality_streams(sorted, input_size)),
+            // ),
+            // (
+            //     "utf8 high cardinality",
+            //     Box::new(move |sorted| utf8_high_cardinality_streams(sorted, input_size)),
+            // ),
+            // (
+            //     "utf8 view low cardinality",
+            //     Box::new(move |sorted| {
+            //         utf8_view_low_cardinality_streams(sorted, input_size)
+            //     }),
+            // ),
+            // (
+            //     "utf8 view high cardinality",
+            //     Box::new(move |sorted| {
+            //         utf8_view_high_cardinality_streams(sorted, input_size)
+            //     }),
+            // ),
+            // (
+            //     "utf8 tuple",
+            //     Box::new(move |sorted| utf8_tuple_streams(sorted, input_size)),
+            // ),
+            // (
+            //     "utf8 view tuple",
+            //     Box::new(move |sorted| utf8_view_tuple_streams(sorted, input_size)),
+            // ),
+            // (
+            //     "utf8 dictionary",
+            //     Box::new(move |sorted| dictionary_streams(sorted, input_size)),
+            // ),
+            // (
+            //     "utf8 dictionary tuple",
+            //     Box::new(move |sorted| dictionary_tuple_streams(sorted, input_size)),
+            // ),
+            // (
+            //     "mixed dictionary tuple",
+            //     Box::new(move |sorted| {
+            //         mixed_dictionary_tuple_streams(sorted, input_size)
+            //     }),
+            // ),
+            // (
+            //     "mixed tuple",
+            //     Box::new(move |sorted| mixed_tuple_streams(sorted, input_size)),
+            // ),
+            // (
+            //     "mixed tuple with utf8 view",
+            //     Box::new(move |sorted| {
+            //         mixed_tuple_with_utf8_view_streams(sorted, input_size)
+            //     }),
+            // ),
+        ];
+
+        for (name, f) in &cases {
+            c.bench_function(&format!("merge sorted {name} {size_label}"), |b| {
+                let data = f(true);
+                let case = BenchCase::merge_sorted(&data);
+                b.iter(move || case.run())
+            });
+
+            c.bench_function(&format!("sort merge {name} {size_label}"), |b| {
+                let data = f(false);
+                let case = BenchCase::sort_merge(&data);
+                b.iter(move || case.run())
+            });
+
+            c.bench_function(&format!("sort {name} {size_label}"), |b| {
+                let data = f(false);
+                let case = BenchCase::sort(&data);
+                b.iter(move || case.run())
+            });
+
+            c.bench_function(&format!("sort partitioned {name} {size_label}"), |b| {
+                let data = f(false);
+                let case = BenchCase::sort_partitioned(&data);
+                b.iter(move || case.run())
+            });
+        }
+    }
 }
 
 /// Encapsulates running each test case
