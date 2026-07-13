@@ -32,10 +32,10 @@ use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use futures::Stream;
 use datafusion_common::Result;
+use datafusion_execution::async_try_stream;
 use datafusion_execution::memory_pool::MemoryReservation;
-
-use genawaiter::sync::{Co, Gen};
 
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
 type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
@@ -174,14 +174,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         let cloned_metrics = self.metrics.clone();
 
-        let mut this = self;
-        let stream = async_try_stream(|co| async move {
-            if let Err(e) = this.run(&co).await {
-                co.yield_(Err(e)).await;
-            }
-        });
-
-        let stream = Box::pin(RecordBatchStreamAdapter::new(schema_clone, stream));
+        let stream = Box::pin(RecordBatchStreamAdapter::new(schema_clone, self.create_stream()));
 
         Box::pin(ObservedStream::new(stream, cloned_metrics, None))
     }
@@ -216,7 +209,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         result
     }
 
-    async fn run(&mut self, co: &Co<Result<RecordBatch>>) -> Result<()> {
+    fn create_stream(mut self) -> impl Stream<Item=Result<RecordBatch>> {
+        async_try_stream(|mut emitter| async move {
+
         // This vector contains the indices of the partitions that have not started emitting yet.
         let mut uninitiated_partitions =
             (0..self.streams.partitions()).collect::<Vec<_>>();
@@ -254,7 +249,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 && let Some(batch) = self.emit_in_progress_batch()?
             {
                 drop(timer);
-                co.yield_(Ok(batch)).await;
+                emitter.emit(batch).await;
                 timer = elapsed_compute.timer();
             }
 
@@ -282,9 +277,11 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         // Repeated overflows are fine — each poll emits another partial
         // batch until `in_progress` is fully drained.
         while let Some(batch) = self.emit_in_progress_batch()? {
-            co.yield_(Ok(batch)).await;
+            emitter.emit(batch).await;
         }
         Ok(())
+
+        })
     }
 
     /// Initialize all partitions, return `Poll::Pending` if any partition returns `Poll::Pending`
