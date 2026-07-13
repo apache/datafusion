@@ -63,15 +63,6 @@ pub struct SortedSpillFile {
 
     /// how much memory the largest memory batch is taking
     pub max_record_batch_memory: usize,
-
-    /// Upper bound on the merge output batch size when this run participates in a
-    /// merge. `None` means the run is unconstrained (written at the normal batch
-    /// size). `Some(n)` means the run was re-spilled with a shrunk batch layout to
-    /// resolve skew (see `MultiLevelMergeBuilder`), so any merge that includes it
-    /// must cap its output at `n` rows, otherwise
-    /// re-spilling the merged result would rebuild an oversized batch and
-    /// reintroduce the skew.
-    pub batch_size_limit: Option<usize>,
 }
 
 impl std::fmt::Debug for SortedSpillFile {
@@ -79,16 +70,14 @@ impl std::fmt::Debug for SortedSpillFile {
         match self.file.path() {
             Some(path) => write!(
                 f,
-                "SortedSpillFile({:?}) takes {} (batch_size_limit: {:?})",
+                "SortedSpillFile({:?}) takes {}",
                 path,
-                human_readable_size(self.max_record_batch_memory),
-                self.batch_size_limit,
+                human_readable_size(self.max_record_batch_memory)
             ),
             None => write!(
                 f,
-                "SortedSpillFile(<custom_backend>) takes {} (batch_size_limit: {:?})",
-                human_readable_size(self.max_record_batch_memory),
-                self.batch_size_limit,
+                "SortedSpillFile(<custom_backend>) takes {}",
+                human_readable_size(self.max_record_batch_memory)
             ),
         }
     }

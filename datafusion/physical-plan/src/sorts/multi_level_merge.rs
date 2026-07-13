@@ -133,8 +133,8 @@ use futures::{Stream, StreamExt};
 ///    wide that two streams' worth of reservation exceeds the budget - the larger of the two
 ///    runs is re-spilled with each batch sliced in half. This shrinks its largest batch,
 ///    lowering the per-stream reservation, and the merge pass is retried. The re-spilled run
-///    records a per-run [`batch_size_limit`](SortedSpillFile::batch_size_limit) equal to half
-///    the batch size it was written with, so any later merge that includes it caps its output
+///    is tracked in the queue alongside a per-run batch-size limit equal to half the batch
+///    size it was written with, so any later merge that includes it caps its output
 ///    batch size to match - otherwise the merged run could rebuild a full-size batch and
 ///    reintroduce the skew. Crucially the global merge batch size is *not* lowered: the shrunk
 ///    run is pushed to the back of the queue, so passes that don't touch it keep merging at the
@@ -149,7 +149,13 @@ pub(crate) struct MultiLevelMergeBuilder {
     /// [`Self::split_spill_file_in_half`]) so the deferred, reduced-batch-size merges
     /// happen last. The k-way merge is order-independent, so the ordering is purely a
     /// heuristic and never affects correctness.
-    sorted_spill_files: VecDeque<SortedSpillFile>,
+    ///
+    /// Each run is paired with the batch-size limit a merge consuming it must cap its
+    /// output at. Runs written at the full batch size carry `batch_size`.
+    /// A run re-spilled smaller to resolve skew carries its halved limit. Tracking it here
+    /// keeps this limit out of the public [`SortedSpillFile`], so no external caller
+    /// has to set it.
+    sorted_spill_files: VecDeque<(SortedSpillFile, usize)>,
     sorted_streams: Vec<SendableRecordBatchStream>,
     expr: LexOrdering,
     metrics: BaselineMetrics,
@@ -182,7 +188,12 @@ impl MultiLevelMergeBuilder {
         Self {
             spill_manager,
             schema,
-            sorted_spill_files: sorted_spill_files.into(),
+            // Initial runs are written at the full batch size, so they impose no cap
+            // on later merges - record `batch_size` as their (unconstrained) limit.
+            sorted_spill_files: sorted_spill_files
+                .into_iter()
+                .map(|file| (file, batch_size))
+                .collect(),
             sorted_streams,
             expr,
             metrics,
@@ -245,15 +256,17 @@ impl MultiLevelMergeBuilder {
                 continue;
             };
 
-            // Add the spill file. It inherits the batch-size limit of the merge that
+            // Add the spill file paired with the batch-size limit of the merge that
             // produced it: if that merge consumed a shrunk (skew-resolved) run, its
             // output was capped and this intermediate run is likewise capped, so a
             // later pass that re-merges it won't rebuild an oversized batch.
-            self.sorted_spill_files.push_back(SortedSpillFile {
-                file: spill_file,
-                max_record_batch_memory,
+            self.sorted_spill_files.push_back((
+                SortedSpillFile {
+                    file: spill_file,
+                    max_record_batch_memory,
+                },
                 batch_size_limit,
-            });
+            ));
         }
     }
 
@@ -267,7 +280,7 @@ impl MultiLevelMergeBuilder {
                     Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)));
                 Ok(MergeStep::Stream {
                     stream: self.observe_output(empty_stream),
-                    batch_size_limit: None,
+                    batch_size_limit: self.batch_size,
                 })
             }
 
@@ -275,14 +288,14 @@ impl MultiLevelMergeBuilder {
             (0, 1) => {
                 let output_stream = self.sorted_streams.remove(0);
                 Ok(MergeStep::Stream {
-                    stream: output_stream,
-                    batch_size_limit: None,
+                    stream: self.observe_output(output_stream),
+                    batch_size_limit: self.batch_size,
                 })
-            },
+            }
 
             // Only single sorted spill file so return it
             (1, 0) => {
-                let spill_file = self
+                let (spill_file, _) = self
                     .sorted_spill_files
                     .pop_front()
                     .expect("matched exactly one spill file");
@@ -294,7 +307,7 @@ impl MultiLevelMergeBuilder {
 
                 Ok(MergeStep::Stream {
                     stream: self.observe_output(output_stream),
-                    batch_size_limit: None,
+                    batch_size_limit: self.batch_size,
                 })
             }
 
@@ -306,13 +319,13 @@ impl MultiLevelMergeBuilder {
                 // No need to wrap with observed stream since merge sort will update the observed metrics
                 Ok(MergeStep::Stream {
                     stream: self.create_new_merge_sort(
-                    sorted_stream,
-                    // If we have no sorted spill files left, this is the last run
-                    true,
-                    true,
-                    self.batch_size,
-                )?,
-                    batch_size_limit: None
+                        sorted_stream,
+                        // If we have no sorted spill files left, this is the last run
+                        true,
+                        true,
+                        self.batch_size,
+                    )?,
+                    batch_size_limit: self.batch_size,
                 })
             }
 
@@ -350,12 +363,14 @@ impl MultiLevelMergeBuilder {
                 };
 
                 // Cap the merge output at the smallest limit among the runs we're
-                // about to merge. Only runs that were shrunk for skew carry a limit;
-                // if none do, the merge runs at the full `self.batch_size`. The output
-                // is tagged with the same limit so a re-spilled intermediate run stays
-                // shrunk and won't rebuild an oversized batch on a later pass.
-                let batch_size_limit = min_batch_size_limit(&sorted_spill_files);
-                let output_batch_size = batch_size_limit.unwrap_or(self.batch_size);
+                // about to merge. Runs that were shrunk for skew carry a smaller limit,
+                // if none do, every run carries `self.batch_size` and the merge runs at
+                // the full batch size. The output stream is tagged with the same limit
+                // (see the `MergeStep::Stream` returns below) so a re-spilled
+                // intermediate run stays shrunk and won't rebuild an oversized batch on
+                // a later pass.
+                let output_batch_size =
+                    min_batch_size_limit(&sorted_spill_files).unwrap_or(self.batch_size);
 
                 // Don't account for existing streams memory
                 // as we are not holding the memory for them
@@ -372,7 +387,7 @@ impl MultiLevelMergeBuilder {
                     mem::swap(&mut self.reservation, &mut memory_reservation);
                 }
 
-                for spill in sorted_spill_files {
+                for (spill, _) in sorted_spill_files {
                     let stream = self
                         .spill_manager
                         .clone()
@@ -402,7 +417,7 @@ impl MultiLevelMergeBuilder {
 
                     Ok(MergeStep::Stream {
                         stream: merge_sort_stream,
-                        batch_size_limit,
+                        batch_size_limit: output_batch_size,
                     })
                 } else {
                     // Attach the memory reservation to the stream to make sure we have enough memory
@@ -412,7 +427,7 @@ impl MultiLevelMergeBuilder {
                             merge_sort_stream,
                             memory_reservation,
                         )),
-                        batch_size_limit,
+                        batch_size_limit: output_batch_size,
                     })
                 }
             }
@@ -481,7 +496,7 @@ impl MultiLevelMergeBuilder {
         // allocation, preventing starvation under memory pressure.
         let mut total_needed: usize = 0;
 
-        for spill in &self.sorted_spill_files {
+        for (spill, _) in &self.sorted_spill_files {
             if number_of_spills_to_read_for_current_phase >= max_spill_files {
                 break;
             }
@@ -532,8 +547,8 @@ impl MultiLevelMergeBuilder {
                         // of them with a smaller batch size and retry, the smaller max
                         // batch lowers the per-stream reservation enough to seat both.
                         let split_index = usize::from(
-                            self.sorted_spill_files[1].max_record_batch_memory
-                                > self.sorted_spill_files[0].max_record_batch_memory,
+                            self.sorted_spill_files[1].0.max_record_batch_memory
+                                > self.sorted_spill_files[0].0.max_record_batch_memory,
                         );
                         return Ok(SpillFilesToMerge::SplitThenRetry(split_index));
                     }
@@ -562,9 +577,9 @@ impl MultiLevelMergeBuilder {
     ///
     /// Two things make this cheap for the overall sort:
     /// - Instead of halving the *global* merge batch size (which would slow every
-    ///   remaining pass), the shrunk run records its own
-    ///   [`batch_size_limit`](SortedSpillFile::batch_size_limit); only merges that
-    ///   actually consume it pay the reduced batch size.
+    ///   remaining pass), the shrunk run records its own smaller batch-size limit
+    ///   (tracked alongside the run in `sorted_spill_files`).
+    ///   Only merges that actually consume it pay the reduced batch size.
     /// - The shrunk run is pushed to the *back* of the queue rather than kept at
     ///   `index`. Passes drain from the front, so the bulk of the sort merges the
     ///   unconstrained runs at the full batch size and the shrunk run is folded in
@@ -585,15 +600,14 @@ impl MultiLevelMergeBuilder {
         // element (not the back, as `Vec::swap_remove`/`swap_remove_back` would), so any
         // already-deferred shrunk runs sitting at the back stay there. We then push this
         // freshly shrunk run to the back so it too is merged after the unconstrained runs.
-        let target = self
+        // `old_batch_size` is the batch size this run was written with (the full merge
+        // batch size unless it was already shrunk once). Halving it caps the next merge
+        // that reads this run so the merged output can't rebuild a full-size batch.
+        let (target, old_batch_size) = self
             .sorted_spill_files
             .swap_remove_front(index)
             .expect("split index is one of the two front runs, so it is in bounds");
         let old_max = target.max_record_batch_memory;
-        // The batch size this run was written with (the full merge batch size unless
-        // it was already shrunk once). Halving it caps the next merge that reads this
-        // run so the merged output can't rebuild a full-size batch.
-        let old_batch_size = target.batch_size_limit.unwrap_or(self.batch_size);
 
         // Reserve enough to hold a single stream of this file while we re-spill it.
         let reservation = self.reservation.new_empty();
@@ -650,12 +664,15 @@ impl MultiLevelMergeBuilder {
         let new_batch_size_limit = (old_batch_size / 2).max(1);
 
         // Push the re-spilled (smaller) run to the back so it is merged after the
-        // unconstrained runs still ahead of it in the queue.
-        self.sorted_spill_files.push_back(SortedSpillFile {
-            file,
-            max_record_batch_memory: new_max,
-            batch_size_limit: Some(new_batch_size_limit),
-        });
+        // unconstrained runs still ahead of it in the queue, paired with its halved
+        // batch-size limit.
+        self.sorted_spill_files.push_back((
+            SortedSpillFile {
+                file,
+                max_record_batch_memory: new_max,
+            },
+            new_batch_size_limit,
+        ));
 
         Ok(())
     }
@@ -670,8 +687,9 @@ impl MultiLevelMergeBuilder {
 
 /// Outcome of trying to reserve memory for one multi-level merge pass.
 enum SpillFilesToMerge {
-    /// Enough memory: the spill files to read this pass and the read-ahead buffer size.
-    Ready(Vec<SortedSpillFile>, usize),
+    /// Enough memory: the spill files to read this pass (each paired with its
+    /// batch-size limit) and the read-ahead buffer size.
+    Ready(Vec<(SortedSpillFile, usize)>, usize),
     /// Could not seat the minimum of 2 streams. Re-spill the spill file at this index
     /// with a smaller (halved) batch size, then retry the pass.
     SplitThenRetry(usize),
@@ -682,21 +700,23 @@ enum MergeStep {
     /// A merged stream is ready to be consumed (and possibly spilled back).
     Stream {
         stream: SendableRecordBatchStream,
-        /// The batch-size limit to stamp on the run if this stream is re-spilled as
-        /// an intermediate result. `Some(n)` when the merge that produced this stream
-        /// consumed a skew-resolved run (so its output was capped at `n` rows);
-        /// `None` when it ran at the full batch size.
-        batch_size_limit: Option<usize>,
+        /// The batch-size limit to stamp on the run if this stream is re-spilled as an
+        /// intermediate result: the batch size its merge ran at. It equals the full
+        /// merge batch size unless the merge consumed a skew-resolved run, in which
+        /// case it is that run's smaller limit so the re-spilled result stays capped
+        /// and can't rebuild an oversized batch.
+        batch_size_limit: usize,
     },
     /// Re-spill the spill file at this index smaller, then retry the merge step.
     SplitThenRetry(usize),
 }
 
-/// Smallest [`SortedSpillFile::batch_size_limit`] among `files`, or `None` if none of
-/// them is constrained. A merge over `files` must cap its output at this value so a
-/// re-spilled result can't rebuild a batch wider than the most-constrained input.
-fn min_batch_size_limit(files: &[SortedSpillFile]) -> Option<usize> {
-    files.iter().filter_map(|f| f.batch_size_limit).min()
+/// Smallest batch-size limit among the runs in `files`, or `None` if `files` is empty.
+/// A merge over `files` must cap its output at this value so a re-spilled result can't
+/// rebuild a batch wider than the most-constrained input. Runs written at the full
+/// batch size carry that size as their limit, so they never tighten the cap below it.
+fn min_batch_size_limit(files: &[(SortedSpillFile, usize)]) -> Option<usize> {
+    files.iter().map(|(_, limit)| *limit).min()
 }
 
 /// Slice `batch` into two row-halves so a re-spill writes batches half the size.
@@ -820,7 +840,6 @@ mod tests {
         SortedSpillFile {
             file,
             max_record_batch_memory,
-            batch_size_limit: None,
         }
     }
 
@@ -963,7 +982,7 @@ mod tests {
         assert_eq!(total_rows, (2 * n) as usize);
 
         // The largest emitted batch is the halved size, not the original 8192: the
-        // shrunk run carries a halved `batch_size_limit`, and the final pass consumes
+        // shrunk run carries a halved batch-size limit, and the final pass consumes
         // it, so the merge output is capped there. Without the per-run limit the merge
         // would rebuild 8192-row batches.
         let expected_batch_size = initial_batch_size / 2;
@@ -1090,10 +1109,10 @@ mod tests {
         // Both runs were split exactly once, so each is limited to half the original
         // batch size. A global-halving implementation would have driven the second
         // run down to a quarter.
-        let expected_limit = Some(initial_batch_size / 2);
-        for file in &builder.sorted_spill_files {
+        let expected_limit = initial_batch_size / 2;
+        for (_, limit) in &builder.sorted_spill_files {
             assert_eq!(
-                file.batch_size_limit, expected_limit,
+                *limit, expected_limit,
                 "each run split once should be limited to half the original batch \
                  size, not compounded"
             );
