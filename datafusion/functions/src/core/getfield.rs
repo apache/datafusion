@@ -129,22 +129,24 @@ fn process_map_array(
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], true, capacity);
 
+    let offsets = map_array.value_offsets();
+    // Scan the comparison result in place: slicing it per entry would allocate
+    // a new array for every row of the map.
+    let matches = keys.values();
+    let match_nulls = keys.nulls();
+
     for entry in 0..map_array.len() {
-        let start = map_array.value_offsets()[entry] as usize;
-        let end = map_array.value_offsets()[entry + 1] as usize;
+        let start = offsets[entry] as usize;
+        let end = offsets[entry + 1] as usize;
 
-        let maybe_matched = keys
-            .slice(start, end - start)
-            .iter()
-            .enumerate()
-            .find(|(_, t)| t.unwrap());
+        let matched = (start..end).find(|&i| {
+            matches.value(i) && match_nulls.is_none_or(|nulls| nulls.is_valid(i))
+        });
 
-        if maybe_matched.is_none() {
-            mutable.try_extend_nulls(1)?;
-            continue;
+        match matched {
+            Some(i) => mutable.try_extend(0, i, i + 1)?,
+            None => mutable.try_extend_nulls(1)?,
         }
-        let (match_offset, _) = maybe_matched.unwrap();
-        mutable.try_extend(0, start + match_offset, start + match_offset + 1)?;
     }
 
     let data = mutable.freeze();
