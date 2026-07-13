@@ -88,22 +88,18 @@ pub struct DynamicFilterPhysicalExpr {
 /// `expression_id` lives here because it identifies the actual filter expression `expr`.
 /// Derived `DynamicFilterPhysicalExpr`s (e.g. via [`PhysicalExpr::with_new_children`]) are
 /// the same logical filter and must report the same `expression_id`.
-///
-/// **Warning:** exposed publicly solely so that proto (de)serialization in
-/// `datafusion-proto` can read and rebuild this state. Do not treat this type
-/// or its layout as a stable API.
 #[derive(Clone, Debug)]
-pub struct Inner {
+struct Inner {
     /// A unique identifier for the expression.
-    pub expression_id: u64,
+    expression_id: u64,
     /// A counter that gets incremented every time the expression is updated so that we can track changes cheaply.
     /// This is used for [`PhysicalExpr::snapshot_generation`] to have a cheap check for changes.
-    pub generation: u64,
-    pub expr: Arc<dyn PhysicalExpr>,
+    generation: u64,
+    expr: Arc<dyn PhysicalExpr>,
     /// Flag for quick synchronous check if filter is complete.
     /// This is redundant with the watch channel state, but allows us to return immediately
     /// from `wait_complete()` without subscribing if already complete.
-    pub is_complete: bool,
+    is_complete: bool,
 }
 
 impl Inner {
@@ -393,29 +389,9 @@ impl DynamicFilterPhysicalExpr {
         write!(f, " ]")
     }
 
-    /// Return the filter's original children (before any remapping).
-    ///
-    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
-    /// Not a stable API.
-    pub fn original_children(&self) -> &[Arc<dyn PhysicalExpr>] {
-        &self.children
-    }
-
-    /// Return the filter's remapped children, if any have been set via
-    /// [`PhysicalExpr::with_new_children`].
-    ///
-    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
-    /// Not a stable API.
-    pub fn remapped_children(&self) -> Option<&[Arc<dyn PhysicalExpr>]> {
-        self.remapped_children.as_deref()
-    }
-
     /// Rebuild a `DynamicFilterPhysicalExpr` from its stored parts. Used by
     /// proto deserialization.
-    ///
-    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
-    /// Not a stable API.
-    pub fn from_parts(
+    fn from_parts(
         children: Vec<Arc<dyn PhysicalExpr>>,
         remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
         inner: Inner,
@@ -439,14 +415,6 @@ impl DynamicFilterPhysicalExpr {
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
-    }
-
-    /// Return a clone of the atomically-captured `Inner` state.
-    ///
-    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
-    /// Not a stable API.
-    pub fn inner(&self) -> Inner {
-        self.inner.read().clone()
     }
 }
 
@@ -1210,22 +1178,19 @@ mod test {
 
         // Capture the parts and reconstruct. `expression_id` rides in `inner`.
         let reconstructed = DynamicFilterPhysicalExpr::from_parts(
-            reassigned.original_children().to_vec(),
-            reassigned.remapped_children().map(|r| r.to_vec()),
-            reassigned.inner(),
+            reassigned.children.to_vec(),
+            reassigned.remapped_children.as_ref().map(|r| r.to_vec()),
+            reassigned.inner.read().clone(),
         );
 
+        assert_eq!(reassigned.children, reconstructed.children);
         assert_eq!(
-            reassigned.original_children(),
-            reconstructed.original_children(),
-        );
-        assert_eq!(
-            reassigned.remapped_children(),
-            reconstructed.remapped_children(),
+            reassigned.remapped_children,
+            reconstructed.remapped_children,
         );
         assert_eq!(reassigned.expression_id(), reconstructed.expression_id());
-        let r = reassigned.inner();
-        let c = reconstructed.inner();
+        let r = reassigned.inner.read().clone();
+        let c = reconstructed.inner.read().clone();
         assert_eq!(r.generation, c.generation);
         assert_eq!(r.is_complete, c.is_complete);
         assert_eq!(format!("{:?}", r.expr), format!("{:?}", c.expr));

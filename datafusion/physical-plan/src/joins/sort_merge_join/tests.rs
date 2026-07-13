@@ -49,6 +49,7 @@ use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_ord::sort::SortColumn;
 use arrow_schema::SchemaRef;
+use bytes::Bytes;
 use datafusion_common::JoinType::*;
 use datafusion_common::{
     JoinSide, internal_err,
@@ -59,9 +60,12 @@ use datafusion_common::{
 };
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::config::SessionConfig;
-use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+use datafusion_execution::disk_manager::{
+    DiskManager, DiskManagerBuilder, DiskManagerMode,
+};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+use datafusion_execution::spill_file::{SpillFile, SpillWriter, TempFileFactory};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
@@ -70,6 +74,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 use futures::{Stream, StreamExt};
 use insta::assert_snapshot;
 use itertools::Itertools;
+use std::collections::VecDeque;
 
 fn build_table(
     a: (&str, &Vec<i32>),
@@ -5062,6 +5067,305 @@ async fn spill_read_back_single_source() -> Result<()> {
         0,
         "All memory should be released after join completes"
     );
+
+    Ok(())
+}
+
+/// Small chunk size so even tiny test spill files are split into several
+/// pieces, forcing multiple genuine suspend/resume cycles instead of one.
+const PENDING_CHUNK_SIZE: usize = 16;
+
+/// Splits real spill bytes into fixed-size chunks and yields `Poll::Pending`
+/// before every chunk
+struct PendingChunkedStream {
+    chunks: VecDeque<Bytes>,
+    yield_pending: bool,
+}
+
+impl PendingChunkedStream {
+    fn new(bytes: Bytes) -> Self {
+        let mut chunks = VecDeque::new();
+        if bytes.is_empty() {
+            chunks.push_back(bytes);
+        } else {
+            let mut remaining = bytes;
+            while !remaining.is_empty() {
+                let take = PENDING_CHUNK_SIZE.min(remaining.len());
+                chunks.push_back(remaining.split_to(take));
+            }
+        }
+        Self {
+            chunks,
+            yield_pending: true,
+        }
+    }
+}
+
+impl Stream for PendingChunkedStream {
+    type Item = Result<Bytes>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if self.yield_pending {
+            self.yield_pending = false;
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
+        // Pending before every subsequent chunk as well.
+        self.yield_pending = true;
+        match self.chunks.pop_front() {
+            Some(chunk) => Poll::Ready(Some(Ok(chunk))),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
+/// A `SpillFile` that delegates everything to a real local spill file,
+/// except `read_stream`, which is forced through `PendingChunkedStream`.
+struct PendingSpillFile {
+    inner: Arc<dyn SpillFile>,
+}
+
+impl SpillFile for PendingSpillFile {
+    fn path(&self) -> Option<&std::path::Path> {
+        self.inner.path()
+    }
+
+    fn size(&self) -> Option<u64> {
+        self.inner.size()
+    }
+
+    fn read_stream(&self) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>> {
+        let path = self
+            .inner
+            .path()
+            .expect("PendingSpillFile only wraps local files")
+            .to_owned();
+
+        let stream = futures::stream::once(async move {
+            tokio::fs::read(&path)
+                .await
+                .map(Bytes::from)
+                .map_err(datafusion_common::DataFusionError::IoError)
+        })
+        .flat_map(
+            |read_result| -> Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>> {
+                match read_result {
+                    Ok(bytes) => Box::pin(PendingChunkedStream::new(bytes)),
+                    Err(e) => Box::pin(futures::stream::once(async move { Err(e) })),
+                }
+            },
+        );
+
+        Ok(Box::pin(stream))
+    }
+
+    fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
+        self.inner.open_writer()
+    }
+}
+
+/// Wraps the default `OsTmpDirectory` factory so every spill file it
+/// creates is a [`PendingSpillFile`].
+struct PendingTempFileFactory {
+    inner: Arc<DiskManager>,
+}
+
+impl TempFileFactory for PendingTempFileFactory {
+    fn create_temp_file(&self, description: &str) -> Result<Arc<dyn SpillFile>> {
+        Ok(Arc::new(PendingSpillFile {
+            inner: self.inner.create_tmp_file(description)?,
+        }))
+    }
+}
+
+fn pending_disk_manager_builder() -> DiskManagerBuilder {
+    let inner = Arc::new(
+        DiskManagerBuilder::default()
+            .with_mode(DiskManagerMode::OsTmpDirectory)
+            .build()
+            .unwrap(),
+    );
+    DiskManagerBuilder::default().with_mode(DiskManagerMode::Custom(Arc::new(
+        PendingTempFileFactory { inner },
+    )))
+}
+
+/// Materializing-side (Inner/Left/Right/Full) coverage: identical to
+/// `overallocation_multi_batch_spill`, but every spill read goes through
+/// `PendingSpillFile`, so `poll_spilled_batches` must actually hit and
+/// recover from `Poll::Pending` mid-read.
+#[tokio::test]
+async fn materializing_spill_pending_stream() -> Result<()> {
+    let left_batch_1 = build_table_i32(
+        ("a1", &vec![0, 1]),
+        ("b1", &vec![1, 1]),
+        ("c1", &vec![4, 5]),
+    );
+    let left_batch_2 = build_table_i32(
+        ("a1", &vec![2, 3]),
+        ("b1", &vec![1, 1]),
+        ("c1", &vec![6, 7]),
+    );
+    let right_batch_1 = build_table_i32(
+        ("a2", &vec![0, 10]),
+        ("b2", &vec![1, 1]),
+        ("c2", &vec![50, 60]),
+    );
+    let right_batch_2 = build_table_i32(
+        ("a2", &vec![20, 30]),
+        ("b2", &vec![1, 1]),
+        ("c2", &vec![70, 80]),
+    );
+    let left = build_table_from_batches(vec![left_batch_1, left_batch_2]);
+    let right = build_table_from_batches(vec![right_batch_1, right_batch_2]);
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(500, 1.0)
+        .with_disk_manager_builder(pending_disk_manager_builder())
+        .build_arc()?;
+
+    for join_type in [Inner, Left, Right, Full] {
+        let task_ctx =
+            Arc::new(TaskContext::default().with_runtime(Arc::clone(&runtime)));
+        let join = join_with_options(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            join_type,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let stream = join.execute(0, task_ctx)?;
+        let spilled_result = common::collect(stream).await.unwrap();
+
+        let metrics = join.metrics().unwrap();
+        assert!(
+            metrics.spill_count().unwrap() > 0,
+            "expected spill_count > 0 for {join_type:?}"
+        );
+
+        // Compare against a no-spill run to make sure the Pending
+        // re-entry path didn't corrupt or drop any data.
+        let task_ctx_no_spill = Arc::new(TaskContext::default());
+        let join_no_spill = join_with_options(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            join_type,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
+        let no_spill_result = common::collect(stream).await.unwrap();
+
+        assert_eq!(
+            spilled_result, no_spill_result,
+            "Pending-forced spill read produced different results for {join_type:?}"
+        );
+    }
+
+    Ok(())
+}
+
+/// Bitwise-side (Semi/Anti) coverage: identical to `bitwise_spill_with_filter`,
+/// but every spill read goes through `PendingSpillFile`, forcing
+/// `process_key_match_with_filter`'s spilled-batch loop to actually hit and
+/// resume from `Poll::Pending`.
+#[tokio::test]
+async fn bitwise_spill_pending_stream() -> Result<()> {
+    let left = build_table(
+        ("a1", &vec![1, 2, 3, 4, 5, 6]),
+        ("b1", &vec![1, 2, 3, 4, 5, 6]),
+        ("c1", &vec![4, 5, 6, 7, 8, 9]),
+    );
+    let right = build_table(
+        ("a2", &vec![10, 20, 30, 40, 50]),
+        ("b1", &vec![1, 3, 4, 6, 8]),
+        ("c2", &vec![50, 60, 70, 80, 90]),
+    );
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    // c1 < c2 is always true for matching keys — same filter as
+    // bitwise_spill_with_filter, so the inner key group is buffered
+    // (and spilled) rather than short-circuited.
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c1", 0)),
+            Operator::Lt,
+            Arc::new(Column::new("c2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ])),
+    );
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(pending_disk_manager_builder())
+        .build_arc()?;
+
+    for join_type in [LeftSemi, LeftAnti, RightSemi, RightAnti] {
+        let task_ctx =
+            Arc::new(TaskContext::default().with_runtime(Arc::clone(&runtime)));
+        let join = SortMergeJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            Some(filter.clone()),
+            join_type,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let stream = join.execute(0, task_ctx)?;
+        let spilled_result = common::collect(stream).await.unwrap();
+
+        let metrics = join.metrics().unwrap();
+        assert!(
+            metrics.spill_count().unwrap() > 0,
+            "expected spill_count > 0 for {join_type:?}"
+        );
+
+        let task_ctx_no_spill = Arc::new(TaskContext::default());
+        let join_no_spill = SortMergeJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            Some(filter.clone()),
+            join_type,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
+        let no_spill_result = common::collect(stream).await.unwrap();
+
+        assert_eq!(
+            spilled_result, no_spill_result,
+            "Pending-forced spill read produced different results for {join_type:?}"
+        );
+    }
 
     Ok(())
 }

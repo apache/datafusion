@@ -42,7 +42,7 @@ pub trait SpillFile: Send + Sync {
 
 /// Writer for spill file backends.
 pub trait SpillWriter: std::io::Write + Send {
-    /// Intended for close/sync/commit operations.    
+    /// Intended for close/sync/commit operations.
     fn finish(&mut self) -> Result<()>;
 }
 

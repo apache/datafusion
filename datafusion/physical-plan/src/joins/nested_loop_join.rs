@@ -489,28 +489,6 @@ impl NestedLoopJoinExec {
 
         Ok(plan)
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        let left = children.swap_remove(0);
-        let right = children.swap_remove(0);
-
-        Self {
-            left,
-            right,
-            metrics: ExecutionPlanMetricsSet::new(),
-            build_side_data: Default::default(),
-            left_spill_data: Arc::new(OnceAsync::default()),
-            cache: Arc::clone(&self.cache),
-            filter: self.filter.clone(),
-            join_type: self.join_type,
-            join_schema: Arc::clone(&self.join_schema),
-            column_indices: self.column_indices.clone(),
-            projection: self.projection.clone(),
-        }
-    }
 }
 
 impl DisplayAs for NestedLoopJoinExec {
@@ -566,10 +544,14 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![
             Distribution::SinglePartition,
             Distribution::UnspecifiedDistribution,
-        ]
+        ])
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -595,6 +577,28 @@ impl ExecutionPlan for NestedLoopJoinExec {
             .with_projection_ref(self.projection.clone())
             .build()?,
         ))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+
+        Ok(Arc::new(Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            build_side_data: Default::default(),
+            left_spill_data: Arc::new(OnceAsync::default()),
+            cache: Arc::clone(&self.cache),
+            filter: self.filter.clone(),
+            join_type: self.join_type,
+            join_schema: Arc::clone(&self.join_schema),
+            column_indices: self.column_indices.clone(),
+            projection: self.projection.clone(),
+        }))
     }
 
     fn execute(

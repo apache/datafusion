@@ -76,6 +76,10 @@ impl SpillManager {
         &self.schema
     }
 
+    pub(crate) fn env(&self) -> &RuntimeEnv {
+        &self.env
+    }
+
     /// Creates a temporary file for in-progress operations, returning an error
     /// message if file creation fails. The file can be used to append batches
     /// incrementally and then finish the file when done.

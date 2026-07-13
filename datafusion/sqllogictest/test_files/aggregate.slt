@@ -1936,6 +1936,165 @@ SELECT g, approx_distinct(arrow_cast(s, 'Utf8View')) FROM approx_distinct_group_
 3 0
 4 1
 
+# BinaryView non-grouped
+query I
+SELECT approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'BinaryView')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+
+# BinaryView grouped
+query II
+SELECT g, approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'BinaryView')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+
+# FixedSizeBinary non-grouped
+query I
+SELECT approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'FixedSizeBinary(1)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+# FixedSizeBinary grouped
+query II
+SELECT g, approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'FixedSizeBinary(1)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+
+# List
+statement ok
+CREATE TABLE approx_distinct_list_test (g INT, l INT[]) AS VALUES
+  (1, [1, 2]), (1, [1, 2]), (1, [3, 4]),
+  (2, [5, 6]), (2, NULL),
+  (3, NULL), (3, NULL),
+  (4, [7, 8]);
+
+# List non-grouped
+query I
+SELECT approx_distinct(l) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# List grouped
+# Group 1 -> {[1,2],[3,4]}=2,
+# Group 2 -> {[5,6]}=1 (NULL excluded),
+# Group 3 -> all null=0,
+# Group 4 -> {[7,8]}=1
+query II
+SELECT g, approx_distinct(l) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(l) FROM approx_distinct_list_test;
+----
+4
+
+# LargeList non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeList(Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# LargeList grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'LargeList(Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeList(Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+# ListView non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'ListView(Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# ListView grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'ListView(Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'ListView(Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+# LargeListView non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeListView(Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# LargeListView grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'LargeListView(Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeListView(Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+
+# FixedSizeList non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'FixedSizeList(2, Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# FixedSizeList grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'FixedSizeList(2, Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'FixedSizeList(2, Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+statement ok
+DROP TABLE approx_distinct_list_test;
+
 # Integers (Int32): group 1 -> {10,20}=2, group 2 -> {30,40}=2, group 3 -> 0, group 4 -> {50}=1
 query II
 SELECT g, approx_distinct(i) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
@@ -2004,6 +2163,33 @@ FROM approx_distinct_decimal_test GROUP BY g ORDER BY g;
 
 statement ok
 DROP TABLE approx_distinct_decimal_test;
+
+# This test runs approx_distinct over all four Duration units for the scalar and the grouped path.
+statement ok
+CREATE TABLE approx_distinct_duration_test AS VALUES
+  (1, arrow_cast(1, 'Duration(Second)'),  arrow_cast(1, 'Duration(Millisecond)'),  arrow_cast(1, 'Duration(Microsecond)'),  arrow_cast(1, 'Duration(Nanosecond)')),
+  (1, arrow_cast(2, 'Duration(Second)'),  arrow_cast(2, 'Duration(Millisecond)'),  arrow_cast(2, 'Duration(Microsecond)'),  arrow_cast(2, 'Duration(Nanosecond)')),
+  (1, arrow_cast(2, 'Duration(Second)'),  arrow_cast(2, 'Duration(Millisecond)'),  arrow_cast(2, 'Duration(Microsecond)'),  arrow_cast(2, 'Duration(Nanosecond)')),
+  (2, arrow_cast(3, 'Duration(Second)'),  arrow_cast(3, 'Duration(Millisecond)'),  arrow_cast(3, 'Duration(Microsecond)'),  arrow_cast(3, 'Duration(Nanosecond)')),
+  (2, arrow_cast(0, 'Duration(Second)'),  arrow_cast(0, 'Duration(Millisecond)'),  arrow_cast(0, 'Duration(Microsecond)'),  arrow_cast(0, 'Duration(Nanosecond)')),
+  (2, arrow_cast(0, 'Duration(Second)'),  arrow_cast(0, 'Duration(Millisecond)'),  arrow_cast(0, 'Duration(Microsecond)'),  arrow_cast(0, 'Duration(Nanosecond)'));
+
+# Scalar path
+query IIII
+SELECT approx_distinct(column2), approx_distinct(column3), approx_distinct(column4), approx_distinct(column5) FROM approx_distinct_duration_test;
+----
+4 4 4 4
+
+# Grouped path
+query IIIII
+SELECT column1, approx_distinct(column2), approx_distinct(column3), approx_distinct(column4), approx_distinct(column5)
+FROM approx_distinct_duration_test GROUP BY column1 ORDER BY column1;
+----
+1 2 2 2 2
+2 2 2 2 2
+
+statement ok
+DROP TABLE approx_distinct_duration_test;
 
 
 # This test runs approx_distinct over the intervals YearMonth,
@@ -9179,7 +9365,7 @@ ORDER BY g;
 
 # Config reset
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

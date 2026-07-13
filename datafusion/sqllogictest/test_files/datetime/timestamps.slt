@@ -1936,10 +1936,8 @@ SELECT '2000-01-01T00:00:00'::timestamp - '2010-01-01T00:00:00'::timestamp;
 -3653 days 0 hours 0 mins 0.000000000 secs
 
 # Interval - Timestamp => error
-# statement error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
-# TODO: This query should raise error
-# query P
-# SELECT i - ts1 from FOO;
+query error Cannot coerce arithmetic expression Interval\(MonthDayNano\) - Timestamp\(ns\) to valid types
+SELECT i - ts1 from FOO;
 
 statement ok
 drop table foo;

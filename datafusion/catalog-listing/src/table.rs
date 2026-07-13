@@ -30,14 +30,18 @@ use datafusion_common::{
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::file_scan_config::{
+    FileScanConfig, FileScanConfigBuilder, output_partitioning_from_partition_fields,
+};
 use datafusion_datasource::file_sink_config::{FileOutputMode, FileSinkConfig};
 #[expect(deprecated)]
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchemaBuilder, compute_all_files_statistics,
 };
-use datafusion_execution::cache::cache_manager::{FileStatisticsCache, TableScopedPath};
+use datafusion_execution::cache::cache_manager::{
+    CachedFileMetadata, FileStatisticsCache, SchemaFingerprint, TableScopedPath,
+};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
@@ -60,7 +64,7 @@ pub struct ListFilesResult {
     pub file_groups: Vec<FileGroup>,
     /// Aggregated statistics for all files.
     pub statistics: Statistics,
-    /// Whether files are grouped by partition values (enables Hash partitioning).
+    /// Whether files are grouped by partition values.
     pub grouped_by_partition: bool,
 }
 
@@ -146,15 +150,15 @@ pub struct ListFilesResult {
 /// # use datafusion_datasource_parquet::file_format::ParquetFormat;/// #
 /// # use datafusion_catalog::Session;
 /// async fn get_listing_table(session: &dyn Session) -> Result<Arc<dyn TableProvider>> {
-/// let table_path = "/path/to/parquet";
+///     let table_path = "/path/to/parquet";
 ///
-/// // Parse the path
-/// let table_path = ListingTableUrl::parse(table_path)?;
+///     // Parse the path
+///     let table_path = ListingTableUrl::parse(table_path)?;
 ///
-/// // Create default parquet options
-/// let file_format = ParquetFormat::new();
-/// let listing_options = ListingOptions::new(Arc::new(file_format))
-///   .with_file_extension(".parquet");
+///     // Create default parquet options
+///     let file_format = ParquetFormat::new();
+///     let listing_options = ListingOptions::new(Arc::new(file_format))
+///         .with_file_extension(".parquet");
 ///
 /// // Resolve the schema
 /// let resolved_schema = listing_options
@@ -168,8 +172,8 @@ pub struct ListFilesResult {
 /// // Create a new TableProvider
 /// let provider = Arc::new(ListingTable::try_new(config)?);
 ///
-/// # Ok(provider)
-/// # }
+/// Ok(provider)
+/// }
 /// ```
 #[derive(Debug, Clone)]
 pub struct ListingTable {
@@ -197,6 +201,10 @@ pub struct ListingTable {
     column_defaults: HashMap<String, Expr>,
     /// Optional [`PhysicalExprAdapterFactory`] for creating physical expression adapters
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    /// Precomputed fingerprint of `file_schema` for file-statistics cache
+    /// validation. Constant for the table, so computed once here instead of per
+    /// file.
+    file_schema_fingerprint: Arc<SchemaFingerprint>,
 }
 
 impl ListingTable {
@@ -227,6 +235,9 @@ impl ListingTable {
                 .with_metadata(file_schema.metadata().clone()),
         );
 
+        let file_schema_fingerprint =
+            Arc::new(SchemaFingerprint::from_schema(&file_schema));
+
         let table = Self {
             table_paths: config.table_paths,
             file_schema,
@@ -238,6 +249,7 @@ impl ListingTable {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             expr_adapter_factory: config.expr_adapter_factory,
+            file_schema_fingerprint,
         };
 
         Ok(table)
@@ -266,21 +278,6 @@ impl ListingTable {
     pub fn with_cache(mut self, cache: Option<Arc<FileStatisticsCache>>) -> Self {
         self.collected_statistics = cache;
         self
-    }
-
-    fn statistics_cache(
-        &self,
-        has_table_reference: bool,
-    ) -> Option<&Arc<FileStatisticsCache>> {
-        let shared_cache = self.collected_statistics.as_ref()?;
-        if has_table_reference || self.schema_source == SchemaSource::Inferred {
-            Some(shared_cache)
-        } else {
-            // Anonymous specified-schema reads can use the same file path with
-            // different logical schemas. File statistics are schema-dependent,
-            // so avoid reusing stats computed for a different read schema.
-            None
-        }
     }
 
     /// Specify the SQL definition for this table, if any
@@ -628,6 +625,15 @@ impl TableProvider for ListingTable {
                 );
             }
             Some(output_partitioning)
+        } else if partitioned_by_file_group {
+            // Files are grouped by partition column values: declare output
+            // partitioning on those columns so the optimizer can skip
+            // repartitioning for aggregates and joins on the partition columns.
+            output_partitioning_from_partition_fields(
+                &self.table_schema,
+                &table_partition_cols.clone().into(),
+                partitioned_file_lists.len(),
+            )
         } else {
             None
         };
@@ -650,7 +656,6 @@ impl TableProvider for ListingTable {
             .with_output_ordering(output_ordering)
             .with_output_partitioning(output_partitioning)
             .with_expr_adapter(self.expr_adapter_factory.clone())
-            .with_partitioned_by_file_group(partitioned_by_file_group)
             .build();
 
         // create the execution plan
@@ -861,8 +866,8 @@ impl ListingTable {
         // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
         //
         // When enabled, files are grouped by their Hive partition column values, allowing
-        // FileScanConfig to declare Hash partitioning. This enables the optimizer to skip
-        // hash repartitioning for aggregates and joins on partition columns.
+        // FileScanConfig to declare output partitioning. This enables the optimizer to
+        // skip repartitioning for aggregates and joins on partition columns.
         let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
         let (file_groups, grouped_by_partition) =
@@ -990,18 +995,18 @@ impl ListingTable {
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
-        use datafusion_execution::cache::cache_manager::CachedFileMetadata;
-
         let path = TableScopedPath {
             table: part_file.table_reference.clone(),
             path: part_file.object_meta.location.clone(),
         };
         let meta = &part_file.object_meta;
 
-        // Check cache first - if we have valid cached statistics and ordering
-        if let Some(cache) = self.statistics_cache(path.table.is_some())
+        // Check cache first. The key stays `{table, path}` for cheap lookups;
+        // the cached value carries the schema fingerprint to prevent reusing
+        // stats computed under a different file schema.
+        if let Some(cache) = &self.collected_statistics
             && let Some(cached) = cache.get(&path)
-            && cached.is_valid_for(meta)
+            && cached.is_valid_for(meta, &self.file_schema_fingerprint)
         {
             // Return cached statistics and ordering
             return Ok((Arc::clone(&cached.statistics), cached.ordering.clone()));
@@ -1017,11 +1022,12 @@ impl ListingTable {
         let statistics = Arc::new(file_meta.statistics);
 
         // Store in cache
-        if let Some(cache) = self.statistics_cache(path.table.is_some()) {
+        if let Some(cache) = &self.collected_statistics {
             cache.put(
                 &path,
                 CachedFileMetadata::new(
                     meta.clone(),
+                    Arc::clone(&self.file_schema_fingerprint),
                     Arc::clone(&statistics),
                     file_meta.ordering.clone(),
                 ),
