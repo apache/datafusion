@@ -32,8 +32,8 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
-use datafusion_execution::async_try_stream;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::{async_try_stream, Emitter, TryEmitter};
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::StreamExt;
 
@@ -234,132 +234,132 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
   fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
     async_try_stream(|mut emitter| async move {
-        // This vector contains the indices of the partitions that have not started emitting yet.
-        let mut uninitiated_partitions =
-            (0..self.streams.partitions()).collect::<Vec<_>>();
+      // This vector contains the indices of the partitions that have not started emitting yet.
+      let mut uninitiated_partitions =
+        (0..self.streams.partitions()).collect::<Vec<_>>();
 
-        poll_fn(|cx| self.initialize_all_partitions(&mut uninitiated_partitions, cx))
-            .await?;
+      poll_fn(|cx| self.initialize_all_partitions(&mut uninitiated_partitions, cx))
+        .await?;
 
-        assert_eq!(uninitiated_partitions.len(), 0);
+      assert_eq!(uninitiated_partitions.len(), 0);
 
-        // If there are no more uninitiated partitions, set up the loser tree and continue
-        // to the next phase.
+      // If there are no more uninitiated partitions, set up the loser tree and continue
+      // to the next phase.
 
-        // Claim the memory for the uninitiated partitions
-        drop(uninitiated_partitions);
-        self.init_loser_tree();
+      // Claim the memory for the uninitiated partitions
+      drop(uninitiated_partitions);
+      self.init_loser_tree();
 
-        // NB timer records time taken on drop, so there are no
-        // calls to `timer.done()` below.
-        let elapsed_compute = self.metrics.elapsed_compute().clone();
-        let mut timer = elapsed_compute.timer();
+      // NB timer records time taken on drop, so there are no
+      // calls to `timer.done()` below.
+      let elapsed_compute = self.metrics.elapsed_compute().clone();
+      let mut timer = elapsed_compute.timer();
 
-        // Continue while we have more than 1 stream left
-        while self.number_of_exhausted_streams + 1 < self.streams.partitions() {
-            let stream_idx = self.loser_tree[0];
-            if !self.advance_cursors(stream_idx) {
-                break;
-            }
-            self.in_progress.push_row(stream_idx);
+      // Continue while we have more than 1 stream left
+      while self.number_of_exhausted_streams + 1 < self.streams.partitions() {
+        let stream_idx = self.loser_tree[0];
+        if !self.advance_cursors(stream_idx) {
+          break;
+        }
+        self.in_progress.push_row(stream_idx);
 
-            // stop sorting if fetch has been reached
-            if self.fetch_reached() {
-                break;
-            }
-
-            if self.in_progress.len() >= self.batch_size
-                && let Some(batch) = self.emit_in_progress_batch()?
-            {
-                drop(timer);
-                emitter.emit(batch).await;
-                timer = elapsed_compute.timer();
-            }
-
-            let winner = self.loser_tree[0];
-            // Fast path: skip the `maybe_poll_stream` call (and its `Poll`
-            // plumbing) unless the winner's cursor is exhausted and needs a
-            // fresh batch — it is live for almost every row.
-            if self.cursors[winner].is_none() {
-                drop(timer);
-                poll_fn(|cx| self.maybe_poll_stream(cx, winner)).await?;
-
-                timer = elapsed_compute.timer();
-
-                // Adjusting the loser tree if necessary
-                self.update_loser_tree();
-
-                let new_winner = self.loser_tree[0];
-
-                // Fast path: skip comparing full batch if the last batch value is still the winner
-                // we do this if:
-                // 1. the winner did not change - so we can skip the full new batch rather than other partial batch
-                // 2. The new winner have more than 1 value
-                // 3. the last row in the new batch beat all other streams
-                if winner == new_winner
-                    && self.cursors[new_winner]
-                        .as_ref()
-                        .is_some_and(|c| c.len() > 1)
-                    && self.winner_batch_beats_all(new_winner)
-                {
-                    let cursor = self.cursors[new_winner]
-                        .as_mut()
-                        .expect("already validated that has cursor");
-
-                    // TODO - avoid pushing n rows where we are above the limit or something
-                    // Skip less than the entire number of rows so we can keep the same code flow
-                    let number_of_rows_to_skip = cursor.len() - 1;
-                    // If so, add the indices and
-                    self.in_progress
-                        .push_n_rows(new_winner, number_of_rows_to_skip);
-
-                    // Move the cursor to the end
-                    cursor.advance_n(number_of_rows_to_skip);
-                }
-            } else {
-                // Adjusting the loser tree if necessary
-                self.update_loser_tree();
-            }
+        // stop sorting if fetch has been reached
+        if self.fetch_reached() {
+          break;
         }
 
-        let last_stream_idx = self.loser_tree[0];
-
-        // Push the last stream's buffered rows that were not added to in progress
-        if let Some(cursor) = self.cursors[last_stream_idx].as_mut() {
-            let mut remaining = cursor.len();
-            if let Some(fetch) = self.fetch {
-                remaining = remaining
-                    .min(fetch.saturating_sub(self.produced + self.in_progress.len()));
-            }
-            if remaining > 0 {
-                self.in_progress.push_n_rows(last_stream_idx, remaining);
-                cursor.advance_n(remaining);
-            }
+        if self.in_progress.len() >= self.batch_size
+          && let Some(batch) = self.emit_in_progress_batch()?
+        {
+          drop(timer);
+          emitter.emit(batch).await;
+          timer = elapsed_compute.timer();
         }
 
-        drop(timer);
+        let winner = self.loser_tree[0];
+        // Fast path: skip the `maybe_poll_stream` call (and its `Poll`
+        // plumbing) unless the winner's cursor is exhausted and needs a
+        // fresh batch — it is live for almost every row.
+        if self.cursors[winner].is_none() {
+          drop(timer);
+          poll_fn(|cx| self.maybe_poll_stream(cx, winner)).await?;
 
-        if self.fetch.is_none_or(|fetch| fetch > self.produced) {
-            self.passthrough_last_stream(co, last_stream_idx).await?;
+          timer = elapsed_compute.timer();
+
+          // Adjusting the loser tree if necessary
+          self.update_loser_tree();
+
+          let new_winner = self.loser_tree[0];
+
+          // Fast path: skip comparing full batch if the last batch value is still the winner
+          // we do this if:
+          // 1. the winner did not change - so we can skip the full new batch rather than other partial batch
+          // 2. The new winner have more than 1 value
+          // 3. the last row in the new batch beat all other streams
+          if winner == new_winner
+            && self.cursors[new_winner]
+            .as_ref()
+            .is_some_and(|c| c.len() > 1)
+            && self.winner_batch_beats_all(new_winner)
+          {
+            let cursor = self.cursors[new_winner]
+              .as_mut()
+              .expect("already validated that has cursor");
+
+            // TODO - avoid pushing n rows where we are above the limit or something
+            // Skip less than the entire number of rows so we can keep the same code flow
+            let number_of_rows_to_skip = cursor.len() - 1;
+            // If so, add the indices and
+            self.in_progress
+              .push_n_rows(new_winner, number_of_rows_to_skip);
+
+            // Move the cursor to the end
+            cursor.advance_n(number_of_rows_to_skip);
+          }
+        } else {
+          // Adjusting the loser tree if necessary
+          self.update_loser_tree();
         }
+      }
 
-        Ok(())
-      })
-    }
+      let last_stream_idx = self.loser_tree[0];
 
-    async fn passthrough_last_stream(
-        &mut self,
-        emitter: &Emitter<Result<RecordBatch>>,
-        last_stream_index: usize,
-    ) -> Result<()> {
-        let elapsed_compute = self.metrics.elapsed_compute().clone();
-        let mut timer = elapsed_compute.timer();
+      // Push the last stream's buffered rows that were not added to in progress
+      if let Some(cursor) = self.cursors[last_stream_idx].as_mut() {
+        let mut remaining = cursor.len();
+        if let Some(fetch) = self.fetch {
+          remaining = remaining
+            .min(fetch.saturating_sub(self.produced + self.in_progress.len()));
+        }
+        if remaining > 0 {
+          self.in_progress.push_n_rows(last_stream_idx, remaining);
+          cursor.advance_n(remaining);
+        }
+      }
 
-        let last_stream = self.streams.take_partition(last_stream_index);
+      drop(timer);
 
-        let mut last_batch = None;
+      if self.fetch.is_none_or(|fetch| fetch > self.produced) {
+        self.passthrough_last_stream(emitter, last_stream_idx).await?;
+      }
 
-        // Continue while we still have rows in the in progress builder and not reached fetch limit
+      Ok(())
+    })
+  }
+
+  async fn passthrough_last_stream(
+    &mut self,
+    mut emitter: TryEmitter<RecordBatch, DataFusionError>,
+    last_stream_index: usize,
+  ) -> Result<()> {
+    let elapsed_compute = self.metrics.elapsed_compute().clone();
+    let mut timer = elapsed_compute.timer();
+
+    let last_stream = self.streams.take_partition(last_stream_index);
+
+    let mut last_batch = None;
+
+    // Continue while we still have rows in the in progress builder and not reached fetch limit
         while !self.in_progress.is_empty()
             && self.fetch.is_none_or(|fetch| fetch > self.produced)
         {
@@ -368,7 +368,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             // in that case we emit that without coalescing so we won't have error coalescing
             if let Some(last_batch) = last_batch.take() {
                 drop(timer);
-                co.yield_(Ok(last_batch)).await;
+                emitter.emit(last_batch).await;
                 timer = elapsed_compute.timer();
             }
 
