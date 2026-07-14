@@ -36,9 +36,9 @@ pub(crate) fn try_narrow_integer_schema(
     schema: &Schema,
     row_groups: &[RowGroupMetaData],
 ) -> Option<Schema> {
-    let domains = merge_exact_integer_domains(row_groups)?;
+    let column_to_minmax = extract_column_minmaxes(row_groups)?;
     let mut changed = false;
-    let fields = narrow_fields(schema.fields(), &[], &domains, &mut changed);
+    let fields = narrow_fields(schema.fields(), &[], &column_to_minmax, &mut changed);
     if !changed {
         return None;
     }
@@ -46,17 +46,15 @@ pub(crate) fn try_narrow_integer_schema(
     Some(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
-/// Merge exact Int32/Int64 min/max across all row groups, keyed by Parquet
-/// column path string (e.g. `"id"` or `"tags.list.element"`).
-///
-/// A column is omitted if any row group lacks exact min/max for it.
-fn merge_exact_integer_domains(
+/// Creates a `HashMap` of strings (Parquet column path, like `"id"` or `"tags.list.element"`) to a two-tuple representing (min, max)
+/// Note that a column is omitted if any row group lacks exact min/max for it. The min/max are converted to i64 as well
+fn extract_column_minmaxes(
     row_groups: &[RowGroupMetaData],
 ) -> Option<HashMap<String, (i64, i64)>> {
-    let mut domains: Option<HashMap<String, (i64, i64)>> = None;
+    let mut column_to_minmax: Option<HashMap<String, (i64, i64)>> = None;
 
     for rg in row_groups {
-        let mut this_rg = HashMap::new();
+        let mut curr_rg = HashMap::new();
         for column in rg.columns() {
             let path = column.column_path().string();
             let Some(stats) = column.statistics() else {
@@ -68,14 +66,14 @@ fn merge_exact_integer_domains(
             let Some((min, max)) = int_min_max(stats) else {
                 continue;
             };
-            this_rg.insert(path, (min, max));
+            curr_rg.insert(path, (min, max));
         }
 
-        match &mut domains {
-            None => domains = Some(this_rg),
+        match &mut column_to_minmax {
+            None => column_to_minmax = Some(curr_rg),
             Some(merged) => {
                 merged.retain(|path, (file_min, file_max)| {
-                    let Some((min, max)) = this_rg.get(path) else {
+                    let Some((min, max)) = curr_rg.get(path) else {
                         return false;
                     };
                     *file_min = (*file_min).min(*min);
@@ -86,7 +84,7 @@ fn merge_exact_integer_domains(
         }
     }
 
-    domains
+    column_to_minmax
 }
 
 /// Note that we're ignoring types like `Statistics::Int96` because if we can't cast to i64 then it's too big to downcast
@@ -149,19 +147,21 @@ fn is_narrower(candidate: &DataType, current: &DataType) -> bool {
 fn narrow_fields(
     fields: &Fields,
     path_prefix: &[&str],
-    domains: &HashMap<String, (i64, i64)>,
+    column_to_minmax: &HashMap<String, (i64, i64)>,
     changed: &mut bool,
 ) -> Fields {
     fields
         .iter()
-        .map(|field| Arc::new(narrow_field(field, path_prefix, domains, changed)))
+        .map(|field| {
+            Arc::new(narrow_field(field, path_prefix, column_to_minmax, changed))
+        })
         .collect()
 }
 
 fn narrow_field(
     field: &Field,
     path_prefix: &[&str],
-    domains: &HashMap<String, (i64, i64)>,
+    column_to_minmax: &HashMap<String, (i64, i64)>,
     changed: &mut bool,
 ) -> Field {
     let mut path: Vec<&str> = path_prefix.to_vec();
@@ -169,40 +169,48 @@ fn narrow_field(
 
     let new_type = match field.data_type() {
         DataType::Struct(children) => {
-            DataType::Struct(narrow_fields(children, &path, domains, changed))
+            DataType::Struct(narrow_fields(children, &path, column_to_minmax, changed))
         }
         DataType::List(child) => {
             let mut list_path = path.clone();
             list_path.push("list");
-            DataType::List(Arc::new(narrow_field(child, &list_path, domains, changed)))
+            DataType::List(Arc::new(narrow_field(
+                child,
+                &list_path,
+                column_to_minmax,
+                changed,
+            )))
         }
         DataType::LargeList(child) => {
             let mut list_path = path.clone();
             list_path.push("list");
             DataType::LargeList(Arc::new(narrow_field(
-                child, &list_path, domains, changed,
+                child,
+                &list_path,
+                column_to_minmax,
+                changed,
             )))
         }
         DataType::FixedSizeList(child, size) => {
             let mut list_path = path.clone();
             list_path.push("list");
             DataType::FixedSizeList(
-                Arc::new(narrow_field(child, &list_path, domains, changed)),
+                Arc::new(narrow_field(child, &list_path, column_to_minmax, changed)),
                 *size,
             )
         }
         DataType::Map(entries, sorted) => DataType::Map(
-            Arc::new(narrow_field(entries, &path, domains, changed)),
+            Arc::new(narrow_field(entries, &path, column_to_minmax, changed)),
             *sorted,
         ),
         DataType::Dictionary(key, value) if value.is_integer() => {
-            match maybe_narrow_primitive(value, &path, domains, changed) {
+            match maybe_narrow_primitive(value, &path, column_to_minmax, changed) {
                 Some(narrowed) => DataType::Dictionary(key.clone(), Box::new(narrowed)),
                 None => field.data_type().clone(),
             }
         }
         dt if dt.is_integer() => {
-            match maybe_narrow_primitive(dt, &path, domains, changed) {
+            match maybe_narrow_primitive(dt, &path, column_to_minmax, changed) {
                 Some(narrowed) => narrowed,
                 None => dt.clone(),
             }
@@ -217,11 +225,11 @@ fn narrow_field(
 fn maybe_narrow_primitive(
     current: &DataType,
     path: &[&str],
-    domains: &HashMap<String, (i64, i64)>,
+    column_to_minmax: &HashMap<String, (i64, i64)>,
     changed: &mut bool,
 ) -> Option<DataType> {
     let path_key = path.join(".");
-    let (min, max) = *domains.get(&path_key)?;
+    let (min, max) = *column_to_minmax.get(&path_key)?;
     let candidate = narrowest_integer_type(min, max);
     if is_narrower(&candidate, current) {
         *changed = true;
