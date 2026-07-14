@@ -33,7 +33,8 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
-    ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
+    ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    RangePartitioning, Statistics,
 };
 // compatibility
 pub use super::join_filter::JoinFilter;
@@ -146,9 +147,16 @@ pub fn adjust_right_output_partitioning(
             Partitioning::Hash(new_exprs, *size)
         }
         Partitioning::Range(range) => {
-            // Range partitioning optimizer propagation is tracked in
-            // https://github.com/apache/datafusion/issues/22395
-            Partitioning::UnknownPartitioning(range.partition_count())
+            let ordering = add_offset_to_physical_sort_exprs(
+                range.ordering().iter().cloned(),
+                left_columns_len as _,
+            )?;
+            let ordering = LexOrdering::new(ordering)
+                .expect("offsetting a range ordering keeps it non-empty");
+            Partitioning::Range(RangePartitioning::new(
+                ordering,
+                range.split_points().to_vec(),
+            ))
         }
         result => result.clone(),
     };
@@ -2468,7 +2476,7 @@ mod tests {
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
-    use datafusion_common::{ScalarValue, arrow_datafusion_err, arrow_err};
+    use datafusion_common::{ScalarValue, SplitPoint, arrow_datafusion_err, arrow_err};
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use rstest::rstest;
@@ -4129,6 +4137,53 @@ mod tests {
         assert_eq!(result.column_statistics[1].distinct_count, Inexact(31));
         assert_eq!(result.column_statistics[1].sum_value, Absent);
         assert_eq!(result.column_statistics[1].byte_size, Inexact(256));
+    }
+
+    #[test]
+    fn test_adjust_right_output_partitioning_preserves_range() -> Result<()> {
+        let split_points = vec![
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(10)),
+                ScalarValue::Int32(Some(100)),
+            ]),
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(20)),
+                ScalarValue::Int32(Some(50)),
+            ]),
+        ];
+        let range = RangePartitioning::try_new(
+            LexOrdering::new([
+                PhysicalSortExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    SortOptions::new(false, true),
+                ),
+                PhysicalSortExpr::new(
+                    Arc::new(Column::new("b", 2)),
+                    SortOptions::new(true, false),
+                ),
+            ])
+            .unwrap(),
+            split_points.clone(),
+        )?;
+
+        let adjusted = adjust_right_output_partitioning(&Partitioning::Range(range), 3)?;
+        let expected = Partitioning::Range(RangePartitioning::new(
+            LexOrdering::new([
+                PhysicalSortExpr::new(
+                    Arc::new(Column::new("a", 3)),
+                    SortOptions::new(false, true),
+                ),
+                PhysicalSortExpr::new(
+                    Arc::new(Column::new("b", 5)),
+                    SortOptions::new(true, false),
+                ),
+            ])
+            .unwrap(),
+            split_points,
+        ));
+
+        assert_eq!(adjusted, expected);
+        Ok(())
     }
 
     #[test]
