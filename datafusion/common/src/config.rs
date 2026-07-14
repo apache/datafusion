@@ -858,7 +858,7 @@ config_namespace! {
         /// may create spill files larger than the limit.
         ///
         /// Default: 128 MB
-        pub max_spill_file_size_bytes: usize, default = 128 * 1024 * 1024
+        pub max_spill_file_size_bytes: ConfigNonZeroUsize, default = non_zero_usize_default(128 * 1024 * 1024)
 
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: usize, default = 32
