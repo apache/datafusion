@@ -873,7 +873,7 @@ config_namespace! {
         /// This is a soft max, so it can be exceeded slightly. There also
         /// will be one file smaller than the limit if the total
         /// number of rows written is not roughly divisible by the soft max
-        pub soft_max_rows_per_output_file: usize, default = 50000000
+        pub soft_max_rows_per_output_file: ConfigNonZeroUsize, default = non_zero_usize_default(50000000)
 
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially
