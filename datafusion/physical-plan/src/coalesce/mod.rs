@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::Schema;
 use datafusion_common::{Result, assert_or_internal_err};
+use std::sync::Arc;
 
 /// Concatenate multiple [`RecordBatch`]es and apply a limit
 ///
