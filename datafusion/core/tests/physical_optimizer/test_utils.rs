@@ -1018,7 +1018,11 @@ impl ExecutionPlan for TestScan {
         internal_err!("TestScan is for testing optimizer only, not for execution")
     }
 
-    fn statistics_with_args(&self, _args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
         Ok(Arc::new(Statistics::new_unknown(&self.schema)))
     }
 

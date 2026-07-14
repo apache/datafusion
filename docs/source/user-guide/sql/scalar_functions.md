@@ -3261,6 +3261,7 @@ _Alias of [current_date](#current_date)._
 - [array_except](#array_except)
 - [array_extract](#array_extract)
 - [array_filter](#array_filter)
+- [array_first](#array_first)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
@@ -3323,6 +3324,7 @@ _Alias of [current_date](#current_date)._
 - [list_except](#list_except)
 - [list_extract](#list_extract)
 - [list_filter](#list_filter)
+- [list_first](#list_first)
 - [list_has](#list_has)
 - [list_has_all](#list_has_all)
 - [list_has_any](#list_has_any)
@@ -3756,6 +3758,34 @@ array_filter(array, x -> x > 2)
 #### Aliases
 
 - list_filter
+
+### `array_first`
+
+Returns the first element of an array that satisfies the given predicate. Returns null if the array is empty or no element matches. A predicate that returns null for an element is treated as not matching.
+
+```sql
+array_first(array, predicate)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **predicate**: Lambda predicate that returns a boolean. The first element for which it returns true is returned.
+
+#### Example
+
+```sql
+> select array_first([1, 2, 3, 4], x -> x > 2);
++----------------------------------------+
+| array_first([1,2,3,4],x -> x > 2)      |
++----------------------------------------+
+| 3                                      |
++----------------------------------------+
+```
+
+#### Aliases
+
+- list_first
 
 ### `array_has`
 
@@ -4989,6 +5019,10 @@ _Alias of [array_element](#array_element)._
 ### `list_filter`
 
 _Alias of [array_filter](#array_filter)._
+
+### `list_first`
+
+_Alias of [array_first](#array_first)._
 
 ### `list_has`
 
