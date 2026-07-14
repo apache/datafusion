@@ -306,12 +306,22 @@ impl FileSink for ParquetSink {
                     .await?;
                 let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
                     .register(context.memory_pool());
+                let metadata_enabled = parquet_opts.global.skip_arrow_metadata;
                 file_write_tasks.spawn(
                     async move {
                         while let Some(batch) = rx.recv().await {
                             writer.write(&batch).await?;
                             reservation.try_resize(writer.memory_size())?;
                         }
+
+                        // Flushing here to get a complete view of the statistics for potential type narrowing before writer is closed
+                        writer.flush().await?;
+                        if let Some(row_group_metadata) =
+                            writer.flushed_row_groups().first()
+                        {
+                            print!("lol");
+                        }
+
                         let parquet_meta_data = writer
                             .close()
                             .await
