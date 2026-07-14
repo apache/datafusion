@@ -99,7 +99,7 @@ struct PrimitiveHashTable<VAL: ArrowPrimitiveType>
 where
     Option<<VAL as ArrowPrimitiveType>::Native>: Comparable,
 {
-    owned: ArrayRef,
+    owned: PrimitiveArray<VAL>,
     map: TopKHashTable<Option<VAL::Native>>,
     rnd: RandomState,
     kt: DataType,
@@ -194,15 +194,12 @@ impl ArrowHashTable for StringHashTable {
 
 impl<VAL: ArrowPrimitiveType> PrimitiveHashTable<VAL>
 where
-    Option<<VAL as ArrowPrimitiveType>::Native>: Comparable,
-    Option<<VAL as ArrowPrimitiveType>::Native>: HashValue,
+    Option<<VAL as ArrowPrimitiveType>::Native>: Comparable + HashValue,
 {
     pub fn new(limit: usize, kt: DataType) -> Self {
-        let owned = Arc::new(
-            PrimitiveArray::<VAL>::builder(0)
-                .with_data_type(kt.clone())
-                .finish(),
-        );
+        let owned = PrimitiveArray::<VAL>::builder(0)
+            .with_data_type(kt.clone())
+            .finish();
         Self {
             owned,
             map: TopKHashTable::new(limit, limit * 10),
@@ -214,11 +211,10 @@ where
 
 impl<VAL: ArrowPrimitiveType> ArrowHashTable for PrimitiveHashTable<VAL>
 where
-    Option<<VAL as ArrowPrimitiveType>::Native>: Comparable,
-    Option<<VAL as ArrowPrimitiveType>::Native>: HashValue,
+    Option<<VAL as ArrowPrimitiveType>::Native>: Comparable + HashValue,
 {
     fn set_batch(&mut self, ids: ArrayRef) {
-        self.owned = ids;
+        self.owned = PrimitiveArray::from(ids.to_data());
     }
 
     fn len(&self) -> usize {
@@ -248,11 +244,10 @@ where
     }
 
     fn find_or_insert(&mut self, row_idx: usize, replace_idx: usize) -> (usize, bool) {
-        let ids = self.owned.as_primitive::<VAL>();
-        let id: Option<VAL::Native> = if ids.is_null(row_idx) {
+        let id: Option<VAL::Native> = if self.owned.is_null(row_idx) {
             None
         } else {
-            Some(ids.value(row_idx))
+            Some(self.owned.value(row_idx))
         };
         // Compute hash and create equality closure for hash table lookup.
         let hash: u64 = id.hash(&self.rnd);

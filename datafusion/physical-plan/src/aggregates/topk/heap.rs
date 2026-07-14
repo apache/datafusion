@@ -95,7 +95,7 @@ pub struct PrimitiveHeap<VAL: ArrowPrimitiveType>
 where
     <VAL as ArrowPrimitiveType>::Native: Comparable,
 {
-    batch: ArrayRef,
+    batch: PrimitiveArray<VAL>,
     heap: TopKHeap<VAL::Native>,
     desc: bool,
     data_type: DataType,
@@ -106,9 +106,9 @@ where
     <VAL as ArrowPrimitiveType>::Native: Comparable,
 {
     pub fn new(limit: usize, desc: bool, data_type: DataType) -> Self {
-        let owned: ArrayRef = Arc::new(PrimitiveArray::<VAL>::builder(0).finish());
+        let batch = PrimitiveArray::<VAL>::builder(0).finish();
         Self {
-            batch: owned,
+            batch,
             heap: TopKHeap::new(limit, desc),
             desc,
             data_type,
@@ -121,15 +121,14 @@ where
     <VAL as ArrowPrimitiveType>::Native: Comparable,
 {
     fn set_batch(&mut self, vals: ArrayRef) {
-        self.batch = vals;
+        self.batch = PrimitiveArray::from(vals.to_data());
     }
 
     fn is_worse(&self, row_idx: usize) -> bool {
         if !self.heap.is_full() {
             return false;
         }
-        let vals = self.batch.as_primitive::<VAL>();
-        let new_val = vals.value(row_idx);
+        let new_val = self.batch.value(row_idx);
         let worst_val = self.heap.worst_val().expect("Missing root");
         (!self.desc && new_val > *worst_val) || (self.desc && new_val < *worst_val)
     }
@@ -139,8 +138,7 @@ where
     }
 
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
-        let vals = self.batch.as_primitive::<VAL>();
-        let new_val = vals.value(row_idx);
+        let new_val = self.batch.value(row_idx);
         self.heap.append_or_replace(new_val, map_idx, map);
     }
 
@@ -150,8 +148,7 @@ where
         row_idx: usize,
         map: &mut Vec<(usize, usize)>,
     ) {
-        let vals = self.batch.as_primitive::<VAL>();
-        let new_val = vals.value(row_idx);
+        let new_val = self.batch.value(row_idx);
         self.heap.replace_if_better(heap_idx, new_val, map);
     }
 
