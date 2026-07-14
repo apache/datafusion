@@ -112,6 +112,7 @@ Here are some active projects using DataFusion:
 - [GreptimeDB] Open Source & Cloud Native Distributed Time Series Database
 - [hiop](https://hiop.io) Serverless Data Logistic Platform
 - [HoraeDB] Distributed Time-Series Database
+- [Hotdata](https://www.hotdata.dev) On-demand databases for AI agents with a unified query engine for vector, OLAP, and full-text search.
 - [Iceberg-rust](https://github.com/apache/iceberg-rust) Rust implementation of Apache Iceberg
 - [InfluxDB] Time Series Database
 - [Kamu] Planet-scale streaming data pipeline
@@ -138,6 +139,7 @@ Here are some active projects using DataFusion:
 - [Telemetry](https://telemetry.sh/) Structured logging made easy
 - [Xorq](https://github.com/xorq-labs/xorq/) Xorq is a multi-engine batch transformation framework built on Ibis, DataFusion and Arrow
 - [KalamDB](https://github.com/jamals86/KalamDB) SQL-first realtime state database for AI agents, chat products, and multi-tenant SaaS.
+- [Infino](https://github.com/infino-ai/infino) Fast retrieval engine for SQL, full-text search, and vector search over Parquet on object storage
 
 Here are some less active projects that used DataFusion:
 
@@ -186,7 +188,7 @@ provide integrations with other systems, some of which are described below:
 - [datafusion-c](https://github.com/datafusion-contrib/datafusion-c)
 - [datafusion-python](https://github.com/apache/datafusion-python)
 - [datafusion-ruby](https://github.com/datafusion-contrib/datafusion-ruby)
-- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
+- [datafusion-java](https://github.com/apache/datafusion-java)
 
 ### Integrations
 

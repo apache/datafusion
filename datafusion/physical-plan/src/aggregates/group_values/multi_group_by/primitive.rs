@@ -15,17 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::aggregates::group_values::HashValue;
 use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::ArrowNativeTypeOp;
-use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray, cast::AsArray};
+use arrow::array::{
+    Array, ArrayRef, ArrowPrimitiveType, BooleanBufferBuilder, PrimitiveArray,
+    cast::AsArray,
+};
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
+use arrow::util::bit_util::apply_bitwise_binary_op;
 use datafusion_common::Result;
+use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use itertools::izip;
 use std::iter;
 use std::sync::Arc;
 
@@ -47,6 +52,7 @@ pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType, const NULLABLE: boo
 impl<T, const NULLABLE: bool> PrimitiveGroupValueBuilder<T, NULLABLE>
 where
     T: ArrowPrimitiveType,
+    T::Native: HashValue,
 {
     /// Create a new `PrimitiveGroupValueBuilder`
     pub fn new(data_type: DataType) -> Self {
@@ -62,43 +68,50 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     ) {
         assert!(
             !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()),
             "called with nullable input"
         );
         let array_values = array.as_primitive::<T>().values();
+        let n = lhs_rows.len();
 
-        let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-            equal_to_results.iter_mut(),
-        );
+        // Build a packed comparison bitmask, then AND it into equal_to_results
+        let num_bytes = n.div_ceil(8);
+        let mut cmp_buf = vec![0u8; num_bytes];
 
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            let result = {
-                // Getting unchecked not only for bound checks but because the bound checks are
-                // what prevents auto-vectorization
-                let left = if cfg!(debug_assertions) {
-                    self.group_values[lhs_row]
-                } else {
-                    // SAFETY: indices are guaranteed to be in bounds
-                    unsafe { *self.group_values.get_unchecked(lhs_row) }
-                };
-                let right = if cfg!(debug_assertions) {
-                    array_values[rhs_row]
-                } else {
-                    // SAFETY: indices are guaranteed to be in bounds
-                    unsafe { *array_values.get_unchecked(rhs_row) }
-                };
-
-                // Always evaluate, to allow for auto-vectorization
-                left.is_eq(right)
+        for (i, (&lhs_row, &rhs_row)) in lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
+        {
+            if !equal_to_results.get_bit(i) {
+                continue;
+            }
+            let left = if cfg!(debug_assertions) {
+                self.group_values[lhs_row]
+            } else {
+                unsafe { *self.group_values.get_unchecked(lhs_row) }
             };
-
-            *equal_to_result = result && *equal_to_result;
+            let right = if cfg!(debug_assertions) {
+                array_values[rhs_row]
+            } else {
+                unsafe { *array_values.get_unchecked(rhs_row) }
+            };
+            // `left` was already canonicalized on append; canonicalize the
+            // input so ±0 (and any future equivalence class) compares equal.
+            if left.is_eq(right.canonicalize()) {
+                cmp_buf[i / 8] |= 1 << (i % 8);
+            }
         }
+
+        // AND the comparison result into the existing equal_to_results bitmask
+        apply_bitwise_binary_op(
+            equal_to_results.as_slice_mut(),
+            0,
+            &cmp_buf,
+            0,
+            n,
+            |a, b| a & b,
+        );
     }
 
     pub fn vectorized_equal_nullable(
@@ -106,39 +119,37 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     ) {
         assert!(NULLABLE, "called with non-nullable input");
         let array = array.as_primitive::<T>();
 
-        let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-            equal_to_results.iter_mut(),
-        );
-
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            // Has found not equal to in previous column, don't need to check
-            if !*equal_to_result {
+        for (idx, (&lhs_row, &rhs_row)) in
+            lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
+        {
+            if !equal_to_results.get_bit(idx) {
                 continue;
             }
-
-            // Perf: skip null check (by short circuit) if input is not nullable
             let exist_null = self.nulls.is_null(lhs_row);
             let input_null = array.is_null(rhs_row);
             if let Some(result) = nulls_equal_to(exist_null, input_null) {
-                *equal_to_result = result;
+                if !result {
+                    equal_to_results.set_bit(idx, false);
+                }
                 continue;
             }
 
-            // Otherwise, we need to check their values
-            *equal_to_result = self.group_values[lhs_row].is_eq(array.value(rhs_row));
+            if !self.group_values[lhs_row].is_eq(array.value(rhs_row).canonicalize()) {
+                equal_to_results.set_bit(idx, false);
+            }
         }
     }
 }
 
 impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
     for PrimitiveGroupValueBuilder<T, NULLABLE>
+where
+    T::Native: HashValue,
 {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         // Perf: skip null check (by short circuit) if input is not nullable
@@ -151,7 +162,8 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             // Otherwise, we need to check their values
         }
 
-        self.group_values[lhs_row].is_eq(array.as_primitive::<T>().value(rhs_row))
+        self.group_values[lhs_row]
+            .is_eq(array.as_primitive::<T>().value(rhs_row).canonicalize())
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
@@ -162,10 +174,12 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                 self.group_values.push(T::default_value());
             } else {
                 self.nulls.append(false);
-                self.group_values.push(array.as_primitive::<T>().value(row));
+                self.group_values
+                    .push(array.as_primitive::<T>().value(row).canonicalize());
             }
         } else {
-            self.group_values.push(array.as_primitive::<T>().value(row));
+            self.group_values
+                .push(array.as_primitive::<T>().value(row).canonicalize());
         }
 
         Ok(())
@@ -176,7 +190,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     ) {
         if !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()) {
             self.vectorized_equal_to_non_nullable(
@@ -211,7 +225,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                         self.group_values.push(T::default_value());
                     } else {
                         self.nulls.append(false);
-                        self.group_values.push(arr.value(row));
+                        self.group_values.push(arr.value(row).canonicalize());
                     }
                 }
             }
@@ -219,7 +233,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             (true, Nulls::None) => {
                 self.nulls.append_n(rows.len(), false);
                 for &row in rows {
-                    self.group_values.push(arr.value(row));
+                    self.group_values.push(arr.value(row).canonicalize());
                 }
             }
 
@@ -231,7 +245,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 
             (false, _) => {
                 for &row in rows {
-                    self.group_values.push(arr.value(row));
+                    self.group_values.push(arr.value(row).canonicalize());
                 }
             }
         }
@@ -265,8 +279,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
-        let first_n = self.group_values.drain(0..n).collect::<Vec<_>>();
-
+        let first_n = split_vec_min_alloc(&mut self.group_values, n);
         let first_n_nulls = if NULLABLE { self.nulls.take_n(n) } else { None };
 
         Arc::new(
@@ -281,10 +294,23 @@ mod tests {
     use std::sync::Arc;
 
     use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
-    use arrow::array::{ArrayRef, Float32Array, Int64Array, NullBufferBuilder};
-    use arrow::datatypes::{DataType, Float32Type, Int64Type};
+    use arrow::array::{
+        ArrayRef, BooleanBufferBuilder, Float32Array, Int32Array, Int64Array,
+        NullBufferBuilder,
+    };
+    use arrow::datatypes::{DataType, Float32Type, Int32Type, Int64Type};
 
     use super::GroupColumn;
+
+    fn make_true_buffer(n: usize) -> BooleanBufferBuilder {
+        let mut buf = BooleanBufferBuilder::new(n);
+        buf.append_n(n, true);
+        buf
+    }
+
+    fn to_vec(buf: &BooleanBufferBuilder) -> Vec<bool> {
+        (0..buf.len()).map(|i| buf.get_bit(i)).collect()
+    }
 
     #[test]
     fn test_nullable_primitive_equal_to() {
@@ -296,16 +322,18 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            let iter = lhs_rows.iter().zip(rhs_rows.iter());
-            for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
-            }
-        };
+        let equal_to =
+            |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut BooleanBufferBuilder| {
+                let iter = lhs_rows.iter().zip(rhs_rows.iter());
+                for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
+                    equal_to_results
+                        .set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
+                }
+            };
 
         test_nullable_primitive_equal_to_internal(append, equal_to);
     }
@@ -320,18 +348,19 @@ mod tests {
                 .unwrap();
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            builder.vectorized_equal_to(
-                lhs_rows,
-                input_array,
-                rhs_rows,
-                equal_to_results,
-            );
-        };
+        let equal_to =
+            |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut BooleanBufferBuilder| {
+                builder.vectorized_equal_to(
+                    lhs_rows,
+                    input_array,
+                    rhs_rows,
+                    equal_to_results,
+                );
+            };
 
         test_nullable_primitive_equal_to_internal(append, equal_to);
     }
@@ -344,7 +373,7 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut Vec<bool>,
+            &mut BooleanBufferBuilder,
         ),
     {
         // Will cover such cases:
@@ -384,7 +413,7 @@ mod tests {
         // explicitly build a null buffer where one of the null values also happens to match
         let mut nulls = NullBufferBuilder::new(6);
         nulls.append_non_null();
-        nulls.append_null(); // this sets Some(2) to null above
+        nulls.append_null();
         nulls.append_null();
         nulls.append_non_null();
         nulls.append_null();
@@ -393,7 +422,7 @@ mod tests {
         let input_array = Arc::new(Float32Array::new(values, nulls.finish())) as ArrayRef;
 
         // Check
-        let mut equal_to_results = vec![true; builder.len()];
+        let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
             &builder,
             &[0, 1, 2, 3, 4, 5, 6],
@@ -401,14 +430,15 @@ mod tests {
             &[0, 1, 2, 3, 4, 5, 6],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(!equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(equal_to_results[3]);
-        assert!(!equal_to_results[4]);
-        assert!(equal_to_results[5]);
-        assert!(!equal_to_results[6]);
+        assert!(!results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(results[3]);
+        assert!(!results[4]);
+        assert!(results[5]);
+        assert!(!results[6]);
     }
 
     #[test]
@@ -421,16 +451,18 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            let iter = lhs_rows.iter().zip(rhs_rows.iter());
-            for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
-            }
-        };
+        let equal_to =
+            |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut BooleanBufferBuilder| {
+                let iter = lhs_rows.iter().zip(rhs_rows.iter());
+                for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
+                    equal_to_results
+                        .set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
+                }
+            };
 
         test_not_nullable_primitive_equal_to_internal(append, equal_to);
     }
@@ -445,18 +477,19 @@ mod tests {
                 .unwrap();
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            builder.vectorized_equal_to(
-                lhs_rows,
-                input_array,
-                rhs_rows,
-                equal_to_results,
-            );
-        };
+        let equal_to =
+            |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut BooleanBufferBuilder| {
+                builder.vectorized_equal_to(
+                    lhs_rows,
+                    input_array,
+                    rhs_rows,
+                    equal_to_results,
+                );
+            };
 
         test_not_nullable_primitive_equal_to_internal(append, equal_to);
     }
@@ -469,7 +502,7 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut Vec<bool>,
+            &mut BooleanBufferBuilder,
         ),
     {
         // Will cover such cases:
@@ -487,7 +520,7 @@ mod tests {
         let input_array = Arc::new(Int64Array::from(vec![Some(0), Some(2)])) as ArrayRef;
 
         // Check
-        let mut equal_to_results = vec![true; builder.len()];
+        let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
             &builder,
             &[0, 1],
@@ -495,9 +528,10 @@ mod tests {
             &[0, 1],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(equal_to_results[0]);
-        assert!(!equal_to_results[1]);
+        assert!(results[0]);
+        assert!(!results[1]);
     }
 
     #[test]
@@ -520,19 +554,20 @@ mod tests {
             .vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_nulls_input_array.len()];
+        let mut equal_to_results = make_true_buffer(all_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[0, 1, 2, 3, 4],
             &all_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(equal_to_results[3]);
-        assert!(equal_to_results[4]);
+        assert!(results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(results[3]);
+        assert!(results[4]);
 
         // All not nulls input array
         let all_not_nulls_input_array = Arc::new(Int64Array::from(vec![
@@ -546,18 +581,74 @@ mod tests {
             .vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
+        let mut equal_to_results = make_true_buffer(all_not_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[5, 6, 7, 8, 9],
             &all_not_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(equal_to_results[3]);
-        assert!(equal_to_results[4]);
+        assert!(results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(results[3]);
+        assert!(results[4]);
+    }
+
+    // All bits false: every row must be skipped; accessing any lhs/rhs index would panic.
+    #[test]
+    fn test_vectorized_equal_to_skips_false_rows() {
+        let mut builder =
+            PrimitiveGroupValueBuilder::<Int32Type, true>::new(DataType::Int32);
+        let array = Arc::new(Int32Array::from(vec![None::<i32>, None])) as ArrayRef;
+        builder.vectorized_append(&array, &[0, 1]).unwrap();
+
+        let mut results = BooleanBufferBuilder::new(2);
+        results.append_n(2, false);
+
+        builder.vectorized_equal_to(
+            &[usize::MAX, usize::MAX],
+            &array,
+            &[usize::MAX, usize::MAX],
+            &mut results,
+        );
+    }
+
+    #[test]
+    fn test_primitive_take_n() {
+        // drain branch: n * 2 <= len
+        let mut builder =
+            PrimitiveGroupValueBuilder::<Int64Type, true>::new(DataType::Int64);
+        let array = Arc::new(Int64Array::from(vec![
+            Some(10),
+            None,
+            Some(30),
+            Some(40),
+            Some(50),
+        ])) as ArrayRef;
+        for i in 0..5 {
+            builder.append_val(&array, i).unwrap();
+        }
+        // len=5, n=2, n*2=4 <= 5  →  drain branch
+        let out = builder.take_n(2);
+        let expected = Arc::new(Int64Array::from(vec![Some(10), None])) as ArrayRef;
+        assert_eq!(&out, &expected);
+        // remaining: [30, 40, 50]
+        assert_eq!(builder.len(), 3);
+
+        // split_off branch: remaining < n  (len=3, n=2, n*2=4 > 3)
+        let out2 = builder.take_n(2);
+        let expected2 = Arc::new(Int64Array::from(vec![Some(30), Some(40)])) as ArrayRef;
+        assert_eq!(&out2, &expected2);
+        // remaining: [50]
+        assert_eq!(builder.len(), 1);
+
+        // take the last element
+        let out3 = builder.take_n(1);
+        let expected3 = Arc::new(Int64Array::from(vec![Some(50)])) as ArrayRef;
+        assert_eq!(&out3, &expected3);
+        assert_eq!(builder.len(), 0);
     }
 }

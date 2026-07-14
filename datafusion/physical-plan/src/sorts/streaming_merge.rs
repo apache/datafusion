@@ -29,7 +29,7 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::human_readable_size;
 use datafusion_common::{Result, assert_or_internal_err, internal_err};
-use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_execution::SpillFile;
 use datafusion_execution::memory_pool::{
     MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
 };
@@ -59,7 +59,7 @@ macro_rules! merge_helper {
 }
 
 pub struct SortedSpillFile {
-    pub file: RefCountedTempFile,
+    pub file: Arc<dyn SpillFile>,
 
     /// how much memory the largest memory batch is taking
     pub max_record_batch_memory: usize,
@@ -67,12 +67,19 @@ pub struct SortedSpillFile {
 
 impl std::fmt::Debug for SortedSpillFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "SortedSpillFile({:?}) takes {}",
-            self.file.path(),
-            human_readable_size(self.max_record_batch_memory)
-        )
+        match self.file.path() {
+            Some(path) => write!(
+                f,
+                "SortedSpillFile({:?}) takes {}",
+                path,
+                human_readable_size(self.max_record_batch_memory)
+            ),
+            None => write!(
+                f,
+                "SortedSpillFile(<custom_backend>) takes {}",
+                human_readable_size(self.max_record_batch_memory)
+            ),
+        }
     }
 }
 

@@ -152,8 +152,7 @@ impl ListingTableConfig {
     /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     /// # let table_paths = ListingTableUrl::parse("file:///path/to/data").unwrap();
     /// let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_file_extension(".parquet")
-    ///     .with_collect_stat(true);
+    ///     .with_file_extension(".parquet");
     ///
     /// let config = ListingTableConfig::new(table_paths).with_listing_options(options);
     /// // Configure file format and options

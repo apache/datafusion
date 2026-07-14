@@ -18,7 +18,10 @@
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::DataType;
+use arrow::compute::cast;
+use arrow::datatypes::{
+    DataType, Float16Type, Int8Type, Int16Type, UInt8Type, UInt16Type,
+};
 use datafusion_common::Result;
 
 use super::array_static_filter::ArrayStaticFilter;
@@ -28,14 +31,23 @@ use super::static_filter::StaticFilter;
 pub(super) fn instantiate_static_filter(
     in_array: ArrayRef,
 ) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
+    // Flatten dictionary-encoded haystacks to their value type so that
+    // specialized filters (e.g. Int32StaticFilter) are used instead of
+    // falling through to the generic ArrayStaticFilter.
+    let in_array = match in_array.data_type() {
+        DataType::Dictionary(_, value_type) => cast(&in_array, value_type.as_ref())?,
+        _ => in_array,
+    };
     match in_array.data_type() {
-        // Integer primitive types
-        DataType::Int8 => Ok(Arc::new(Int8StaticFilter::try_new(&in_array)?)),
-        DataType::Int16 => Ok(Arc::new(Int16StaticFilter::try_new(&in_array)?)),
+        DataType::Int8 => Ok(Arc::new(BitmapFilter::<Int8Type>::try_new(&in_array)?)),
+        DataType::UInt8 => Ok(Arc::new(BitmapFilter::<UInt8Type>::try_new(&in_array)?)),
+        DataType::Int16 => Ok(Arc::new(BitmapFilter::<Int16Type>::try_new(&in_array)?)),
+        DataType::UInt16 => Ok(Arc::new(BitmapFilter::<UInt16Type>::try_new(&in_array)?)),
+        DataType::Float16 => {
+            Ok(Arc::new(BitmapFilter::<Float16Type>::try_new(&in_array)?))
+        }
         DataType::Int32 => Ok(Arc::new(Int32StaticFilter::try_new(&in_array)?)),
         DataType::Int64 => Ok(Arc::new(Int64StaticFilter::try_new(&in_array)?)),
-        DataType::UInt8 => Ok(Arc::new(UInt8StaticFilter::try_new(&in_array)?)),
-        DataType::UInt16 => Ok(Arc::new(UInt16StaticFilter::try_new(&in_array)?)),
         DataType::UInt32 => Ok(Arc::new(UInt32StaticFilter::try_new(&in_array)?)),
         DataType::UInt64 => Ok(Arc::new(UInt64StaticFilter::try_new(&in_array)?)),
         // Float primitive types (use ordered wrappers for Hash/Eq)

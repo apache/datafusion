@@ -18,10 +18,37 @@
 use arrow::array::{Array, BooleanArray};
 use datafusion_common::Result;
 
-/// Trait for InList static filters
+/// Trait for InList static filters.
+///
+/// Static filters store a pre-computed set of values (the haystack) and check
+/// whether needle values are contained in that set. The haystack is always
+/// represented in its non-dictionary (value) type. Dictionary haystacks are
+/// flattened via `cast()` before construction.
+///
+/// Dictionary-encoded needles are unwrapped inside `contains()` and
+/// evaluated against the dictionary's values.
 pub(super) trait StaticFilter {
     fn null_count(&self) -> usize;
 
-    /// Checks if values in `v` are contained in the filter
+    /// Checks if values in `v` (needle) are contained in this filter's
+    /// haystack. `v` may be dictionary-encoded, in which case the
+    /// implementation unwraps the dictionary and operates on its values.
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray>;
 }
+
+/// Evaluate dictionary-encoded needles by applying a filter to dictionary
+/// values and remapping the result through the keys.
+macro_rules! handle_dictionary {
+    ($self:ident, $v:ident, $negated:ident) => {
+        arrow::array::downcast_dictionary_array! {
+            $v => {
+                let values_contains = $self.contains($v.values().as_ref(), $negated)?;
+                let result = arrow::compute::take(&values_contains, $v.keys(), None)?;
+                return Ok(arrow::array::downcast_array(result.as_ref()))
+            }
+            _ => {}
+        }
+    };
+}
+
+pub(super) use handle_dictionary;

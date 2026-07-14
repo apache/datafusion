@@ -256,9 +256,9 @@ where
         let end = offset_window[1];
         let len = end - start;
 
-        // array is null
-        if array.is_null(row_index) {
-            mutable.extend_nulls(1);
+        // array or index is null
+        if array.is_null(row_index) || indexes.is_null(row_index) {
+            mutable.try_extend_nulls(1)?;
             continue;
         }
 
@@ -266,10 +266,10 @@ where
 
         if let Some(index) = index {
             let start = start.as_usize() + index.as_usize();
-            mutable.extend(0, start, start + 1_usize);
+            mutable.try_extend(0, start, start + 1_usize)?;
         } else {
             // Index out of bounds
-            mutable.extend_nulls(1);
+            mutable.try_extend_nulls(1)?;
         }
     }
 
@@ -602,14 +602,12 @@ fn combine_input_nulls(
     to_array: &Int64Array,
     stride: Option<&Int64Array>,
 ) -> Option<NullBuffer> {
-    [
+    NullBuffer::union_many([
         array.nulls(),
         from_array.nulls(),
         to_array.nulls(),
         stride.and_then(|s| s.nulls()),
-    ]
-    .into_iter()
-    .fold(None, |acc, nulls| NullBuffer::union(acc.as_ref(), nulls))
+    ])
 }
 
 fn general_array_slice<O: OffsetSizeTrait>(
@@ -641,7 +639,7 @@ where
         let len = end - start;
 
         if nulls.as_ref().is_some_and(|n| n.is_null(row_index)) {
-            mutable.extend_nulls(1);
+            mutable.try_extend_nulls(1)?;
             offsets.push(offsets[row_index] + O::usize_as(1));
             continue;
         }
@@ -667,14 +665,14 @@ where
             } => {
                 let start_index = (start + rel_start).to_usize().unwrap();
                 let end_index = (start + rel_start + slice_len).to_usize().unwrap();
-                mutable.extend(0, start_index, end_index);
+                mutable.try_extend(0, start_index, end_index)?;
                 offsets.push(offsets[row_index] + slice_len);
             }
             SlicePlan::Indices(indices) => {
                 let count = indices.len();
                 for rel_index in indices {
                     let absolute_index = (start + rel_index).to_usize().unwrap();
-                    mutable.extend(0, absolute_index, absolute_index + 1);
+                    mutable.try_extend(0, absolute_index, absolute_index + 1)?;
                 }
                 offsets.push(offsets[row_index] + O::usize_as(count));
             }
@@ -756,7 +754,7 @@ where
             } => {
                 let start_index = (start + rel_start).to_usize().unwrap();
                 let end_index = (start + rel_start + slice_len).to_usize().unwrap();
-                mutable.extend(0, start_index, end_index);
+                mutable.try_extend(0, start_index, end_index)?;
                 offsets.push(current_offset);
                 sizes.push(slice_len);
                 current_offset += slice_len;
@@ -765,7 +763,7 @@ where
                 let count = indices.len();
                 for rel_index in indices {
                     let absolute_index = (start + rel_index).to_usize().unwrap();
-                    mutable.extend(0, absolute_index, absolute_index + 1);
+                    mutable.try_extend(0, absolute_index, absolute_index + 1)?;
                 }
                 let length = O::usize_as(count);
                 offsets.push(current_offset);
@@ -1067,7 +1065,7 @@ where
 
         // array is null
         if array.is_null(row_index) {
-            mutable.extend_nulls(1);
+            mutable.try_extend_nulls(1)?;
             continue;
         }
 
@@ -1079,16 +1077,16 @@ where
                     row_nulls_buffer.valid_indices().next()
                 {
                     let index = start.as_usize() + first_non_null_index;
-                    mutable.extend(0, index, index + 1)
+                    mutable.try_extend(0, index, index + 1)?;
                 } else {
                     // all the elements in the array are null
-                    mutable.extend_nulls(1);
+                    mutable.try_extend_nulls(1)?;
                 }
             }
             None => {
                 // no nulls are present in the array so take the first element
                 let index = start.as_usize();
-                mutable.extend(0, index, index + 1);
+                mutable.try_extend(0, index, index + 1)?;
             }
         }
     }
@@ -1109,7 +1107,7 @@ mod tests {
     };
     use arrow::array::{ListArray, RecordBatch};
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::{Column, DFSchema, Result, assert_batches_eq};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{Expr, ExprSchemable};
@@ -1196,6 +1194,26 @@ mod tests {
         let batch = RecordBatch::try_from_iter([("result", result)])?;
 
         assert_batches_eq!(expected, &[batch]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_element_null_index_with_non_zero_buffer_returns_null() -> Result<()> {
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4)]),
+            Some(vec![Some(5)]),
+        ]);
+        let indexes = Int64Array::new(
+            ScalarBuffer::from(vec![1, 1, 1]),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        let result = general_array_element(&list_array, &indexes)?;
+        let expected = Int32Array::from(vec![Some(1), None, Some(5)]);
+
+        assert_eq!(result.as_primitive::<Int32Type>(), &expected);
 
         Ok(())
     }

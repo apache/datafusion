@@ -1,0 +1,433 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#######
+# Tests for array_agg with sliding (bounded) window frames.
+# Validates the retract_batch implementation on ArrayAggAccumulator.
+#######
+
+# Setup test data
+statement ok
+CREATE TABLE t(ts INT, val TEXT) AS VALUES
+  (1, 'A'), (2, 'B'), (3, 'C'), (4, 'D'), (5, 'E');
+
+# Basic ROWS sliding window
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t;
+----
+[A]
+[A, B]
+[B, C]
+[C, D]
+[D, E]
+
+# Wider ROWS frame
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+FROM t;
+----
+[A]
+[A, B]
+[A, B, C]
+[B, C, D]
+[C, D, E]
+
+# ROWS with FOLLOWING
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+FROM t;
+----
+[A, B]
+[A, B, C]
+[B, C, D]
+[C, D, E]
+[D, E]
+
+# Regression: unbounded frame still works
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM t;
+----
+[A]
+[A, B]
+[A, B, C]
+[A, B, C, D]
+[A, B, C, D, E]
+
+# Setup data with NULLs
+statement ok
+CREATE TABLE t_nulls(ts INT, val TEXT) AS VALUES
+  (1, 'A'), (2, NULL), (3, 'C'), (4, NULL), (5, 'E');
+
+# Sliding window with NULLs (nulls preserved)
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_nulls;
+----
+[A]
+[A, NULL]
+[NULL, C]
+[C, NULL]
+[NULL, E]
+
+# Setup data with value gaps for RANGE frame
+statement ok
+CREATE TABLE t_range(ts INT, val TEXT) AS VALUES
+  (1, 'A'), (2, 'B'), (3, 'C'), (4, 'D'), (100, 'E');
+
+# RANGE frame with value gap causes multi-element retract
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts RANGE BETWEEN 2 PRECEDING AND 2 FOLLOWING)
+FROM t_range;
+----
+[A, B, C]
+[A, B, C, D]
+[A, B, C, D]
+[B, C, D]
+[E]
+
+# Single-row frame
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
+FROM t;
+----
+[A]
+[B]
+[C]
+[D]
+[E]
+
+# Integer values in sliding window
+statement ok
+CREATE TABLE t_int(ts INT, val INT) AS VALUES
+  (1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_int;
+----
+[10]
+[10, 20]
+[20, 30]
+[30, 40]
+[40, 50]
+
+# Setup data with duplicate sort keys for GROUPS frame
+statement ok
+CREATE TABLE t_groups(ts INT, val TEXT) AS VALUES
+  (1, 'A'), (1, 'B'), (2, 'C'), (2, 'D'), (3, 'E');
+
+# GROUPS frame: each "group" = rows with same ORDER BY value
+# Group 0: ts=1 (A,B), Group 1: ts=2 (C,D), Group 2: ts=3 (E)
+# Frame: 1 PRECEDING group + CURRENT group
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_groups;
+----
+[A, B]
+[A, B]
+[A, B, C, D]
+[A, B, C, D]
+[C, D, E]
+
+# IGNORE NULLS: nulls are filtered out before storage and retract
+# t_nulls has: (1,'A'), (2,NULL), (3,'C'), (4,NULL), (5,'E')
+query ?
+SELECT array_agg(val) IGNORE NULLS OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_nulls;
+----
+[A]
+[A]
+[C]
+[C]
+[E]
+
+# IGNORE NULLS with wider frame
+query ?
+SELECT array_agg(val) IGNORE NULLS OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+FROM t_nulls;
+----
+[A]
+[A]
+[A, C]
+[C]
+[C, E]
+
+#######
+# DISTINCT sliding window tests
+# Validates retract_batch implementation on DistinctArrayAggAccumulator.
+# DataFusion rejects `array_agg(... ORDER BY ...)` inside window functions,
+# so we wrap with array_sort to make output deterministic
+# (HashMap iteration order otherwise).
+#######
+
+statement ok
+CREATE TABLE t_dist(ts INT, val TEXT) AS VALUES
+  (1,'A'),(2,'A'),(3,'B'),(4,'C'),(5,'B');
+
+# Duplicate stays in frame after partial retract.
+# Frame contents per row (ts=1..5):
+#   [A]       -> {A}
+#   [A,A]     -> {A}            (A appears twice, still distinct {A})
+#   [A,A,B]   -> {A,B}
+#   [A,B,C]   -> {A,B,C}        (one A retracted, one A remains)
+#   [B,C,B]   -> {B,C}          (last A retracted, B duplicate stays)
+query ?
+SELECT array_sort(array_agg(DISTINCT val)
+  OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW))
+FROM t_dist;
+----
+[A]
+[A]
+[A, B]
+[A, B, C]
+[B, C]
+
+# Narrower ROWS frame
+query ?
+SELECT array_sort(array_agg(DISTINCT val)
+  OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
+FROM t_dist;
+----
+[A]
+[A]
+[A, B]
+[B, C]
+[B, C]
+
+# DESC window ORDER BY: frame walks input in reverse temporal order, so
+# update/retract are called against the reversed row stream. Validates
+# retract still tracks duplicates correctly when rows arrive in DESC order.
+# Output rows are emitted in ts DESC order (ts=5,4,3,2,1).
+#   ts=5 (B): frame [B]        -> {B}
+#   ts=4 (C): frame [B,C]      -> {B,C}     (1 preceding in DESC = ts=5)
+#   ts=3 (B): frame [C,B]      -> {B,C}
+#   ts=2 (A): frame [B,A]      -> {A,B}
+#   ts=1 (A): frame [A,A]      -> {A}       (duplicate A in frame)
+query ?
+SELECT array_sort(array_agg(DISTINCT val)
+  OVER (ORDER BY ts DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
+FROM t_dist;
+----
+[B]
+[B, C]
+[B, C]
+[A, B]
+[A]
+
+# RANGE frame with value gaps -> multi-row retract on shift
+statement ok
+CREATE TABLE t_dist_range(ts INT, val TEXT) AS VALUES
+  (1,'A'),(2,'A'),(3,'B'),(10,'A'),(11,'C');
+
+query ?
+SELECT array_sort(array_agg(DISTINCT val)
+  OVER (ORDER BY ts RANGE BETWEEN 2 PRECEDING AND CURRENT ROW))
+FROM t_dist_range;
+----
+[A]
+[A]
+[A, B]
+[A]
+[A, C]
+
+# DISTINCT + IGNORE NULLS in sliding frame: nulls never enter state.
+statement ok
+CREATE TABLE t_dist_nulls(ts INT, val TEXT) AS VALUES
+  (1,'A'),(2,NULL),(3,'A'),(4,NULL),(5,'B');
+
+query ?
+SELECT array_sort(array_agg(DISTINCT val) IGNORE NULLS
+  OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
+FROM t_dist_nulls;
+----
+[A]
+[A]
+[A]
+[A]
+[B]
+
+# DISTINCT without IGNORE NULLS: NULL enters state with a refcount.
+# Retract must remove the NULL key when its last occurrence leaves the frame.
+# array_sort defaults to ASC NULLS FIRST, so a live NULL sorts ahead of A/B;
+# rows with no live NULL have no NULL element.
+#   ts=1 (A):    frame [A]          -> {A}        sorted [A]
+#   ts=2 (NULL): frame [A,NULL]     -> {A,NULL}   sorted [NULL, A]
+#   ts=3 (A):    frame [NULL,A]     -> {A,NULL}   sorted [NULL, A]
+#   ts=4 (NULL): frame [A,NULL]     -> {A,NULL}   sorted [NULL, A]
+#                (the ts=2 NULL retracts but the ts=4 NULL is still present)
+#   ts=5 (B):    frame [NULL,B]     -> {B,NULL}   sorted [NULL, B]
+query ?
+SELECT array_sort(array_agg(DISTINCT val)
+  OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
+FROM t_dist_nulls;
+----
+[A]
+[NULL, A]
+[NULL, A]
+[NULL, A]
+[NULL, B]
+
+# GROUPS frame with duplicated sort keys: rows tied on the ORDER BY column
+# are batched into the same group, so a single shift can update or retract
+# multiple rows at once.
+statement ok
+CREATE TABLE t_dist_groups(ts INT, val TEXT) AS VALUES
+  (1,'A'),(1,'A'),(2,'B'),(2,'C'),(3,'A'),(3,'D');
+
+query ?
+SELECT array_sort(array_agg(DISTINCT val)
+  OVER (ORDER BY ts GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW))
+FROM t_dist_groups;
+----
+[A]
+[A]
+[A, B, C]
+[A, B, C]
+[A, B, C, D]
+[A, B, C, D]
+
+# PARTITION BY: each partition retracts against its own state only. A leak of
+# one partition's state into the next would surface as the next partition's
+# first row carrying foreign values, or a retract hitting the
+# `value not present in state` internal_err. 'A' lives only in grp 1, 'C' only
+# in grp 2, 'B' in both — so leaked grp-1 state would make grp=2/ts=1 emit
+# [A, B] instead of [B]. Rows emitted in (grp, ts) order.
+#   grp 1: ts=1 [A]->{A}   ts=2 [A,A]->{A}   ts=3 [A,B]->{A,B}
+#   grp 2: ts=1 [B]->{B}   ts=2 [B,C]->{B,C} ts=3 [C,C]->{C}
+statement ok
+CREATE TABLE t_dist_parts(grp INT, ts INT, val TEXT) AS VALUES
+  (1,1,'A'),(1,2,'A'),(1,3,'B'),
+  (2,1,'B'),(2,2,'C'),(2,3,'C');
+
+query ?
+SELECT array_sort(array_agg(DISTINCT val)
+  OVER (PARTITION BY grp ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
+FROM t_dist_parts
+ORDER BY grp, ts;
+----
+[A]
+[A]
+[A, B]
+[B]
+[B, C]
+[C]
+
+# Numeric element type: retract must hash and compare Int32 ScalarValues
+# correctly (every sibling test uses Utf8). Mirrors the t_dist 2-PRECEDING walk.
+#   ts=1 [10]       -> {10}
+#   ts=2 [10,10]    -> {10}            (duplicate, stays distinct {10})
+#   ts=3 [10,10,20] -> {10,20}
+#   ts=4 [10,20,30] -> {10,20,30}      (one 10 retracted, one 10 remains)
+#   ts=5 [20,30,20] -> {20,30}         (last 10 retracted, 20 duplicate stays)
+statement ok
+CREATE TABLE t_dist_int(ts INT, val INT) AS VALUES
+  (1,10),(2,10),(3,20),(4,30),(5,20);
+
+query ?
+SELECT array_sort(array_agg(DISTINCT val)
+  OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW))
+FROM t_dist_int;
+----
+[10]
+[10]
+[10, 20]
+[10, 20, 30]
+[20, 30]
+
+# ORDER BY interaction — window context.
+# DataFusion's planner rejects ANY aggregate-level ORDER BY inside a window
+# function, so neither the valid (DISTINCT x ORDER BY x) nor the invalid
+# (DISTINCT x ORDER BY y) form reaches the DISTINCT-arg-equality validator
+# in window context. Both error at planning, but at the window-planner stage.
+statement error Aggregate ORDER BY is not implemented for window functions
+SELECT array_agg(DISTINCT val ORDER BY val)
+  OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_dist;
+
+statement error Aggregate ORDER BY is not implemented for window functions
+SELECT array_agg(DISTINCT val ORDER BY ts)
+  OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_dist;
+
+# ORDER BY interaction — non-window context (regression for the storage swap).
+# The DISTINCT-arg-equality validator must still accept the matching case
+# and reject the mismatched case after we changed the underlying state.
+query ?
+SELECT array_agg(DISTINCT val ORDER BY val) FROM t_dist;
+----
+[A, B, C]
+
+statement error In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
+SELECT array_agg(DISTINCT val ORDER BY ts) FROM t_dist;
+
+# Result cardinality bounded by frame cardinality (live-key proxy for state growth).
+# Set up 100 rows over 50 cycling distinct values, then run a 2-row sliding frame.
+# Since `evaluate` returns the live key set verbatim, max(result_length) == 2
+# proves keys are dropped as their last occurrence leaves the frame. A leaky
+# retract would let the result balloon toward 50 (all distinct values seen) or
+# error at runtime via the `value not present in state` internal_err!.
+statement ok
+CREATE TABLE t_dist_growth AS
+  SELECT i AS ts, ('v' || (i % 50)::TEXT) AS val FROM generate_series(1, 100) t(i);
+
+query I
+SELECT max(cardinality(distinct_arr)) FROM (
+  SELECT array_agg(DISTINCT val)
+    OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS distinct_arr
+  FROM t_dist_growth
+);
+----
+2
+
+# Cleanup
+statement ok
+DROP TABLE t;
+
+statement ok
+DROP TABLE t_nulls;
+
+statement ok
+DROP TABLE t_range;
+
+statement ok
+DROP TABLE t_int;
+
+statement ok
+DROP TABLE t_groups;
+
+statement ok
+DROP TABLE t_dist;
+
+statement ok
+DROP TABLE t_dist_range;
+
+statement ok
+DROP TABLE t_dist_nulls;
+
+statement ok
+DROP TABLE t_dist_groups;
+
+statement ok
+DROP TABLE t_dist_growth;
+
+statement ok
+DROP TABLE t_dist_parts;
+
+statement ok
+DROP TABLE t_dist_int;

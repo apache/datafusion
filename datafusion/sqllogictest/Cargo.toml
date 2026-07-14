@@ -64,7 +64,7 @@ tempfile = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"], optional = true }
 thiserror = "2.0.18"
 tokio = { workspace = true }
-tokio-postgres = { version = "0.7.17", optional = true }
+tokio-postgres = { version = "0.7.18", optional = true }
 
 [features]
 avro = ["datafusion/avro"]
@@ -94,7 +94,7 @@ harness = false
 name = "sqllogictests"
 path = "bin/sqllogictests.rs"
 
-# Required because we pull serde_json with a feature to get consistent pg display,
-# but its not directly used.
+# serde_json is pulled with a feature to get
+# consistent pg display, but is not directly used in this crate.
 [package.metadata.cargo-machete]
-ignored = "serde_json"
+ignored = ["serde_json"]

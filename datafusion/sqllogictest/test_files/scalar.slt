@@ -234,7 +234,26 @@ select round(atanh(a), 5), round(atanh(b), 5), round(atanh(c), 5) from small_flo
 query RRR rowsort
 select atan2(0, 1), atan2(1, 2), atan2(2, 2);
 ----
-0 0.4636476 0.7853982
+0 0.463647609001 0.785398163397
+
+# atan2 returns Float32 only when both arguments are Float32; every other
+# numeric combination (integers, Float64, mixed, NULL) is computed in Float64
+query TTTTTT
+select
+  arrow_typeof(atan2(arrow_cast(1.0, 'Float32'), arrow_cast(1.0, 'Float32'))),
+  arrow_typeof(atan2(1, 1)),
+  arrow_typeof(atan2(arrow_cast(1.0, 'Float32'), arrow_cast(1.0, 'Float64'))),
+  arrow_typeof(atan2(arrow_cast(1.0, 'Float64'), arrow_cast(1.0, 'Float32'))),
+  arrow_typeof(atan2(null, null)),
+  arrow_typeof(atan2(null, 64));
+----
+Float32 Float64 Float64 Float64 Float64 Float64
+
+# atan2 with integer inputs is computed in double precision
+query B
+select atan2(1, 1000000) = atan2(1.0, 1000000.0);
+----
+true
 
 # atan2 scalar nulls
 query R rowsort
@@ -777,6 +796,31 @@ select nanvl(null, null);
 ----
 NULL
 
+# nanvl evaluates in the common (widest) float type of its arguments. Mixing
+# narrower floats widens losslessly (Float16 + Float32 -> Float32), while
+# integers, decimals, and NULL are coerced to Float64.
+query TTTTTTTT
+select
+  arrow_typeof(nanvl(arrow_cast(1.0, 'Float16'), arrow_cast(2.0, 'Float16'))),
+  arrow_typeof(nanvl(arrow_cast(1.0, 'Float32'), arrow_cast(2.0, 'Float32'))),
+  arrow_typeof(nanvl(arrow_cast(1.0, 'Float16'), arrow_cast(2.0, 'Float32'))),
+  arrow_typeof(nanvl(arrow_cast(1.0, 'Float16'), arrow_cast(2.0, 'Float64'))),
+  arrow_typeof(nanvl(arrow_cast(1.0, 'Float32'), arrow_cast(2.0, 'Float64'))),
+  arrow_typeof(nanvl(1, 2)),
+  arrow_typeof(nanvl(1, arrow_cast(2.0, 'Float32'))),
+  arrow_typeof(nanvl(null, null));
+----
+Float16 Float32 Float32 Float64 Float64 Float64 Float64 Float64
+
+# nanvl with an integer argument is computed in double precision, even when the
+# other argument is Float32.
+query BB
+select
+  nanvl(16777217, 1) = nanvl(arrow_cast(16777217, 'Float64'), 1.0),
+  nanvl(16777217, arrow_cast(1.0, 'Float32')) = nanvl(arrow_cast(16777217, 'Float64'), 1.0);
+----
+true true
+
 # nanvl with columns (round is needed to normalize the outputs of different operating systems)
 query RRR rowsort
 select round(nanvl(asin(f + a), 2), 5), round(nanvl(asin(b + c), 3), 5), round(nanvl(asin(d + e), 4), 5) from small_floats;
@@ -920,6 +964,61 @@ select round(a), round(b), round(c) from small_floats;
 -1 NULL NULL
 0 0 1
 1 0 0
+
+# round int64 should preserve exact values above Float64 precision range
+query TI
+select arrow_typeof(round(arrow_cast(9007199254740993, 'Int64'))),
+       round(arrow_cast(9007199254740993, 'Int64'));
+----
+Int64 9007199254740993
+
+# round int64 with positive decimal_places should preserve exact values above Float64 precision range
+query TI
+select arrow_typeof(round(arrow_cast(9007199254740993, 'Int64'), 2)),
+       round(arrow_cast(9007199254740993, 'Int64'), 2);
+----
+Int64 9007199254740993
+
+# round int64 with negative decimal_places
+query TI
+select arrow_typeof(round(arrow_cast(125, 'Int64'), -1)),
+       round(arrow_cast(125, 'Int64'), -1);
+----
+Int64 130
+
+# round int64 with column decimal_places
+query I
+select round(v, dp)
+from (values (arrow_cast(125, 'Int64'), 1),
+             (arrow_cast(125, 'Int64'), -1)) as t(v, dp);
+----
+125
+130
+
+# round int64 overflow with negative decimal_places
+query error Overflow while rounding Int64
+select round(arrow_cast(9223372036854775807, 'Int64'), -1);
+
+# round uint64 should preserve exact values
+query TI
+select arrow_typeof(round(arrow_cast(18446744073709551615, 'UInt64'))),
+       round(arrow_cast(18446744073709551615, 'UInt64'));
+----
+UInt64 18446744073709551615
+
+# round uint64 with positive decimal_places should preserve exact values
+query TI
+select arrow_typeof(round(arrow_cast(18446744073709551615, 'UInt64'), 2)),
+       round(arrow_cast(18446744073709551615, 'UInt64'), 2);
+----
+UInt64 18446744073709551615
+
+# round int64 to place larger than the number itself
+query TI
+select arrow_typeof(round(arrow_cast(125, 'Int64'), -5)),
+       round(arrow_cast(125, 'Int64'), -5);
+----
+Int64 0
 
 # round with too large
 #  max Int32 is 2147483647
@@ -1107,12 +1206,16 @@ NULL
 
 # sqrt with columns (round is needed to normalize the outputs of different operating systems)
 query RRR rowsort
-select round(sqrt(a), 5), round(sqrt(b), 5), round(sqrt(c), 5) from signed_integers;
+select round(sqrt(abs(a)), 5), round(sqrt(abs(b)), 5), round(sqrt(abs(c)), 5) from signed_integers;
 ----
-1.41421 NaN 11.09054
+1 10 23.81176
+1.41421 31.62278 11.09054
+1.73205 100 31.27299
 2 NULL NULL
-NaN 10 NaN
-NaN 100 NaN
+
+# sqrt with negative column values should error
+query error cannot take square root of a negative number
+select round(sqrt(a), 5), round(sqrt(b), 5), round(sqrt(c), 5) from signed_integers;
 
 # sqrt scalar fraction
 query RR rowsort
@@ -1128,10 +1231,12 @@ select sqrt(cast(10e8 as double));
 
 
 # sqrt scalar negative
-query R rowsort
+query error cannot take square root of a negative number
 select sqrt(-1);
-----
-NaN
+
+# sqrt scalar negative float8
+query error cannot take square root of a negative number
+select sqrt((-1.0)::float8);
 
 ## tan
 
@@ -1228,6 +1333,57 @@ from small_floats;
 0.836 0.8 0.836
 1 1 1
 
+# trunc with decimals
+query RT
+select trunc(arrow_cast(3.1415, 'Decimal128(10,4)')), arrow_typeof(trunc(arrow_cast(3.1415, 'Decimal128(10,4)')));
+----
+3 Decimal128(10, 4)
+
+# trunc with precision - decimals
+query RRRRR rowsort
+select
+  trunc(arrow_cast(4.267, 'Decimal32(8,3)'), 3),
+  trunc(arrow_cast(1.1234, 'Decimal64(18,6)'), 2),
+  trunc(arrow_cast(-1.1231, 'Decimal128(15,4)'), 6),
+  trunc(arrow_cast(1.2837284, 'Decimal256(35,7)'), 2),
+  trunc(arrow_cast(1.1, 'Decimal128(10,1)'), 0);
+----
+4.267 1.12 -1.1231 1.28 1
+
+# trunc with negative precision should truncate digits left of decimal - decimal types
+query RT
+select trunc(arrow_cast(12345.678, 'Decimal128(10,3)'), -3),
+       arrow_typeof(trunc(arrow_cast(12345.678, 'Decimal128(10,3)'), -3));
+----
+12000 Decimal128(10, 3)
+
+# trunc: coercion with a decimal argument and a non-int64 precision argument
+query RT
+select trunc(arrow_cast(1.2345678, 'Decimal128(20,14)'), arrow_cast(2, 'Int32')),
+       arrow_typeof(trunc(arrow_cast(1.2345678, 'Decimal128(20,14)'), arrow_cast(2, 'Int32')));
+----
+1.23 Decimal128(20, 14)
+
+# trunc with columns and precision - decimal128
+query RRR rowsort
+select
+  trunc(arrow_cast(a, 'Decimal128(10,4)'), 0) as a0,
+  trunc(arrow_cast(b, 'Decimal128(10,4)'), 0) as b0,
+  trunc(arrow_cast(c, 'Decimal128(10,4)'), 0) as c0
+from small_floats;
+----
+-1 NULL NULL
+0 0 -1
+0 0 0
+0 0 1
+
+# trunc issue #22512
+query R
+select trunc(CAST(9007199254740993 AS DECIMAL(20,0)));
+----
+9007199254740993
+
+
 ## bitwise and
 
 # bitwise and with column and scalar
@@ -1299,6 +1455,12 @@ NULL -32
 
 statement ok
 set datafusion.sql_parser.dialect = postgresql;
+
+# postgresql exponentiation uses caret
+query R
+select 2 ^ 3;
+----
+8
 
 # postgresql bitwise xor with column and scalar
 query I rowsort
@@ -1739,23 +1901,11 @@ SELECT 'a' || 42 || 23.3
 ----
 a4223.3
 
-# concat of binary and text provides a text output
-query T
-select arrow_cast('Café', 'Utf8') || arrow_cast('Foobar', 'Binary');
-----
-CaféFoobar
-
-query T
-select arrow_cast('Café', 'Binary') || arrow_cast('Foobar', 'Utf8');
-----
-CaféFoobar
-
-# Concat of two binaries should cast arguments to text and produce a text output,
-# following common behaviour of PostreSQL. However, Spark is providing binary
-query T
+# Concat operator of two binaries uses their binary representation without text at all
+query ?
 select arrow_cast('Café', 'Binary') || arrow_cast('Foobar', 'Binary');
 ----
-CaféFoobar
+436166c3a9466f6f626172
 
 
 # test_not_expressions()
@@ -1765,7 +1915,7 @@ SELECT not(true), not(false)
 ----
 false true
 
-query error type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation Int64 IS DISTINCT FROM Boolean
+query error Error during planning: Unary operator 'NOT' requires a boolean expression, got Int64
 SELECT not(1), not(0)
 
 query ?B
@@ -1773,7 +1923,7 @@ SELECT null, not(null)
 ----
 NULL NULL
 
-query error type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation Utf8 IS DISTINCT FROM Boolean
+query error Error during planning: Unary operator 'NOT' requires a boolean expression, got Utf8
 SELECT NOT('hi')
 
 # test_negative_expressions()
@@ -1783,7 +1933,7 @@ SELECT null, -null
 ----
 NULL NULL
 
-query error type_coercion\ncaused by\nError during planning: Negation only supports numeric, interval and timestamp types
+query error Error during planning: Unary operator '-' only supports signed numeric, interval and timestamp types
 SELECT -'100'
 
 query error DataFusion error: Error during planning: Unary operator '\+' only supports numeric, interval and timestamp types

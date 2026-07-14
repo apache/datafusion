@@ -548,6 +548,17 @@ impl RatioMetrics {
     pub fn total(&self) -> usize {
         self.total.load(Ordering::Relaxed)
     }
+
+    /// Return the strategy used to merge two [`RatioMetrics`] values
+    pub fn merge_strategy(&self) -> &RatioMergeStrategy {
+        &self.merge_strategy
+    }
+
+    /// Whether `Display` for this metric appends the raw `(part/total)` numbers
+    /// alongside the percentage
+    pub fn display_raw_values(&self) -> bool {
+        self.display_raw_values
+    }
 }
 
 impl PartialEq for RatioMetrics {
@@ -661,6 +672,13 @@ pub enum MetricValue {
         /// The value of the metric
         gauge: Gauge,
     },
+    /// Operator defined peak memory usage in bytes.
+    PeakMemoryUsage {
+        /// The provided name of this metric
+        name: Cow<'static, str>,
+        /// The value of the metric
+        gauge: Gauge,
+    },
     /// Operator defined time
     Time {
         /// The provided name of this metric
@@ -733,6 +751,13 @@ impl PartialEq for MetricValue {
                     name: other_name,
                     gauge: other_gauge,
                 },
+            )
+            | (
+                MetricValue::PeakMemoryUsage { name, gauge },
+                MetricValue::PeakMemoryUsage {
+                    name: other_name,
+                    gauge: other_gauge,
+                },
             ) => name == other_name && gauge == other_gauge,
             (
                 MetricValue::Time { name, time },
@@ -799,7 +824,9 @@ impl MetricValue {
             Self::CurrentMemoryUsage(_) => "mem_used",
             Self::ElapsedCompute(_) => "elapsed_compute",
             Self::Count { name, .. } => name.borrow(),
-            Self::Gauge { name, .. } => name.borrow(),
+            Self::Gauge { name, .. } | Self::PeakMemoryUsage { name, .. } => {
+                name.borrow()
+            }
             Self::Time { name, .. } => name.borrow(),
             Self::StartTimestamp(_) => "start_timestamp",
             Self::EndTimestamp(_) => "end_timestamp",
@@ -822,7 +849,9 @@ impl MetricValue {
             Self::CurrentMemoryUsage(used) => used.value(),
             Self::ElapsedCompute(time) => time.value(),
             Self::Count { count, .. } => count.value(),
-            Self::Gauge { gauge, .. } => gauge.value(),
+            Self::Gauge { gauge, .. } | Self::PeakMemoryUsage { gauge, .. } => {
+                gauge.value()
+            }
             Self::Time { time, .. } => time.value(),
             Self::StartTimestamp(timestamp) => timestamp
                 .value()
@@ -861,6 +890,10 @@ impl MetricValue {
                 count: Count::new(),
             },
             Self::Gauge { name, .. } => Self::Gauge {
+                name: name.clone(),
+                gauge: Gauge::new(),
+            },
+            Self::PeakMemoryUsage { name, .. } => Self::PeakMemoryUsage {
                 name: name.clone(),
                 gauge: Gauge::new(),
             },
@@ -920,6 +953,12 @@ impl MetricValue {
             | (
                 Self::Gauge { gauge, .. },
                 Self::Gauge {
+                    gauge: other_gauge, ..
+                },
+            )
+            | (
+                Self::PeakMemoryUsage { gauge, .. },
+                Self::PeakMemoryUsage {
                     gauge: other_gauge, ..
                 },
             ) => gauge.add(other_gauge.value()),
@@ -1010,7 +1049,15 @@ impl MetricValue {
             Self::SpilledBytes(_) => 11,
             Self::SpilledRows(_) => 12,
             Self::CurrentMemoryUsage(_) => 13,
-            Self::Count { .. } => 14,
+            Self::Count { name, .. } => match name.as_ref() {
+                // This Parquet page-index metric is a plain Count because it
+                // records pages that skipped page-index evaluation, not a
+                // pruned/matched pair. Keep it grouped with the other
+                // page-index pruning metrics in EXPLAIN output.
+                "page_index_pages_skipped_by_fully_matched" => 8,
+                _ => 14,
+            },
+            Self::PeakMemoryUsage { .. } => 13,
             Self::Gauge { .. } => 15,
             Self::Time { .. } => 16,
             Self::Ratio { .. } => 17,
@@ -1043,6 +1090,10 @@ impl Display for MetricValue {
             }
             Self::CurrentMemoryUsage(gauge) => {
                 // CurrentMemoryUsage is in bytes, format like SpilledBytes
+                let readable_size = human_readable_size(gauge.value());
+                write!(f, "{readable_size}")
+            }
+            Self::PeakMemoryUsage { gauge, .. } => {
                 let readable_size = human_readable_size(gauge.value());
                 write!(f, "{readable_size}")
             }
@@ -1504,6 +1555,18 @@ mod tests {
         mem_gauge.add(100 * MB as usize);
         assert_eq!(
             MetricValue::CurrentMemoryUsage(mem_gauge.clone()).to_string(),
+            "100.0 MB"
+        );
+
+        // Test PeakMemoryUsage formatting (should use size, not count)
+        let peak_mem_gauge = Gauge::new();
+        peak_mem_gauge.add(100 * MB as usize);
+        assert_eq!(
+            MetricValue::PeakMemoryUsage {
+                name: "peak_mem_used".into(),
+                gauge: peak_mem_gauge.clone()
+            }
+            .to_string(),
             "100.0 MB"
         );
 

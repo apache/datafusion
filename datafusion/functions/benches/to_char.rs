@@ -278,6 +278,66 @@ fn criterion_benchmark(c: &mut Criterion) {
             )
         })
     });
+
+    // These bellow 02 benchmarks use Date32 data with format strings that contain
+    // time specifiers (%H, %M, %S, ...). Arrow's Date32 formatter cannot
+    // handle time specifiers and falls back to a Date64 cast.
+
+    // Covers full fallback (every row triggers the cast)
+    c.bench_function("to_char_array_date32_datetime_patterns_1000", |b| {
+        let mut rng = rand::rng();
+        let data_arr = generate_date32_array(&mut rng);
+        let batch_len = data_arr.len();
+        let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
+        let patterns = ColumnarValue::Array(Arc::new(generate_datetime_pattern_array(
+            &mut rng,
+        )) as ArrayRef);
+
+        b.iter(|| {
+            black_box(
+                to_char()
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![data.clone(), patterns.clone()],
+                        arg_fields: vec![
+                            Field::new("a", data.data_type(), true).into(),
+                            Field::new("b", patterns.data_type(), true).into(),
+                        ],
+                        number_rows: batch_len,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    })
+                    .expect("to_char should work on valid values"),
+            )
+        })
+    });
+
+    // Covers partial fallback (roughly half the rows trigger it)
+    c.bench_function("to_char_array_date32_mixed_patterns_1000", |b| {
+        let mut rng = rand::rng();
+        let data_arr = generate_date32_array(&mut rng);
+        let batch_len = data_arr.len();
+        let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
+        let patterns = ColumnarValue::Array(Arc::new(generate_mixed_pattern_array(
+            &mut rng,
+        )) as ArrayRef);
+
+        b.iter(|| {
+            black_box(
+                to_char()
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![data.clone(), patterns.clone()],
+                        arg_fields: vec![
+                            Field::new("a", data.data_type(), true).into(),
+                            Field::new("b", patterns.data_type(), true).into(),
+                        ],
+                        number_rows: batch_len,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    })
+                    .expect("to_char should work on valid values"),
+            )
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);

@@ -25,7 +25,7 @@ use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
-use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef};
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonSink};
@@ -43,16 +43,19 @@ use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::count_udaf;
+use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{JoinType, Operator, Volatility, create_udf};
-use datafusion::physical_expr::aggregate::AggregateExprBuilder;
+use datafusion::physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
-    LexOrdering, PhysicalSortRequirement, ScalarFunctionExpr,
+    HigherOrderFunctionExpr, LexOrdering, PhysicalSortRequirement, ScalarFunctionExpr,
 };
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
@@ -62,7 +65,8 @@ use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    BinaryExpr, Column, NotExpr, PhysicalSortExpr, binary, cast, col, in_list, like, lit,
+    BinaryExpr, Column, DynamicFilterPhysicalExpr, NotExpr, PhysicalSortExpr, binary,
+    cast, col, in_list, like, lit,
 };
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion::physical_plan::joins::{
@@ -70,7 +74,6 @@ use datafusion::physical_plan::joins::{
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::metrics::MetricType;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -85,7 +88,9 @@ use datafusion::physical_plan::windows::{
     create_udwf_window_expr,
 };
 use datafusion::physical_plan::{
-    ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics, displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
+    PhysicalExpr, PlanProperties, RangePartitioning, SendableRecordBatchStream,
+    SplitPoint, Statistics, displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -98,11 +103,12 @@ use datafusion_common::{
     DataFusionError, NullEquality, Result, UnnestOptions, exec_datafusion_err,
     internal_datafusion_err, internal_err, not_impl_err,
 };
-use datafusion_datasource::TableSchema;
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::{TableSchema, TableSchemaBuilder};
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
-    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue,
+    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, HigherOrderUDF,
     ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
     WindowFrame, WindowFrameBound, WindowUDF,
     execution_props::{ScalarSubqueryResults, SubqueryIndex},
@@ -118,20 +124,27 @@ use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
 };
-use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
+use datafusion_proto::physical_plan::from_proto::{
+    parse_protobuf_file_scan_config, parse_table_schema_from_proto,
+};
+use datafusion_proto::physical_plan::to_proto::{
+    serialize_file_scan_config, serialize_physical_expr_with_converter,
+};
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DeduplicatingProtoConverter, DefaultPhysicalExtensionCodec,
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
-    PhysicalProtoConverterExtension,
+    PhysicalPlanNodeExt, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf;
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
 
 use crate::cases::{
-    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
-    MyRegexUdfNode,
+    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyHigherOrderUDF,
+    MyHigherOrderUdfNode, MyRegexUdf, MyRegexUdfNode,
 };
+use datafusion_physical_expr::expressions::{LambdaVariable, is_not_null, lambda};
+use datafusion_physical_expr::utils::reassign_expr_columns;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -220,6 +233,74 @@ async fn all_types_context() -> Result<SessionContext> {
 #[test]
 fn roundtrip_empty() -> Result<()> {
     roundtrip_test(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))))
+}
+
+#[derive(Debug)]
+struct DowncastDelegatingExec {
+    inner: Arc<dyn ExecutionPlan>,
+}
+
+impl DowncastDelegatingExec {
+    fn new(inner: Arc<dyn ExecutionPlan>) -> Self {
+        Self { inner }
+    }
+}
+
+impl DisplayAs for DowncastDelegatingExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        self.inner.fmt_as(t, f)
+    }
+}
+
+impl ExecutionPlan for DowncastDelegatingExec {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        self.inner.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.inner.children()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let inner = Arc::clone(&self.inner).with_new_children(children)?;
+        Ok(Arc::new(Self::new(inner)))
+    }
+
+    fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
+        Some(self.inner.as_ref())
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.inner.execute(partition, context)
+    }
+}
+
+#[test]
+fn serialize_uses_downcast_delegate() -> Result<()> {
+    let inner: Arc<dyn ExecutionPlan> =
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(DowncastDelegatingExec::new(inner));
+    let codec = DefaultPhysicalExtensionCodec {};
+
+    let proto = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+
+    assert!(matches!(
+        proto.physical_plan_type,
+        Some(protobuf::physical_plan_node::PhysicalPlanType::Empty(_))
+    ));
+
+    Ok(())
 }
 
 #[test]
@@ -336,6 +417,59 @@ fn roundtrip_nested_loop_join() -> Result<()> {
             None,
             join_type,
             Some(vec![0]),
+        )?))?;
+    }
+    Ok(())
+}
+
+/// Regression: proto3 `repeated` fields cannot distinguish "absent" from "empty",
+/// so a naive encoding collapses `Some(vec![])` and `None` into the same wire
+/// representation. `try_embed_projection` (DataFusion 53+) produces
+/// `HashJoinExec.projection = Some(vec![])` for `SELECT count(1) … JOIN …`,
+/// which previously round-tripped to `None` and caused downstream consumers (e.g.
+/// distributed Flight executors) to receive a different number of output
+/// columns than the planner declared. Verify all three states preserve.
+#[test]
+fn roundtrip_hash_join_projection_states() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Arc::new(Schema::new(vec![field_a.clone()]));
+    let schema_right = Arc::new(Schema::new(vec![field_a]));
+    let on = vec![(
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
+    )];
+
+    for projection in [None, Some(vec![]), Some(vec![0]), Some(vec![1])] {
+        roundtrip_test(Arc::new(HashJoinExec::try_new(
+            Arc::new(EmptyExec::new(schema_left.clone())),
+            Arc::new(EmptyExec::new(schema_right.clone())),
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            projection,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?))?;
+    }
+    Ok(())
+}
+
+/// Same regression coverage for `NestedLoopJoinExec`, which shares the
+/// `repeated uint32 projection` proto field shape with `HashJoinExec`.
+#[test]
+fn roundtrip_nested_loop_join_projection_states() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Arc::new(Schema::new(vec![field_a.clone()]));
+    let schema_right = Arc::new(Schema::new(vec![field_a]));
+
+    for projection in [None, Some(vec![]), Some(vec![0]), Some(vec![1])] {
+        roundtrip_test(Arc::new(NestedLoopJoinExec::try_new(
+            Arc::new(EmptyExec::new(schema_left.clone())),
+            Arc::new(EmptyExec::new(schema_right.clone())),
+            None,
+            &JoinType::Inner,
+            projection,
         )?))?;
     }
     Ok(())
@@ -1001,7 +1135,7 @@ fn roundtrip_arrow_scan() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-    let table_schema = TableSchema::new(file_schema.clone(), vec![]);
+    let table_schema = TableSchema::from(&file_schema);
     let file_source = Arc::new(ArrowSource::new_file_source(table_schema));
 
     let scan_config =
@@ -1028,14 +1162,13 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         vec![wrap_partition_value_in_dict(ScalarValue::Int64(Some(0)))];
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-    let table_schema = TableSchema::new(
-        schema.clone(),
-        vec![Arc::new(Field::new(
+    let table_schema = TableSchemaBuilder::from(&schema)
+        .with_table_partition_cols(vec![Arc::new(Field::new(
             "part".to_string(),
             wrap_partition_type_in_dict(DataType::Int16),
             false,
-        ))],
-    );
+        ))])
+        .build();
 
     let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
     let scan_config =
@@ -1137,6 +1270,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             _buf: &[u8],
             _inputs: &[Arc<dyn ExecutionPlan>],
             _ctx: &TaskContext,
+            _proto_converter: &dyn PhysicalProtoConverterExtension,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unreachable!()
         }
@@ -1145,6 +1279,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             &self,
             _node: Arc<dyn ExecutionPlan>,
             _buf: &mut Vec<u8>,
+            _proto_converter: &dyn PhysicalProtoConverterExtension,
         ) -> Result<()> {
             unreachable!()
         }
@@ -1246,6 +1381,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
         _ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("No extension codec provided")
     }
@@ -1254,6 +1390,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
         &self,
         _node: Arc<dyn ExecutionPlan>,
         _buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<()> {
         not_impl_err!("No extension codec provided")
     }
@@ -1336,6 +1473,42 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
         }
         Ok(())
     }
+
+    fn try_decode_higher_order_function(
+        &self,
+        name: &str,
+        buf: &[u8],
+    ) -> Result<Arc<HigherOrderUDF>> {
+        if name == "higher_order_udf" {
+            let proto = MyHigherOrderUdfNode::decode(buf).map_err(|err| {
+                internal_datafusion_err!("failed to decode higher_order_udf: {err}")
+            })?;
+
+            Ok(Arc::new(HigherOrderUDF::new_from_impl(
+                MyHigherOrderUDF::new(proto.payload),
+            )))
+        } else {
+            not_impl_err!("unrecognized higher order UDF implementation, cannot decode")
+        }
+    }
+
+    fn try_encode_higher_order_function(
+        &self,
+        node: &HigherOrderUDF,
+        buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        if let Some(hof) = (node.inner().as_ref() as &dyn std::any::Any)
+            .downcast_ref::<MyHigherOrderUDF>()
+        {
+            let proto = MyHigherOrderUdfNode {
+                payload: hof.payload.clone(),
+            };
+            proto.encode(buf).map_err(|err| {
+                internal_datafusion_err!("failed to encode hof: {err:?}")
+            })?;
+        }
+        Ok(())
+    }
 }
 
 #[test]
@@ -1393,6 +1566,92 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     let ctx = SessionContext::new();
     let proto_converter = DefaultPhysicalProtoConverter {};
     roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec, &proto_converter)?;
+    Ok(())
+}
+
+#[test]
+fn roundtrip_higher_order_udf() -> Result<()> {
+    let element_field = Arc::new(Field::new("v", DataType::Int32, true));
+    let list_field = Field::new(
+        "list_col",
+        DataType::List(Arc::clone(&element_field)),
+        false,
+    );
+    let schema = Arc::new(Schema::new(vec![list_field]));
+
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
+
+    let expr = HigherOrderFunctionExpr::try_new_with_schema(
+        Arc::clone(&hof),
+        vec![
+            col("list_col", &schema)?,
+            lambda(
+                ["v"],
+                is_not_null(Arc::new(LambdaVariable::new(1, element_field)))?,
+            )?,
+        ],
+        &schema,
+        Arc::new(ConfigOptions::default()),
+    )?;
+
+    let project = ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: Arc::new(expr),
+            alias: "a".to_string(),
+        }],
+        input,
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_higher_order_function(hof);
+
+    roundtrip_test_with_context(Arc::new(project), &ctx)
+}
+
+#[test]
+fn roundtrip_higher_order_udf_extension_codec() -> Result<()> {
+    let element_field = Arc::new(Field::new("v", DataType::Int32, true));
+    let list_field = Field::new(
+        "list_col",
+        DataType::List(Arc::clone(&element_field)),
+        false,
+    );
+    let schema = Arc::new(Schema::new(vec![list_field]));
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+
+    let lambda_body = Arc::new(LambdaVariable::new(1, Arc::clone(&element_field)));
+    let lambda_expr = lambda(["v"], lambda_body)?;
+
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
+    let hof_expr = Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
+        hof,
+        vec![col("list_col", &schema)?, lambda_expr],
+        &schema,
+        Arc::new(ConfigOptions::default()),
+    )?);
+
+    let project = ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: hof_expr,
+            alias: "out".to_string(),
+        }],
+        input,
+    )?;
+
+    let ctx = SessionContext::new();
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    roundtrip_test_and_return(
+        Arc::new(project),
+        &ctx,
+        &UDFExtensionCodec,
+        &proto_converter,
+    )?;
     Ok(())
 }
 
@@ -1547,14 +1806,9 @@ fn roundtrip_analyze() -> Result<()> {
     let schema = Schema::new(vec![field_a, field_b]);
     let input = Arc::new(PlaceholderRowExec::new(Arc::new(schema.clone())));
 
-    roundtrip_test(Arc::new(AnalyzeExec::new(
-        false,
-        false,
-        vec![MetricType::Summary, MetricType::Dev],
-        None,
-        input,
-        Arc::new(schema),
-    )))
+    roundtrip_test(Arc::new(
+        AnalyzeExec::builder(false, false, input, Arc::new(schema)).build(),
+    ))
 }
 
 #[tokio::test]
@@ -1792,6 +2046,21 @@ fn roundtrip_repartition_preserve_order() -> Result<()> {
     let repartition = RepartitionExec::try_new(union, Partitioning::RoundRobinBatch(10))?
         .with_preserve_order();
     assert!(repartition.preserve_order());
+
+    roundtrip_test(Arc::new(repartition))
+}
+
+#[test]
+fn roundtrip_range_partitioning() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let range_partitioning = Partitioning::Range(RangePartitioning::new(
+        [PhysicalSortExpr::new_default(col("a", &schema)?)].into(),
+        vec![SplitPoint::new(vec![ScalarValue::Int64(Some(10))])],
+    ));
+    // RepartitionExec is used only to carry the partitioning through proto.
+    // Executing range repartitioning is intentionally unsupported.
+    let repartition = RepartitionExec::try_new(input, range_partitioning)?;
 
     roundtrip_test(Arc::new(repartition))
 }
@@ -2163,7 +2432,105 @@ async fn test_round_trip_human_display() -> Result<()> {
     let sql = "select r_name, count(r_name) from region group by r_name";
     roundtrip_test_sql_with_context(sql, &ctx).await?;
 
+    let sql = "select count(*) as count_star from region";
+    roundtrip_test_sql_with_context(sql, &ctx).await?;
+
     Ok(())
+}
+
+#[test]
+fn test_round_trip_aliased_reverse_human_display() -> Result<()> {
+    let aggregate_expr = roundtrip_first_value_aggregate(
+        "agg",
+        "first_value(b) ORDER BY [b ASC NULLS LAST]",
+        Some("agg"),
+    )?;
+    let reversed = aggregate_expr
+        .reverse_expr()
+        .expect("expected reverse expr");
+
+    assert_eq!(reversed.name(), "agg");
+    assert_eq!(reversed.human_display_alias(), Some("agg"));
+    assert_eq!(
+        reversed.human_display(),
+        Some("last_value(b) ORDER BY [b DESC NULLS FIRST]")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_round_trip_human_display_alias_with_colon() -> Result<()> {
+    let aggregate_expr = roundtrip_first_value_aggregate(
+        "agg:one",
+        "first_value(b) ORDER BY [b ASC NULLS LAST]",
+        Some("agg:one"),
+    )?;
+
+    assert_eq!(aggregate_expr.name(), "agg:one");
+    assert_eq!(aggregate_expr.human_display_alias(), Some("agg:one"));
+    assert_eq!(
+        aggregate_expr.human_display(),
+        Some("first_value(b) ORDER BY [b ASC NULLS LAST]")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_round_trip_non_aliased_human_display_ending_like_alias() -> Result<()> {
+    let aggregate_expr =
+        roundtrip_first_value_aggregate("agg", "first_value(b) as agg", None)?;
+
+    assert_eq!(aggregate_expr.name(), "agg");
+    assert_eq!(
+        aggregate_expr.human_display(),
+        Some("first_value(b) as agg")
+    );
+    assert_eq!(aggregate_expr.human_display_alias(), None);
+
+    Ok(())
+}
+
+fn roundtrip_first_value_aggregate(
+    alias: &str,
+    human_display: &str,
+    human_display_alias: Option<&str>,
+) -> Result<Arc<AggregateFunctionExpr>> {
+    let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
+    let mut builder =
+        AggregateExprBuilder::new(first_value_udaf(), vec![col("b", &schema)?])
+            .order_by(vec![PhysicalSortExpr {
+                expr: col("b", &schema)?,
+                options: SortOptions::new(false, false),
+            }])
+            .schema(Arc::clone(&schema))
+            .alias(alias)
+            .human_display(human_display);
+    if let Some(human_display_alias) = human_display_alias {
+        builder = builder.human_display_alias(human_display_alias);
+    }
+    let agg_expr = builder.build().map(Arc::new)?;
+
+    let plan = Arc::new(AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::new(vec![], vec![], vec![], false),
+        vec![agg_expr],
+        vec![None],
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        schema,
+    )?);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let roundtrip_plan = roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
+    let aggregate = roundtrip_plan
+        .as_ref()
+        .downcast_ref::<AggregateExec>()
+        .expect("expected AggregateExec after roundtrip");
+
+    Ok(Arc::clone(&aggregate.aggr_expr()[0]))
 }
 
 // Bug 2 of https://github.com/apache/datafusion/issues/16772
@@ -2685,430 +3052,298 @@ fn roundtrip_call_null_scalar_struct_dict() -> Result<()> {
     roundtrip_test(filter)
 }
 
-/// Test that expression deduplication works during deserialization.
-/// When the same expression Arc is serialized multiple times, it should be
-/// deduplicated on deserialization (sharing the same Arc).
-#[test]
-fn test_expression_deduplication() -> Result<()> {
-    let field_a = Field::new("a", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![field_a]));
-
-    // Create a shared expression that will be used multiple times
-    let shared_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
-
-    // Create an InList expression that uses the same column Arc multiple times
-    // This simulates a real-world scenario where expressions are shared
-    let in_list_expr = in_list(
-        Arc::clone(&shared_col),
-        vec![lit(1i64), lit(2i64), lit(3i64)],
-        &false,
-        &schema,
-    )?;
-
-    // Create a binary expression that uses the shared column and the in_list result
-    let binary_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-        Arc::clone(&shared_col),
-        Operator::Eq,
-        lit(42i64),
-    ));
-
-    // Create a plan that has both expressions (they share the `shared_col` Arc)
-    let input = Arc::new(EmptyExec::new(schema.clone()));
-    let filter = FilterExecBuilder::new(in_list_expr, input).build()?;
-    let projection_exprs = vec![ProjectionExpr {
-        expr: binary_expr,
-        alias: "result".to_string(),
-    }];
-    let exec_plan =
-        Arc::new(ProjectionExec::try_new(projection_exprs, Arc::new(filter))?);
-
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter {};
-
-    // Perform roundtrip
-    let bytes = physical_plan_to_bytes_with_proto_converter(
-        Arc::clone(&exec_plan) as Arc<dyn ExecutionPlan>,
-        &codec,
-        &proto_converter,
-    )?;
-
-    // Create a new converter for deserialization (fresh cache)
-    let deser_converter = DeduplicatingProtoConverter {};
-    let result_plan = physical_plan_from_bytes_with_proto_converter(
-        bytes.as_ref(),
-        ctx.task_ctx().as_ref(),
-        &codec,
-        &deser_converter,
-    )?;
-
-    // Verify the plan structure is correct
-    pretty_assertions::assert_eq!(format!("{exec_plan:?}"), format!("{result_plan:?}"));
-
-    Ok(())
+/// Create a [`DynamicFilterPhysicalExpr`] with child column expression "a" @ index 0.
+fn make_dynamic_filter() -> Arc<dyn PhysicalExpr> {
+    Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>],
+        lit(true),
+    )) as Arc<dyn PhysicalExpr>
 }
 
-/// Test that expression deduplication correctly shares Arcs for identical expressions.
-/// This test verifies the core deduplication behavior.
-#[test]
-fn test_expression_deduplication_arc_sharing() -> Result<()> {
-    use datafusion_proto::bytes::{
-        physical_plan_from_bytes_with_proto_converter,
-        physical_plan_to_bytes_with_proto_converter,
-    };
-
-    let field_a = Field::new("a", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![field_a]));
-
-    // Create a column expression
-    let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
-
-    // Create a projection that uses the SAME Arc twice
-    // After roundtrip, both should point to the same Arc
-    let projection_exprs = vec![
-        ProjectionExpr {
-            expr: Arc::clone(&col_expr),
-            alias: "a1".to_string(),
-        },
-        ProjectionExpr {
-            expr: Arc::clone(&col_expr), // Same Arc!
-            alias: "a2".to_string(),
-        },
-    ];
-
-    let input = Arc::new(EmptyExec::new(schema));
-    let exec_plan = Arc::new(ProjectionExec::try_new(projection_exprs, input)?);
-
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter {};
-
-    // Serialize
-    let bytes = physical_plan_to_bytes_with_proto_converter(
-        Arc::clone(&exec_plan) as Arc<dyn ExecutionPlan>,
-        &codec,
-        &proto_converter,
-    )?;
-
-    // Deserialize with a fresh converter
-    let deser_converter = DeduplicatingProtoConverter {};
-    let result_plan = physical_plan_from_bytes_with_proto_converter(
-        bytes.as_ref(),
-        ctx.task_ctx().as_ref(),
-        &codec,
-        &deser_converter,
-    )?;
-
-    // Get the projection from the result
-    let projection = result_plan
-        .downcast_ref::<ProjectionExec>()
-        .expect("Expected ProjectionExec");
-
-    let exprs: Vec<_> = projection.expr().iter().collect();
-    assert_eq!(exprs.len(), 2);
-
-    // The key test: both expressions should point to the same Arc after deduplication
-    // This is because they were the same Arc before serialization
-    assert!(
-        Arc::ptr_eq(&exprs[0].expr, &exprs[1].expr),
-        "Expected both expressions to share the same Arc after deduplication"
-    );
-
-    Ok(())
+/// Update a [`DynamicFilterPhysicalExpr`]'s children to support child schema "b" @ 0, "a" @ 1.
+fn make_reassigned_dynamic_filter(
+    filter: Arc<dyn PhysicalExpr>,
+) -> Result<(Arc<Schema>, Arc<dyn PhysicalExpr>)> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("b", DataType::Int64, false),
+        Field::new("a", DataType::Int64, false),
+    ]));
+    let reassigned = reassign_expr_columns(filter, &schema)?;
+    Ok((schema, reassigned))
 }
 
-/// Test backward compatibility: protos without expr_id should still deserialize correctly.
-#[test]
-fn test_backward_compatibility_no_expr_id() -> Result<()> {
-    let field_a = Field::new("a", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![field_a]));
+/// Extract the expression id from a [`PhysicalExpr`] proto. Populated by the
+/// default serializer from `PhysicalExpr::expression_id`.
+fn proto_expression_id(expr: &PhysicalExprNode) -> u64 {
+    expr.expr_id
+        .expect("expected PhysicalExprNode.expr_id to be populated")
+}
 
-    // Manually create a proto without expr_id set
-    let proto = PhysicalExprNode {
-        expr_id: None, // Simulating old proto without this field
-        expr_type: Some(
-            datafusion_proto::protobuf::physical_expr_node::ExprType::Column(
-                datafusion_proto::protobuf::PhysicalColumn {
-                    name: "a".to_string(),
-                    index: 0,
-                },
-            ),
-        ),
-    };
+/// Roundtrip a single physical expression shaped like so:
+///
+/// ```text
+///             BinaryExpr(AND)
+///             /             \
+///     filter_expr_1     filter_expr_2
+/// ```
+///
+/// Returns filter_expr_1 and filter_expr_2 after deserialization.
+fn roundtrip_dynamic_filter_expr_pair(
+    filter_expr_1: Arc<dyn PhysicalExpr>,
+    filter_expr_2: Arc<dyn PhysicalExpr>,
+    schema: Arc<Schema>,
+) -> Result<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> {
+    let pair_expr = Arc::new(BinaryExpr::new(
+        Arc::clone(&filter_expr_1),
+        Operator::And,
+        Arc::clone(&filter_expr_2),
+    )) as Arc<dyn PhysicalExpr>;
 
-    let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
+    let converter = DeduplicatingProtoConverter {};
+    let proto = converter.physical_expr_to_proto(&pair_expr, &codec)?;
+    let ctx = SessionContext::new();
     let task_ctx = ctx.task_ctx();
     let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let deserialized_expr =
+        converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
 
-    // Should deserialize without error
-    let result = proto_converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
+    let binary = deserialized_expr
+        .downcast_ref::<BinaryExpr>()
+        .expect("Expected BinaryExpr");
 
-    // Verify the result is correct
-    let col = result.downcast_ref::<Column>().expect("Expected Column");
-    assert_eq!(col.name(), "a");
-    assert_eq!(col.index(), 0);
-
-    Ok(())
+    Ok((Arc::clone(binary.left()), Arc::clone(binary.right())))
 }
 
-/// Test that deduplication works within a single plan deserialization and that
-/// separate deserializations produce independent expressions (no cross-operation sharing).
-#[test]
-fn test_deduplication_within_plan_deserialization() -> Result<()> {
-    use datafusion_proto::bytes::{
-        physical_plan_from_bytes_with_proto_converter,
-        physical_plan_to_bytes_with_proto_converter,
-    };
+/// Roundtrip an execution plan shaped like so:
+///
+/// ```text
+/// FilterExec(dynamic_filter_1 on a@0)
+///   ProjectionExec(a := Column("a", source_index))
+///     DataSourceExec
+///       ParquetSource(predicate = dynamic_filter_2)
+/// ```
+///
+/// `dynamic_filter_1` and `dynamic_filter_2` are the same dynamic filter, except with
+/// different children.
+///
+/// Returns
+/// - `dynamic_filter_1` before serialization
+/// - `dynamic_filter_2` before serialization
+/// - `dynamic_filter_1` after serialization
+/// - `dynamic_filter_2` after serialization
+#[allow(clippy::type_complexity)]
+fn roundtrip_dynamic_filter_plan_pair() -> Result<(
+    Arc<dyn PhysicalExpr>,
+    Arc<dyn PhysicalExpr>,
+    Arc<dyn PhysicalExpr>,
+    Arc<dyn PhysicalExpr>,
+)> {
+    let filter_expr_1 = make_dynamic_filter();
+    let (data_source_schema, filter_expr_2) =
+        make_reassigned_dynamic_filter(Arc::clone(&filter_expr_1))?;
+    let left_before = Arc::clone(&filter_expr_1);
+    let right_before = Arc::clone(&filter_expr_2);
+    let file_source = Arc::new(
+        ParquetSource::new(Arc::clone(&data_source_schema))
+            .with_predicate(Arc::clone(&filter_expr_2)),
+    );
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .build();
+    let data_source_exec =
+        DataSourceExec::from_data_source(scan_config) as Arc<dyn ExecutionPlan>;
 
-    let field_a = Field::new("a", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![field_a]));
+    let projection_exec = Arc::new(ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: Arc::new(Column::new("a", 1)) as Arc<dyn PhysicalExpr>,
+            alias: "a".to_string(),
+        }],
+        data_source_exec,
+    )?) as Arc<dyn ExecutionPlan>;
+    let filter_exec = Arc::new(FilterExec::try_new(
+        Arc::clone(&filter_expr_1),
+        projection_exec,
+    )?) as Arc<dyn ExecutionPlan>;
 
-    // Create a plan with expressions that will be deduplicated
-    let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
-    let projection_exprs = vec![
-        ProjectionExpr {
-            expr: Arc::clone(&col_expr),
-            alias: "a1".to_string(),
-        },
-        ProjectionExpr {
-            expr: Arc::clone(&col_expr), // Same Arc - will be deduplicated
-            alias: "a2".to_string(),
-        },
-    ];
-    let exec_plan = Arc::new(ProjectionExec::try_new(
-        projection_exprs,
-        Arc::new(EmptyExec::new(schema)),
-    )?);
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DeduplicatingProtoConverter {};
+    let proto = converter.execution_plan_to_proto(&filter_exec, &codec)?;
 
     let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter {};
-
-    // Serialize
-    let bytes = physical_plan_to_bytes_with_proto_converter(
-        Arc::clone(&exec_plan) as Arc<dyn ExecutionPlan>,
-        &codec,
-        &proto_converter,
-    )?;
-
-    // First deserialization
-    let plan1 = physical_plan_from_bytes_with_proto_converter(
-        bytes.as_ref(),
-        ctx.task_ctx().as_ref(),
-        &codec,
-        &proto_converter,
-    )?;
-
-    // Check that the plan was deserialized correctly with deduplication
-    let projection1 = plan1
-        .downcast_ref::<ProjectionExec>()
-        .expect("Expected ProjectionExec");
-    let exprs1: Vec<_> = projection1.expr().iter().collect();
-    assert_eq!(exprs1.len(), 2);
-    assert!(
-        Arc::ptr_eq(&exprs1[0].expr, &exprs1[1].expr),
-        "Expected both expressions to share the same Arc after deduplication"
-    );
-
-    // Second deserialization
-    let plan2 = physical_plan_from_bytes_with_proto_converter(
-        bytes.as_ref(),
-        ctx.task_ctx().as_ref(),
-        &codec,
-        &proto_converter,
-    )?;
-
-    // Check that the second plan was also deserialized correctly
-    let projection2 = plan2
-        .downcast_ref::<ProjectionExec>()
-        .expect("Expected ProjectionExec");
-    let exprs2: Vec<_> = projection2.expr().iter().collect();
-    assert_eq!(exprs2.len(), 2);
-    assert!(
-        Arc::ptr_eq(&exprs2[0].expr, &exprs2[1].expr),
-        "Expected both expressions to share the same Arc after deduplication"
-    );
-
-    // Check that there was no deduplication across deserializations
-    assert!(
-        !Arc::ptr_eq(&exprs1[0].expr, &exprs2[0].expr),
-        "Expected expressions from different deserializations to be different Arcs"
-    );
-    assert!(
-        !Arc::ptr_eq(&exprs1[1].expr, &exprs2[1].expr),
-        "Expected expressions from different deserializations to be different Arcs"
-    );
-
-    Ok(())
-}
-
-/// Test that deduplication works within direct expression deserialization and that
-/// separate deserializations produce independent expressions (no cross-operation sharing).
-#[test]
-fn test_deduplication_within_expr_deserialization() -> Result<()> {
-    let field_a = Field::new("a", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![field_a]));
-
-    // Create a binary expression where both sides are the same Arc
-    // This allows us to test deduplication within a single deserialization
-    let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
-    let binary_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-        Arc::clone(&col_expr),
-        Operator::Plus,
-        Arc::clone(&col_expr), // Same Arc - will be deduplicated
-    ));
-
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter {};
     let task_ctx = ctx.task_ctx();
     let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let deserialized_plan = converter.proto_to_execution_plan(&proto, &decode_ctx)?;
 
-    // Serialize the expression
-    let proto = proto_converter.physical_expr_to_proto(&binary_expr, &codec)?;
+    let outer_filter = deserialized_plan
+        .downcast_ref::<FilterExec>()
+        .expect("Expected outer FilterExec");
+    let left_filter = Arc::clone(outer_filter.predicate());
+    let projection = outer_filter.children()[0]
+        .downcast_ref::<ProjectionExec>()
+        .expect("Expected ProjectionExec");
+    let data_source = projection
+        .input()
+        .downcast_ref::<DataSourceExec>()
+        .expect("Expected DataSourceExec");
+    let scan_config = data_source
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .expect("Expected FileScanConfig");
+    let right_filter = scan_config
+        .file_source()
+        .filter()
+        .expect("Expected pushed-down predicate");
 
-    // First expression deserialization
-    let expr1 = proto_converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
+    Ok((left_before, right_before, left_filter, right_filter))
+}
 
-    // Check that deduplication worked within the deserialization
-    let binary1 = expr1
-        .downcast_ref::<BinaryExpr>()
-        .expect("Expected BinaryExpr");
-    assert!(
-        Arc::ptr_eq(binary1.left(), binary1.right()),
-        "Expected both sides to share the same Arc after deduplication"
+/// Takes two [`DynamicFilterPhysicalExpr`] and asserts that updates to one are visible
+/// via the other. This helps assert that referential integrity is maintained after
+/// deserializing.
+fn assert_dynamic_filter_update_is_visible(
+    left_filter: &Arc<dyn PhysicalExpr>,
+    right_filter: &Arc<dyn PhysicalExpr>,
+) -> Result<()> {
+    let left_filter = left_filter
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .expect("Expected dynamic filter");
+    let right_filter = right_filter
+        .downcast_ref::<DynamicFilterPhysicalExpr>()
+        .expect("Expected dynamic filter");
+
+    // Sanity check that the filters have the same generation.
+    let original_generation = left_filter.snapshot_generation();
+    assert_eq!(original_generation, right_filter.snapshot_generation(),);
+
+    left_filter.update(lit(123_i64))?;
+
+    // Assert that both generations updated.
+    assert_eq!(original_generation + 1, right_filter.snapshot_generation(),);
+    assert_eq!(
+        left_filter.snapshot_generation(),
+        right_filter.snapshot_generation(),
     );
 
-    // Second expression deserialization
-    let expr2 = proto_converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
-
-    // Check that the second expression was also deserialized correctly
-    let binary2 = expr2
-        .downcast_ref::<BinaryExpr>()
-        .expect("Expected BinaryExpr");
-    assert!(
-        Arc::ptr_eq(binary2.left(), binary2.right()),
-        "Expected both sides to share the same Arc after deduplication"
-    );
-
-    // Check that there was no deduplication across deserializations
-    assert!(
-        !Arc::ptr_eq(binary1.left(), binary2.left()),
-        "Expected expressions from different deserializations to be different Arcs"
-    );
-    assert!(
-        !Arc::ptr_eq(binary1.right(), binary2.right()),
-        "Expected expressions from different deserializations to be different Arcs"
-    );
+    // Ensure both filters have the updated expr.
+    let expected_current = r#"Literal { value: Int64(123), field: Field { name: "lit", data_type: Int64 } }"#;
+    assert_eq!(expected_current, format!("{:?}", left_filter.current()?),);
+    assert_eq!(expected_current, format!("{:?}", right_filter.current()?),);
 
     Ok(())
 }
 
-/// Test that session_id rotates between top-level serialization operations.
-/// This verifies that each top-level serialization gets a fresh session_id,
-/// which prevents cross-process collisions when serialized plans are merged.
+/// Extract the dynamic-filter predicate that was pushed down to the parquet
+/// scan at the bottom of the plan tree.
+fn parquet_source_predicate(child: &Arc<dyn ExecutionPlan>) -> Arc<dyn PhysicalExpr> {
+    let data_source = child
+        .downcast_ref::<DataSourceExec>()
+        .expect("Child should be DataSourceExec");
+    let (_, parquet_source) = data_source
+        .downcast_to_file_source::<ParquetSource>()
+        .expect("Should be ParquetSource");
+    parquet_source
+        .filter()
+        .expect("ParquetSource should have a predicate after roundtrip")
+}
+
+/// Assert that two dynamic filters are equal both structurally (Debug output)
+/// and by identity (`expression_id`).
+fn assert_dynamic_filters_equal(
+    expected: &Arc<dyn PhysicalExpr>,
+    actual: &Arc<dyn PhysicalExpr>,
+) {
+    // Structural.
+    let expected_dbg = format!("{expected:?}");
+    let actual_dbg = format!("{actual:?}");
+    if expected_dbg == actual_dbg {
+        return;
+    }
+
+    // Note that the `DeduplicatingDeserializer` routes every cache hit through
+    // `with_new_children`. This produces an equivalent expression, but with
+    // remapped children that are equal to the original. Handle that case here.
+    let rewritten = Arc::clone(expected)
+        .with_new_children(expected.children().iter().map(|c| Arc::clone(c)).collect())
+        .expect("with_new_children on a dynamic filter should not fail");
+    assert_eq!(format!("{rewritten:?}"), actual_dbg);
+}
+
+// Two clones of a dynamic filter expression should be deduped to the exact same expression.
 #[test]
-fn test_session_id_rotation_between_serializations() -> Result<()> {
-    let field_a = Field::new("a", DataType::Int64, false);
-    let _schema = Arc::new(Schema::new(vec![field_a]));
+fn test_dynamic_filter_roundtrip_dedupe() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let filter_expr_1 = make_dynamic_filter();
+    let filter_expr_2 = Arc::clone(&filter_expr_1);
 
-    // Create a simple expression
-    let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+    let (filter_expr_1_after_roundtrip, filter_expr_2_after_roundtrip) =
+        roundtrip_dynamic_filter_expr_pair(
+            Arc::clone(&filter_expr_1),
+            Arc::clone(&filter_expr_2),
+            schema,
+        )?;
 
+    // Assert the filters are not modified during roundtrip.
+    assert_dynamic_filters_equal(&filter_expr_1, &filter_expr_1_after_roundtrip);
+    assert_dynamic_filters_equal(&filter_expr_2, &filter_expr_2_after_roundtrip);
+    assert_dynamic_filters_equal(
+        &filter_expr_1_after_roundtrip,
+        &filter_expr_2_after_roundtrip,
+    );
+
+    // Assert referential integrity.
+    assert_dynamic_filter_update_is_visible(
+        &filter_expr_1_after_roundtrip,
+        &filter_expr_2_after_roundtrip,
+    )?;
+
+    Ok(())
+}
+
+/// Roundtrip test for an execution plan where there are multiple instances of a dynamic filter
+/// with different children.
+#[test]
+fn test_dynamic_filter_plan_roundtrip_dedupe() -> Result<()> {
+    let (
+        filter_expr_1,
+        filter_expr_2,
+        filter_expr_1_after_roundtrip,
+        filter_expr_2_after_roundtrip,
+    ) = roundtrip_dynamic_filter_plan_pair()?;
+
+    // Assert the filters are not modified during roundtrip.
+    assert_dynamic_filters_equal(&filter_expr_1, &filter_expr_1_after_roundtrip);
+    assert_dynamic_filters_equal(&filter_expr_2, &filter_expr_2_after_roundtrip);
+
+    // Assert referential integrity.
+    assert_dynamic_filter_update_is_visible(
+        &filter_expr_1_after_roundtrip,
+        &filter_expr_2_after_roundtrip,
+    )?;
+
+    Ok(())
+}
+
+#[test]
+fn test_dynamic_filter_expression_id_is_stable_between_serializations() -> Result<()> {
+    let filter_expr = make_dynamic_filter();
     let codec = DefaultPhysicalExtensionCodec {};
     let proto_converter = DeduplicatingProtoConverter {};
 
-    // First serialization
-    let proto1 = proto_converter.physical_expr_to_proto(&col_expr, &codec)?;
-    let expr_id1 = proto1.expr_id.expect("Expected expr_id to be set");
+    let proto1 = proto_converter.physical_expr_to_proto(&filter_expr, &codec)?;
+    let expr_id1 = proto_expression_id(&proto1);
 
-    // Second serialization with the same converter
-    // The session_id should have rotated, so the expr_id should be different
-    // even though we're serializing the same expression (same pointer address)
-    let proto2 = proto_converter.physical_expr_to_proto(&col_expr, &codec)?;
-    let expr_id2 = proto2.expr_id.expect("Expected expr_id to be set");
+    let proto2 = proto_converter.physical_expr_to_proto(&filter_expr, &codec)?;
+    let expr_id2 = proto_expression_id(&proto2);
 
-    // The expr_ids should be different because session_id rotated
-    assert_ne!(
+    assert_eq!(
         expr_id1, expr_id2,
-        "Expected different expr_ids due to session_id rotation between serializations"
+        "Expected the same dynamic filter expression id across serializations"
     );
-
-    // Also test that serializing the same expression multiple times within
-    // the same top-level operation would give the same expr_id (not testable
-    // here directly since each physical_expr_to_proto is a top-level operation,
-    // but the deduplication tests verify this indirectly)
-
-    Ok(())
-}
-
-/// Test that session_id rotation works correctly with execution plans.
-/// This verifies the end-to-end behavior with plan serialization.
-#[test]
-fn test_session_id_rotation_with_execution_plans() -> Result<()> {
-    use datafusion_proto::bytes::physical_plan_to_bytes_with_proto_converter;
-
-    let field_a = Field::new("a", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![field_a]));
-
-    // Create a simple plan
-    let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
-    let projection_exprs = vec![ProjectionExpr {
-        expr: Arc::clone(&col_expr),
-        alias: "a1".to_string(),
-    }];
-    let exec_plan = Arc::new(ProjectionExec::try_new(
-        projection_exprs.clone(),
-        Arc::new(EmptyExec::new(Arc::clone(&schema))),
-    )?);
-
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter {};
-
-    // First serialization
-    let bytes1 = physical_plan_to_bytes_with_proto_converter(
-        Arc::clone(&exec_plan) as Arc<dyn ExecutionPlan>,
-        &codec,
-        &proto_converter,
-    )?;
-
-    // Second serialization with the same converter
-    let bytes2 = physical_plan_to_bytes_with_proto_converter(
-        Arc::clone(&exec_plan) as Arc<dyn ExecutionPlan>,
-        &codec,
-        &proto_converter,
-    )?;
-
-    // The serialized bytes should be different due to different session_ids
-    // (specifically, the expr_id values embedded in the protobuf will differ)
-    assert_ne!(
-        bytes1.as_ref(),
-        bytes2.as_ref(),
-        "Expected different serialized bytes due to session_id rotation"
-    );
-
-    // But both should deserialize correctly
-    let ctx = SessionContext::new();
-    let deser_converter = DeduplicatingProtoConverter {};
-
-    let plan1 = datafusion_proto::bytes::physical_plan_from_bytes_with_proto_converter(
-        bytes1.as_ref(),
-        ctx.task_ctx().as_ref(),
-        &codec,
-        &deser_converter,
-    )?;
-
-    let plan2 = datafusion_proto::bytes::physical_plan_from_bytes_with_proto_converter(
-        bytes2.as_ref(),
-        ctx.task_ctx().as_ref(),
-        &codec,
-        &deser_converter,
-    )?;
-
-    // Verify both plans have the expected structure
-    assert_eq!(plan1.schema(), plan2.schema());
 
     Ok(())
 }
@@ -3600,6 +3835,86 @@ fn test_linearization_stops_at_different_op() -> Result<()> {
     Ok(())
 }
 
+/// Create a DataSourceExec backed by a ParquetSource that accepts filter pushdown,
+/// along with a ConfigOptions that enables all dynamic filter pushdown options.
+fn datasource_for_dynamic_filter_pushdown(
+    schema: &Arc<Schema>,
+) -> (Arc<dyn ExecutionPlan>, ConfigOptions) {
+    let mut parquet_options = TableParquetOptions::new();
+    parquet_options.global.pushdown_filters = true;
+    let source = Arc::new(
+        ParquetSource::new(Arc::clone(schema))
+            .with_table_parquet_options(parquet_options),
+    );
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+            .with_file(PartitionedFile::new("/path/to/file.parquet", 1024))
+            .build();
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_join_dynamic_filter_pushdown = true;
+    config.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
+    config.optimizer.enable_topk_dynamic_filter_pushdown = true;
+
+    (DataSourceExec::from_data_source(scan_config), config)
+}
+
+/// Test that plan containing a HashJoinExec with dynamic filter pushdown
+/// can be serialized and deserialized while preserving references to the dynamic filter.
+#[test]
+fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
+
+    let left_child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let (right_child, config) = datasource_for_dynamic_filter_pushdown(&schema);
+
+    let on: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = vec![(
+        Arc::new(Column::new("col", 0)),
+        Arc::new(Column::new("col", 0)),
+    )];
+
+    let hash_join = Arc::new(HashJoinExec::try_new(
+        left_child,
+        right_child,
+        on,
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?) as Arc<dyn ExecutionPlan>;
+
+    // Run the optimizer rule for filter pushdown.
+    let optimizer = FilterPushdown::new_post_optimization();
+    let plan = optimizer.optimize(hash_join, &config)?;
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DeduplicatingProtoConverter {};
+    let deserialized = roundtrip_test_and_return(plan, &ctx, &codec, &converter)?;
+
+    // Extract the deserialized HashJoinExec and its dynamic filter.
+    let deserialized_join = deserialized
+        .downcast_ref::<HashJoinExec>()
+        .expect("Should be HashJoinExec");
+    let deserialized_hash_join_df = deserialized_join
+        .dynamic_filter_expr()
+        .expect("HashJoinExec should have a dynamic filter after roundtrip");
+
+    // Extract the dynamic filter pushed down to the probe side's ParquetSource.
+    let deserialized_predicate = parquet_source_predicate(deserialized_join.right());
+
+    // The HashJoinExec's dynamic filter and the probe side's predicate should
+    // refer to the same underlying expression.
+    let plan_df: Arc<dyn PhysicalExpr> = deserialized_hash_join_df.clone();
+    assert_dynamic_filters_equal(&plan_df, &deserialized_predicate);
+    assert_dynamic_filter_update_is_visible(&plan_df, &deserialized_predicate)?;
+
+    Ok(())
+}
+
 /// returns a SessionContext with an empty `netflow` table registered
 fn netflow_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
@@ -3680,4 +3995,469 @@ async fn roundtrip_issue_18602_complex_filter_decode_recursion() -> Result<()> {
     LIMIT 20";
 
     roundtrip_test_sql_with_context(sql, &ctx).await
+}
+
+/// Test that plan containing a AggregateExec with dynamic filter pushdown
+/// can be serialized and deserialized while preserving references to the dynamic filter.
+#[test]
+fn test_aggregate_with_dynamic_filter_roundtrip() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+
+    let (child, config) = datasource_for_dynamic_filter_pushdown(&schema);
+
+    let agg = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        PhysicalGroupBy::new_single(vec![]),
+        vec![
+            AggregateExprBuilder::new(
+                datafusion::functions_aggregate::min_max::min_udaf(),
+                vec![Arc::clone(&col_a)],
+            )
+            .schema(Arc::clone(&schema))
+            .alias("min_a")
+            .build()
+            .map(Arc::new)?,
+        ],
+        vec![None],
+        child,
+        Arc::clone(&schema),
+    )?) as Arc<dyn ExecutionPlan>;
+
+    // Run the optimizer rule for filter pushdown.
+    let optimizer = FilterPushdown::new_post_optimization();
+    let plan = optimizer.optimize(agg, &config)?;
+
+    // Roundtrip with deduplication.
+    //
+    // Note: We don't use `roundtrip_test_and_return` here because there's a
+    // pre-existing issue with PhysicalGroupBy serialization where empty groups
+    // `[[]]` become `[]` after roundtrip. This behavior is unrelated to this test.
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DeduplicatingProtoConverter {};
+    let bytes = physical_plan_to_bytes_with_proto_converter(
+        Arc::clone(&plan),
+        &codec,
+        &converter,
+    )?;
+    let deserialized = physical_plan_from_bytes_with_proto_converter(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &converter,
+    )?;
+
+    // Extract the deserialized AggregateExec and its dynamic filter.
+    let deserialized_agg = deserialized
+        .downcast_ref::<AggregateExec>()
+        .expect("Should be AggregateExec");
+    let deserialized_agg_df = deserialized_agg
+        .dynamic_filter_expr()
+        .expect("AggregateExec should have a dynamic filter after roundtrip");
+
+    // Extract the dynamic filter pushed down to the child ParquetSource.
+    let deserialized_predicate = parquet_source_predicate(deserialized_agg.input());
+
+    // The AggregateExec's dynamic filter and the child's predicate should
+    // refer to the same underlying expression.
+    let plan_df: Arc<dyn PhysicalExpr> = deserialized_agg_df.clone();
+    assert_dynamic_filters_equal(&plan_df, &deserialized_predicate);
+    assert_dynamic_filter_update_is_visible(&plan_df, &deserialized_predicate)?;
+
+    Ok(())
+}
+
+/// Test that plan containing a SortExec with dynamic filter pushdown
+/// can be serialized and deserialized while preserving references to the dynamic filter.
+#[test]
+fn test_sort_topk_with_dynamic_filter_roundtrip() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+
+    let (child, config) = datasource_for_dynamic_filter_pushdown(&schema);
+
+    let sort = Arc::new(
+        SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: Arc::clone(&col_a),
+                options: SortOptions::default(),
+            }])
+            .unwrap(),
+            child,
+        )
+        .with_fetch(Some(10)),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // Verify the optimizer kept the dynamic filter on the SortExec.
+    let optimizer = FilterPushdown::new_post_optimization();
+    let plan = optimizer.optimize(sort, &config)?;
+
+    // Roundtrip with deduplication.
+    //
+    // Note: We don't use `roundtrip_test_and_return` here because
+    // `DeduplicatingDeserializer` rewrites cache hits via `with_new_children`,
+    // which sets `remapped_children: Some(...)` on the second encounter of a
+    // shared `DynamicFilterPhysicalExpr`. SortExec's `Debug` includes its
+    // dynamic filter, so the original-vs-deserialized structural equality check
+    // would fail purely on this artifact.
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DeduplicatingProtoConverter {};
+    let bytes = physical_plan_to_bytes_with_proto_converter(
+        Arc::clone(&plan),
+        &codec,
+        &converter,
+    )?;
+    let deserialized = physical_plan_from_bytes_with_proto_converter(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &converter,
+    )?;
+
+    // Extract the deserialized SortExec and its dynamic filter.
+    let deserialized_sort = deserialized
+        .downcast_ref::<SortExec>()
+        .expect("Should be SortExec");
+    let deserialized_sort_df = deserialized_sort
+        .dynamic_filter_expr()
+        .expect("SortExec should have a dynamic filter after roundtrip");
+
+    // Extract the dynamic filter pushed down to the child ParquetSource.
+    let deserialized_predicate = parquet_source_predicate(deserialized_sort.input());
+
+    // The SortExec's dynamic filter and the child's predicate should
+    // refer to the same underlying expression.
+    let plan_df: Arc<dyn PhysicalExpr> = deserialized_sort_df;
+    assert_dynamic_filters_equal(&plan_df, &deserialized_predicate);
+    assert_dynamic_filter_update_is_visible(&plan_df, &deserialized_predicate)?;
+
+    Ok(())
+}
+
+/// A custom [`ExecutionPlan`] which stores [`PhysicalExpr`]s.
+struct CustomExecWithExprs {
+    exprs: Vec<Arc<dyn PhysicalExpr>>,
+    child: Arc<dyn ExecutionPlan>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct CustomExecWithExprsProto {
+    #[prost(message, repeated, tag = "1")]
+    exprs: Vec<PhysicalExprNode>,
+}
+
+impl std::fmt::Debug for CustomExecWithExprs {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomExecWithExprs")
+            .field("exprs", &self.exprs)
+            .field("child", &self.child)
+            .finish()
+    }
+}
+
+impl CustomExecWithExprs {
+    fn new(exprs: Vec<Arc<dyn PhysicalExpr>>, child: Arc<dyn ExecutionPlan>) -> Self {
+        Self { exprs, child }
+    }
+}
+
+impl DisplayAs for CustomExecWithExprs {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "CustomExecWithExprs")
+    }
+}
+
+impl ExecutionPlan for CustomExecWithExprs {
+    fn name(&self) -> &str {
+        "CustomExecWithExprs"
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.child.schema()
+    }
+
+    fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
+        self.child.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.child]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        unreachable!()
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        unreachable!()
+    }
+}
+
+/// A [`PhysicalExtensionCodec`] for [`CustomExecWithExprs`].
+#[derive(Debug)]
+struct CustomExecWithExprsCodec {}
+
+impl PhysicalExtensionCodec for CustomExecWithExprsCodec {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+        ctx: &TaskContext,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let decode_ctx = PhysicalPlanDecodeContext::new(ctx, self);
+        let input_schema = inputs[0].schema();
+        let proto = CustomExecWithExprsProto::decode(buf)
+            .map_err(|e| internal_datafusion_err!("Failed to decode custom exec: {e}"))?;
+        let exprs = proto
+            .exprs
+            .iter()
+            .map(|expr_proto| {
+                proto_converter.proto_to_physical_expr(
+                    expr_proto,
+                    input_schema.as_ref(),
+                    &decode_ctx,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Arc::new(CustomExecWithExprs::new(exprs, inputs[0].clone())))
+    }
+
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<()> {
+        let custom = node
+            .downcast_ref::<CustomExecWithExprs>()
+            .ok_or_else(|| internal_datafusion_err!("Expected CustomExecWithExprs"))?;
+        let proto = CustomExecWithExprsProto {
+            exprs: custom
+                .exprs
+                .iter()
+                .map(|expr| proto_converter.physical_expr_to_proto(expr, self))
+                .collect::<Result<Vec<_>>>()?,
+        };
+        proto
+            .encode(buf)
+            .map_err(|e| internal_datafusion_err!("Failed to encode custom exec: {e}"))?;
+
+        Ok(())
+    }
+}
+
+/// Tests that a custom [`ExecutionPlan`] with [`PhysicalExpr`] can
+/// dedupe dynamic filters by using the proto converter in its
+/// [`PhysicalExtensionCodec`] implementation.
+#[test]
+fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
+    // Create the plan:
+    //
+    //   FilterExec(dynamic_filter)
+    //     -> CustomExecWithExprs(exprs: [dynamic_filter])
+    //         -> EmptyExec
+    //
+    // The same dynamic filter expression is saved in both the FilterExec and CustomExecWithExprs.
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>],
+        lit(true),
+    ));
+    let dynamic_filter_expr: Arc<dyn PhysicalExpr> = dynamic_filter;
+
+    let empty = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let custom_exec = Arc::new(CustomExecWithExprs::new(
+        vec![Arc::clone(&dynamic_filter_expr)],
+        empty,
+    ));
+    let filter_exec = Arc::new(FilterExec::try_new(
+        Arc::clone(&dynamic_filter_expr),
+        custom_exec,
+    )?) as Arc<dyn ExecutionPlan>;
+
+    // Roundtrip with DeduplicatingProtoConverter
+    let codec = CustomExecWithExprsCodec {};
+    let converter = DeduplicatingProtoConverter {};
+
+    let bytes = physical_plan_to_bytes_with_proto_converter(
+        Arc::clone(&filter_exec),
+        &codec,
+        &converter,
+    )?;
+
+    let ctx = SessionContext::new();
+    let deser_converter = DeduplicatingProtoConverter {};
+    let deserialized = physical_plan_from_bytes_with_proto_converter(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &deser_converter,
+    )?;
+
+    // Extract the deserialized FilterExec's dynamic filter
+    let deser_filter = deserialized
+        .downcast_ref::<FilterExec>()
+        .expect("Top-level should be FilterExec");
+    let deser_filter_df = deser_filter.predicate();
+
+    // Extract the deserialized custom node's dynamic filter
+    let deser_custom = deser_filter
+        .input()
+        .downcast_ref::<CustomExecWithExprs>()
+        .expect("FilterExec child should be CustomExecWithExprs");
+    assert_eq!(deser_custom.exprs.len(), 1, "Should have one expression");
+    let [deser_custom_df] = deser_custom.exprs.as_slice() else {
+        return internal_err!("Custom node should have one expression");
+    };
+
+    // Pass the un-remapped filter first so the helper's `with_new_children`
+    // rewrite can reconstruct the remapped form on the other side.
+    assert_dynamic_filters_equal(deser_custom_df, deser_filter_df);
+    assert_dynamic_filter_update_is_visible(deser_custom_df, deser_filter_df)?;
+
+    Ok(())
+}
+
+fn roundtrip_file_scan_config(scan_config: FileScanConfig) -> Result<FileScanConfig> {
+    let exec_plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let result_plan =
+        roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_converter)?;
+
+    let data_source_exec = result_plan
+        .downcast_ref::<DataSourceExec>()
+        .expect("Expected DataSourceExec");
+    let file_scan_config = data_source_exec
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .expect("Expected FileScanConfig");
+    Ok(file_scan_config.clone())
+}
+
+#[test]
+fn roundtrip_parquet_exec_output_partitioning() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let output_partitioning =
+        Partitioning::Hash(vec![Arc::new(Column::new("col", 0))], 1);
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .with_output_partitioning(Some(output_partitioning.clone()))
+            .build();
+
+    assert_eq!(
+        roundtrip_file_scan_config(scan_config)?.output_partitioning,
+        Some(output_partitioning)
+    );
+
+    Ok(())
+}
+
+#[test]
+fn parse_legacy_partitioned_by_file_group_as_output_partitioning() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let table_schema = TableSchema::builder(Arc::clone(&file_schema))
+        .with_table_partition_cols(vec![Arc::new(Field::new(
+            "part",
+            DataType::Utf8,
+            false,
+        ))])
+        .build();
+    let file_source = Arc::new(ParquetSource::new(table_schema));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file1.parquet".to_string(),
+                    1024,
+                )]),
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file2.parquet".to_string(),
+                    1024,
+                )]),
+            ])
+            .build();
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let mut proto = serialize_file_scan_config(&scan_config, &codec, &proto_converter)?;
+    proto.partitioned_by_file_group = Some(true);
+    proto.output_partitioning = None;
+
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let parsed = parse_protobuf_file_scan_config(
+        &proto,
+        &decode_ctx,
+        &proto_converter,
+        Arc::new(ParquetSource::new(parse_table_schema_from_proto(&proto)?)),
+    )?;
+
+    match parsed.output_partitioning {
+        Some(Partitioning::Hash(exprs, partition_count)) => {
+            assert_eq!(partition_count, 2);
+            assert_eq!(exprs.len(), 1);
+            let column = exprs[0].downcast_ref::<Column>().unwrap();
+            assert_eq!(column.name(), "part");
+            assert_eq!(column.index(), 1);
+        }
+        other => panic!("Expected legacy hash output partitioning, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_parquet_exec_range_output_partitioning() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let output_partitioning = Partitioning::Range(RangePartitioning::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+            "col", 0,
+        )))])
+        .unwrap(),
+        vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+    ));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-1.parquet".to_string(),
+                    1024,
+                )]),
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-2.parquet".to_string(),
+                    1024,
+                )]),
+            ])
+            .with_output_partitioning(Some(output_partitioning.clone()))
+            .build();
+
+    assert_eq!(
+        roundtrip_file_scan_config(scan_config)?.output_partitioning,
+        Some(output_partitioning)
+    );
+
+    Ok(())
 }

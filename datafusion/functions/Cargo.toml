@@ -184,6 +184,11 @@ required-features = ["datetime_expressions"]
 
 [[bench]]
 harness = false
+name = "date_part"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
 name = "to_char"
 required-features = ["datetime_expressions"]
 
@@ -210,6 +215,11 @@ required-features = ["math_expressions"]
 [[bench]]
 harness = false
 name = "atan2"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "power"
 required-features = ["math_expressions"]
 
 [[bench]]
@@ -246,6 +256,10 @@ required-features = ["string_expressions"]
 harness = false
 name = "replace"
 required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "overlay"
 
 [[bench]]
 harness = false

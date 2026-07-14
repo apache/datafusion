@@ -36,14 +36,17 @@ pub use ddl::{
     CreateFunctionBody, CreateIndex, CreateMemoryTable, CreateView, DdlStatement,
     DropCatalogSchema, DropFunction, DropTable, DropView, OperateFunctionArg,
 };
-pub use dml::{DmlStatement, WriteOp};
+pub use dml::{
+    DmlStatement, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
+    WriteOp,
+};
 pub use plan::{
     Aggregate, Analyze, ColumnUnnestList, DescribeTable, Distinct, DistinctOn,
     EmptyRelation, Explain, ExplainOption, Extension, FetchType, Filter, Join,
     JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
-    RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan, Subquery,
-    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
-    projection_schema,
+    RangePartitioning, RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan,
+    Subquery, SubqueryAlias, TableScan, TableScanBuilder, ToStringifiedPlan, Union,
+    Unnest, Values, Window, projection_schema,
 };
 pub use statement::{
     Deallocate, Execute, Prepare, ResetVariable, SetVariable, Statement,

@@ -34,25 +34,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout docs sources
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: Checkout asf-site branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           ref: asf-site
           path: asf-site
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
 
       - name: Install dependencies
         run: uv sync --package datafusion-docs
-      - name: Install dependency graph tooling
+      - name: Install Graphviz
         run: |
           set -x
           sudo apt-get update
           sudo apt-get install -y graphviz
-          cargo install cargo-depgraph --version ^1.6 --locked
+      - name: Install cargo-depgraph
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853  # v2.83.2
+        with:
+          tool: cargo-depgraph@1.6
 
       - name: Build docs
         run: |

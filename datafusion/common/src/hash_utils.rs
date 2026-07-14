@@ -31,8 +31,54 @@ use itertools::Itertools;
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hash, Hasher};
 
-/// The hash random state used throughout DataFusion for hashing.
+/// [`RandomState`] is optimized for speed and suitable for hash tables and
+/// bloom filters. [`QualityRandomState`] is optimized for statistical quality
+/// and suitable for algorithms such as HyperLogLog. The tradeoff is that the
+/// fast variant gives up some statistical quality, while the quality variant
+/// is slightly slower.
+///
+/// See: <https://docs.rs/foldhash/0.2.0/src/foldhash/lib.rs.html#17-21>
 pub type RandomState = FixedState;
+pub type QualityRandomState = foldhash::quality::FixedState;
+
+/// Fixed quality hash state used by HyperLogLog sketches.
+///
+/// The seed is part of the HLL wire/storage semantics: serialized sketches only
+/// remain mergeable if every producer uses the same hash state.
+pub const HLL_RANDOM_STATE: QualityRandomState = QualityRandomState::with_seed(0);
+
+/// Hash state used by [`create_hashes`].
+///
+/// Multi-column hashing folds the previous column hash into a fresh hasher
+/// before hashing the next column. This trait keeps that seeded hasher in the
+/// same foldhash tier as the top-level hash state.
+pub trait HashState: BuildHasher {
+    type SeededState: BuildHasher;
+
+    fn seeded_state(&self, seed: u64) -> Self::SeededState;
+}
+
+impl HashState for FixedState {
+    type SeededState = foldhash::fast::SeedableRandomState;
+
+    fn seeded_state(&self, seed: u64) -> Self::SeededState {
+        foldhash::fast::SeedableRandomState::with_seed(
+            seed,
+            foldhash::SharedSeed::global_fixed(),
+        )
+    }
+}
+
+impl HashState for foldhash::quality::FixedState {
+    type SeededState = foldhash::quality::SeedableRandomState;
+
+    fn seeded_state(&self, seed: u64) -> Self::SeededState {
+        foldhash::quality::SeedableRandomState::with_seed(
+            seed,
+            foldhash::SharedSeed::global_fixed(),
+        )
+    }
+}
 
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
@@ -101,7 +147,7 @@ thread_local! {
 /// ```
 pub fn with_hashes<I, T, F, R>(
     arrays: I,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     callback: F,
 ) -> Result<R>
 where
@@ -159,7 +205,11 @@ where
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: bool) {
+fn hash_null<S: HashState>(
+    random_state: &S,
+    hashes_buffer: &'_ mut [u64],
+    mul_col: bool,
+) {
     if mul_col {
         hashes_buffer.iter_mut().for_each(|hash| {
             // stable hash for null value
@@ -173,13 +223,13 @@ fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: 
 }
 
 pub trait HashValue {
-    fn hash_one(&self, state: &RandomState) -> u64;
+    fn hash_one<S: BuildHasher>(&self, state: &S) -> u64;
     /// Write this value into an existing hasher (same data as `hash_one`).
     fn hash_write(&self, hasher: &mut impl Hasher);
 }
 
 impl<T: HashValue + ?Sized> HashValue for &T {
-    fn hash_one(&self, state: &RandomState) -> u64 {
+    fn hash_one<S: BuildHasher>(&self, state: &S) -> u64 {
         T::hash_one(self, state)
     }
     fn hash_write(&self, hasher: &mut impl Hasher) {
@@ -190,7 +240,7 @@ impl<T: HashValue + ?Sized> HashValue for &T {
 macro_rules! hash_value {
     ($($t:ty),+) => {
         $(impl HashValue for $t {
-            fn hash_one(&self, state: &RandomState) -> u64 {
+            fn hash_one<S: BuildHasher>(&self, state: &S) -> u64 {
                 state.hash_one(self)
             }
             fn hash_write(&self, hasher: &mut impl Hasher) {
@@ -205,28 +255,22 @@ hash_value!(bool, str, [u8], IntervalDayTime, IntervalMonthDayNano);
 macro_rules! hash_float_value {
     ($(($t:ty, $i:ty)),+) => {
         $(impl HashValue for $t {
-            fn hash_one(&self, state: &RandomState) -> u64 {
-                state.hash_one(<$i>::from_ne_bytes(self.to_ne_bytes()))
+            fn hash_one<S: BuildHasher>(&self, state: &S) -> u64 {
+                // +0.0 and -0.0 differ only in the sign bit but compare equal
+                // under IEEE 754; normalize -0.0 → +0.0 so Hash agrees with Eq.
+                let bits = <$i>::from_ne_bytes(self.to_ne_bytes());
+                let bits = if bits << 1 == 0 { 0 } else { bits };
+                state.hash_one(bits)
             }
             fn hash_write(&self, hasher: &mut impl Hasher) {
-                hasher.write(&self.to_ne_bytes())
+                let bits = <$i>::from_ne_bytes(self.to_ne_bytes());
+                let bits: $i = if bits << 1 == 0 { 0 } else { bits };
+                hasher.write(&bits.to_ne_bytes())
             }
         })+
     };
 }
 hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
-
-/// Create a `SeedableRandomState` whose per-hasher seed incorporates `seed`.
-/// This folds the previous hash into the hasher's initial state so only the
-/// new value needs to pass through the hash function — same cost as `hash_one`.
-#[cfg(not(feature = "force_hash_collisions"))]
-#[inline]
-fn seeded_state(seed: u64) -> foldhash::fast::SeedableRandomState {
-    foldhash::fast::SeedableRandomState::with_seed(
-        seed,
-        foldhash::SharedSeed::global_fixed(),
-    )
-}
 
 #[cfg(not(feature = "force_hash_collisions"))]
 trait ChildHashing {
@@ -237,18 +281,18 @@ trait ChildHashing {
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
-struct RandomStateChildHashing<'a> {
-    random_state: &'a RandomState,
+struct HashStateChildHashing<'a, S> {
+    hash_state: &'a S,
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
-impl ChildHashing for RandomStateChildHashing<'_> {
+impl<S: HashState> ChildHashing for HashStateChildHashing<'_, S> {
     fn create_hashes<I, T>(&self, arrays: I, hashes_buffer: &mut [u64]) -> Result<()>
     where
         I: IntoIterator<Item = T>,
         T: AsDynArray,
     {
-        create_hashes(arrays, self.random_state, hashes_buffer).map(|_| ())
+        create_hashes(arrays, self.hash_state, hashes_buffer).map(|_| ())
     }
 }
 
@@ -258,7 +302,7 @@ impl ChildHashing for RandomStateChildHashing<'_> {
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array_primitive<T>(
     array: &PrimitiveArray<T>,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) where
@@ -273,7 +317,7 @@ fn hash_array_primitive<T>(
     if array.null_count() == 0 {
         if rehash {
             for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                let mut hasher = seeded_state(*hash).build_hasher();
+                let mut hasher = random_state.seeded_state(*hash).build_hasher();
                 value.hash_write(&mut hasher);
                 *hash = hasher.finish();
             }
@@ -285,7 +329,7 @@ fn hash_array_primitive<T>(
     } else if rehash {
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
-            let mut hasher = seeded_state(hashes_buffer[i]).build_hasher();
+            let mut hasher = random_state.seeded_state(hashes_buffer[i]).build_hasher();
             value.hash_write(&mut hasher);
             hashes_buffer[i] = hasher.finish();
         }
@@ -303,7 +347,7 @@ fn hash_array_primitive<T>(
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array<T>(
     array: &T,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) where
@@ -358,7 +402,7 @@ fn hash_string_view_array_inner<
     const REHASH: bool,
 >(
     array: &GenericByteViewArray<T>,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     hashes_buffer: &mut [u64],
 ) {
     assert_eq!(
@@ -387,7 +431,7 @@ fn hash_string_view_array_inner<
         // all views are inlined, no need to access external buffers
         if !HAS_BUFFERS || view_len <= 12 {
             if REHASH {
-                let mut hasher = seeded_state(*hash).build_hasher();
+                let mut hasher = random_state.seeded_state(*hash).build_hasher();
                 v.hash_write(&mut hasher);
                 *hash = hasher.finish();
             } else {
@@ -398,7 +442,7 @@ fn hash_string_view_array_inner<
         // view is not inlined, so we need to hash the bytes as well
         let value = view_bytes(view_len, v);
         if REHASH {
-            let mut hasher = seeded_state(*hash).build_hasher();
+            let mut hasher = random_state.seeded_state(*hash).build_hasher();
             value.hash_write(&mut hasher);
             *hash = hasher.finish();
         } else {
@@ -413,7 +457,7 @@ fn hash_string_view_array_inner<
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_generic_byte_view_array<T: ByteViewType>(
     array: &GenericByteViewArray<T>,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) {
@@ -432,7 +476,7 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
         }
         (false, false, true) => {
             for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                let mut hasher = seeded_state(*hash).build_hasher();
+                let mut hasher = random_state.seeded_state(*hash).build_hasher();
                 view.hash_write(&mut hasher);
                 *hash = hasher.finish();
             }
@@ -574,7 +618,7 @@ fn dispatch_dictionary_scatter<K: ArrowDictionaryKeyType>(
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_dictionary<K: ArrowDictionaryKeyType>(
     array: &DictionaryArray<K>,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     hashes_buffer: &mut [u64],
     multi_col: bool,
 ) -> Result<()> {
@@ -1036,7 +1080,7 @@ fn hash_run_array<R: RunEndIndexType>(
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_single_array(
     array: &dyn Array,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) -> Result<()> {
@@ -1060,47 +1104,65 @@ fn hash_single_array(
         }
         DataType::Struct(_) => {
             let array = as_struct_array(array)?;
-            let child_hashing = RandomStateChildHashing { random_state };
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
             hash_struct_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::List(_) => {
             let array = as_list_array(array)?;
-            let child_hashing = RandomStateChildHashing { random_state };
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
             hash_list_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::LargeList(_) => {
             let array = as_large_list_array(array)?;
-            let child_hashing = RandomStateChildHashing { random_state };
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
             hash_list_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::ListView(_) => {
             let array = as_list_view_array(array)?;
-            let child_hashing = RandomStateChildHashing { random_state };
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
             hash_list_view_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::LargeListView(_) => {
             let array = as_large_list_view_array(array)?;
-            let child_hashing = RandomStateChildHashing { random_state };
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
             hash_list_view_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::Map(_, _) => {
             let array = as_map_array(array)?;
-            let child_hashing = RandomStateChildHashing { random_state };
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
             hash_map_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::FixedSizeList(_,_) => {
             let array = as_fixed_size_list_array(array)?;
-            let child_hashing = RandomStateChildHashing { random_state };
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
             hash_fixed_list_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::Union(_, _) => {
             let array = as_union_array(array)?;
-            let child_hashing = RandomStateChildHashing { random_state };
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
             hash_union_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::RunEndEncoded(_, _) => downcast_run_array! {
             array => {
-                let child_hashing = RandomStateChildHashing { random_state };
+                let child_hashing = HashStateChildHashing {
+                    hash_state: random_state,
+                };
                 hash_run_array(array, &child_hashing, hashes_buffer, rehash)?
             },
             _ => unreachable!()
@@ -1120,7 +1182,7 @@ fn hash_single_array(
 #[cfg(feature = "force_hash_collisions")]
 fn hash_single_array(
     _array: &dyn Array,
-    _random_state: &RandomState,
+    _random_state: &impl HashState,
     hashes_buffer: &mut [u64],
     _rehash: bool,
 ) -> Result<()> {
@@ -1173,7 +1235,7 @@ impl AsDynArray for &ArrayRef {
 /// `hashes_buffer` should be pre-sized appropriately.
 pub fn create_hashes<'a, I, T>(
     arrays: I,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     hashes_buffer: &'a mut [u64],
 ) -> Result<&'a mut [u64]>
 where
@@ -1486,6 +1548,18 @@ mod tests {
         assert_eq!(custom_hashes[0], custom_hashes[2]);
         assert_ne!(custom_hashes[0], custom_hashes[1]);
         assert_ne!(custom_hashes, default_hashes);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_create_hashes_with_custom_hasher_normalizes_negative_zero() {
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![0.0, -0.0]));
+        let hash_builder = BuildHasherDefault::<TestHasher>::default();
+        let mut hashes = vec![0; array.len()];
+
+        create_hashes_with_hasher([&array], &hash_builder, &mut hashes).unwrap();
+
+        assert_eq!(hashes[0], hashes[1]);
     }
 
     #[test]
@@ -1983,6 +2057,31 @@ mod tests {
         create_hashes([array], &random_state, &mut hashes2).unwrap();
 
         assert_eq!(hashes1, hashes2);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_create_hashes_with_quality_hash_state() {
+        let int_array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let str_array: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));
+        let quality_state = foldhash::quality::FixedState::with_seed(0);
+
+        let mut one_col_hashes = vec![0; int_array.len()];
+        create_hashes([&int_array], &quality_state, &mut one_col_hashes).unwrap();
+        let expected_hashes: Vec<_> = [1i32, 2, 3, 4]
+            .iter()
+            .map(|value| quality_state.hash_one(value))
+            .collect();
+        assert_eq!(one_col_hashes, expected_hashes);
+
+        let mut two_col_hashes = vec![0; int_array.len()];
+        create_hashes(
+            [&int_array, &str_array],
+            &quality_state,
+            &mut two_col_hashes,
+        )
+        .unwrap();
+        assert_ne!(two_col_hashes, one_col_hashes);
     }
 
     #[test]

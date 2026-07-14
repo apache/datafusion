@@ -170,7 +170,9 @@ macro_rules! build_hasher_hash_float_value {
         $(#[cfg(not(feature = "force_hash_collisions"))]
         impl BuildHasherHashValue for $t {
             fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64 {
-                state.hash_one(<$i>::from_ne_bytes(self.to_ne_bytes()))
+                let bits = <$i>::from_ne_bytes(self.to_ne_bytes());
+                let bits = if bits << 1 == 0 { 0 } else { bits };
+                state.hash_one(bits)
             }
         })+
     };

@@ -130,7 +130,7 @@ GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
 -2117946883 d -2117946883 NULL NULL NULL
 -2098805236 c -2098805236 NULL NULL NULL
 
-query ITIIII
+query ITRRRR
 SELECT c5, c1,
        MEDIAN(c5),
        MEDIAN(CASE WHEN c1 = 'a' THEN c5 ELSE NULL END),
@@ -220,7 +220,7 @@ e true false NULL
 statement ok
 reset datafusion.execution.batch_size;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;
@@ -308,7 +308,7 @@ SELECT c2, sum(c5), sum(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 5 6449337880 7.074412226677
 
 # Test median for int / float
-query IIR
+query IRR
 SELECT c2, median(c5), median(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
 1 23971150 0.5922606
@@ -389,14 +389,14 @@ SELECT c2, sum(c3), sum(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 5 -194 7.074412226677
 
 # Test median with nullable fields
-query IIR
+query IRR
 SELECT c2, median(c3), median(c11) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
 1 12 0.6067944
 2 1 0.46076488
 3 14 0.40154034
-4 -17 0.48515016
-5 -35 0.5536642
+4 -17.5 0.48515016
+5 -35.5 0.5536642
 
 # Test approx_median with nullable fields
 query IRR
@@ -502,7 +502,7 @@ FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 5 5 0
 
 # Test median with filter
-query III
+query IRR
 SELECT
   c2,
   median(c3) FILTER (WHERE c3 > 0),
@@ -636,8 +636,46 @@ FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 4 3
 5 6
 
+# Test variance and stddev with nullable fields and filters
+query IRRR
+SELECT c2,
+       var_samp(c11) FILTER (WHERE c3 > 0),
+       stddev_samp(c11) FILTER (WHERE c3 > 0),
+       stddev_pop(c11) FILTER (WHERE c3 > 0)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 0.085786074994 0.29289259976 0.276141791266
+2 0.070769227104 0.266024861816 0.24884347232
+3 0.087515365779 0.295829960922 0.270054571305
+4 0.038697229167 0.196716113134 0.182123731489
+5 0.081817232141 0.286037116719 0.23354832782
+
+# Test corr with nullable fields and filters
+query IR
+SELECT c2,
+       corr(c3, c11) FILTER (WHERE c5 > 0)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 -0.38515658251
+2 0.414489249329
+3 -0.796447131429
+4 -0.938568248748
+5 -0.051058146743
+
+# Test count distinct with nullable fields and filters
+query II
+SELECT c2,
+       count(distinct c3) FILTER (WHERE c11 > 0.5)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 10
+2 6
+3 3
+4 3
+5 6
+
 # Test median with nullable fields and filter
-query IIR
+query IRR
 SELECT c2,
        median(c3) FILTER (WHERE c5 > 0),
        median(c11) FILTER (WHERE c5 < 0)
@@ -645,21 +683,21 @@ FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
 1 -5 0.6623719
 2 15 0.52930677
-3 13 0.32792538
+3 13.5 0.32792538
 4 -38 0.49774808
 5 -18 0.49842384
 
 # Test min / max with nullable fields and nullable filter
-query II
+query IR
 SELECT c2,
        median(c3) FILTER (WHERE c11 > 0.5)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 33
+1 33.5
 2 -29
 3 22
 4 -90
-5 -22
+5 -22.5
 
 # Test approx_median with nullable fields and filter
 query IRR
@@ -712,7 +750,7 @@ ORDER BY i;
 statement ok
 reset datafusion.execution.batch_size;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;
@@ -772,7 +810,7 @@ true false false false false true false NULL
 statement ok
 reset datafusion.execution.batch_size;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

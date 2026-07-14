@@ -27,20 +27,18 @@ on:
   push:
     branches-ignore:
       - 'gh-readonly-queue/**'
+      - 'dependabot/**'
     paths-ignore:
       - "docs/**"
       - "**.md"
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/pull_request_template.md"
   pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
-      - ".github/ISSUE_TEMPLATE/**"
-      - ".github/pull_request_template.md"
   # manual trigger
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
+  merge_group:
+
 
 permissions:
   contents: read
@@ -49,12 +47,12 @@ jobs:
   # Check crate compiles and base cargo check passes
   linux-build-lib:
     name: linux build test
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=8,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=8,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -82,7 +80,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -103,11 +101,11 @@ jobs:
   linux-datafusion-substrait-features:
     name: cargo check datafusion-substrait features
     needs: linux-build-lib
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -140,12 +138,12 @@ jobs:
   linux-datafusion-proto-features:
     name: cargo check datafusion-proto features
     needs: linux-build-lib
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -164,6 +162,26 @@ jobs:
       - name: Check datafusion-proto (avro)
         run: cargo check --profile ci --no-default-features -p datafusion-proto --features=avro
 
+  # Check datafusion-ffi features
+  #
+  # Ensure via `cargo check` that the crate can be built with a
+  # subset of the features packages enabled.
+  linux-datafusion-ffi-features:
+    name: cargo check datafusion-ffi features
+    needs: linux-build-lib
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    container:
+      image: amd64/rust
+    steps:
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Check datafusion-ffi (no-default-features)
+        run: cargo check --profile ci --no-default-features -p datafusion-ffi
+
 
   # Check datafusion crate features
   #
@@ -172,12 +190,12 @@ jobs:
   linux-cargo-check-datafusion:
     name: cargo check datafusion features
     needs: linux-build-lib
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -242,7 +260,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -273,14 +291,14 @@ jobs:
   linux-test:
     name: cargo test (amd64)
     needs: linux-build-lib
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
       volumes:
         - /usr/local:/host/usr/local
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -301,7 +319,6 @@ jobs:
             --profile ci \
             --exclude datafusion-examples \
             --exclude ffi_example_table_provider \
-            --exclude datafusion-benchmarks \
             --exclude datafusion-cli \
             --workspace \
             --lib \
@@ -324,10 +341,10 @@ jobs:
   linux-test-datafusion-cli:
     name: cargo test datafusion-cli (amd64)
     needs: linux-build-lib
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -354,12 +371,12 @@ jobs:
   linux-test-example:
     name: cargo examples (amd64)
     needs: linux-build-lib
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -385,12 +402,12 @@ jobs:
   linux-test-doc:
     name: cargo test doc (amd64)
     needs: linux-build-lib
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -407,12 +424,12 @@ jobs:
   linux-rustdoc:
     name: cargo doc
     needs: linux-build-lib
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -424,7 +441,7 @@ jobs:
     name: build and run with wasm-pack
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup for wasm32
         run: |
           rustup target add wasm32-unknown-unknown
@@ -433,7 +450,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        uses: taiki-e/install-action@481c34c1cf3a84c68b5e46f4eccfc82af798415a  # v2.75.23
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853  # v2.83.2
         with:
           tool: wasm-pack
       - name: Run tests with headless mode
@@ -448,12 +465,12 @@ jobs:
   verify-benchmark-results:
     name: verify benchmark results (amd64)
     needs: linux-build-lib
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -482,7 +499,7 @@ jobs:
   sqllogictest-postgres:
     name: "Run sqllogictest with Postgres runner"
     needs: linux-build-lib
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     services:
@@ -500,8 +517,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -521,12 +538,12 @@ jobs:
   sqllogictest-substrait:
     name: "Run sqllogictest in Substrait round-trip mode"
     needs: linux-build-lib
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -560,19 +577,24 @@ jobs:
   #          export PATH=$PATH:$HOME/d/protoc/bin
   #          cargo test --lib --tests --bins --features avro,json,backtrace
 
+  # macOS scope is narrowed to `datafusion-ffi`: the only bug class amd64
+  # cannot reproduce is FFI cdylib loading (`.dylib` vs `.so` resolution in
+  # datafusion/ffi/src/tests/utils.rs). All other macos-only failures
+  # historically came from datafusion-benchmarks (now covered on amd64) or
+  # flaky sqllogictest metrics.
   macos-aarch64:
     name: cargo test (macos-aarch64)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
-      - name: Run tests (excluding doctests)
+      - name: Run datafusion-ffi tests
         shell: bash
-        run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests,substrait
+        run: cargo test --profile ci -p datafusion-ffi --lib --tests --features integration-tests
 
   vendor:
     name: Verify Vendored Code
@@ -580,7 +602,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -597,15 +619,22 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Run
         run: |
-          echo '' > datafusion/proto/src/generated/datafusion.rs
           ci/scripts/rust_fmt.sh
+
+  check-workflow-tool-installs:
+    name: Check GitHub Actions install tooling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: Check workflow tool installs
+        run: ci/scripts/check_no_cargo_install_in_workflows.sh
 
   # Coverage job disabled due to
   # https://github.com/apache/datafusion/issues/3678
@@ -638,12 +667,15 @@ jobs:
   #         path: /home/runner/.cargo
   #         # this key is not equal because the user is different than on a container (runner vs github)
   #         key: cargo-coverage-cache3-
+  #     - name: Install cargo-tarpaulin
+  #       uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853  # v2.83.2
+  #       with:
+  #         tool: cargo-tarpaulin@0.20.1
   #     - name: Run coverage
   #       run: |
   #         export PATH=$PATH:$HOME/d/protoc/bin
   #         rustup toolchain install stable
   #         rustup default stable
-  #         cargo install --version 0.20.1 cargo-tarpaulin
   #         cargo tarpaulin --all --out Xml
   #     - name: Report coverage
   #       continue-on-error: true
@@ -652,12 +684,12 @@ jobs:
   clippy:
     name: clippy
     needs: linux-build-lib
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -682,7 +714,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -699,12 +731,12 @@ jobs:
   config-docs-check:
     name: check configs.md and ***_functions.md is up-to-date
     needs: linux-build-lib
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -739,7 +771,7 @@ jobs:
       image: amd64/rust
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -769,11 +801,11 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@481c34c1cf3a84c68b5e46f4eccfc82af798415a  # v2.75.23
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853  # v2.83.2
         with:
           tool: cargo-msrv
 

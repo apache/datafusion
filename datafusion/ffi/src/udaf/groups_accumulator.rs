@@ -64,7 +64,6 @@ pub struct FFI_GroupsAccumulator {
         accumulator: &mut Self,
         values: SVec<WrappedArray>,
         group_indices: SVec<usize>,
-        opt_filter: FFI_Option<WrappedArray>,
         total_num_groups: usize,
     ) -> FFI_Result<()>,
 
@@ -195,21 +194,14 @@ unsafe extern "C" fn merge_batch_fn_wrapper(
     accumulator: &mut FFI_GroupsAccumulator,
     values: SVec<WrappedArray>,
     group_indices: SVec<usize>,
-    opt_filter: FFI_Option<WrappedArray>,
     total_num_groups: usize,
 ) -> FFI_Result<()> {
     unsafe {
         let accumulator = accumulator.inner_mut();
         let values = sresult_return!(process_values(values));
         let group_indices: Vec<usize> = group_indices.into_iter().collect();
-        let opt_filter = sresult_return!(process_opt_filter(opt_filter));
 
-        sresult!(accumulator.merge_batch(
-            &values,
-            &group_indices,
-            opt_filter.as_ref(),
-            total_num_groups
-        ))
+        sresult!(accumulator.merge_batch(&values, &group_indices, total_num_groups))
     }
 }
 
@@ -379,7 +371,6 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         unsafe {
@@ -388,20 +379,11 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
                 .map(WrappedArray::try_from)
                 .collect::<std::result::Result<Vec<_>, ArrowError>>()?;
             let group_indices = group_indices.iter().cloned().collect();
-            let opt_filter = opt_filter
-                .map(|bool_array| to_ffi(&bool_array.to_data()))
-                .transpose()?
-                .map(|(array, schema)| WrappedArray {
-                    array,
-                    schema: WrappedSchema(schema),
-                })
-                .into();
 
             df_result!((self.accumulator.merge_batch)(
                 &mut self.accumulator,
                 values.into_iter().collect(),
                 group_indices,
-                opt_filter,
                 total_num_groups
             ))
         }
@@ -517,8 +499,7 @@ mod tests {
         let second_states =
             vec![make_array(create_array!(Boolean, vec![false]).to_data())];
 
-        let opt_filter = create_array!(Boolean, vec![true]);
-        foreign_accum.merge_batch(&second_states, &[0], Some(opt_filter.as_ref()), 1)?;
+        foreign_accum.merge_batch(&second_states, &[0], 1)?;
         let groups_bool = foreign_accum.evaluate(EmitTo::All)?;
         assert_eq!(groups_bool.len(), 1);
         assert_eq!(

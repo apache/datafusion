@@ -56,7 +56,7 @@ pub trait FunctionRegistry {
 
     /// Returns a reference to the user defined higher order function named
     /// `name`.
-    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>>;
+    fn higher_order_function(&self, name: &str) -> Result<Arc<HigherOrderUDF>>;
 
     /// Returns a reference to the user defined aggregate function (udaf) named
     /// `name`.
@@ -81,8 +81,8 @@ pub trait FunctionRegistry {
     /// for example if the registry is read only.
     fn register_higher_order_function(
         &mut self,
-        _function: Arc<dyn HigherOrderUDF>,
-    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        _function: Arc<HigherOrderUDF>,
+    ) -> Result<Option<Arc<HigherOrderUDF>>> {
         not_impl_err!("Registering HigherOrderUDF")
     }
     /// Registers a new [`AggregateUDF`], returning any previously registered
@@ -122,7 +122,7 @@ pub trait FunctionRegistry {
     fn deregister_higher_order_function(
         &mut self,
         _name: &str,
-    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+    ) -> Result<Option<Arc<HigherOrderUDF>>> {
         not_impl_err!("Deregistering HigherOrderUDF")
     }
 
@@ -198,7 +198,7 @@ pub struct MemoryFunctionRegistry {
     /// Window Functions
     udwfs: HashMap<String, Arc<WindowUDF>>,
     /// Higher Order Functions
-    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
+    higher_order_functions: HashMap<String, Arc<HigherOrderUDF>>,
 }
 
 impl MemoryFunctionRegistry {
@@ -219,7 +219,7 @@ impl FunctionRegistry for MemoryFunctionRegistry {
             .ok_or_else(|| plan_datafusion_err!("Function {name} not found"))
     }
 
-    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+    fn higher_order_function(&self, name: &str) -> Result<Arc<HigherOrderUDF>> {
         self.higher_order_functions
             .get(name)
             .cloned()
@@ -245,8 +245,8 @@ impl FunctionRegistry for MemoryFunctionRegistry {
     }
     fn register_higher_order_function(
         &mut self,
-        function: Arc<dyn HigherOrderUDF>,
-    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        function: Arc<HigherOrderUDF>,
+    ) -> Result<Option<Arc<HigherOrderUDF>>> {
         Ok(self
             .higher_order_functions
             .insert(function.name().into(), function))

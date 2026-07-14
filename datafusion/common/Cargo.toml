@@ -77,7 +77,8 @@ indexmap = { workspace = true }
 itertools = { workspace = true }
 libc = "0.2.185"
 log = { workspace = true }
-object_store = { workspace = true, optional = true, features = ["tokio"] }
+num-traits = { workspace = true }
+object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
 recursive = { workspace = true, optional = true }
 sqlparser = { workspace = true, optional = true }

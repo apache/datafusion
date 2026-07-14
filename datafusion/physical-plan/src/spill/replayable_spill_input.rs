@@ -26,9 +26,8 @@ use std::task::{Context, Poll};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
-use datafusion_execution::RecordBatchStream;
 use datafusion_execution::SendableRecordBatchStream;
-use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_execution::{RecordBatchStream, SpillFile};
 use futures::Stream;
 use parking_lot::Mutex;
 
@@ -91,7 +90,7 @@ pub(crate) struct ReplayableStreamSource {
 /// Inner state exclusively owned by either [`ReplayableStreamSource`] or one [`ReplayableSpillStream`]
 enum StateInner {
     Unopened,
-    Replayable(Option<RefCountedTempFile>),
+    Replayable(Option<Arc<dyn SpillFile>>),
     Poisoned,
 }
 
@@ -222,10 +221,10 @@ impl ReplayableSpillStream {
         schema: SchemaRef,
         spill_manager: &SpillManager,
         shared_state: Arc<Mutex<Option<StateInner>>>,
-        spill_file: Option<RefCountedTempFile>,
+        spill_file: Option<Arc<dyn SpillFile>>,
     ) -> Result<Self> {
         let inner = if let Some(file) = spill_file.as_ref() {
-            spill_manager.read_spill_as_stream(file.clone(), None)?
+            spill_manager.read_spill_as_stream(Arc::clone(file), None)?
         } else {
             Box::pin(EmptyRecordBatchStream::new(Arc::clone(&schema)))
         };
@@ -282,6 +281,9 @@ impl Stream for ReplayableSpillStream {
             }
             // The stream is exhausted, give the inner state ownership back to `ReplayableStreamSource`
             Poll::Ready(None) => {
+                // Release the input pipeline's resources.
+                let inner_schema = this.inner.schema();
+                this.inner = Box::pin(EmptyRecordBatchStream::new(inner_schema));
                 if let Some(spill_file) = this.spill_file.as_mut() {
                     match spill_file.finish() {
                         Ok(file) => {

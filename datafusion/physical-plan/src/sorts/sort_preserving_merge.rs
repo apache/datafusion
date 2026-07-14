@@ -24,17 +24,16 @@ use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
     check_if_same_properties,
 };
 
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use crate::execution_plan::{EvaluationType, SchedulingType};
@@ -182,17 +181,6 @@ impl SortPreservingMergeExec {
         .with_evaluation_type(drive)
         .with_scheduling_type(scheduling)
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for SortPreservingMergeExec {
@@ -268,7 +256,13 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::UnspecifiedDistribution]
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![
+            Distribution::UnspecifiedDistribution,
+        ])
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -287,17 +281,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![&self.input]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for sort_expr in &self.expr {
-            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-        }
-        Ok(tnr)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -307,6 +290,17 @@ impl ExecutionPlan for SortPreservingMergeExec {
             SortPreservingMergeExec::new(self.expr.clone(), children.swap_remove(0))
                 .with_fetch(self.fetch),
         ))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -393,8 +387,16 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(None)
+    fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(None)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -480,7 +482,8 @@ mod tests {
             .with_memory_limit(20_000_000, 1.0)
             .build_arc()?;
         let mut config = SessionConfig::new();
-        config.options_mut().execution.batch_size = target_batch_size;
+        config.options_mut().execution.batch_size =
+            datafusion_common::config::ConfigNonZeroUsize::try_new(target_batch_size)?;
         let task_ctx = TaskContext::default()
             .with_runtime(runtime)
             .with_session_config(config);
@@ -1419,12 +1422,6 @@ mod tests {
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
         }
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
-        }
         fn with_new_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
@@ -1505,11 +1502,7 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt64, false)]);
         let properties = CongestedExec::compute_properties(Arc::new(schema.clone()));
-        let &partition_count = match properties.output_partitioning() {
-            Partitioning::RoundRobinBatch(partitions) => partitions,
-            Partitioning::Hash(_, partitions) => partitions,
-            Partitioning::UnknownPartitioning(partitions) => partitions,
-        };
+        let partition_count = properties.output_partitioning().partition_count();
         let source = CongestedExec {
             schema: schema.clone(),
             cache: Arc::new(properties),

@@ -72,6 +72,32 @@ impl LambdaVariable {
     pub fn field(&self) -> &FieldRef {
         &self.field
     }
+
+    #[cfg(feature = "proto")]
+    /// Reconstruct a [`LambdaVariable`] from a proto node.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::{
+            expect_expr_variant, physical_expr::proto_decode::require_proto_field,
+        };
+        use datafusion_proto_models::protobuf;
+
+        let var = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::LambdaVariable,
+            "LambdaVariable",
+        );
+
+        Ok(Arc::new(LambdaVariable::new(
+            var.index as usize,
+            Arc::new(
+                require_proto_field(var.field.as_ref(), "LambdaVariable", "field")?
+                    .try_into()?,
+            ),
+        )))
+    }
 }
 
 impl std::fmt::Display for LambdaVariable {
@@ -107,7 +133,8 @@ impl PhysicalExpr for LambdaVariable {
 
         if self.field.as_ref() != batch.schema_ref().field(self.index) {
             return exec_err!(
-                "Physical LambdaVariable field doesn't match batch field during evaluation {} != {}",
+                "Field of physical LambdaVariable with index {} doesn't match batch field during evaluation {} != {}",
+                self.index,
                 self.field,
                 batch.schema_ref().field(self.index)
             );
@@ -133,6 +160,24 @@ impl PhysicalExpr for LambdaVariable {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}@{}", self.name(), self.index)
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::LambdaVariable(
+                protobuf::PhysicalLambdaVariableExprNode {
+                    index: self.index() as u32,
+                    field: Some(self.field().as_ref().try_into()?),
+                },
+            )),
+        }))
     }
 }
 

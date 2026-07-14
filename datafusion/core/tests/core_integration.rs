@@ -63,8 +63,11 @@ mod tracing;
 /// Run all tests that are found in the `extension_types` directory
 mod extension_types;
 
+/// Helper functions for tests.
+mod helper;
+
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();

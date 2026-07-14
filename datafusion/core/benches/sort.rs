@@ -68,10 +68,10 @@
 
 use std::sync::Arc;
 
-use arrow::array::StringViewArray;
+use arrow::array::{ArrayRef, StringViewArray, StringViewBuilder};
 use arrow::{
-    array::{DictionaryArray, Float64Array, Int64Array, StringArray},
-    datatypes::{Int32Type, Schema},
+    array::{Array, DictionaryArray, Float64Array, Int64Array, StringArray},
+    datatypes::{Field, Int32Type, Schema},
     record_batch::RecordBatch,
 };
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -92,6 +92,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures::StreamExt;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use tokio::runtime::Runtime;
 
@@ -103,9 +104,54 @@ const NUM_STREAMS: usize = 8;
 const BATCH_SIZE: usize = 1024;
 
 /// Input sizes to benchmark. The small size (100K) exercises the
-/// in-memory concat-and-sort path; the large size (10M) exercises
+/// in-memory concat-and-sort path; the large size (1M) exercises
 /// the sort-then-merge path with high fan-in.
 const INPUT_SIZES: &[(u64, &str)] = &[(100_000, "100k"), (1_000_000, "1M")];
+
+/// Number of extra (non-sort-key) payload columns to carry alongside the sort
+/// keys in the axis benchmarks. Measures the cost of reordering wide batches.
+const EXTRA_COLUMN_COUNTS: &[usize] = &[0, 5, 20, 100];
+
+/// Input ordering profiles for the SortExec axis benchmarks.
+#[derive(Clone, Copy, Debug)]
+enum DataProfile {
+    Sorted,
+    Unsorted,
+    /// Fully sorted, then 10% of rows swapped to random positions.
+    NearlySorted,
+}
+
+impl DataProfile {
+    /// Arrange `v` (whose initial order is irrelevant) into this profile.
+    fn apply<T: Ord>(self, mut v: Vec<T>) -> Vec<T> {
+        let mut rng = StdRng::seed_from_u64(99);
+        match self {
+            DataProfile::Sorted => v.sort_unstable(),
+            DataProfile::Unsorted => v.shuffle(&mut rng),
+            DataProfile::NearlySorted => {
+                v.sort_unstable();
+                let n = v.len();
+
+                // 10% is globally misplaced
+                for _ in 0..n / 10 {
+                    v.swap(rng.random_range(0..n), rng.random_range(0..n));
+                }
+            }
+        }
+        v
+    }
+}
+
+/// Sort-key cardinality, i.e. how much the key values overlap across rows and
+/// partitions. Only affects the sort keys, not the extra payload columns.
+#[derive(Clone, Copy, Debug)]
+enum Cardinality {
+    /// Heavy overlap: i64 in `0..input_size` (~1/3 duplicates), 100 distinct
+    /// strings repeated across all rows.
+    Low,
+    /// Minimal overlap: full-range i64 and random strings (~no duplicates).
+    High,
+}
 
 type PartitionedBatches = Vec<Vec<RecordBatch>>;
 type StreamGenerator = Box<dyn Fn(bool) -> PartitionedBatches>;
@@ -312,11 +358,15 @@ impl BenchCase {
     }
 }
 
-/// Make sort exprs for each column in `schema`
+const EXTRA_COLUMN_NAME_PREFIX: &str = "extra_";
+
+/// Make sort exprs for each column in `schema`, skipping non-sort payload
+/// columns added by [`with_extra_columns`].
 fn make_sort_exprs(schema: &Schema) -> LexOrdering {
     let sort_exprs = schema
         .fields()
         .iter()
+        .filter(|f| !f.name().starts_with(EXTRA_COLUMN_NAME_PREFIX))
         .map(|f| PhysicalSortExpr::new_default(col(f.name(), schema).unwrap()));
     LexOrdering::new(sort_exprs).unwrap()
 }
@@ -328,10 +378,19 @@ fn i64_streams(sorted: bool, input_size: u64) -> PartitionedBatches {
         values.sort_unstable();
     }
 
-    split_tuples(values, |v| {
-        let array = Int64Array::from(v);
-        RecordBatch::try_from_iter(vec![("i64", Arc::new(array) as _)]).unwrap()
-    })
+    split_tuples(values, build_i64_batch)
+}
+
+/// Build a single-column i64 [`RecordBatch`].
+fn build_i64_batch(v: Vec<i64>) -> RecordBatch {
+    let array = Int64Array::from(v);
+    RecordBatch::try_from_iter(vec![("i64", Arc::new(array) as _)]).unwrap()
+}
+
+/// Build a single-column utf8 view [`RecordBatch`] under the given column name.
+fn build_utf8_view_batch(name: &str, v: Vec<Option<Arc<str>>>) -> RecordBatch {
+    let array: StringViewArray = v.into_iter().collect();
+    RecordBatch::try_from_iter(vec![(name, Arc::new(array) as _)]).unwrap()
 }
 
 /// Create streams of f64 (where approximately 1/3 values are repeated)
@@ -369,10 +428,7 @@ fn utf8_view_low_cardinality_streams(
     if sorted {
         values.sort_unstable();
     }
-    split_tuples(values, |v| {
-        let array: StringViewArray = v.into_iter().collect();
-        RecordBatch::try_from_iter(vec![("utf_view_low", Arc::new(array) as _)]).unwrap()
-    })
+    split_tuples(values, |v| build_utf8_view_batch("utf_view_low", v))
 }
 
 /// Create streams of high  cardinality (~ no duplicates) utf8_view values
@@ -384,10 +440,7 @@ fn utf8_view_high_cardinality_streams(
     if sorted {
         values.sort_unstable();
     }
-    split_tuples(values, |v| {
-        let array: StringViewArray = v.into_iter().collect();
-        RecordBatch::try_from_iter(vec![("utf_view_high", Arc::new(array) as _)]).unwrap()
-    })
+    split_tuples(values, |v| build_utf8_view_batch("utf_view_high", v))
 }
 
 /// Create streams of high  cardinality (~ no duplicates) utf8 values
@@ -485,25 +538,32 @@ fn mixed_tuple_streams(sorted: bool, input_size: u64) -> PartitionedBatches {
         tuples.sort_unstable();
     }
 
-    split_tuples(tuples, |tuples| {
-        let (tuples, i64_values): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
-        let (tuples, utf8_low2): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
-        let (f64_values, utf8_low1): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+    split_tuples(tuples, build_mixed_tuple_batch)
+}
 
-        let f64_values: Float64Array = f64_values.into_iter().map(|v| v as f64).collect();
+/// The tuple shape used by the `mixed tuple` case: (i64, utf8_low, utf8_low, i64)
+type MixedTuple = (((i64, Option<Arc<str>>), Option<Arc<str>>), i64);
 
-        let utf8_low1: StringArray = utf8_low1.into_iter().collect();
-        let utf8_low2: StringArray = utf8_low2.into_iter().collect();
-        let i64_values: Int64Array = i64_values.into_iter().collect();
+/// Build a (f64, utf8_low, utf8_low, i64) batch from [`MixedTuple`]s
+/// (the leading i64 becomes the f64 column).
+fn build_mixed_tuple_batch(tuples: Vec<MixedTuple>) -> RecordBatch {
+    let (tuples, i64_values): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+    let (tuples, utf8_low2): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+    let (f64_values, utf8_low1): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
 
-        RecordBatch::try_from_iter(vec![
-            ("f64", Arc::new(f64_values) as _),
-            ("utf_low1", Arc::new(utf8_low1) as _),
-            ("utf_low2", Arc::new(utf8_low2) as _),
-            ("i64", Arc::new(i64_values) as _),
-        ])
-        .unwrap()
-    })
+    let f64_values: Float64Array = f64_values.into_iter().map(|v| v as f64).collect();
+
+    let utf8_low1: StringArray = utf8_low1.into_iter().collect();
+    let utf8_low2: StringArray = utf8_low2.into_iter().collect();
+    let i64_values: Int64Array = i64_values.into_iter().collect();
+
+    RecordBatch::try_from_iter(vec![
+        ("f64", Arc::new(f64_values) as _),
+        ("utf_low1", Arc::new(utf8_low1) as _),
+        ("utf_low2", Arc::new(utf8_low2) as _),
+        ("i64", Arc::new(i64_values) as _),
+    ])
+    .unwrap()
 }
 
 /// Create a batch of (f64, utf8_view_low, utf8_view_low, i64)
@@ -681,10 +741,10 @@ impl DataGenerator {
     }
 
     /// Create sorted values of high  cardinality (~ no duplicates) utf8 values
-    fn utf8_high_cardinality_values(&mut self) -> Vec<Option<String>> {
+    fn utf8_high_cardinality_values(&mut self) -> Vec<Option<Arc<str>>> {
         // make random strings
         let mut input = (0..self.input_size)
-            .map(|_| Some(self.random_string()))
+            .map(|_| Some(self.random_string().into()))
             .collect::<Vec<_>>();
 
         input.sort_unstable();
@@ -698,6 +758,26 @@ impl DataGenerator {
             .take(20)
             .map(char::from)
             .collect::<String>()
+    }
+
+    /// i64 values with the given cardinality (initial order is irrelevant since
+    /// callers reorder via [`DataProfile::apply`]).
+    fn i64_values_by(&mut self, card: Cardinality) -> Vec<i64> {
+        match card {
+            Cardinality::Low => self.i64_values(),
+            // Full i64 range -> effectively unique (minimal overlap)
+            Cardinality::High => {
+                (0..self.input_size).map(|_| self.rng.random()).collect()
+            }
+        }
+    }
+
+    /// utf8 values with the given cardinality.
+    fn utf8_values_by(&mut self, card: Cardinality) -> Vec<Option<Arc<str>>> {
+        match card {
+            Cardinality::Low => self.utf8_low_cardinality_values(),
+            Cardinality::High => self.utf8_high_cardinality_values(),
+        }
     }
 }
 
@@ -733,5 +813,181 @@ where
         .collect()
 }
 
-criterion_group!(benches, criterion_benchmark);
+type AxisGenerator = Box<dyn Fn(DataProfile, Cardinality, usize) -> PartitionedBatches>;
+
+/// Benchmarks `SortExec` (at the 1M input size) across the following axes:
+/// 1. Sort columns
+///     - single column with a specialized impl (primitive or byte(view))
+///     - multiple columns, which will use fallback impl
+/// 2. Number of columns in the record batch - more columns mean more data to
+///    copy while reordering and more memory to hold
+/// 3. Value cardinality - whether the sort-key values overlap or not
+/// 4. Input ordering - already sorted / unsorted / nearly sorted
+fn sort_axis_benchmark(c: &mut Criterion) {
+    let input_size = 1_000_000u64;
+    let size_label = "1M";
+
+    let cases: Vec<(&str, AxisGenerator)> = vec![
+        (
+            "i64",
+            Box::new(move |p, card, extra| i64_axis(p, card, extra, input_size)),
+        ),
+        (
+            "utf8 view",
+            Box::new(move |p, card, extra| utf8_view_axis(p, card, extra, input_size)),
+        ),
+        (
+            "mixed tuple",
+            Box::new(move |p, card, extra| mixed_tuple_axis(p, card, extra, input_size)),
+        ),
+    ];
+
+    for (name, f) in &cases {
+        for card in [Cardinality::Low, Cardinality::High] {
+            for &extra in EXTRA_COLUMN_COUNTS {
+                for profile in [
+                    DataProfile::Sorted,
+                    DataProfile::Unsorted,
+                    DataProfile::NearlySorted,
+                ] {
+                    c.bench_function(
+                        &format!(
+                            "sort {name} {size_label} {card:?} cardinality {profile:?} +{extra}cols",
+                        ),
+                        |b| {
+                            let data = f(profile, card, extra);
+                            let case = BenchCase::sort(&data);
+                            b.iter(move || case.run())
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Single-column i64 batches
+fn i64_axis(
+    profile: DataProfile,
+    card: Cardinality,
+    extra: usize,
+    input_size: u64,
+) -> PartitionedBatches {
+    let values = profile.apply(DataGenerator::new(input_size).i64_values_by(card));
+    let batches = split_tuples(values, build_i64_batch);
+    with_extra_columns(batches, extra)
+}
+
+/// Single-column utf8 view batches
+fn utf8_view_axis(
+    profile: DataProfile,
+    card: Cardinality,
+    extra: usize,
+    input_size: u64,
+) -> PartitionedBatches {
+    let values = profile.apply(DataGenerator::new(input_size).utf8_values_by(card));
+    let batches = split_tuples(values, |v| build_utf8_view_batch("utf_view", v));
+    with_extra_columns(batches, extra)
+}
+
+/// Multi-column (f64, utf8, utf8, i64) batches.
+fn mixed_tuple_axis(
+    profile: DataProfile,
+    card: Cardinality,
+    extra: usize,
+    input_size: u64,
+) -> PartitionedBatches {
+    let mut data_gen = DataGenerator::new(input_size);
+    let tuples: Vec<MixedTuple> = data_gen
+        .i64_values_by(card)
+        .into_iter()
+        .zip(data_gen.utf8_values_by(card))
+        .zip(data_gen.utf8_values_by(card))
+        .zip(data_gen.i64_values_by(card))
+        .collect();
+    let batches = split_tuples(profile.apply(tuples), build_mixed_tuple_batch);
+    with_extra_columns(batches, extra)
+}
+
+/// Append `n` extra non-sort-key payload columns to every batch, split across i64, string, string view and dictionary
+fn with_extra_columns(batches: PartitionedBatches, n: usize) -> PartitionedBatches {
+    if n == 0 {
+        return batches;
+    }
+    let mut rng = StdRng::seed_from_u64(7);
+
+    type Generator = Box<dyn Fn(&mut DataGenerator) -> ArrayRef>;
+
+    let generators: Vec<Generator> = vec![
+        Box::new(|data_gen: &mut DataGenerator| {
+            let arr = Int64Array::from_iter_values(data_gen.i64_values());
+
+            Arc::new(arr)
+        }),
+        Box::new(|data_gen: &mut DataGenerator| {
+            let values = data_gen.utf8_low_cardinality_values();
+            let arr: StringArray = values.iter().map(|item| item.as_deref()).collect();
+
+            Arc::new(arr)
+        }),
+        Box::new(|data_gen: &mut DataGenerator| {
+            let values = data_gen.utf8_low_cardinality_values();
+            let mut builder =
+                StringViewBuilder::with_capacity(values.len()).with_deduplicate_strings();
+            for v in values {
+                builder.append_option(v.as_deref());
+            }
+
+            let arr = builder.finish();
+
+            Arc::new(arr)
+        }),
+        Box::new(|data_gen: &mut DataGenerator| {
+            let values = data_gen.utf8_low_cardinality_values();
+
+            let arr: DictionaryArray<Int32Type> =
+                values.iter().map(|item| item.as_deref()).collect();
+
+            Arc::new(arr)
+        }),
+    ];
+
+    let generator_index = (0..n)
+        .map(|_| rng.random_range(0..generators.len()))
+        .collect::<Vec<_>>();
+
+    let mut generator = DataGenerator { input_size: 1, rng };
+
+    batches
+        .into_iter()
+        .map(|stream| {
+            stream
+                .into_iter()
+                .map(|batch| {
+                    let num_rows = batch.num_rows();
+                    let mut fields =
+                        batch.schema().fields().iter().cloned().collect::<Vec<_>>();
+                    let mut columns = batch.columns().to_vec();
+                    generator.input_size = num_rows as u64;
+
+                    for (col_index, gen_index) in generator_index.iter().enumerate() {
+                        let gen_fn = &generators[*gen_index];
+
+                        let array = gen_fn(&mut generator);
+                        fields.push(Arc::new(Field::new(
+                            format!("{EXTRA_COLUMN_NAME_PREFIX}{col_index}"),
+                            array.data_type().clone(),
+                            array.logical_null_count() > 0,
+                        )));
+                        columns.push(array);
+                    }
+
+                    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
+                })
+                .collect()
+        })
+        .collect()
+}
+
+criterion_group!(benches, criterion_benchmark, sort_axis_benchmark);
 criterion_main!(benches);
