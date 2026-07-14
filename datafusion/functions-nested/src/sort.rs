@@ -471,12 +471,7 @@ fn take_by_indices<OffsetSize: OffsetSizeTrait>(
 fn rebase_offsets<OffsetSize: OffsetSizeTrait>(
     offsets: &OffsetBuffer<OffsetSize>,
 ) -> OffsetBuffer<OffsetSize> {
-    if offsets[0].as_usize() == 0 {
-        offsets.clone()
-    } else {
-        let rebased: Vec<OffsetSize> = offsets.iter().map(|o| *o - offsets[0]).collect();
-        OffsetBuffer::new(rebased.into())
-    }
+    offsets.clone().subtract(offsets[0])
 }
 
 fn order_desc(modifier: &str) -> Result<bool> {
