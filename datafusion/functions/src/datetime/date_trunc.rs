@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use arrow::array::temporal_conversions::{
     MICROSECONDS, MILLISECONDS, NANOSECONDS, as_datetime_with_timezone,
-    timestamp_ns_to_datetime,
 };
 use arrow::array::timezone::Tz;
 use arrow::array::types::{
@@ -462,6 +461,7 @@ const NANOS_PER_MILLISECOND: i64 = NANOSECONDS / MILLISECONDS;
 const NANOS_PER_SECOND: i64 = NANOSECONDS;
 const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
 const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
+const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
 
 const MICROS_PER_MILLISECOND: i64 = MICROSECONDS / MILLISECONDS;
 const MICROS_PER_SECOND: i64 = MICROSECONDS;
@@ -591,52 +591,128 @@ where
 
 fn _date_trunc_coarse_with_tz(
     granularity: DateTruncGranularity,
-    value: Option<DateTime<Tz>>,
+    value: DateTime<Tz>,
 ) -> Result<Option<i64>> {
-    if let Some(value) = value {
-        let local = value.naive_local();
-        let truncated = _date_trunc_coarse::<NaiveDateTime>(granularity, Some(local))?;
-        let truncated = truncated.and_then(|truncated| {
-            match truncated.and_local_timezone(value.timezone()) {
-                LocalResult::None => {
-                    // This can happen if the date_trunc operation moves the time into
-                    // an hour that doesn't exist due to daylight savings. On known example where
-                    // this can happen is with historic dates in the America/Sao_Paulo time zone.
-                    // To account for this adjust the time by a few hours, convert to local time,
-                    // and then adjust the time back.
-                    truncated
-                        .sub(TimeDelta::try_hours(3).unwrap())
-                        .and_local_timezone(value.timezone())
-                        .single()
-                        .map(|v| v.add(TimeDelta::try_hours(3).unwrap()))
-                }
-                LocalResult::Single(datetime) => Some(datetime),
-                LocalResult::Ambiguous(datetime1, datetime2) => {
-                    // Because we are truncating from an equally or more specific time
-                    // the original time must have been within the ambiguous local time
-                    // period. Therefore the offset of one of these times should match the
-                    // offset of the original time.
-                    if datetime1.offset().fix() == value.offset().fix() {
-                        Some(datetime1)
-                    } else {
-                        Some(datetime2)
-                    }
+    let local = value.naive_local();
+    let truncated = _date_trunc_coarse::<NaiveDateTime>(granularity, Some(local))?;
+    let truncated = truncated.and_then(|truncated| {
+        match truncated.and_local_timezone(value.timezone()) {
+            LocalResult::None => {
+                // This can happen if the date_trunc operation moves the time into
+                // an hour that doesn't exist due to daylight savings. On known example where
+                // this can happen is with historic dates in the America/Sao_Paulo time zone.
+                // To account for this adjust the time by a few hours, convert to local time,
+                // and then adjust the time back.
+                truncated
+                    .sub(TimeDelta::try_hours(3).unwrap())
+                    .and_local_timezone(value.timezone())
+                    .single()
+                    .map(|v| v.add(TimeDelta::try_hours(3).unwrap()))
+            }
+            LocalResult::Single(datetime) => Some(datetime),
+            LocalResult::Ambiguous(datetime1, datetime2) => {
+                // Because we are truncating from an equally or more specific time
+                // the original time must have been within the ambiguous local time
+                // period. Therefore the offset of one of these times should match the
+                // offset of the original time.
+                if datetime1.offset().fix() == value.offset().fix() {
+                    Some(datetime1)
+                } else {
+                    Some(datetime2)
                 }
             }
-        });
-        Ok(truncated.and_then(|value| value.timestamp_nanos_opt()))
-    } else {
-        _date_trunc_coarse::<NaiveDateTime>(granularity, None)?;
-        Ok(None)
-    }
+        }
+    });
+    Ok(truncated.and_then(|value| value.timestamp_nanos_opt()))
 }
 
+/// Days from the Unix epoch to 0000-03-01, the epoch used by the civil calendar
+/// conversions below.
+const DAYS_EPOCH_SHIFT: i64 = 719_468;
+
+/// Days in a 400 year era of the proleptic Gregorian calendar.
+const DAYS_PER_ERA: i64 = 146_097;
+
+/// Splits a day count relative to the Unix epoch into a proleptic Gregorian
+/// year, month (1-12) and day of month (1-31).
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + DAYS_EPOCH_SHIFT;
+    let era = z.div_euclid(DAYS_PER_ERA);
+    let day_of_era = z.rem_euclid(DAYS_PER_ERA);
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36524
+        - day_of_era / 146_096)
+        / 365;
+    let day_of_year =
+        day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    // Month index with March as 0, so that the leap day falls at the end of the year.
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+/// Inverse of [`civil_from_days`]: the day count relative to the Unix epoch for
+/// the given proleptic Gregorian date.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year.rem_euclid(400);
+    let month_index = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * month_index + 2) / 5 + day - 1;
+    let day_of_era =
+        year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * DAYS_PER_ERA + day_of_era - DAYS_EPOCH_SHIFT
+}
+
+/// Truncates a UTC nanosecond timestamp with integer arithmetic. Truncating on
+/// the calendar directly avoids converting every value to a `NaiveDateTime` and
+/// rebuilding it field by field.
+///
+/// Returns `None` when the truncated timestamp is no longer representable as
+/// nanoseconds since the epoch, which the caller reports as an out of range
+/// error.
 fn _date_trunc_coarse_without_tz(
     granularity: DateTruncGranularity,
-    value: Option<NaiveDateTime>,
-) -> Result<Option<i64>> {
-    let value = _date_trunc_coarse::<NaiveDateTime>(granularity, value)?;
-    Ok(value.and_then(|value| value.and_utc().timestamp_nanos_opt()))
+    value: i64,
+) -> Option<i64> {
+    let truncate_to = |unit: i64| value.checked_sub(value.rem_euclid(unit));
+    let days = || value.div_euclid(NANOS_PER_DAY);
+    let nanos_from_days = |days: i64| days.checked_mul(NANOS_PER_DAY);
+
+    match granularity {
+        // Sub-second granularities are applied by the caller, which rescales
+        // the nanoseconds to the time unit of the array.
+        DateTruncGranularity::Millisecond | DateTruncGranularity::Microsecond => {
+            Some(value)
+        }
+        DateTruncGranularity::Second => truncate_to(NANOS_PER_SECOND),
+        DateTruncGranularity::Minute => truncate_to(NANOS_PER_MINUTE),
+        DateTruncGranularity::Hour => truncate_to(NANOS_PER_HOUR),
+        DateTruncGranularity::Day => nanos_from_days(days()),
+        DateTruncGranularity::Week => {
+            let days = days();
+            // `Weekday::num_days_from_monday` for the epoch (a Thursday) is 3.
+            nanos_from_days(days - (days + 3).rem_euclid(7))
+        }
+        DateTruncGranularity::Month => {
+            let days = days();
+            let (_, _, day_of_month) = civil_from_days(days);
+            nanos_from_days(days - (day_of_month - 1))
+        }
+        DateTruncGranularity::Quarter => {
+            let (year, month, _) = civil_from_days(days());
+            nanos_from_days(days_from_civil(year, 1 + 3 * ((month - 1) / 3), 1))
+        }
+        DateTruncGranularity::Year => {
+            let (year, _, _) = civil_from_days(days());
+            nanos_from_days(days_from_civil(year, 1, 1))
+        }
+    }
 }
 
 /// Truncates the single `value`, expressed in nanoseconds since the
@@ -655,15 +731,10 @@ fn date_trunc_coarse(
             // and NaiveDateTime (ISO 8601) has no concept of timezones
             let value = as_datetime_with_timezone::<TimestampNanosecondType>(value, tz)
                 .ok_or(exec_datafusion_err!("Timestamp {value} out of range"))?;
-            _date_trunc_coarse_with_tz(granularity, Some(value))
+            _date_trunc_coarse_with_tz(granularity, value)?
         }
-        None => {
-            // Use chrono NaiveDateTime to clear the various fields, if we don't have a timezone.
-            let value = timestamp_ns_to_datetime(value)
-                .ok_or_else(|| exec_datafusion_err!("Timestamp {value} out of range"))?;
-            _date_trunc_coarse_without_tz(granularity, Some(value))
-        }
-    }?;
+        None => _date_trunc_coarse_without_tz(granularity, value),
+    };
 
     value.ok_or_else(|| {
         exec_datafusion_err!(
