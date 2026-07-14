@@ -1603,12 +1603,8 @@ impl ExecutionPlan for RepartitionExec {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
         match self.partitioning() {
-            Partitioning::Range(_) => {
-                // Range partitioning optimizer propagation is tracked in
-                // https://github.com/apache/datafusion/issues/23230
-                return Ok(SortOrderPushdownResult::Unsupported);
-            }
-            Partitioning::RoundRobinBatch(_)
+            Partitioning::Range(_)
+            | Partitioning::RoundRobinBatch(_)
             | Partitioning::Hash(_, _)
             | Partitioning::UnknownPartitioning(_) => {}
         }
@@ -1634,12 +1630,11 @@ impl ExecutionPlan for RepartitionExec {
         new_properties.partitioning = match new_properties.partitioning {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
-            UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
             Range(_) => {
-                // Range repartition optimizations are tracked in
-                // https://github.com/apache/datafusion/issues/23230
+                // Number of partitions is constrained by the split points and cannot be changed
                 return Ok(None);
             }
+            UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
         };
         Ok(Some(Arc::new(Self {
             input: Arc::clone(&self.input),
