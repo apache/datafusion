@@ -106,6 +106,7 @@ declare -a WRITE_STEPS=(
 )
 
 declare -a READONLY_STEPS=(
+  "ci/scripts/check_no_cargo_install_in_workflows.sh|false"
   "ci/scripts/rust_docs.sh|false"
 )
 
