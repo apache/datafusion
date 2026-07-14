@@ -5641,3 +5641,53 @@ set datafusion.execution.target_partitions = 4;
 
 statement count 0
 drop table t;
+
+# DISTINCT must not be removed when a unique key is downgraded to a
+# non-unique functional dependency by a join: `u.id` is a primary key, but
+# after the LEFT JOIN each `u` row can occur once per matching order.
+statement ok
+CREATE TABLE users_with_pk (id INT, name VARCHAR, primary key(id)) AS VALUES
+  (1, 'alice'),
+  (2, 'bob');
+
+statement ok
+CREATE TABLE user_orders (user_id INT, amount INT) AS VALUES
+  (1, 10),
+  (1, 20),
+  (2, 30);
+
+# BUG: the DISTINCT is dropped by ReplaceDistinctWithAggregate, so `id` is
+# returned once per matching order instead of once per user.
+query I
+SELECT DISTINCT u.id
+  FROM users_with_pk u
+  LEFT JOIN user_orders o ON u.id = o.user_id
+  ORDER BY u.id;
+----
+1
+1
+2
+
+# BUG: no Aggregate (or any other deduplication) appears in the plan.
+query TT
+EXPLAIN SELECT DISTINCT u.id
+  FROM users_with_pk u
+  LEFT JOIN user_orders o ON u.id = o.user_id;
+----
+logical_plan
+01)Projection: u.id
+02)--Left Join: u.id = o.user_id
+03)----SubqueryAlias: u
+04)------TableScan: users_with_pk projection=[id]
+05)----SubqueryAlias: o
+06)------TableScan: user_orders projection=[user_id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, user_id@0)], projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table users_with_pk;
+
+statement ok
+drop table user_orders;
