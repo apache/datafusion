@@ -450,7 +450,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c  # v2.82.10
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853  # v2.83.2
         with:
           tool: wasm-pack
       - name: Run tests with headless mode
@@ -668,7 +668,7 @@ jobs:
   #         # this key is not equal because the user is different than on a container (runner vs github)
   #         key: cargo-coverage-cache3-
   #     - name: Install cargo-tarpaulin
-  #       uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c  # v2.82.10
+  #       uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853  # v2.83.2
   #       with:
   #         tool: cargo-tarpaulin@0.20.1
   #     - name: Run coverage
@@ -744,7 +744,7 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238  # v6.2.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "20"
       - name: Check if configs.md has been modified
@@ -782,7 +782,7 @@ jobs:
 
       - name: Set up Node.js (required for prettier)
         # doc_prettier_check.sh uses npx to run prettier for Markdown formatting
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: '18'
 
@@ -805,7 +805,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c  # v2.82.10
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853  # v2.83.2
         with:
           tool: cargo-msrv
 

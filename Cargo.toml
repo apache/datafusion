@@ -187,6 +187,7 @@ pbjson = { version = "0.9.0" }
 pbjson-types = "0.9"
 percent-encoding = "2.3"
 pin-project = "1"
+pin-project-lite = "^0.2.7"
 # Should match arrow-flight's version of prost.
 prost = "0.14.1"
 rand = "0.9"
