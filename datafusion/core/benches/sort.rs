@@ -989,5 +989,5 @@ fn with_extra_columns(batches: PartitionedBatches, n: usize) -> PartitionedBatch
         .collect()
 }
 
-criterion_group!(benches, criterion_benchmark, sort_axis_benchmark);
+criterion_group!(benches, criterion_benchmark);
 criterion_main!(benches);
