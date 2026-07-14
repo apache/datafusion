@@ -22,8 +22,8 @@ use super::power::PowerFunc;
 use crate::utils::calculate_binary_math;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{
-    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float16Type,
-    Float32Type, Float64Type,
+    ArrowPrimitiveType, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
+    Decimal256Type, Float16Type, Float32Type, Float64Type,
 };
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
@@ -185,6 +185,46 @@ fn log_decimal256(value: i256, scale: i8, base: f64) -> Result<f64, ArrowError> 
     }
 }
 
+/// If `base` is a non-null scalar, returns its natural logarithm as the native
+/// type of `T`. The cast mirrors the one [`calculate_binary_math`] applies to
+/// the base, so the value seen here is the one the kernel would have used.
+fn scalar_base_ln<T: ArrowPrimitiveType>(base: &ColumnarValue) -> Option<T::Native>
+where
+    T::Native: Float + TryFrom<ScalarValue>,
+{
+    let ColumnarValue::Scalar(scalar) = base else {
+        return None;
+    };
+    if scalar.is_null() {
+        return None;
+    }
+    let scalar = scalar.cast_to(&T::DATA_TYPE).ok()?;
+    T::Native::try_from(scalar).ok().map(T::Native::ln)
+}
+
+/// `log(base, value)` over a float array.
+///
+/// `x.log(base)` is `x.ln() / base.ln()`, so a scalar base contributes the same
+/// logarithm to every row. Hoisting it out of the loop halves the transcendental
+/// calls per row without changing the formula or its operands.
+fn log_float<T>(value: &dyn Array, base: &ColumnarValue) -> Result<ArrayRef>
+where
+    T: ArrowPrimitiveType,
+    T::Native: Float + TryFrom<ScalarValue>,
+{
+    let base_ln = scalar_base_ln::<T>(base);
+    Ok(calculate_binary_math::<T, T, T, _>(
+        value,
+        base,
+        |value, base| {
+            Ok(match base_ln {
+                Some(base_ln) => value.ln() / base_ln,
+                None => value.log(base),
+            })
+        },
+    )?)
+}
+
 impl ScalarUDFImpl for LogFunc {
     fn name(&self) -> &str {
         "log"
@@ -254,20 +294,8 @@ impl ScalarUDFImpl for LogFunc {
                     |value, base| Ok(value.log(base)),
                 )?
             }
-            DataType::Float32 => {
-                calculate_binary_math::<Float32Type, Float32Type, Float32Type, _>(
-                    &value,
-                    &base,
-                    |value, base| Ok(value.log(base)),
-                )?
-            }
-            DataType::Float64 => {
-                calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
-                    &value,
-                    &base,
-                    |value, base| Ok(value.log(base)),
-                )?
-            }
+            DataType::Float32 => log_float::<Float32Type>(&value, &base)?,
+            DataType::Float64 => log_float::<Float64Type>(&value, &base)?,
             DataType::Decimal32(_, scale) => {
                 calculate_binary_math::<Decimal32Type, Float64Type, Float64Type, _>(
                     &value,

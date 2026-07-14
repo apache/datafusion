@@ -105,6 +105,11 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "log"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "concat"
 required-features = ["string_expressions"]
 
