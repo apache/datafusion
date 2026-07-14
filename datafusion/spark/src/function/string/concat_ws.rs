@@ -130,6 +130,9 @@ impl ScalarUDFImpl for SparkConcatWs {
         args: Vec<Expr>,
         _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
+        // Rule 1 — literal NULL separator → NULL (must run before pruning;
+        // `concat_ws(NULL)` and `concat_ws(NULL, …)` are both NULL in Spark
+        // regardless of how many value args follow).
         if let Some(Expr::Literal(scalar, _)) = args.first()
             && scalar.is_null()
         {
@@ -139,14 +142,27 @@ impl ScalarUDFImpl for SparkConcatWs {
             )));
         }
 
-        if matches!(args.as_slice(), [Expr::Literal(_, _)]) {
+        // Rule 2 — Spark ignores NULL value args, so any literal NULL after
+        // the separator can be dropped at plan time. The separator itself
+        // (index 0) is preserved.
+        let pruned: Vec<Expr> = args
+            .into_iter()
+            .enumerate()
+            .filter(|(i, e)| *i == 0 || !matches!(e, Expr::Literal(s, _) if s.is_null()))
+            .map(|(_, e)| e)
+            .collect();
+
+        // Rule 3 — only the separator (a literal, non-null) survives →
+        // empty string. Catches both `concat_ws(sep_lit)` directly and
+        // `concat_ws(sep_lit, NULL, NULL, …)` after Rule 2.
+        if matches!(pruned.as_slice(), [Expr::Literal(_, _)]) {
             return Ok(ExprSimplifyResult::Simplified(Expr::Literal(
                 ScalarValue::Utf8(Some(String::new())),
                 None,
             )));
         }
 
-        Ok(ExprSimplifyResult::Original(args))
+        Ok(ExprSimplifyResult::Original(pruned))
     }
 }
 
