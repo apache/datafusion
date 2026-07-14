@@ -113,11 +113,7 @@ pub trait ArrowHashTable {
 /// and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`). This is used internally by
 /// `PriorityMap::supports()` to validate grouping key type compatibility.
 pub fn is_supported_hash_key_type(kt: &DataType) -> bool {
-    kt.is_primitive()
-        || matches!(
-            kt,
-            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
-        )
+    kt.is_primitive() || StringArrayType::try_from(kt).is_ok()
 }
 
 // An implementation of ArrowHashTable for String keys
