@@ -341,6 +341,142 @@ macro_rules! make_math_unary_udf {
     };
 }
 
+/// Macro to create a unary logarithm UDF that rejects negative inputs.
+///
+/// A unary logarithm function takes an argument of type Float32 or Float64,
+/// applies a unary floating function to the argument, and returns a value of the same type.
+///
+/// $UDF: the name of the UDF struct that implements `ScalarUDFImpl`
+/// $NAME: the name of the function
+/// $UNARY_FUNC: the unary function to apply to the argument
+/// $OUTPUT_ORDERING: the output ordering calculation method of the function
+/// $GET_DOC: the function to get the documentation of the UDF
+macro_rules! make_checked_log_unary_udf {
+    ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $GET_DOC:expr) => {
+        $crate::make_udf_function!($NAME::$UDF, $NAME);
+
+        mod $NAME {
+
+            use std::sync::Arc;
+
+            use arrow::array::{Array, ArrayRef, AsArray, Float32Array, Float64Array};
+            use arrow::datatypes::{DataType, Float32Type, Float64Type};
+            use arrow::error::ArrowError;
+            use datafusion_common::{Result, exec_err};
+            use datafusion_expr::interval_arithmetic::Interval;
+            use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+            use datafusion_expr::{
+                ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl,
+                Signature, Volatility,
+            };
+
+            #[derive(Debug, PartialEq, Eq, Hash)]
+            pub struct $UDF {
+                signature: Signature,
+            }
+
+            impl $UDF {
+                pub fn new() -> Self {
+                    use DataType::*;
+                    Self {
+                        signature: Signature::uniform(
+                            1,
+                            vec![Float64, Float32],
+                            Volatility::Immutable,
+                        ),
+                    }
+                }
+            }
+
+            impl ScalarUDFImpl for $UDF {
+                fn name(&self) -> &str {
+                    stringify!($NAME)
+                }
+
+                fn signature(&self) -> &Signature {
+                    &self.signature
+                }
+
+                fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+                    let arg_type = &arg_types[0];
+
+                    match arg_type {
+                        DataType::Float32 => Ok(DataType::Float32),
+                        // For other types (possible values float64/null/int), use Float64
+                        _ => Ok(DataType::Float64),
+                    }
+                }
+
+                fn output_ordering(
+                    &self,
+                    input: &[ExprProperties],
+                ) -> Result<SortProperties> {
+                    $OUTPUT_ORDERING(input)
+                }
+
+                fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+                    $EVALUATE_BOUNDS(inputs)
+                }
+
+                fn invoke_with_args(
+                    &self,
+                    args: ScalarFunctionArgs,
+                ) -> Result<ColumnarValue> {
+                    let args = ColumnarValue::values_to_arrays(&args.args)?;
+                    let arr: ArrayRef = match args[0].data_type() {
+                        DataType::Float64 => {
+                            let result: Float64Array = args[0]
+                                .as_primitive::<Float64Type>()
+                                .try_unary(checked_log_f64)?;
+                            Arc::new(result) as ArrayRef
+                        }
+                        DataType::Float32 => {
+                            let result: Float32Array = args[0]
+                                .as_primitive::<Float32Type>()
+                                .try_unary(checked_log_f32)?;
+                            Arc::new(result) as ArrayRef
+                        }
+                        other => {
+                            return exec_err!(
+                                "Unsupported data type {other:?} for function {}",
+                                self.name()
+                            );
+                        }
+                    };
+
+                    Ok(ColumnarValue::Array(arr))
+                }
+
+                fn documentation(&self) -> Option<&Documentation> {
+                    Some($GET_DOC())
+                }
+            }
+
+            fn checked_log_f64(value: f64) -> Result<f64, ArrowError> {
+                if value < 0.0 {
+                    Err(negative_log_error())
+                } else {
+                    Ok(f64::$UNARY_FUNC(value))
+                }
+            }
+
+            fn checked_log_f32(value: f32) -> Result<f32, ArrowError> {
+                if value < 0.0 {
+                    Err(negative_log_error())
+                } else {
+                    Ok(f32::$UNARY_FUNC(value))
+                }
+            }
+
+            fn negative_log_error() -> ArrowError {
+                ArrowError::ComputeError(
+                    "Cannot take logarithm of a negative number".to_string(),
+                )
+            }
+        }
+    };
+}
+
 /// Macro to create a binary math UDF.
 ///
 /// A binary math function takes two numeric arguments. When both arguments are
