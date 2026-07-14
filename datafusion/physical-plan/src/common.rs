@@ -197,6 +197,16 @@ pub fn spawn_buffered(
             let sender = builder.tx();
 
             builder.spawn(async move {
+                // We call `reserve` (which waits until there's room for at least 1 message in the
+                // channel buffer) **before** polling from input to ensure we hold a maximum of
+                // `buffer` record batches in memory.
+                // Polling from input and then calling send() would block when the channel is full
+                // so it would essentially hold `buffer` + 1 record batches:
+                // * `buffer`: this many elements would live inside the channel, since this is the
+                //   channel's capacity
+                // * 1 extra RecordBatch which was produced, but there was no room for it in the
+                //   channel, so it's being owned by the send() future, which keeps the batch in
+                //   memory while it waits for a slot to free up
                 while let Ok(permit) = sender.reserve().await {
                     // Receiver dropped when query is shutdown early (e.g., limit) or error,
                     // no need to return propagate the send error.
@@ -300,10 +310,13 @@ mod tests {
     use crate::empty::EmptyExec;
     use crate::projection::ProjectionExec;
 
+    use crate::stream::RecordBatchStreamAdapter;
+    use futures::stream;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use arrow::{
-        array::{Float32Array, Float64Array, UInt64Array},
+        array::{Float32Array, Float64Array, Int32Array, UInt64Array},
         datatypes::{DataType, Field, Schema},
     };
 
@@ -557,18 +570,10 @@ mod tests {
         assert!(err.to_string().contains("schema metadata differ"));
     }
 
-    /// Verifies that `spawn_buffered` holds exactly `buffer + 1` record batches in memory
-    /// when no receiver is polling: `buffer` slots in the channel and 1 held in the
-    /// suspended `send()` future.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_spawn_buffered_max_in_flight_batches() {
-        use crate::stream::RecordBatchStreamAdapter;
-        use arrow::array::Int32Array;
-        use futures::stream;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
+    /// Verifies that `spawn_buffered` holds exactly `buffer` record batches in memory
+    /// when no receiver is polling
+    async fn spawn_buffered_max_in_flight_batches(buffer_size: usize) {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let buffer_size = 1;
         let num_batches = 10;
 
         let produced_count = Arc::new(AtomicUsize::new(0));
@@ -603,12 +608,16 @@ mod tests {
         // Give the producer task time to fill the channel and stall on send().
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        // With reserve(), the producer acquires a channel slot before pulling from
-        // input, so at most buffer_size batches can exist in memory simultaneously.
         assert_eq!(
             produced_count.load(Ordering::SeqCst),
             buffer_size,
             "expected exactly {buffer_size} batch(es) in memory with no receiver polling"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_spawn_buffered_max_in_flight_batches() {
+        spawn_buffered_max_in_flight_batches(1).await;
+        spawn_buffered_max_in_flight_batches(2).await;
     }
 }
