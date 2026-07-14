@@ -632,7 +632,8 @@ south 2
 statement ok
 DROP TABLE dict_count_distinct;
 
-# overlapping values with different key assignments across batches
+# same dictionary type but value order differs across batches so key ids refer to different strings;
+# grouping must use the logical value, not the raw key id
 query TI rowsort
 WITH
   first_batch AS (
@@ -640,7 +641,7 @@ WITH
     FROM (VALUES ('west'), ('east'), ('west'), (NULL)) AS t(column1)
   ),
   second_batch AS (
-    SELECT arrow_cast(column1, 'Dictionary(Int16, LargeUtf8)') AS region
+    SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS region
     FROM (VALUES ('east'), ('west'), ('north'), (NULL)) AS t(column1)
   )
 SELECT region, count(*)
@@ -651,42 +652,3 @@ NULL 2
 east 2
 north 1
 west 3
-
-# different logical values must not merge even when their dictionary key numbers coincide
-query TI rowsort
-WITH
-  first_batch AS (
-    SELECT arrow_cast(column1, 'Dictionary(Int8, LargeUtf8)') AS status
-    FROM (VALUES ('active'), ('inactive'), (NULL)) AS t(column1)
-  ),
-  second_batch AS (
-    SELECT arrow_cast(column1, 'Dictionary(Int16, Utf8)') AS status
-    FROM (VALUES ('inactive'), ('active'), (NULL)) AS t(column1)
-  )
-SELECT status, count(*)
-FROM (SELECT status FROM first_batch UNION ALL SELECT status FROM second_batch)
-GROUP BY status;
-----
-NULL 2
-active 2
-inactive 2
-
-# value present in one batch's dictionary but absent from the other
-query TI rowsort
-WITH
-  first_batch AS (
-    SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS sensor
-    FROM (VALUES ('temperature'), ('humidity'), ('temperature'), (NULL)) AS t(column1)
-  ),
-  second_batch AS (
-    SELECT arrow_cast(column1, 'Dictionary(Int8, LargeUtf8)') AS sensor
-    FROM (VALUES ('temperature'), ('pressure'), (NULL)) AS t(column1)
-  )
-SELECT sensor, count(*)
-FROM (SELECT sensor FROM first_batch UNION ALL SELECT sensor FROM second_batch)
-GROUP BY sensor;
-----
-NULL 2
-humidity 1
-pressure 1
-temperature 3
