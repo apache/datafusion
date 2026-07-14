@@ -34,7 +34,7 @@ use std::task::{Context, Poll};
 
 use arrow::array::{
     Array, ArrayRef, BinaryViewArray, BufferSpec, GenericByteViewArray, StringViewArray,
-    layout, make_array,
+    builder::GenericByteViewBuilder, layout, make_array,
 };
 use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
@@ -420,6 +420,20 @@ pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
     }
 }
 
+/// Garbage collect and deduplicate a string view before writing it out to disk
+///
+/// This is to avoid inflating disk usage and also to ensure that deduplication reduces memory pressure when reading back.
+fn gc_dedup_view<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+) -> GenericByteViewArray<T> {
+    let mut builder = GenericByteViewBuilder::<T>::with_capacity(array.len())
+        .with_deduplicate_strings();
+    for v in array.iter() {
+        builder.append_option(v);
+    }
+    builder.finish()
+}
+
 fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
     match array.data_type() {
         DataType::Utf8View => {
@@ -428,7 +442,7 @@ fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
                 .downcast_ref::<StringViewArray>()
                 .expect("Utf8View array should downcast to StringViewArray");
             if should_gc_view_array(string_view) {
-                Ok((Arc::new(string_view.gc()) as ArrayRef, true))
+                Ok((Arc::new(gc_dedup_view(string_view)) as ArrayRef, true))
             } else {
                 Ok((Arc::clone(array), false))
             }
@@ -439,7 +453,7 @@ fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
                 .downcast_ref::<BinaryViewArray>()
                 .expect("BinaryView array should downcast to BinaryViewArray");
             if should_gc_view_array(binary_view) {
-                Ok((Arc::new(binary_view.gc()) as ArrayRef, true))
+                Ok((Arc::new(gc_dedup_view(binary_view)) as ArrayRef, true))
             } else {
                 Ok((Arc::clone(array), false))
             }
@@ -1345,7 +1359,7 @@ mod tests {
         let size_without_gc: usize = array_without_gc
             .data_buffers()
             .iter()
-            .map(|buffer| buffer.capacity())
+            .map(|buffer| buffer.len())
             .sum();
 
         let gc_batch = gc_view_arrays(&sliced_batch)?;
@@ -1357,7 +1371,7 @@ mod tests {
         let size_with_gc: usize = array_with_gc
             .data_buffers()
             .iter()
-            .map(|buffer| buffer.capacity())
+            .map(|buffer| buffer.len())
             .sum();
 
         let reduction_percent =
@@ -1376,8 +1390,17 @@ mod tests {
         use arrow::array::{DictionaryArray, Int32Array};
         use arrow::buffer::Buffer;
 
-        let strings: Vec<String> = (0..200)
+        // A small pool of distinct, non-inlined (> 12 byte) strings.
+        let distinct: Vec<String> = (0..8)
             .map(|i| format!("http://example.com/nested/path/that/is/not/inlined/{i}"))
+            .collect();
+
+        // Bytes stored once each string is deduplicated (all references collapse
+        // to a single copy of every distinct value).
+        let distinct_bytes: usize = distinct.iter().map(|s| s.len()).sum();
+
+        let strings: Vec<String> = (0..200)
+            .map(|i| distinct[i % distinct.len()].clone())
             .collect();
         let string_values = Arc::new(StringViewArray::from(strings)) as ArrayRef;
 
@@ -1418,9 +1441,11 @@ mod tests {
             .as_any()
             .downcast_ref::<StringViewArray>()
             .unwrap();
-        assert!(
-            calculate_string_view_waste_ratio(gc_list_values) < 0.2,
-            "GC should compact nested List child views"
+        let list_stored_bytes: usize =
+            gc_list_values.data_buffers().iter().map(|b| b.len()).sum();
+        assert_eq!(
+            list_stored_bytes, distinct_bytes,
+            "GC should deduplicate nested List child views (regression: dedup not applied)"
         );
 
         let gc_dictionary_values = gc_batch.column(1).to_data().child_data()[0].clone();
@@ -1429,9 +1454,14 @@ mod tests {
             .as_any()
             .downcast_ref::<StringViewArray>()
             .unwrap();
-        assert!(
-            calculate_string_view_waste_ratio(gc_dictionary_values) < 0.2,
-            "GC should compact nested Dictionary values"
+        let dictionary_stored_bytes: usize = gc_dictionary_values
+            .data_buffers()
+            .iter()
+            .map(|b| b.len())
+            .sum();
+        assert_eq!(
+            dictionary_stored_bytes, distinct_bytes,
+            "GC should deduplicate nested Dictionary values (regression: dedup not applied)"
         );
 
         Ok(())
