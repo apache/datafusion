@@ -20,7 +20,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use std::sync::Arc;
 
 use crate::join_key_set::JoinKeySet;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{NullEquality, Result};
 use datafusion_expr::expr::{BinaryExpr, Expr};
 use datafusion_expr::logical_plan::{
@@ -251,18 +251,19 @@ fn rewrite_children(
     plan: LogicalPlan,
     config: &dyn OptimizerConfig,
 ) -> Result<Transformed<LogicalPlan>> {
-    // Process uncorrelated subqueries in expressions, then direct children.
-    let transformed_plan = plan
-        .map_uncorrelated_subqueries(|input| optimizer.rewrite(input, config))?
-        .transform_sibling(|plan| {
-            plan.map_children(|input| optimizer.rewrite(input, config))
-        })?;
-
-    // recompute schema if the plan was transformed
-    if transformed_plan.transformed {
-        transformed_plan.map_data(|plan| plan.recompute_schema())
+    // In-place recursion via `Arc::make_mut` + `std::mem::take`. When the
+    // recursive `optimizer.rewrite(child, config)` call returns
+    // `Transformed::no`, the child's `Arc` is reused without rebuilding
+    // the parent's `LogicalPlan` variant — same shape as the
+    // ownership-based `map_uncorrelated_subqueries` + `map_children` it
+    // replaces, just without the per-node destructure/restructure cost.
+    let mut plan = plan;
+    let changed =
+        crate::optimizer::rewrite_children_in_place(&mut plan, optimizer, config)?;
+    if changed {
+        plan.recompute_schema().map(Transformed::yes)
     } else {
-        Ok(transformed_plan)
+        Ok(Transformed::no(plan))
     }
 }
 
