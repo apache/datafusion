@@ -254,7 +254,7 @@ mod tests {
             writer.close().unwrap();
         }
         let reader = SerializedFileReader::new(Bytes::from(buf)).unwrap();
-        reader.metadata().row_groups().iter().cloned().collect()
+        reader.metadata().row_groups().to_vec()
     }
 
     #[test]
