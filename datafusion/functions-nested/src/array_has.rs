@@ -22,7 +22,7 @@ use arrow::array::{
     BooleanBufferBuilder, Datum, MAX_INLINE_VIEW_LEN, PrimitiveArray, Scalar,
     StringArrayType, StringViewArray,
 };
-use arrow::buffer::{BooleanBuffer, NullBuffer};
+use arrow::buffer::{BooleanBuffer, NullBuffer, OffsetBuffer};
 use arrow::datatypes::DataType;
 use arrow::downcast_primitive_array;
 use arrow::row::{RowConverter, Rows, SortField};
@@ -337,17 +337,21 @@ fn array_has_dispatch_for_array<'a>(
     let combined_nulls = NullBuffer::union(haystack.nulls(), needle.nulls());
     let needle = needle.as_ref();
 
-    // Slice to the visible region and rebase the offsets to 0 so `offsets[i]`
-    // indexes `visible_values` directly (the haystack may be a sliced list).
-    let mut offsets: Vec<usize> = haystack.offsets().collect();
-    let first_offset = offsets[0];
+    // Rebase offsets to 0 with `OffsetBuffer::subtract` so `offsets[i]` indexes
+    // `visible_values` directly (the haystack may be a sliced list).
+    let raw = OffsetBuffer::new(
+        haystack
+            .offsets()
+            .map(|o| o as i64)
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    let first = raw[0];
     let visible_values = haystack
         .values()
-        .slice(first_offset, offsets[offsets.len() - 1] - first_offset);
+        .slice(first as usize, (raw[raw.len() - 1] - first) as usize);
     let visible_values = visible_values.as_ref();
-    for offset in &mut offsets {
-        *offset -= first_offset;
-    }
+    let offsets: Vec<usize> = raw.subtract(first).iter().map(|&o| o as usize).collect();
 
     // Fast path for primitive/string elements whose (coerced) type matches the
     // needle; a type mismatch or a nested type falls through to the per-row kernel.
