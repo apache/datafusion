@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Schema, SchemaRef};
+use arrow_schema::DataType;
 use async_trait::async_trait;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{DataFusionError, HashMap, Result, internal_datafusion_err};
@@ -322,18 +323,68 @@ impl FileSink for ParquetSink {
                             writer.flushed_row_groups().first()
                             && metadata_enabled
                         {
-                            print!("lol");
                             let stats: Vec<_> = row_group_metadata
                                 .columns()
                                 .iter()
                                 .filter_map(|c| c.statistics())
-                                .filter(|s| {
-                                    matches!(
-                                        s,
-                                        Statistics::Int32(_)
-                                            | Statistics::Int64(_)
-                                            | Statistics::Int96(_)
-                                    )
+                                .filter(|s| s.min_is_exact() && s.max_is_exact())
+                                .filter_map(|s| match s {
+                                    Statistics::Int32(val) => {
+                                        let min = val
+                                            .min_opt()
+                                            .and_then(|m| i64::try_from(*m).ok());
+                                        let max = val
+                                            .max_opt()
+                                            .and_then(|m| i64::try_from(*m).ok());
+                                        min.zip(max)
+                                    }
+                                    Statistics::Int64(val) => {
+                                        let min = val
+                                            .min_opt()
+                                            .and_then(|m| i64::try_from(*m).ok());
+                                        let max = val
+                                            .max_opt()
+                                            .and_then(|m| i64::try_from(*m).ok());
+                                        min.zip(max)
+                                    }
+                                    // There's an Int96 type, but we're ignoring that as it's too big to downcast anyways
+                                    _ => None,
+                                })
+                                .map(|(min, max)| {
+                                    if min < 0 || max < 0 {
+                                        // Signed
+                                        if min >= i8::MIN as i64 && max <= i8::MAX as i64
+                                        {
+                                            return Ok(DataType::Int8);
+                                        }
+
+                                        if min >= i16::MIN as i64
+                                            && max <= i16::MAX as i64
+                                        {
+                                            return Ok(DataType::Int16);
+                                        }
+
+                                        if min >= i32::MIN as i64
+                                            && max <= i32::MAX as i64
+                                        {
+                                            return Ok(DataType::Int32);
+                                        }
+                                    } else {
+                                        // Unsigned
+                                        if max <= u8::MAX as i64 {
+                                            return Ok(DataType::UInt8);
+                                        }
+
+                                        if max <= u16::MAX as i64 {
+                                            return Ok(DataType::UInt16);
+                                        }
+
+                                        if max <= u32::MAX as i64 {
+                                            return Ok(DataType::UInt32);
+                                        }
+                                    }
+
+                                    Ok(DataType::Null) // TODO: maybe change this?
                                 })
                                 .collect();
                         }
