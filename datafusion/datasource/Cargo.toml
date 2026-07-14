@@ -73,14 +73,10 @@ url = { workspace = true }
 zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
-arrow-schema = { workspace = true }
 criterion = { workspace = true }
 datafusion-functions = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
-
-[package.metadata.cargo-machete]
-ignored = ["arrow-schema"]
 
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet
