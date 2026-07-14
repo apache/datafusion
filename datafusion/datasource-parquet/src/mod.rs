@@ -44,6 +44,7 @@ pub mod source;
 mod supported_predicates;
 #[cfg(test)]
 mod test_util;
+mod type_narrowing;
 mod virtual_column;
 mod writer;
 

@@ -1,0 +1,369 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Narrow integer Arrow types in embedded Parquet `ARROW:schema` metadata
+//! based on exact column chunk min/max statistics.
+//!
+//! Physical page encoding is left unchanged; only the Arrow schema hint in
+//! file key/value metadata is rewritten so readers can advertise a tighter
+//! type when the value domain fits.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use arrow::datatypes::{DataType, Field, Fields, Schema};
+use parquet::file::metadata::RowGroupMetaData;
+use parquet::file::statistics::Statistics;
+
+/// If any integer fields can be narrowed from exact row-group statistics,
+/// returns a new schema with those field types updated. Returns `None` when
+/// nothing changes (or there is no eligible data).
+pub(crate) fn try_narrow_integer_schema(
+    schema: &Schema,
+    row_groups: &[RowGroupMetaData],
+) -> Option<Schema> {
+    if row_groups.is_empty() {
+        return None;
+    }
+
+    let domains = merge_exact_integer_domains(row_groups)?;
+    if domains.is_empty() {
+        return None;
+    }
+
+    let mut changed = false;
+    let fields = narrow_fields(schema.fields(), &[], &domains, &mut changed);
+    if !changed {
+        return None;
+    }
+
+    Some(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+/// Merge exact Int32/Int64 min/max across all row groups, keyed by Parquet
+/// column path string (e.g. `"id"` or `"tags.list.element"`).
+///
+/// A column is omitted if any row group lacks exact min/max for it.
+fn merge_exact_integer_domains(
+    row_groups: &[RowGroupMetaData],
+) -> Option<HashMap<String, (i64, i64)>> {
+    let mut domains: Option<HashMap<String, (i64, i64)>> = None;
+
+    for rg in row_groups {
+        let mut this_rg = HashMap::new();
+        for column in rg.columns() {
+            let path = column.column_path().string();
+            let Some(stats) = column.statistics() else {
+                continue;
+            };
+            if !stats.min_is_exact() || !stats.max_is_exact() {
+                continue;
+            }
+            let Some((min, max)) = int_min_max(stats) else {
+                continue;
+            };
+            this_rg.insert(path, (min, max));
+        }
+
+        match &mut domains {
+            None => domains = Some(this_rg),
+            Some(merged) => {
+                merged.retain(|path, (file_min, file_max)| {
+                    let Some((min, max)) = this_rg.get(path) else {
+                        return false;
+                    };
+                    *file_min = (*file_min).min(*min);
+                    *file_max = (*file_max).max(*max);
+                    true
+                });
+            }
+        }
+    }
+
+    domains
+}
+
+fn int_min_max(stats: &Statistics) -> Option<(i64, i64)> {
+    match stats {
+        Statistics::Int32(val) => {
+            let min = val.min_opt().copied().map(i64::from)?;
+            let max = val.max_opt().copied().map(i64::from)?;
+            Some((min, max))
+        }
+        Statistics::Int64(val) => {
+            let min = *val.min_opt()?;
+            let max = *val.max_opt()?;
+            Some((min, max))
+        }
+        _ => None,
+    }
+}
+
+/// Vortex-style integer ladder: signed if any value is negative, else unsigned.
+pub(crate) fn narrowest_integer_type(min: i64, max: i64) -> DataType {
+    if min < 0 || max < 0 {
+        if min >= i8::MIN as i64 && max <= i8::MAX as i64 {
+            DataType::Int8
+        } else if min >= i16::MIN as i64 && max <= i16::MAX as i64 {
+            DataType::Int16
+        } else if min >= i32::MIN as i64 && max <= i32::MAX as i64 {
+            DataType::Int32
+        } else {
+            DataType::Int64
+        }
+    } else if max <= u8::MAX as i64 {
+        DataType::UInt8
+    } else if max <= u16::MAX as i64 {
+        DataType::UInt16
+    } else if max <= u32::MAX as i64 {
+        DataType::UInt32
+    } else {
+        DataType::UInt64
+    }
+}
+
+fn is_integer_type(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+    )
+}
+
+fn integer_bit_width(dt: &DataType) -> Option<u8> {
+    match dt {
+        DataType::Int8 | DataType::UInt8 => Some(8),
+        DataType::Int16 | DataType::UInt16 => Some(16),
+        DataType::Int32 | DataType::UInt32 => Some(32),
+        DataType::Int64 | DataType::UInt64 => Some(64),
+        _ => None,
+    }
+}
+
+fn is_signed_integer(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+    )
+}
+
+fn is_unsigned_integer(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+    )
+}
+
+/// True when `candidate` is a strictly tighter integer type than `current`.
+fn is_narrower(candidate: &DataType, current: &DataType) -> bool {
+    match (integer_bit_width(candidate), integer_bit_width(current)) {
+        (Some(c), Some(cur)) if c < cur => true,
+        (Some(c), Some(cur))
+            if c == cur
+                && is_signed_integer(current)
+                && is_unsigned_integer(candidate) =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
+fn narrow_fields(
+    fields: &Fields,
+    path_prefix: &[&str],
+    domains: &HashMap<String, (i64, i64)>,
+    changed: &mut bool,
+) -> Fields {
+    fields
+        .iter()
+        .map(|field| Arc::new(narrow_field(field, path_prefix, domains, changed)))
+        .collect()
+}
+
+fn narrow_field(
+    field: &Field,
+    path_prefix: &[&str],
+    domains: &HashMap<String, (i64, i64)>,
+    changed: &mut bool,
+) -> Field {
+    let mut path: Vec<&str> = path_prefix.to_vec();
+    path.push(field.name());
+
+    let new_type = match field.data_type() {
+        DataType::Struct(children) => {
+            DataType::Struct(narrow_fields(children, &path, domains, changed))
+        }
+        DataType::List(child) => {
+            let mut list_path = path.clone();
+            list_path.push("list");
+            DataType::List(Arc::new(narrow_field(child, &list_path, domains, changed)))
+        }
+        DataType::LargeList(child) => {
+            let mut list_path = path.clone();
+            list_path.push("list");
+            DataType::LargeList(Arc::new(narrow_field(
+                child, &list_path, domains, changed,
+            )))
+        }
+        DataType::FixedSizeList(child, size) => {
+            let mut list_path = path.clone();
+            list_path.push("list");
+            DataType::FixedSizeList(
+                Arc::new(narrow_field(child, &list_path, domains, changed)),
+                *size,
+            )
+        }
+        DataType::Map(entries, sorted) => DataType::Map(
+            Arc::new(narrow_field(entries, &path, domains, changed)),
+            *sorted,
+        ),
+        DataType::Dictionary(key, value) if is_integer_type(value) => {
+            match maybe_narrow_primitive(value, &path, domains, changed) {
+                Some(narrowed) => DataType::Dictionary(key.clone(), Box::new(narrowed)),
+                None => field.data_type().clone(),
+            }
+        }
+        dt if is_integer_type(dt) => {
+            match maybe_narrow_primitive(dt, &path, domains, changed) {
+                Some(narrowed) => narrowed,
+                None => dt.clone(),
+            }
+        }
+        other => other.clone(),
+    };
+
+    Field::new(field.name(), new_type, field.is_nullable())
+        .with_metadata(field.metadata().clone())
+}
+
+fn maybe_narrow_primitive(
+    current: &DataType,
+    path: &[&str],
+    domains: &HashMap<String, (i64, i64)>,
+    changed: &mut bool,
+) -> Option<DataType> {
+    let path_key = path.join(".");
+    let (min, max) = *domains.get(&path_key)?;
+    let candidate = narrowest_integer_type(min, max);
+    if is_narrower(&candidate, current) {
+        *changed = true;
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Int32Array, Int64Array, RecordBatch, StructArray};
+    use arrow::datatypes::Field;
+    use bytes::Bytes;
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+
+    fn write_and_row_groups(batch: &RecordBatch) -> Vec<RowGroupMetaData> {
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_max_row_group_row_count(Some(batch.num_rows().max(1)))
+            .build();
+        let mut buf = Vec::new();
+        {
+            let mut writer =
+                ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+            writer.write(batch).unwrap();
+            writer.close().unwrap();
+        }
+        let reader = SerializedFileReader::new(Bytes::from(buf)).unwrap();
+        reader.metadata().row_groups().iter().cloned().collect()
+    }
+
+    #[test]
+    fn narrowest_signed_and_unsigned_ladder() {
+        assert_eq!(narrowest_integer_type(-1, 10), DataType::Int8);
+        assert_eq!(narrowest_integer_type(-200, 10), DataType::Int16);
+        assert_eq!(narrowest_integer_type(0, 200), DataType::UInt8);
+        assert_eq!(narrowest_integer_type(0, 70_000), DataType::UInt32);
+        assert_eq!(narrowest_integer_type(2, 19), DataType::UInt8);
+    }
+
+    #[test]
+    fn narrows_flat_int64_to_uint8() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![2, 19, 7]))],
+        )
+        .unwrap();
+        let row_groups = write_and_row_groups(&batch);
+        let narrowed = try_narrow_integer_schema(&schema, &row_groups).unwrap();
+        assert_eq!(narrowed.field(0).data_type(), &DataType::UInt8);
+    }
+
+    #[test]
+    fn narrows_nested_struct_integer() {
+        let inner = Arc::new(Field::new("n", DataType::Int32, true));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int32, true)])),
+            true,
+        )]));
+        let struct_array = StructArray::from(vec![(
+            Arc::clone(&inner),
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
+        )]);
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(struct_array)])
+                .unwrap();
+        let row_groups = write_and_row_groups(&batch);
+        let narrowed = try_narrow_integer_schema(&schema, &row_groups).unwrap();
+        match narrowed.field(0).data_type() {
+            DataType::Struct(fields) => {
+                assert_eq!(fields[0].data_type(), &DataType::UInt8);
+            }
+            other => panic!("expected struct, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn leaves_type_when_domain_does_not_fit_narrower() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![i32::MIN, i32::MAX]))],
+        )
+        .unwrap();
+        let row_groups = write_and_row_groups(&batch);
+        assert!(try_narrow_integer_schema(&schema, &row_groups).is_none());
+    }
+
+    #[test]
+    fn is_narrower_requires_tighter_type() {
+        assert!(is_narrower(&DataType::UInt8, &DataType::Int64));
+        assert!(is_narrower(&DataType::UInt8, &DataType::Int8));
+        assert!(!is_narrower(&DataType::Int64, &DataType::Int32));
+        assert!(!is_narrower(&DataType::UInt8, &DataType::UInt8));
+    }
+}

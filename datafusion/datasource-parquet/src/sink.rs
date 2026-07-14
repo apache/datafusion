@@ -25,7 +25,6 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow_schema::DataType;
 use async_trait::async_trait;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{DataFusionError, HashMap, Result, internal_datafusion_err};
@@ -53,17 +52,22 @@ use parquet::arrow::arrow_writer::{
     ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowRowGroupWriterFactory,
     ArrowWriterOptions, compute_leaves,
 };
-use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
+use parquet::arrow::{
+    ARROW_SCHEMA_META_KEY, ArrowWriter, AsyncArrowWriter, encode_arrow_schema,
+};
 #[cfg(feature = "parquet_encryption")]
 use parquet::encryption::encrypt::FileEncryptionProperties;
-use parquet::file::metadata::{ParquetMetaData, SortingColumn};
+use parquet::file::metadata::{
+    KeyValue, ParquetMetaData, RowGroupMetaData, SortingColumn,
+};
 use parquet::file::properties::{
     DEFAULT_MAX_ROW_GROUP_ROW_COUNT, WriterProperties, WriterPropertiesBuilder,
 };
-use parquet::file::statistics::Statistics;
 use parquet::file::writer::SerializedFileWriter;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
+
+use crate::type_narrowing::try_narrow_integer_schema;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -251,6 +255,26 @@ async fn set_writer_encryption_properties(
     Ok(builder)
 }
 
+/// When Arrow schema metadata is being written, use exact integer column
+/// statistics from flushed row groups to rewrite a narrower `ARROW:schema`
+/// hint into file KV metadata (appended so it overrides the original key).
+fn maybe_append_narrowed_arrow_schema(
+    write_arrow_metadata: bool,
+    writer_schema: &Schema,
+    row_groups: &[RowGroupMetaData],
+    mut append_kv: impl FnMut(KeyValue),
+) {
+    if !write_arrow_metadata {
+        return;
+    }
+    if let Some(narrowed) = try_narrow_integer_schema(writer_schema, row_groups) {
+        append_kv(KeyValue::new(
+            ARROW_SCHEMA_META_KEY.to_string(),
+            Some(encode_arrow_schema(&narrowed)),
+        ));
+    }
+}
+
 #[async_trait]
 impl FileSink for ParquetSink {
     fn config(&self) -> &FileSinkConfig {
@@ -308,8 +332,8 @@ impl FileSink for ParquetSink {
                     .await?;
                 let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
                     .register(context.memory_pool());
-                let metadata_enabled = parquet_opts.global.skip_arrow_metadata;
-                let schema = self.schema();
+                let write_arrow_metadata = !parquet_opts.global.skip_arrow_metadata;
+                let writer_schema = get_writer_schema(&self.config);
                 file_write_tasks.spawn(
                     async move {
                         while let Some(batch) = rx.recv().await {
@@ -319,75 +343,13 @@ impl FileSink for ParquetSink {
 
                         // Flushing here to get a complete view of the statistics for potential type narrowing before writer is closed
                         writer.flush().await?;
-                        if let Some(row_group_metadata) =
-                            writer.flushed_row_groups().first()
-                            && metadata_enabled
-                        {
-                            let stats: Vec<_> = row_group_metadata
-                                .columns()
-                                .iter()
-                                .filter_map(|c| c.statistics())
-                                .filter(|s| s.min_is_exact() && s.max_is_exact())
-                                .filter_map(|s| match s {
-                                    Statistics::Int32(val) => {
-                                        let min = val
-                                            .min_opt()
-                                            .and_then(|m| i64::try_from(*m).ok());
-                                        let max = val
-                                            .max_opt()
-                                            .and_then(|m| i64::try_from(*m).ok());
-                                        min.zip(max)
-                                    }
-                                    Statistics::Int64(val) => {
-                                        let min = val
-                                            .min_opt()
-                                            .and_then(|m| i64::try_from(*m).ok());
-                                        let max = val
-                                            .max_opt()
-                                            .and_then(|m| i64::try_from(*m).ok());
-                                        min.zip(max)
-                                    }
-                                    // There's an Int96 type, but we're ignoring that as it's too big to downcast anyways
-                                    _ => None,
-                                })
-                                .map(|(min, max)| {
-                                    if min < 0 || max < 0 {
-                                        // Signed
-                                        if min >= i8::MIN as i64 && max <= i8::MAX as i64
-                                        {
-                                            return Ok(DataType::Int8);
-                                        }
-
-                                        if min >= i16::MIN as i64
-                                            && max <= i16::MAX as i64
-                                        {
-                                            return Ok(DataType::Int16);
-                                        }
-
-                                        if min >= i32::MIN as i64
-                                            && max <= i32::MAX as i64
-                                        {
-                                            return Ok(DataType::Int32);
-                                        }
-                                    } else {
-                                        // Unsigned
-                                        if max <= u8::MAX as i64 {
-                                            return Ok(DataType::UInt8);
-                                        }
-
-                                        if max <= u16::MAX as i64 {
-                                            return Ok(DataType::UInt16);
-                                        }
-
-                                        if max <= u32::MAX as i64 {
-                                            return Ok(DataType::UInt32);
-                                        }
-                                    }
-
-                                    Ok(DataType::Null) // TODO: maybe change this?
-                                })
-                                .collect();
-                        }
+                        let row_groups = writer.flushed_row_groups().to_vec();
+                        maybe_append_narrowed_arrow_schema(
+                            write_arrow_metadata,
+                            &writer_schema,
+                            &row_groups,
+                            |kv| writer.append_key_value_metadata(kv),
+                        );
 
                         let parquet_meta_data = writer
                             .close()
@@ -742,6 +704,8 @@ async fn concatenate_parallel_row_groups(
     mut serialize_rx: Receiver<SpawnedTask<RBStreamSerializeResult>>,
     mut object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
     pool: Arc<dyn MemoryPool>,
+    writer_schema: Arc<Schema>,
+    write_arrow_metadata: bool,
 ) -> Result<ParquetMetaData> {
     let file_reservation =
         MemoryConsumer::new("ParquetSink(SerializedFileWriter)").register(&pool);
@@ -769,6 +733,14 @@ async fn concatenate_parallel_row_groups(
         }
         rg_out.close()?;
     }
+
+    let row_groups = parquet_writer.flushed_row_groups().to_vec();
+    maybe_append_narrowed_arrow_schema(
+        write_arrow_metadata,
+        writer_schema.as_ref(),
+        &row_groups,
+        |kv| parquet_writer.append_key_value_metadata(kv),
+    );
 
     let parquet_meta_data = parquet_writer.close()?;
     let final_buff = merged_buff.buffer.try_lock().unwrap();
@@ -807,6 +779,8 @@ async fn output_single_parquet_file_parallelized(
     let (writer, row_group_writer_factory) = writer.into_serialized_writer()?;
 
     let pool = Arc::clone(&ctx.pool);
+    let writer_schema = Arc::clone(&ctx.schema);
+    let write_arrow_metadata = !ctx.skip_arrow_metadata;
     let launch_serialization_task = spawn_parquet_parallel_serialization_task(
         row_group_writer_factory,
         data,
@@ -820,6 +794,8 @@ async fn output_single_parquet_file_parallelized(
         serialize_rx,
         object_store_writer,
         pool,
+        writer_schema,
+        write_arrow_metadata,
     )
     .await?;
 
