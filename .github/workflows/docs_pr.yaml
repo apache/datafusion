@@ -53,12 +53,15 @@ jobs:
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
       - name: Install doc dependencies
         run: uv sync --package datafusion-docs
-      - name: Install dependency graph tooling
+      - name: Install Graphviz
         run: |
           set -x
           sudo apt-get update
           sudo apt-get install -y graphviz
-          cargo install cargo-depgraph --version ^1.6 --locked
+      - name: Install cargo-depgraph
+        uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c  # v2.82.10
+        with:
+          tool: cargo-depgraph@1.6
       - name: Build docs html and check for warnings
         run: |
           set -x

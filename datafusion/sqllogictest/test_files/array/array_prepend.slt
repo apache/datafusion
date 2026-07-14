@@ -57,7 +57,6 @@ select array_prepend(null, [[1,2,3]]);
 
 # DuckDB: [[]]
 # ClickHouse: [[]]
-# TODO: We may also return [[]]
 query ?
 select array_prepend([], []);
 ----

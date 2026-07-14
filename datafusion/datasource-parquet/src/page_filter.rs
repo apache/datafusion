@@ -303,7 +303,7 @@ impl PagePruningAccessPlanFilter {
 
                 debug!(
                     "Use filter and page index to create RowSelection {:?} from predicate: {:?}",
-                    &selection,
+                    selection,
                     predicate.predicate_expr(),
                 );
 
