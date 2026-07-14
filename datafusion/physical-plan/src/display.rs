@@ -1011,7 +1011,7 @@ impl TreeRenderVisitor<'_, '_> {
                     continue;
                 }
                 // there are nodes next to this, fill the space
-                write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH))?;
+                write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH))?;
             }
         }
         writeln!(self.f)?;
@@ -1201,13 +1201,13 @@ impl TreeRenderVisitor<'_, '_> {
                 )?;
                 write!(self.f, "{}", Self::RDCORNER)?;
             } else if root.has_node(x, y + 1) {
-                write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
+                write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
                 write!(self.f, "{}", Self::VERTICAL)?;
                 if has_adjacent_nodes || Self::should_render_whitespace(root, x, y) {
-                    write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
+                    write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
                 }
             } else if has_adjacent_nodes || Self::should_render_whitespace(root, x, y) {
-                write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH))?;
+                write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH))?;
             }
         }
         writeln!(self.f)?;
