@@ -24,6 +24,11 @@ SELECT regexp_instr('123123123123123', '(12)3');
 1
 
 query I
+SELECT regexp_instr('abc', '');
+----
+1
+
+query I
 SELECT regexp_instr('123123123123', '123', 1);
 ----
 1
