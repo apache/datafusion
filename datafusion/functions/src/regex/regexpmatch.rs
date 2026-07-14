@@ -16,7 +16,7 @@
 // under the License.
 
 //! Regex expressions
-use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::array::{Array, ArrayRef, AsArray, Datum};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
@@ -116,6 +116,15 @@ impl ScalarUDFImpl for RegexpMatchFunc {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
+
+        // A literal pattern is the common case. Passing it to the kernel as a
+        // scalar lets the regex be compiled once for the whole array, rather
+        // than expanding the literal to a full array and having the kernel look
+        // the pattern up in a per-row cache keyed on the pattern string.
+        if let Some(result) = regexp_match_scalar_pattern(args)? {
+            return Ok(ColumnarValue::Array(result));
+        }
+
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -143,6 +152,61 @@ impl ScalarUDFImpl for RegexpMatchFunc {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+/// Runs `regexp_match` with the pattern (and flags, if given) passed to the
+/// kernel as scalar [`Datum`]s, so the regex is compiled once for the whole
+/// array.
+///
+/// Returns `Ok(None)` when the arguments do not fit this shape, in which case
+/// the caller falls back to the general path. Only the compiled-regex work is
+/// affected here, so any shape the fast path declines - including a null
+/// pattern and the unsupported "global" flag - is handled, and reported on, by
+/// the general path exactly as before.
+fn regexp_match_scalar_pattern(args: &[ColumnarValue]) -> Result<Option<ArrayRef>> {
+    let (values, pattern, flags) = match args {
+        [values, pattern] => (values, pattern, None),
+        [values, pattern, flags] => (values, pattern, Some(flags)),
+        _ => return Ok(None),
+    };
+
+    let (ColumnarValue::Array(values), ColumnarValue::Scalar(pattern)) =
+        (values, pattern)
+    else {
+        return Ok(None);
+    };
+    let flags = match flags {
+        None => None,
+        Some(ColumnarValue::Scalar(flags)) => Some(flags),
+        // An array of flags has to be zipped with the values row by row.
+        Some(ColumnarValue::Array(_)) => return Ok(None),
+    };
+
+    if !matches!(pattern.try_as_str(), Some(Some(_)))
+        || flags.is_some_and(|flags| flags.try_as_str() == Some(Some("g")))
+    {
+        return Ok(None);
+    }
+
+    // The kernel requires the values, the pattern and the flags to share one
+    // string type.
+    let value_type = values.data_type();
+    if &pattern.data_type() != value_type
+        || flags.is_some_and(|flags| &flags.data_type() != value_type)
+    {
+        return Ok(None);
+    }
+
+    let pattern = pattern.to_scalar()?;
+    let flags = flags.map(ScalarValue::to_scalar).transpose()?;
+
+    regexp::regexp_match(
+        values,
+        &pattern,
+        flags.as_ref().map(|flags| flags as &dyn Datum),
+    )
+    .map(Some)
+    .map_err(|e| arrow_datafusion_err!(e))
 }
 
 pub fn regexp_match(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -256,5 +320,72 @@ mod tests {
             re_err.strip_backtrace(),
             "Error during planning: regexp_match() does not support the \"global\" option"
         );
+    }
+
+    /// The literal-pattern fast path must agree with the general path that
+    /// zips a pattern array with the values, for every argument shape.
+    #[test]
+    fn test_scalar_pattern_matches_array_pattern() {
+        use super::{RegexpMatchFunc, ScalarValue};
+        use arrow::array::{Array, ArrayRef};
+        use arrow::datatypes::{DataType, Field};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+
+        let values = Arc::new(StringArray::from(vec![
+            Some("abc"),
+            Some("ABC"),
+            None,
+            Some(""),
+            Some("a-b-c"),
+        ])) as ArrayRef;
+
+        for pattern in ["([a-z])(b)?", "^(A)", "no-match", "", "[a-z]+"] {
+            for flags in [None, Some("i")] {
+                let mut scalar_args = vec![
+                    ColumnarValue::Array(Arc::clone(&values)),
+                    ColumnarValue::Scalar(ScalarValue::Utf8(Some(pattern.to_string()))),
+                ];
+                let mut array_args = vec![
+                    Arc::clone(&values),
+                    Arc::new(StringArray::from(vec![pattern; values.len()])) as ArrayRef,
+                ];
+                if let Some(flags) = flags {
+                    scalar_args.push(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                        flags.to_string(),
+                    ))));
+                    array_args
+                        .push(Arc::new(StringArray::from(vec![flags; values.len()]))
+                            as ArrayRef);
+                }
+
+                let arg_fields = scalar_args
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, arg)| {
+                        Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+                    })
+                    .collect();
+                let actual = RegexpMatchFunc::new()
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: scalar_args,
+                        arg_fields,
+                        number_rows: values.len(),
+                        return_field: Field::new_list(
+                            "f",
+                            Field::new_list_field(DataType::Utf8, true),
+                            true,
+                        )
+                        .into(),
+                        config_options: Arc::new(ConfigOptions::default()),
+                    })
+                    .unwrap()
+                    .to_array(values.len())
+                    .unwrap();
+
+                let expected = regexp_match(&array_args).unwrap();
+                assert_eq!(&actual, &expected, "pattern={pattern:?} flags={flags:?}");
+            }
+        }
     }
 }
