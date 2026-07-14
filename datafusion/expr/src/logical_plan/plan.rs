@@ -2808,6 +2808,7 @@ impl Window {
                 let WindowFunction {
                     fun: WindowFunctionDefinition::WindowUDF(udwf),
                     params: WindowFunctionParams { partition_by, .. },
+                    ..
                 } = window_fun.as_ref()
                 else {
                     return None;

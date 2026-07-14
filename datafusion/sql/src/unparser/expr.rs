@@ -170,7 +170,7 @@ impl Unparser<'_> {
                     negated: *negated,
                 })
             }
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args, .. }) => {
                 let func_name = func.name();
 
                 if let Some(expr) = self
@@ -278,6 +278,7 @@ impl Unparser<'_> {
                             distinct,
                             ..
                         },
+                    ..
                 } = window_fun.as_ref();
                 let func_name = fun.name();
 
@@ -2297,6 +2298,7 @@ mod tests {
                         distinct: false,
                         filter: None,
                     },
+                    spans: Spans::new(),
                 }),
                 r#"row_number(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
             ),
@@ -2324,6 +2326,7 @@ mod tests {
                         distinct: false,
                         filter: Some(Box::new(col("a").gt(lit(100)))),
                     },
+                    spans: Spans::new(),
                 }),
                 r#"count(*) FILTER (WHERE (a > 100)) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
             ),
@@ -3302,6 +3305,7 @@ mod tests {
                     Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
                     Expr::Literal(ScalarValue::Int64(Some(2)), None),
                 ],
+                spans: Spans::new(),
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
@@ -3481,6 +3485,7 @@ mod tests {
             let expr = Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(FromUnixtimeFunc::new())),
                 args: vec![col("date_col")],
+                spans: Spans::new(),
             });
 
             let ast = unparser.expr_to_sql(&expr)?;
@@ -3565,6 +3570,7 @@ mod tests {
                     Expr::Literal(ScalarValue::Utf8(Some(precision.to_string())), None),
                     col("date_col"),
                 ],
+                spans: Spans::new(),
             });
 
             let ast = unparser.expr_to_sql(&expr)?;
@@ -3823,6 +3829,7 @@ mod tests {
                 datafusion_functions::datetime::date_part::DatePartFunc::new(),
             )),
             args: vec![lit("YEAR"), col("date_col")],
+            spans: Spans::new(),
         });
         let actual = format!("{}", unparser.expr_to_sql(&expr)?);
         assert_eq!(actual, "EXTRACT(YEAR FROM `date_col`)");

@@ -336,7 +336,7 @@ pub fn create_physical_expr(
             input_dfschema,
             execution_props,
         )?),
-        Expr::ScalarFunction(ScalarFunction { func, args }) => {
+        Expr::ScalarFunction(ScalarFunction { func, args, .. }) => {
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
             let config_options = match execution_props.config_options.as_ref() {

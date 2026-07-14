@@ -20,7 +20,8 @@ use crate::logical_plan::consumer::{
     from_substrait_sorts, substrait_fun_name,
 };
 use datafusion::common::{
-    DFSchema, ScalarValue, not_impl_err, plan_datafusion_err, plan_err, substrait_err,
+    DFSchema, ScalarValue, Spans, not_impl_err, plan_datafusion_err, plan_err,
+    substrait_err,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr::WindowFunctionParams;
@@ -115,6 +116,7 @@ pub async fn from_window_function(
             null_treatment: None,
             distinct: false,
         },
+        spans: Spans::new(),
     }))
 }
 

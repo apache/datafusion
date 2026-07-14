@@ -26,7 +26,7 @@ use crate::strings::{
 use arrow::array::Array;
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    Result, ScalarValue, exec_datafusion_err, internal_err, plan_err,
+    Result, ScalarValue, Spans, exec_datafusion_err, internal_err, plan_err,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
@@ -399,6 +399,7 @@ pub(crate) fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
             ScalarFunction {
                 func: concat(),
                 args: new_args,
+                spans: Spans::new(),
             },
         )))
     } else {

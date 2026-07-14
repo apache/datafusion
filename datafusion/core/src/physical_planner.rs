@@ -2439,6 +2439,7 @@ pub fn create_window_expr_with_name(
                         distinct,
                         filter,
                     },
+                ..
             } = window_fun.as_ref();
             let physical_args =
                 create_physical_exprs(args, logical_schema, execution_props)?;

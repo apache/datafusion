@@ -18,7 +18,7 @@
 use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference,
+    Column, DFSchema, DFSchemaRef, DataFusionError, Result, Spans, TableReference,
     assert_contains,
 };
 use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
@@ -2898,6 +2898,7 @@ fn test_unparse_window() -> Result<()> {
             distinct: false,
             filter: None,
         },
+        spans: Spans::new(),
     }));
     let table = table_scan(Some("test"), &schema, Some(vec![0, 1]))?.build()?;
     let plan = LogicalPlanBuilder::window_plan(table, vec![window_expr.clone()])?;
@@ -2976,6 +2977,7 @@ fn test_unparse_window_over_aggregate_without_projection() -> Result<()> {
             distinct: false,
             filter: None,
         },
+        spans: Spans::new(),
     }))
     .alias("row_idx");
     let plan = table_scan(Some("gas"), &schema, None)?
@@ -3009,6 +3011,7 @@ fn test_unparse_filter_on_window_over_aggregate_without_projection() -> Result<(
             distinct: false,
             filter: None,
         },
+        spans: Spans::new(),
     }))
     .alias("row_idx");
     let plan = table_scan(Some("gas"), &schema, None)?
@@ -3044,6 +3047,7 @@ fn test_unparse_filter_on_aggregate_output_above_window_without_projection() -> 
             distinct: false,
             filter: None,
         },
+        spans: Spans::new(),
     }))
     .alias("row_idx");
     let plan = table_scan(Some("gas"), &schema, None)?
@@ -3078,6 +3082,7 @@ fn test_unparse_window_over_table_scan_without_projection() -> Result<()> {
             distinct: false,
             filter: None,
         },
+        spans: Spans::new(),
     }))
     .alias("row_idx");
     let plan = table_scan(Some("test"), &schema, None)?
@@ -3110,6 +3115,7 @@ fn test_unparse_stacked_windows_without_projection() -> Result<()> {
             distinct: false,
             filter: None,
         },
+        spans: Spans::new(),
     }))
     .alias("row_idx");
     let rank_expr = Expr::WindowFunction(Box::new(WindowFunction {
@@ -3123,6 +3129,7 @@ fn test_unparse_stacked_windows_without_projection() -> Result<()> {
             distinct: false,
             filter: None,
         },
+        spans: Spans::new(),
     }))
     .alias("rank_idx");
     let plan = table_scan(Some("test"), &schema, None)?
@@ -3156,6 +3163,7 @@ fn test_unparse_window_over_distinct_without_projection() -> Result<()> {
             distinct: false,
             filter: None,
         },
+        spans: Spans::new(),
     }))
     .alias("row_idx");
     let plan = table_scan(Some("test"), &schema, None)?
@@ -3189,6 +3197,7 @@ fn test_unparse_window_over_limit_without_projection() -> Result<()> {
             distinct: false,
             filter: None,
         },
+        spans: Spans::new(),
     }))
     .alias("row_idx");
     let plan = table_scan(Some("test"), &schema, None)?
@@ -3222,6 +3231,7 @@ fn test_unparse_window_over_projection_without_projection() -> Result<()> {
             distinct: false,
             filter: None,
         },
+        spans: Spans::new(),
     }))
     .alias("row_idx");
     let plan = table_scan(Some("test"), &schema, None)?
@@ -3258,6 +3268,7 @@ fn test_unparse_window_over_derived_aggregate_without_projection() -> Result<()>
             distinct: false,
             filter: None,
         },
+        spans: Spans::new(),
     }))
     .alias("row_idx");
     let plan = table_scan(Some("gas"), &schema, None)?
