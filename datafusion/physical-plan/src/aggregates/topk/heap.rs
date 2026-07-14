@@ -440,14 +440,13 @@ impl<VAL: ValueType> TopKHeap<VAL> {
     }
 
     fn swap(&mut self, a_idx: usize, b_idx: usize, mapper: &mut Vec<(usize, usize)>) {
-        let a_hi = self.heap[a_idx].take().expect("Missing heap entry");
-        let b_hi = self.heap[b_idx].take().expect("Missing heap entry");
+        self.heap.swap(a_idx, b_idx);
 
-        mapper.push((a_hi.map_idx, b_idx));
-        mapper.push((b_hi.map_idx, a_idx));
+        let b_hi = self.heap[b_idx].as_ref().expect("Missing heap entry");
+        let a_hi = self.heap[a_idx].as_ref().expect("Missing heap entry");
 
-        self.heap[a_idx] = Some(b_hi);
-        self.heap[b_idx] = Some(a_hi);
+        mapper.push((b_hi.map_idx, b_idx));
+        mapper.push((a_hi.map_idx, a_idx));
     }
 
     fn heapify_down(&mut self, node_idx: usize, mapper: &mut Vec<(usize, usize)>) {
