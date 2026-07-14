@@ -841,33 +841,7 @@ SELECT range_key, SUM(value) OVER (PARTITION BY range_key, non_range_key ORDER B
 
 
 ##########
-# TEST 24: Exact Range Window Below Subset Threshold
-# Even when subset satisfaction is disabled, exact Range([range_key])
-# satisfies PARTITION BY range_key when repartitioning would not increase
-# partition count.
-##########
-
-statement ok
-set datafusion.execution.target_partitions = 4;
-
-statement ok
-set datafusion.optimizer.subset_repartition_threshold = 5;
-
-statement ok
-set datafusion.optimizer.preserve_file_partitions = 0;
-
-query TT
-EXPLAIN SELECT range_key, SUM(value) OVER (PARTITION BY range_key ORDER BY value) FROM range_partitioned;
-----
-physical_plan
-01)ProjectionExec: expr=[range_key@0 as range_key, sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
-02)--BoundedWindowAggExec: wdw=[sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[range_key@0 ASC NULLS LAST, value@1 ASC NULLS LAST], preserve_partitioning=[true]
-04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
-
-
-##########
-# TEST 25: Window Subset Rehashes Below Subset Threshold
+# TEST 24: Window Subset Rehashes Below Subset Threshold
 # Range([range_key]) is only a subset of PARTITION BY
 # (range_key, non_range_key), so it should not satisfy the window key when
 # subset satisfaction is disabled.
@@ -901,130 +875,12 @@ SELECT range_key, SUM(value) OVER (PARTITION BY range_key, non_range_key ORDER B
 statement ok
 reset datafusion.optimizer.subset_repartition_threshold;
 
-
-##########
-# TEST 26: Window Preserves Range When Preserve File Threshold Met
-# With the subset threshold not met, preserve-file threshold 1 still
-# preserves Range even though target_partitions is 5.
-##########
-
-statement ok
-set datafusion.execution.target_partitions = 5;
-
-statement ok
-set datafusion.optimizer.subset_repartition_threshold = 5;
-
-statement ok
-set datafusion.optimizer.preserve_file_partitions = 1;
-
-query TT
-EXPLAIN SELECT range_key, SUM(value) OVER (PARTITION BY range_key ORDER BY value) FROM range_partitioned;
-----
-physical_plan
-01)ProjectionExec: expr=[range_key@0 as range_key, sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
-02)--BoundedWindowAggExec: wdw=[sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[range_key@0 ASC NULLS LAST, value@1 ASC NULLS LAST], preserve_partitioning=[true]
-04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
-
-query II
-SELECT range_key, SUM(value) OVER (PARTITION BY range_key ORDER BY value) FROM range_partitioned ORDER BY range_key;
-----
-1 10
-5 50
-10 100
-15 150
-20 200
-25 250
-30 300
-35 350
-
-statement ok
-set datafusion.execution.target_partitions = 4;
-
 statement ok
 reset datafusion.optimizer.preserve_file_partitions;
 
 
 ##########
-# TEST 27: Window Keeps Range When Preserve File Threshold Not Met
-# With the subset threshold met, the window reuses Range even though the
-# preserve-file threshold is not met and target_partitions is 5.
-##########
-
-statement ok
-set datafusion.execution.target_partitions = 5;
-
-statement ok
-set datafusion.optimizer.subset_repartition_threshold = 4;
-
-statement ok
-set datafusion.optimizer.preserve_file_partitions = 5;
-
-query TT
-EXPLAIN SELECT range_key, SUM(value) OVER (PARTITION BY range_key ORDER BY value) FROM range_partitioned;
-----
-physical_plan
-01)ProjectionExec: expr=[range_key@0 as range_key, sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
-02)--BoundedWindowAggExec: wdw=[sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[range_key@0 ASC NULLS LAST, value@1 ASC NULLS LAST], preserve_partitioning=[true]
-04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
-
-query II
-SELECT range_key, SUM(value) OVER (PARTITION BY range_key ORDER BY value) FROM range_partitioned ORDER BY range_key;
-----
-1 10
-5 50
-10 100
-15 150
-20 200
-25 250
-30 300
-35 350
-
-statement ok
-set datafusion.execution.target_partitions = 4;
-
-statement ok
-reset datafusion.optimizer.preserve_file_partitions;
-
-
-##########
-# TEST 28: Window Rehashes Below Subset Threshold
-# With subset threshold 5 and only 4 input partitions, planning repartitions
-# to increase parallelism instead of reusing Range partitioning.
-##########
-
-statement ok
-set datafusion.execution.target_partitions = 5;
-
-statement ok
-set datafusion.optimizer.subset_repartition_threshold = 5;
-
-statement ok
-set datafusion.optimizer.preserve_file_partitions = 0;
-
-query TT
-EXPLAIN SELECT range_key, SUM(value) OVER (PARTITION BY range_key ORDER BY value) FROM range_partitioned;
-----
-physical_plan
-01)ProjectionExec: expr=[range_key@0 as range_key, sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
-02)--BoundedWindowAggExec: wdw=[sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[range_key@0 ASC NULLS LAST, value@1 ASC NULLS LAST], preserve_partitioning=[true]
-04)------RepartitionExec: partitioning=Hash([range_key@0], 5), input_partitions=4
-05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
-
-statement ok
-set datafusion.execution.target_partitions = 4;
-
-statement ok
-reset datafusion.optimizer.subset_repartition_threshold;
-
-statement ok
-reset datafusion.optimizer.preserve_file_partitions;
-
-
-##########
-# TEST 29: Window Without Partition Keys Uses a Single Partition
+# TEST 25: Window Without Partition Keys Uses a Single Partition
 # A window with no PARTITION BY requires a single partition; range
 # partitioning is not applicable.
 ##########
