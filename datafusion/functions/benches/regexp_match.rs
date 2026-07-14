@@ -115,8 +115,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         ],
     );
 
-    // Guards against a regression on the path where the pattern varies per row
-    // and so cannot be compiled once.
+    // Covers the path where the pattern varies per row and so cannot be
+    // compiled once for the whole array.
     let patterns = Arc::new(StringArray::from(
         (0..SIZE)
             .map(|i| if i % 2 == 0 { PATTERN } else { "^(A).*" })

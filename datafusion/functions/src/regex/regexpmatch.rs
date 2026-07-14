@@ -117,10 +117,9 @@ impl ScalarUDFImpl for RegexpMatchFunc {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
 
-        // A literal pattern is the common case. Passing it to the kernel as a
-        // scalar lets the regex be compiled once for the whole array, rather
-        // than expanding the literal to a full array and having the kernel look
-        // the pattern up in a per-row cache keyed on the pattern string.
+        // A literal pattern is the common case, and handing it to the kernel as
+        // a scalar lets the regex be compiled once for the whole array. Any
+        // other argument shape falls through to the general path below.
         if let Some(result) = regexp_match_scalar_pattern(args)? {
             return Ok(ColumnarValue::Array(result));
         }
@@ -158,11 +157,13 @@ impl ScalarUDFImpl for RegexpMatchFunc {
 /// kernel as scalar [`Datum`]s, so the regex is compiled once for the whole
 /// array.
 ///
-/// Returns `Ok(None)` when the arguments do not fit this shape, in which case
-/// the caller falls back to the general path. Only the compiled-regex work is
-/// affected here, so any shape the fast path declines - including a null
-/// pattern and the unsupported "global" flag - is handled, and reported on, by
-/// the general path exactly as before.
+/// Applies when the values are an array, the pattern is a non-null scalar of
+/// the same string type as the values, and the flags, if given, are a scalar of
+/// that same type and are not the unsupported "global" flag.
+///
+/// Returns `Ok(None)` for every other argument shape, leaving the caller's
+/// general path to materialize each argument as an array, zip the rows, and
+/// raise whatever error the shape warrants.
 fn regexp_match_scalar_pattern(args: &[ColumnarValue]) -> Result<Option<ArrayRef>> {
     let (values, pattern, flags) = match args {
         [values, pattern] => (values, pattern, None),
