@@ -894,22 +894,28 @@ fn get_valid_types(
             fn preserve_encoding(
                 current_type: &DataType,
                 casted_type: DataType,
+                desired_type: &TypeSignatureClass,
                 encoding_preservation: EncodingPreservation,
             ) -> DataType {
-                if encoding_preservation.preserve_dictionary()
-                    && let DataType::Dictionary(key_type, value_type) = current_type
-                    && !matches!(casted_type, DataType::Dictionary(_, _))
-                {
-                    DataType::Dictionary(
-                        key_type.clone(),
-                        Box::new(preserve_encoding(
+                if matches!(desired_type, TypeSignatureClass::Any) {
+                    return casted_type;
+                }
+
+                match current_type {
+                    DataType::Dictionary(key_type, value_type) => {
+                        let casted_type = preserve_encoding(
                             value_type,
                             casted_type,
+                            desired_type,
                             encoding_preservation,
-                        )),
-                    )
-                } else {
-                    casted_type
+                        );
+                        if encoding_preservation.preserve_dictionary() {
+                            DataType::Dictionary(key_type.clone(), Box::new(casted_type))
+                        } else {
+                            casted_type
+                        }
+                    }
+                    _ => casted_type,
                 }
             }
 
@@ -931,6 +937,7 @@ fn get_valid_types(
                     new_types.push(preserve_encoding(
                         current_type,
                         casted_type,
+                        param.desired_type(),
                         encoding_preservation,
                     ));
                 } else if param
@@ -945,6 +952,7 @@ fn get_valid_types(
                     new_types.push(preserve_encoding(
                         current_type,
                         casted_type,
+                        param.desired_type(),
                         encoding_preservation,
                     ));
                 } else {
@@ -2015,15 +2023,45 @@ mod tests {
             .map(|v| v.into_iter().map(|f| f.data_type().clone()).collect())
         };
 
+        // Without preservation, recursively unwrap dictionaries to the unchanged leaf.
         let output =
             nested_dictionary_input(Coercion::new_exact(TypeSignatureClass::Integer))?;
         assert_eq!(vec![DataType::Int32], output);
 
+        // With preservation, restore the complete dictionary stack around the leaf.
         let output = nested_dictionary_input(
             Coercion::new_exact(TypeSignatureClass::Integer)
                 .with_encoding_preservation(EncodingPreservation::dictionary()),
         )?;
-        assert_eq!(vec![nested_dictionary], output);
+        assert_eq!(vec![nested_dictionary.clone()], output);
+
+        let int64_coercion = || {
+            Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_int64()),
+                vec![TypeSignatureClass::Integer],
+                NativeType::Int64,
+            )
+        };
+
+        // Without preservation, materialize the coerced leaf type.
+        let output = nested_dictionary_input(int64_coercion())?;
+        assert_eq!(vec![DataType::Int64], output);
+
+        // With preservation, restore the complete dictionary stack around the coerced leaf.
+        let output = nested_dictionary_input(
+            int64_coercion()
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+        )?;
+        assert_eq!(
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Dictionary(
+                    Box::new(DataType::Int16),
+                    Box::new(DataType::Int64),
+                )),
+            )],
+            output
+        );
 
         Ok(())
     }
