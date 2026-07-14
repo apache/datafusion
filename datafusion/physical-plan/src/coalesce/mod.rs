@@ -99,7 +99,6 @@ impl LimitedBatchCoalescer {
         if let Some(fetch) = self.fetch {
             // limit previously reached
             if self.total_rows >= fetch {
-                self.release_memory();
                 return Ok(PushBatchStatus::LimitReached);
             }
 
@@ -112,8 +111,6 @@ impl LimitedBatchCoalescer {
                 let batch_head = batch.slice(0, remaining_rows);
                 self.total_rows += batch_head.num_rows();
                 self.inner.push_batch(batch_head)?;
-
-                self.release_memory();
                 return Ok(PushBatchStatus::LimitReached);
             }
         }
@@ -136,7 +133,6 @@ impl LimitedBatchCoalescer {
     pub fn finish(&mut self) -> Result<()> {
         self.inner.finish_buffered_batch()?;
         self.finished = true;
-        self.release_memory();
         Ok(())
     }
 
@@ -144,9 +140,19 @@ impl LimitedBatchCoalescer {
         self.finished
     }
 
+    fn limit_reached(&self) -> bool {
+        self.fetch.is_some_and(|fetch| self.total_rows >= fetch)
+    }
+
     /// Return the next completed batch, if any
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
-        self.inner.next_completed_batch()
+        let next = self.inner.next_completed_batch();
+
+        if self.inner.is_empty() && (self.finished || self.limit_reached()) {
+            self.release_memory();
+        }
+
+        next
     }
 
     fn release_memory(&mut self) {
