@@ -5656,8 +5656,6 @@ CREATE TABLE user_orders (user_id INT, amount INT) AS VALUES
   (1, 20),
   (2, 30);
 
-# BUG: the DISTINCT is dropped by ReplaceDistinctWithAggregate, so `id` is
-# returned once per matching order instead of once per user.
 query I
 SELECT DISTINCT u.id
   FROM users_with_pk u
@@ -5665,26 +5663,31 @@ SELECT DISTINCT u.id
   ORDER BY u.id;
 ----
 1
-1
 2
 
-# BUG: no Aggregate (or any other deduplication) appears in the plan.
+# The DISTINCT must be planned as an Aggregate; it cannot be removed based
+# on the (join-downgraded) primary key of `users_with_pk`.
 query TT
 EXPLAIN SELECT DISTINCT u.id
   FROM users_with_pk u
   LEFT JOIN user_orders o ON u.id = o.user_id;
 ----
 logical_plan
-01)Projection: u.id
-02)--Left Join: u.id = o.user_id
-03)----SubqueryAlias: u
-04)------TableScan: users_with_pk projection=[id]
-05)----SubqueryAlias: o
-06)------TableScan: user_orders projection=[user_id]
+01)Aggregate: groupBy=[[u.id]], aggr=[[]]
+02)--Projection: u.id
+03)----Left Join: u.id = o.user_id
+04)------SubqueryAlias: u
+05)--------TableScan: users_with_pk projection=[id]
+06)------SubqueryAlias: o
+07)--------TableScan: user_orders projection=[user_id]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, user_id@0)], projection=[id@0]
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
+02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, user_id@0)], projection=[id@0]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table users_with_pk;
