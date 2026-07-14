@@ -31,20 +31,12 @@ use parquet::file::statistics::Statistics;
 
 /// If any integer fields can be narrowed from exact row-group statistics,
 /// returns a new schema with those field types updated. Returns `None` when
-/// nothing changes (or there is no eligible data).
+/// nothing changes.
 pub(crate) fn try_narrow_integer_schema(
     schema: &Schema,
     row_groups: &[RowGroupMetaData],
 ) -> Option<Schema> {
-    if row_groups.is_empty() {
-        return None;
-    }
-
     let domains = merge_exact_integer_domains(row_groups)?;
-    if domains.is_empty() {
-        return None;
-    }
-
     let mut changed = false;
     let fields = narrow_fields(schema.fields(), &[], &domains, &mut changed);
     if !changed {
@@ -97,6 +89,7 @@ fn merge_exact_integer_domains(
     domains
 }
 
+/// Note that we're ignoring types like `Statistics::Int96` because if we can't cast to i64 then it's too big to downcast
 fn int_min_max(stats: &Statistics) -> Option<(i64, i64)> {
     match stats {
         Statistics::Int32(val) => {
@@ -113,9 +106,10 @@ fn int_min_max(stats: &Statistics) -> Option<(i64, i64)> {
     }
 }
 
-/// Vortex-style integer ladder: signed if any value is negative, else unsigned.
+/// Narrow to the smallest possible integer type that can represent all values
 pub(crate) fn narrowest_integer_type(min: i64, max: i64) -> DataType {
     if min < 0 || max < 0 {
+        // Signed
         if min >= i8::MIN as i64 && max <= i8::MAX as i64 {
             DataType::Int8
         } else if min >= i16::MIN as i64 && max <= i16::MAX as i64 {
@@ -125,6 +119,7 @@ pub(crate) fn narrowest_integer_type(min: i64, max: i64) -> DataType {
         } else {
             DataType::Int64
         }
+    // Unsigned
     } else if max <= u8::MAX as i64 {
         DataType::UInt8
     } else if max <= u16::MAX as i64 {
@@ -136,52 +131,14 @@ pub(crate) fn narrowest_integer_type(min: i64, max: i64) -> DataType {
     }
 }
 
-fn is_integer_type(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-    )
-}
-
-fn integer_bit_width(dt: &DataType) -> Option<u8> {
-    match dt {
-        DataType::Int8 | DataType::UInt8 => Some(8),
-        DataType::Int16 | DataType::UInt16 => Some(16),
-        DataType::Int32 | DataType::UInt32 => Some(32),
-        DataType::Int64 | DataType::UInt64 => Some(64),
-        _ => None,
-    }
-}
-
-fn is_signed_integer(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
-    )
-}
-
-fn is_unsigned_integer(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
-    )
-}
-
 /// True when `candidate` is a strictly tighter integer type than `current`.
 fn is_narrower(candidate: &DataType, current: &DataType) -> bool {
-    match (integer_bit_width(candidate), integer_bit_width(current)) {
+    match (candidate.primitive_width(), current.primitive_width()) {
         (Some(c), Some(cur)) if c < cur => true,
         (Some(c), Some(cur))
             if c == cur
-                && is_signed_integer(current)
-                && is_unsigned_integer(candidate) =>
+                && current.is_signed_integer()
+                && candidate.is_unsigned_integer() =>
         {
             true
         }
@@ -238,13 +195,13 @@ fn narrow_field(
             Arc::new(narrow_field(entries, &path, domains, changed)),
             *sorted,
         ),
-        DataType::Dictionary(key, value) if is_integer_type(value) => {
+        DataType::Dictionary(key, value) if value.is_integer() => {
             match maybe_narrow_primitive(value, &path, domains, changed) {
                 Some(narrowed) => DataType::Dictionary(key.clone(), Box::new(narrowed)),
                 None => field.data_type().clone(),
             }
         }
-        dt if is_integer_type(dt) => {
+        dt if dt.is_integer() => {
             match maybe_narrow_primitive(dt, &path, domains, changed) {
                 Some(narrowed) => narrowed,
                 None => dt.clone(),
