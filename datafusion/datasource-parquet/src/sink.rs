@@ -59,6 +59,7 @@ use parquet::file::metadata::{ParquetMetaData, SortingColumn};
 use parquet::file::properties::{
     DEFAULT_MAX_ROW_GROUP_ROW_COUNT, WriterProperties, WriterPropertiesBuilder,
 };
+use parquet::file::statistics::Statistics;
 use parquet::file::writer::SerializedFileWriter;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -307,6 +308,7 @@ impl FileSink for ParquetSink {
                 let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
                     .register(context.memory_pool());
                 let metadata_enabled = parquet_opts.global.skip_arrow_metadata;
+                let schema = self.schema();
                 file_write_tasks.spawn(
                     async move {
                         while let Some(batch) = rx.recv().await {
@@ -318,8 +320,22 @@ impl FileSink for ParquetSink {
                         writer.flush().await?;
                         if let Some(row_group_metadata) =
                             writer.flushed_row_groups().first()
+                            && metadata_enabled
                         {
                             print!("lol");
+                            let stats: Vec<_> = row_group_metadata
+                                .columns()
+                                .iter()
+                                .filter_map(|c| c.statistics())
+                                .filter(|s| {
+                                    matches!(
+                                        s,
+                                        Statistics::Int32(_)
+                                            | Statistics::Int64(_)
+                                            | Statistics::Int96(_)
+                                    )
+                                })
+                                .collect();
                         }
 
                         let parquet_meta_data = writer
