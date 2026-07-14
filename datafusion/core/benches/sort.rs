@@ -67,6 +67,7 @@
 //! ```
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use arrow::array::{ArrayRef, StringViewArray, StringViewBuilder};
 use arrow::{
@@ -163,62 +164,62 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "i64",
                 Box::new(move |sorted| i64_streams(sorted, input_size)),
             ),
-            // (
-            //     "f64",
-            //     Box::new(move |sorted| f64_streams(sorted, input_size)),
-            // ),
-            // (
-            //     "utf8 low cardinality",
-            //     Box::new(move |sorted| utf8_low_cardinality_streams(sorted, input_size)),
-            // ),
-            // (
-            //     "utf8 high cardinality",
-            //     Box::new(move |sorted| utf8_high_cardinality_streams(sorted, input_size)),
-            // ),
-            // (
-            //     "utf8 view low cardinality",
-            //     Box::new(move |sorted| {
-            //         utf8_view_low_cardinality_streams(sorted, input_size)
-            //     }),
-            // ),
-            // (
-            //     "utf8 view high cardinality",
-            //     Box::new(move |sorted| {
-            //         utf8_view_high_cardinality_streams(sorted, input_size)
-            //     }),
-            // ),
-            // (
-            //     "utf8 tuple",
-            //     Box::new(move |sorted| utf8_tuple_streams(sorted, input_size)),
-            // ),
-            // (
-            //     "utf8 view tuple",
-            //     Box::new(move |sorted| utf8_view_tuple_streams(sorted, input_size)),
-            // ),
-            // (
-            //     "utf8 dictionary",
-            //     Box::new(move |sorted| dictionary_streams(sorted, input_size)),
-            // ),
-            // (
-            //     "utf8 dictionary tuple",
-            //     Box::new(move |sorted| dictionary_tuple_streams(sorted, input_size)),
-            // ),
-            // (
-            //     "mixed dictionary tuple",
-            //     Box::new(move |sorted| {
-            //         mixed_dictionary_tuple_streams(sorted, input_size)
-            //     }),
-            // ),
-            // (
-            //     "mixed tuple",
-            //     Box::new(move |sorted| mixed_tuple_streams(sorted, input_size)),
-            // ),
-            // (
-            //     "mixed tuple with utf8 view",
-            //     Box::new(move |sorted| {
-            //         mixed_tuple_with_utf8_view_streams(sorted, input_size)
-            //     }),
-            // ),
+            (
+                "f64",
+                Box::new(move |sorted| f64_streams(sorted, input_size)),
+            ),
+            (
+                "utf8 low cardinality",
+                Box::new(move |sorted| utf8_low_cardinality_streams(sorted, input_size)),
+            ),
+            (
+                "utf8 high cardinality",
+                Box::new(move |sorted| utf8_high_cardinality_streams(sorted, input_size)),
+            ),
+            (
+                "utf8 view low cardinality",
+                Box::new(move |sorted| {
+                    utf8_view_low_cardinality_streams(sorted, input_size)
+                }),
+            ),
+            (
+                "utf8 view high cardinality",
+                Box::new(move |sorted| {
+                    utf8_view_high_cardinality_streams(sorted, input_size)
+                }),
+            ),
+            (
+                "utf8 tuple",
+                Box::new(move |sorted| utf8_tuple_streams(sorted, input_size)),
+            ),
+            (
+                "utf8 view tuple",
+                Box::new(move |sorted| utf8_view_tuple_streams(sorted, input_size)),
+            ),
+            (
+                "utf8 dictionary",
+                Box::new(move |sorted| dictionary_streams(sorted, input_size)),
+            ),
+            (
+                "utf8 dictionary tuple",
+                Box::new(move |sorted| dictionary_tuple_streams(sorted, input_size)),
+            ),
+            (
+                "mixed dictionary tuple",
+                Box::new(move |sorted| {
+                    mixed_dictionary_tuple_streams(sorted, input_size)
+                }),
+            ),
+            (
+                "mixed tuple",
+                Box::new(move |sorted| mixed_tuple_streams(sorted, input_size)),
+            ),
+            (
+                "mixed tuple with utf8 view",
+                Box::new(move |sorted| {
+                    mixed_tuple_with_utf8_view_streams(sorted, input_size)
+                }),
+            ),
         ];
 
         for (name, f) in &cases {
@@ -823,34 +824,68 @@ type AxisGenerator = Box<dyn Fn(DataProfile, Cardinality, usize) -> PartitionedB
 ///    copy while reordering and more memory to hold
 /// 3. Value cardinality - whether the sort-key values overlap or not
 /// 4. Input ordering - already sorted / unsorted / nearly sorted
-fn sort_axis_benchmark(c: &mut Criterion) {
-    let input_size = 1_000_000u64;
-    let size_label = "1M";
+/// Input size for the axis benchmark at a given extra-column count. The
+/// wide-payload cases (20+ extra cols) are dominated by payload reordering, so
+/// 100k rows still exercises the wide-take path without the multi-second-per-iter
+/// cost of 1M.
+fn axis_input_size(extra: usize) -> (u64, &'static str) {
+    if extra >= 20 {
+        (100_000, "100k")
+    } else {
+        (1_000_000, "1M")
+    }
+}
 
+/// Read a duration (seconds, may be fractional) from `var`. Falls back to
+/// `default_secs` when unset; panics if set to a value that isn't a number.
+fn env_duration(var: &str, default_secs: f64) -> Duration {
+    let secs = match std::env::var(var) {
+        Ok(s) => s
+            .parse::<f64>()
+            .unwrap_or_else(|e| panic!("invalid {var}={s:?}: {e}")),
+        Err(_) => default_secs,
+    };
+    Duration::from_secs_f64(secs)
+}
+
+fn sort_axis_benchmark(c: &mut Criterion) {
     let cases: Vec<(&str, AxisGenerator)> = vec![
         (
             "i64",
-            Box::new(move |p, card, extra| i64_axis(p, card, extra, input_size)),
+            Box::new(|p, card, extra| i64_axis(p, card, extra, axis_input_size(extra).0)),
         ),
         (
             "utf8 view",
-            Box::new(move |p, card, extra| utf8_view_axis(p, card, extra, input_size)),
+            Box::new(|p, card, extra| {
+                utf8_view_axis(p, card, extra, axis_input_size(extra).0)
+            }),
         ),
         (
             "mixed tuple",
-            Box::new(move |p, card, extra| mixed_tuple_axis(p, card, extra, input_size)),
+            Box::new(|p, card, extra| {
+                mixed_tuple_axis(p, card, extra, axis_input_size(extra).0)
+            }),
         ),
     ];
+
+    // The axis benches are all floor-bound (short per-iter), so the default
+    // criterion warm-up/measurement windows dominate their wall-clock. Shrink
+    // them here; override with SORT_AXIS_WARMUP_SECS / SORT_AXIS_MEASUREMENT_SECS.
+    let mut group = c.benchmark_group("sort_axis");
+    group.sample_size(10);
+    group.warm_up_time(env_duration("SORT_AXIS_WARMUP_SECS", 1.0));
+    group.measurement_time(env_duration("SORT_AXIS_MEASUREMENT_SECS", 2.0));
 
     for (name, f) in &cases {
         for card in [Cardinality::Low, Cardinality::High] {
             for &extra in EXTRA_COLUMN_COUNTS {
+                let size_label = axis_input_size(extra).1;
                 for profile in [
                     DataProfile::Sorted,
                     DataProfile::Unsorted,
                     DataProfile::NearlySorted,
                 ] {
-                    c.bench_function(
+                    group.bench_function(
                         &format!(
                             "sort {name} {size_label} {card:?} cardinality {profile:?} +{extra}cols",
                         ),
@@ -864,6 +899,7 @@ fn sort_axis_benchmark(c: &mut Criterion) {
             }
         }
     }
+    group.finish();
 }
 
 /// Single-column i64 batches
@@ -989,5 +1025,5 @@ fn with_extra_columns(batches: PartitionedBatches, n: usize) -> PartitionedBatch
         .collect()
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group!(benches, criterion_benchmark, sort_axis_benchmark);
 criterion_main!(benches);
