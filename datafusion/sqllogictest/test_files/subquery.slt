@@ -1598,6 +1598,25 @@ logical_plan
 21)----------Projection: column1 AS v
 22)------------Values: (Int64(5)), (Int64(NULL))
 
+# same-table `= ANY` / `<> ALL` must plan without
+# "duplicate unqualified field name mark".
+statement ok
+create table set_cmp_self(id int, age int) as values (1, 20), (2, 30), (3, 40);
+
+query I rowsort
+select id from set_cmp_self where age = any(select age from set_cmp_self);
+----
+1
+2
+3
+
+query I
+select id from set_cmp_self where age <> all(select age from set_cmp_self);
+----
+
+statement count 0
+drop table set_cmp_self;
+
 # correlated_recursive_scalar_subquery_with_level_3_exists_subquery_referencing_level1_relation
 query TT
 explain select c_custkey from customer
