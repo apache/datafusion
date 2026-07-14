@@ -861,7 +861,7 @@ config_namespace! {
         pub max_spill_file_size_bytes: usize, default = 128 * 1024 * 1024
 
         /// Number of files to read in parallel when inferring schema and statistics
-        pub meta_fetch_concurrency: usize, default = 32
+        pub meta_fetch_concurrency: ConfigNonZeroUsize, default = non_zero_usize_default(32)
 
         /// Guarantees a minimum level of output files running in parallel.
         /// RecordBatches will be distributed in round robin fashion to each

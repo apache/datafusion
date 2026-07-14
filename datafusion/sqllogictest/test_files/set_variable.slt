@@ -724,6 +724,9 @@ SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551556s'
 statement error DataFusion error: Invalid or Unsupported Configuration: value must be greater than 0
 SET datafusion.execution.batch_size = 0
 
+statement error DataFusion error: Invalid or Unsupported Configuration: value must be greater than 0
+SET datafusion.execution.meta_fetch_concurrency = 0
+
 # Config reset
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema
