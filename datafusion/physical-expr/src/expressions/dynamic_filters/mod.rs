@@ -285,16 +285,19 @@ impl DynamicFilterPhysicalExpr {
         // Slow path: (re)compute the remap and store it under a write lock.
         let remapped =
             Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)?;
-        // Only publish our result if it is at least as fresh as whatever is
+        // Only publish our result if it is strictly newer than whatever is
         // currently cached. Without this guard a slow computation that
         // observed an older `inner` could clobber a newer entry that a
         // concurrent caller has already published (see #23532 review), which
         // would force subsequent readers to redo the remap for the newer
-        // generation.
+        // generation. Same-generation writes are also skipped: the cached
+        // and about-to-write remaps are semantically identical (same input
+        // expression, same remapped_children), so overwriting is redundant
+        // and only wastes a write-lock take.
         {
             let mut cache = self.current_cache.write();
             let should_write = match cache.as_ref() {
-                Some((cached_gen, _)) => generation >= *cached_gen,
+                Some((cached_gen, _)) => generation > *cached_gen,
                 None => true,
             };
             if should_write {
@@ -791,6 +794,25 @@ impl ExpressionIdAtomicCounter {
 /// Currently, no other [`PhysicalExpr`]s use this source. If needed, it can be moved out of this
 /// file and be made public for other expressions to use.
 static EXPR_ID_SOURCE: ExpressionIdAtomicCounter = ExpressionIdAtomicCounter::new();
+
+#[cfg(test)]
+impl DynamicFilterPhysicalExpr {
+    /// Test-only clone that produces a fresh outer instance sharing the
+    /// same `inner`. Used by the concurrent stress test to obtain a
+    /// standalone `Arc<Self>` without going through `with_new_children`
+    /// (which would clear `remapped_children`).
+    fn clone_with_remapped_children_for_test(&self) -> Self {
+        Self {
+            children: self.children.clone(),
+            remapped_children: self.remapped_children.clone(),
+            inner: Arc::clone(&self.inner),
+            current_cache: Arc::new(RwLock::new(None)),
+            state_watch: self.state_watch.clone(),
+            data_type: Arc::clone(&self.data_type),
+            nullable: Arc::clone(&self.nullable),
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -1451,5 +1473,117 @@ mod test {
         // Subsequent calls each hit their own cache.
         assert!(Arc::ptr_eq(&d1_first, &d1.current().unwrap()));
         assert!(Arc::ptr_eq(&d2_first, &d2.current().unwrap()));
+    }
+
+    /// Stress-test the cache under concurrent readers and periodic writes.
+    ///
+    /// Motivation: prod scans run with tens/hundreds of partitions, each
+    /// calling `current()` on the same `Arc<DynamicFilterPhysicalExpr>` per
+    /// batch, while the producer (HashJoin build / TopK) fires `update()`
+    /// on a separate task. A caching bug that only shows up under
+    /// contention (torn read, ABA-style Arc lifetime issue, cache monotonicity
+    /// violation) would be invisible in single-threaded tests. This test
+    /// hot-loops many readers against a writer and asserts the invariants
+    /// that matter:
+    ///   1. `current()` never panics and always returns a valid `Arc`.
+    ///   2. Cache generation never regresses (monotonic non-decreasing).
+    ///   3. After the writer stops, the cache eventually converges to the
+    ///      final `inner.generation`.
+    #[test]
+    fn test_current_cache_concurrent_readers_and_writer() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::thread;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a = col("a", &schema).unwrap();
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            lit(true) as Arc<dyn PhysicalExpr>,
+        ));
+        // Force the remap path: give the derived filter distinct
+        // remapped_children so `current()` actually runs `remap_children`
+        // instead of the short-circuit `Arc::clone(&expr)`.
+        let derived =
+            reassign_expr_columns(Arc::clone(&filter) as Arc<dyn PhysicalExpr>, &schema)
+                .unwrap();
+        // Re-wrap in Arc for cross-thread sharing.
+        let derived: Arc<DynamicFilterPhysicalExpr> = Arc::new(
+            derived
+                .downcast_ref::<DynamicFilterPhysicalExpr>()
+                .expect("derived is DynamicFilterPhysicalExpr")
+                .clone_with_remapped_children_for_test(),
+        );
+
+        let stop = Arc::new(AtomicBool::new(false));
+        const READERS: usize = 8;
+        const READER_ITERS: usize = 5_000;
+        const WRITER_ITERS: i32 = 200;
+
+        let mut readers = Vec::with_capacity(READERS);
+        for _ in 0..READERS {
+            let d = Arc::clone(&derived);
+            let stop = Arc::clone(&stop);
+            readers.push(thread::spawn(move || {
+                let mut last_seen_gen: u64 = 0;
+                for _ in 0..READER_ITERS {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let expr = d.current().expect("current must not fail");
+                    // Cheap sanity: the returned Arc's Debug must be
+                    // formattable — proves it's a valid PhysicalExpr.
+                    let _ = format!("{expr:?}");
+                    // Cache generation observed by this reader must never
+                    // decrease across successive calls on the same filter.
+                    let cached = d
+                        .current_cache
+                        .read()
+                        .as_ref()
+                        .map(|(g, _)| *g)
+                        .unwrap_or(0);
+                    assert!(
+                        cached >= last_seen_gen,
+                        "cache generation regressed: {cached} < {last_seen_gen}",
+                    );
+                    last_seen_gen = cached;
+                }
+            }));
+        }
+
+        let f_writer = Arc::clone(&filter);
+        let writer = thread::spawn(move || {
+            for i in 0..WRITER_ITERS {
+                f_writer
+                    .update(lit(i) as Arc<dyn PhysicalExpr>)
+                    .expect("update must succeed");
+                // Yield to give readers a chance to see intermediate states.
+                thread::yield_now();
+            }
+        });
+
+        writer.join().expect("writer thread panicked");
+        stop.store(true, Ordering::Relaxed);
+        for h in readers {
+            h.join().expect("reader thread panicked");
+        }
+
+        // After the writer is done, one final `current()` should sync the
+        // cache to the latest generation.
+        let _ = derived.current().unwrap();
+        let (cache_gen, _) = derived
+            .current_cache
+            .read()
+            .as_ref()
+            .expect("cache populated after final current()")
+            .clone();
+        let inner_gen = derived.inner.read().generation;
+        assert_eq!(
+            cache_gen, inner_gen,
+            "final cache generation must match inner.generation",
+        );
+        // Writer bumps generation once per update, so final generation is
+        // starting-generation + WRITER_ITERS. Starting is 1, so final is
+        // WRITER_ITERS + 1.
+        assert_eq!(inner_gen, WRITER_ITERS as u64 + 1);
     }
 }
