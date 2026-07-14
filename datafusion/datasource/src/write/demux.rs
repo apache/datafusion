@@ -155,7 +155,7 @@ async fn row_count_demuxer(
 
     let max_rows_per_file = exec_options.soft_max_rows_per_output_file;
     let max_buffered_batches = exec_options.max_buffered_batches_per_output_file;
-    let minimum_parallel_files = exec_options.minimum_parallel_output_files;
+    let minimum_parallel_files = exec_options.minimum_parallel_output_files.get();
     let mut part_idx = 0;
     let write_id = rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 16);
 
