@@ -245,16 +245,29 @@ impl Accumulator for StringViewHLLAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array: &StringViewArray = downcast_value!(values[0], StringViewArray);
 
-        // When all strings are stored inline in the StringView (≤ 12 bytes),
-        // hash the raw u128 view directly instead of materializing a &str.
         if array.data_buffers().is_empty() {
+            // Fast path: with no data buffers every value is inline, so they all
+            // take the u128 path — no need to check the length per row.
             for (i, &view) in array.views().iter().enumerate() {
                 if !array.is_null(i) {
                     self.hll.add_hashed(HLL_HASH_STATE.hash_one(view));
                 }
             }
         } else {
-            self.hll.extend(array.iter().flatten());
+            // Mixed batch: decide per row by length. Short strings still use the
+            // u128 path so they match how they'd be hashed in an all-inline
+            // batch; only the genuinely out-of-line strings materialize a &str.
+            for (i, &view) in array.views().iter().enumerate() {
+                if array.is_null(i) {
+                    continue;
+                }
+                // The low 32 bits of the u128 view encode the string length.
+                if (view as u32) <= 12 {
+                    self.hll.add_hashed(HLL_HASH_STATE.hash_one(view));
+                } else {
+                    self.hll.add(array.value(i));
+                }
+            }
         }
 
         Ok(())
@@ -462,5 +475,50 @@ impl AggregateUDFImpl for ApproxDistinct {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::AsArray;
+    use std::sync::Arc;
+
+    // A string longer than the 12-byte inline limit
+    const LONG: &str = "this string is definitely longer than twelve bytes";
+
+    fn distinct_count(acc: &mut StringViewHLLAccumulator) -> u64 {
+        match acc.evaluate().unwrap() {
+            ScalarValue::UInt64(Some(v)) => v,
+            other => panic!("unexpected evaluate result: {other:?}"),
+        }
+    }
+
+    /// Regression: a short (≤ 12-byte) Utf8View string must hash identically
+    /// regardless of which batch it appears in — all-inline or mixed.
+    #[test]
+    fn utf8view_acc_split_batches_match_single_mixed_batch() {
+        // Multiset: {"aaa" x2, "bbb", LONG}, so 3 distinct values.
+        let mixed: ArrayRef =
+            Arc::new(StringViewArray::from(vec!["aaa", "bbb", LONG, "aaa"]));
+        let mut acc_single = StringViewHLLAccumulator::new();
+        acc_single.update_batch(&[mixed]).unwrap();
+
+        // Same multiset, but split so "aaa" lands in both an all-inline batch
+        // and a batch with a data buffer (forced by LONG).
+        let inline_only: ArrayRef = Arc::new(StringViewArray::from(vec!["aaa", "bbb"]));
+        let with_buffer: ArrayRef = Arc::new(StringViewArray::from(vec!["aaa", LONG]));
+        assert!(inline_only.as_string_view().data_buffers().is_empty());
+        assert!(!with_buffer.as_string_view().data_buffers().is_empty());
+
+        let mut acc_split = StringViewHLLAccumulator::new();
+        acc_split.update_batch(&[inline_only]).unwrap();
+        acc_split.update_batch(&[with_buffer]).unwrap();
+
+        assert_eq!(
+            distinct_count(&mut acc_single),
+            distinct_count(&mut acc_split)
+        );
+        assert_eq!(distinct_count(&mut acc_single), 3);
     }
 }
