@@ -235,17 +235,6 @@ impl PartialSortExec {
             input.boundedness(),
         ))
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics_set: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for PartialSortExec {
@@ -299,11 +288,15 @@ impl ExecutionPlan for PartialSortExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.preserve_partitioning {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(if self.preserve_partitioning {
             vec![Distribution::UnspecifiedDistribution]
         } else {
             vec![Distribution::SinglePartition]
-        }
+        })
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -328,6 +321,17 @@ impl ExecutionPlan for PartialSortExec {
         .with_preserve_partitioning(self.preserve_partitioning);
 
         Ok(Arc::new(new_partial_sort))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics_set: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(

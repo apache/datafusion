@@ -87,7 +87,7 @@ impl ListingTableConfigExt for ListingTableConfig {
 
         let listing_file_extension =
             if let Some(compression_type) = maybe_compression_type {
-                format!("{}.{}", &file_extension, &compression_type)
+                format!("{file_extension}.{compression_type}")
             } else {
                 file_extension
             };

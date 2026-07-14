@@ -131,14 +131,23 @@ use futures::{Stream, StreamExt};
 ///    reserve memory for the minimum of 2 streams - because a single run's largest batch is so
 ///    wide that two streams' worth of reservation exceeds the budget - the larger of the two
 ///    runs is re-spilled with each batch sliced in half. This shrinks its largest batch,
-///    lowering the per-stream reservation, and the merge pass is retried. The merge output
-///    batch size is halved as well so the merged run cannot rebuild a full-size batch and
-///    reintroduce the skew. If a batch cannot be split any further (a single row wider than the
-///    budget), the merge surfaces `ResourcesExhausted` instead of looping forever.
+///    lowering the per-stream reservation, and the merge pass is retried. The re-spilled run
+///    is tracked alongside a per-run batch-size limit equal to half the batch size it was
+///    written with, so any later merge that includes it caps its output batch size to match -
+///    otherwise the merged run could rebuild a full-size batch and reintroduce the skew.
+///    Crucially the global merge batch size is *not* lowered, so re-spilling more than one run
+///    does not compound the reduction. If a batch cannot be split any further (a single row
+///    wider than the budget), the merge surfaces `ResourcesExhausted` instead of looping
+///    forever.
 pub(crate) struct MultiLevelMergeBuilder {
     spill_manager: SpillManager,
     schema: SchemaRef,
-    sorted_spill_files: Vec<SortedSpillFile>,
+    /// Sorted runs still to be merged. Each run is paired with the batch-size limit a
+    /// merge consuming it must cap its output at. Runs written at the full batch size
+    /// carry `batch_size`. A run re-spilled smaller to resolve skew carries its halved
+    /// limit (see [`Self::split_spill_file_in_half`]). Tracking it here keeps this limit
+    /// out of the public [`SortedSpillFile`], so no external caller has to set it.
+    sorted_spill_files: Vec<(SortedSpillFile, usize)>,
     sorted_streams: Vec<SendableRecordBatchStream>,
     expr: LexOrdering,
     metrics: BaselineMetrics,
@@ -171,7 +180,12 @@ impl MultiLevelMergeBuilder {
         Self {
             spill_manager,
             schema,
-            sorted_spill_files,
+            // Initial runs are written at the full batch size, so they impose no cap
+            // on later merges - record `batch_size` as their (unconstrained) limit.
+            sorted_spill_files: sorted_spill_files
+                .into_iter()
+                .map(|file| (file, batch_size))
+                .collect(),
             sorted_streams,
             expr,
             metrics,
@@ -191,17 +205,22 @@ impl MultiLevelMergeBuilder {
 
     async fn create_stream(mut self) -> Result<SendableRecordBatchStream> {
         loop {
-            let mut stream = match self.merge_sorted_runs_within_mem_limit()? {
-                MergeStep::Stream(stream) => stream,
-                MergeStep::SplitThenRetry(index) => {
-                    // Couldn't reserve memory for the minimum of 2 streams. Re-spill the
-                    // larger of the two we're trying to merge with half its batch size so
-                    // its largest batch shrinks, lowering the per-stream reservation, then
-                    // retry. Makes the merge resilient to skewed (very wide) rows.
-                    self.split_spill_file_in_half(index).await?;
-                    continue;
-                }
-            };
+            let (mut stream, batch_size_limit) =
+                match self.merge_sorted_runs_within_mem_limit()? {
+                    MergeStep::Stream {
+                        stream,
+                        batch_size_limit,
+                    } => (stream, batch_size_limit),
+                    MergeStep::SplitThenRetry(index) => {
+                        // Couldn't reserve memory for the minimum of 2 streams. Re-spill
+                        // the larger of the two we're trying to merge with half its batch
+                        // size so its largest batch shrinks, lowering the per-stream
+                        // reservation, then retry. Makes the merge resilient to skewed
+                        // (very wide) rows.
+                        self.split_spill_file_in_half(index).await?;
+                        continue;
+                    }
+                };
 
             // TODO - add a threshold for number of files to disk even if empty and reading from disk so
             //        we can avoid the memory reservation
@@ -229,11 +248,17 @@ impl MultiLevelMergeBuilder {
                 continue;
             };
 
-            // Add the spill file
-            self.sorted_spill_files.push(SortedSpillFile {
-                file: spill_file,
-                max_record_batch_memory,
-            });
+            // Add the spill file paired with the batch-size limit of the merge that
+            // produced it: if that merge consumed a shrunk (skew-resolved) run, its
+            // output was capped and this intermediate run is likewise capped, so a
+            // later pass that re-merges it won't rebuild an oversized batch.
+            self.sorted_spill_files.push((
+                SortedSpillFile {
+                    file: spill_file,
+                    max_record_batch_memory,
+                },
+                batch_size_limit,
+            ));
         }
     }
 
@@ -245,37 +270,52 @@ impl MultiLevelMergeBuilder {
             (0, 0) => {
                 let empty_stream =
                     Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)));
-                Ok(MergeStep::Stream(self.observe_output(empty_stream)))
+                Ok(MergeStep::Stream {
+                    stream: self.observe_output(empty_stream),
+                    batch_size_limit: self.batch_size,
+                })
             }
 
             // Only in-memory stream, return that
             (0, 1) => {
                 let output_stream = self.sorted_streams.remove(0);
-                Ok(MergeStep::Stream(self.observe_output(output_stream)))
+                Ok(MergeStep::Stream {
+                    stream: self.observe_output(output_stream),
+                    batch_size_limit: self.batch_size,
+                })
             }
 
             // Only single sorted spill file so return it
             (1, 0) => {
-                let spill_file = self.sorted_spill_files.remove(0);
+                let (spill_file, batch_size) = self.sorted_spill_files.remove(0);
 
                 // Not reserving any memory for this disk as we are not holding it in memory
                 let output_stream = self
                     .spill_manager
                     .read_spill_as_stream(spill_file.file, None)?;
 
-                Ok(MergeStep::Stream(self.observe_output(output_stream)))
+                Ok(MergeStep::Stream {
+                    stream: self.observe_output(output_stream),
+                    batch_size_limit: batch_size,
+                })
             }
 
-            // Only in memory streams, so merge them all in a single pass
+            // Only in memory streams, so merge them all in a single pass. In-memory
+            // runs are never shrunk for skew, so this merge runs at the full batch
+            // size and its output carries no limit.
             (0, _) => {
                 let sorted_stream = mem::take(&mut self.sorted_streams);
                 // No need to wrap with observed stream since merge sort will update the observed metrics
-                Ok(MergeStep::Stream(self.create_new_merge_sort(
-                    sorted_stream,
-                    // If we have no sorted spill files left, this is the last run
-                    true,
-                    true,
-                )?))
+                Ok(MergeStep::Stream {
+                    stream: self.create_new_merge_sort(
+                        sorted_stream,
+                        // If we have no sorted spill files left, this is the last run
+                        true,
+                        true,
+                        self.batch_size,
+                    )?,
+                    batch_size_limit: self.batch_size,
+                })
             }
 
             // Need to merge multiple streams
@@ -326,7 +366,15 @@ impl MultiLevelMergeBuilder {
                     mem::swap(&mut self.reservation, &mut memory_reservation);
                 }
 
-                for spill in sorted_spill_files {
+                // Cap the merge output at the smallest limit among the runs we're
+                // about to merge. Runs that were shrunk for skew carry a smaller limit,
+                // if none do, every run carries `self.batch_size` and the merge runs at
+                // the full batch size. The output stream is tagged with the same limit
+                // (see the `MergeStep::Stream` returns below) so a re-spilled
+                // intermediate run stays shrunk and won't rebuild an oversized batch on
+                // a later pass.
+                let mut output_batch_size = self.batch_size;
+                for (spill, batch_size_limit) in sorted_spill_files {
                     let stream = self
                         .spill_manager
                         .clone()
@@ -335,6 +383,7 @@ impl MultiLevelMergeBuilder {
                             spill.file,
                             Some(spill.max_record_batch_memory),
                         )?;
+                    output_batch_size = output_batch_size.min(batch_size_limit);
                     sorted_streams.push(stream);
                 }
                 let merge_sort_stream = self.create_new_merge_sort(
@@ -342,6 +391,7 @@ impl MultiLevelMergeBuilder {
                     // If we have no sorted spill files left, this is the last run
                     self.sorted_spill_files.is_empty(),
                     is_only_merging_memory_streams,
+                    output_batch_size,
                 )?;
 
                 // If we're only merging memory streams, we don't need to attach the memory reservation
@@ -353,14 +403,20 @@ impl MultiLevelMergeBuilder {
                         "when only merging memory streams, we should not have any memory reservation and let the merge sort handle the memory"
                     );
 
-                    Ok(MergeStep::Stream(merge_sort_stream))
+                    Ok(MergeStep::Stream {
+                        stream: merge_sort_stream,
+                        batch_size_limit: output_batch_size,
+                    })
                 } else {
                     // Attach the memory reservation to the stream to make sure we have enough memory
                     // throughout the merge process as we bypassed the memory pool for the merge sort stream
-                    Ok(MergeStep::Stream(Box::pin(StreamAttachedReservation::new(
-                        merge_sort_stream,
-                        memory_reservation,
-                    ))))
+                    Ok(MergeStep::Stream {
+                        stream: Box::pin(StreamAttachedReservation::new(
+                            merge_sort_stream,
+                            memory_reservation,
+                        )),
+                        batch_size_limit: output_batch_size,
+                    })
                 }
             }
         }
@@ -371,11 +427,12 @@ impl MultiLevelMergeBuilder {
         streams: Vec<SendableRecordBatchStream>,
         is_output: bool,
         all_in_memory: bool,
+        output_batch_size: usize,
     ) -> Result<SendableRecordBatchStream> {
         let mut builder = StreamingMergeBuilder::new()
             .with_schema(Arc::clone(&self.schema))
             .with_expressions(&self.expr)
-            .with_batch_size(self.batch_size)
+            .with_batch_size(output_batch_size)
             .with_fetch(self.fetch)
             .with_metrics(if is_output {
                 // Only add the metrics to the last run
@@ -415,13 +472,23 @@ impl MultiLevelMergeBuilder {
     ) -> Result<SpillFilesToMerge> {
         assert_ne!(buffer_len, 0, "Buffer length must be greater than 0");
         let mut number_of_spills_to_read_for_current_phase = 0;
+        let configured_fan_in = self
+            .spill_manager
+            .env()
+            .disk_manager
+            .max_spill_merge_fan_in();
+        let max_spill_files = effective_spill_merge_fan_in(configured_fan_in);
         // Track total memory needed for spill file buffers. When the
         // reservation has pre-reserved bytes (from sort_spill_reservation_bytes),
         // those bytes cover the first N spill files without additional pool
         // allocation, preventing starvation under memory pressure.
         let mut total_needed: usize = 0;
 
-        for spill in &self.sorted_spill_files {
+        for (spill, _) in &self.sorted_spill_files {
+            if number_of_spills_to_read_for_current_phase >= max_spill_files {
+                break;
+            }
+
             let per_spill = get_reserved_bytes_for_record_batch_size(
                 spill.max_record_batch_memory,
                 // Size will be the same as the sliced size, bc it is a spilled batch.
@@ -468,8 +535,8 @@ impl MultiLevelMergeBuilder {
                         // of them with a smaller batch size and retry, the smaller max
                         // batch lowers the per-stream reservation enough to seat both.
                         let split_index = usize::from(
-                            self.sorted_spill_files[1].max_record_batch_memory
-                                > self.sorted_spill_files[0].max_record_batch_memory,
+                            self.sorted_spill_files[1].0.max_record_batch_memory
+                                > self.sorted_spill_files[0].0.max_record_batch_memory,
                         );
                         return Ok(SpillFilesToMerge::SplitThenRetry(split_index));
                     }
@@ -491,26 +558,33 @@ impl MultiLevelMergeBuilder {
 
     /// Re-spill the spill file at `index` with half its batch size, putting it back
     /// at the same position. We read the file back and re-spill it through the normal
-    /// spill API (which owns batch layout).
-    /// Slicing each batch in two halves the largest written batch,
-    /// which lowers the per-stream merge reservation so the
-    /// next attempt can seat both streams. One stream's worth of memory is reserved
-    /// for the duration and freed afterwards. Makes the merge resilient to skew.
+    /// spill API (which owns batch layout), slicing every batch in two, which halves
+    /// the largest written batch and so lowers the per-stream merge reservation enough
+    /// for the next attempt to seat both streams. One stream's worth of memory is
+    /// reserved for the duration and freed afterwards. Makes the merge resilient to skew.
+    ///
+    /// Instead of halving the *global* merge batch size (which would compound when more
+    /// than one run is re-spilled), the shrunk run records its own smaller batch-size
+    /// limit (tracked alongside the run in `sorted_spill_files`), so only merges that
+    /// actually consume it pay the reduced batch size.
     async fn split_spill_file_in_half(&mut self, index: usize) -> Result<()> {
         log::debug!(
             "2 spilled streams could not be loaded into memory for merge \
         (requires 2x of the largest batch from both), re-spilling the larger of the two with half \
-        the batch size to reduce memory needs for the next merge attempt, \
-        setting batch_size to half to proceed with merge"
+        the batch size to reduce memory needs for the next merge attempt. the shrunk run carries \
+        a halved batch-size limit so only merges consuming it use the smaller batch size"
         );
 
         // Extract the target in O(1) instead of `remove(index)`, which would shift
         // every following spill file. Swap it to the back and pop it; the matching
         // swap after re-spilling restores the original order, so the vec ends up
         // exactly as it started, just with the target file shrunk.
+        // `old_batch_size` is the batch size this run was written with (the full merge
+        // batch size unless it was already shrunk once). Halving it caps the next merge
+        // that reads this run so the merged output can't rebuild a full-size batch.
         let last = self.sorted_spill_files.len() - 1;
         self.sorted_spill_files.swap(index, last);
-        let target = self
+        let (target, old_batch_size) = self
             .sorted_spill_files
             .pop()
             .expect("index is in bounds, so the vec is non-empty");
@@ -564,18 +638,21 @@ impl MultiLevelMergeBuilder {
             );
         }
 
-        // Also halve the merge output batch size so the next merge pass emits
-        // narrower batches. Otherwise the merged stream would rebuild a full-size
-        // (potentially giant) batch and, when spilled back as an intermediate run,
-        // reintroduce the exact skew we just resolved.
-        self.batch_size = (self.batch_size / 2).max(1);
+        // Record the halved batch size as a *per-run* limit rather than lowering the
+        // global batch size. Merges that don't touch this run keep the full batch
+        // size. a merge that reads it caps its output at this limit so the merged run
+        // can't rebuild a full-size batch and reintroduce the skew.
+        let new_batch_size_limit = (old_batch_size / 2).max(1);
 
         // Push the re-spilled (smaller) file and swap it back into `index`, undoing
         // the swap-to-back above so the order is preserved.
-        self.sorted_spill_files.push(SortedSpillFile {
-            file,
-            max_record_batch_memory: new_max,
-        });
+        self.sorted_spill_files.push((
+            SortedSpillFile {
+                file,
+                max_record_batch_memory: new_max,
+            },
+            new_batch_size_limit,
+        ));
         let last = self.sorted_spill_files.len() - 1;
         self.sorted_spill_files.swap(index, last);
 
@@ -592,8 +669,9 @@ impl MultiLevelMergeBuilder {
 
 /// Outcome of trying to reserve memory for one multi-level merge pass.
 enum SpillFilesToMerge {
-    /// Enough memory: the spill files to read this pass and the read-ahead buffer size.
-    Ready(Vec<SortedSpillFile>, usize),
+    /// Enough memory: the spill files to read this pass (each paired with its
+    /// batch-size limit) and the read-ahead buffer size.
+    Ready(Vec<(SortedSpillFile, usize)>, usize),
     /// Could not seat the minimum of 2 streams. Re-spill the spill file at this index
     /// with a smaller (halved) batch size, then retry the pass.
     SplitThenRetry(usize),
@@ -602,7 +680,15 @@ enum SpillFilesToMerge {
 /// What one iteration of the multi-level merge loop should do next.
 enum MergeStep {
     /// A merged stream is ready to be consumed (and possibly spilled back).
-    Stream(SendableRecordBatchStream),
+    Stream {
+        stream: SendableRecordBatchStream,
+        /// The batch-size limit to stamp on the run if this stream is re-spilled as an
+        /// intermediate result: the batch size its merge ran at. It equals the full
+        /// merge batch size unless the merge consumed a skew-resolved run, in which
+        /// case it is that run's smaller limit so the re-spilled result stays capped
+        /// and can't rebuild an oversized batch.
+        batch_size_limit: usize,
+    },
     /// Re-spill the spill file at this index smaller, then retry the merge step.
     SplitThenRetry(usize),
 }
@@ -615,6 +701,14 @@ fn split_batch_in_half(batch: RecordBatch) -> Vec<RecordBatch> {
     }
     let mid = num_rows / 2;
     vec![batch.slice(0, mid), batch.slice(mid, num_rows - mid)]
+}
+
+fn effective_spill_merge_fan_in(configured_fan_in: usize) -> usize {
+    if configured_fan_in == 0 {
+        usize::MAX
+    } else {
+        configured_fan_in.max(2)
+    }
 }
 
 struct StreamAttachedReservation {
@@ -679,8 +773,8 @@ mod tests {
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryConsumer, MemoryPool,
     };
-    use datafusion_execution::runtime_env::RuntimeEnv;
-    use datafusion_physical_expr::expressions::Column;
+    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+    use datafusion_physical_expr::expressions::{Column, col};
     use datafusion_physical_expr_common::metrics::{
         ExecutionPlanMetricsSet, SpillMetrics,
     };
@@ -861,8 +955,10 @@ mod tests {
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, (2 * n) as usize);
 
-        // The largest emitted batch is the halved size, not the original 8192 —
-        // without halving `self.batch_size` the merge would rebuild 8192-row batches.
+        // The largest emitted batch is the halved size, not the original 8192: the
+        // shrunk run carries a halved batch-size limit, and the final pass consumes
+        // it, so the merge output is capped there. Without the per-run limit the merge
+        // would rebuild 8192-row batches.
         let expected_batch_size = initial_batch_size / 2;
         let max_batch_rows = batches.iter().map(|b| b.num_rows()).max().unwrap_or(0);
         assert_eq!(
@@ -870,6 +966,134 @@ mod tests {
             "after one re-spill the merge must emit {expected_batch_size}-row \
              batches, got a largest batch of {max_batch_rows} rows"
         );
+
+        Ok(())
+    }
+
+    /// Same as [`respill_halves_the_merge_output_batch_size`], but under a budget tight
+    /// enough that *both* runs must be re-spilled before the merge fits - the scenario
+    /// where the batch-size reduction could compound. Because the reduction is tracked
+    /// per-run (each run capped at half) rather than by halving the global batch size on
+    /// every split, the merged output is emitted in 4096-row batches - half, not a
+    /// quarter. A global-halving implementation would have halved once per re-spill and
+    /// emitted 2048-row batches.
+    #[tokio::test]
+    async fn respilling_two_skewed_runs_halves_the_output_without_compounding()
+    -> Result<()> {
+        let env = Arc::new(RuntimeEnv::default());
+        let schema = test_schema();
+        let spill_manager = build_spill_manager(&env, &schema);
+
+        let n: i64 = 16384;
+        let f0 = make_sorted_spill_file(&spill_manager, &schema, (0..n).collect());
+        let f1 = make_sorted_spill_file(&spill_manager, &schema, (0..n).collect());
+        let m = f0.max_record_batch_memory.max(f1.max_record_batch_memory);
+
+        // 2.5*m is tight enough that even after halving one run the two still don't
+        // fit, so *both* runs are re-spilled once before the merge succeeds. (3.5*m,
+        // as in the single-split test, would let the pair fit after one split.) This
+        // is exactly the scenario where a compounding, global-halving implementation
+        // would drive the output batch size down to a quarter.
+        let initial_batch_size = 8192;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(m * 5 / 2));
+
+        let builder = build_merge_builder(
+            spill_manager,
+            Arc::clone(&schema),
+            vec![f0, f1],
+            &pool,
+            initial_batch_size,
+        );
+        let stream = builder.create_spillable_merge_stream();
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+
+        // All rows are still present.
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, (2 * n) as usize);
+
+        // Each run was re-spilled once, so each is capped at half the original batch
+        // size and the merge caps its output at that half - NOT a quarter. A global
+        // halving-per-split implementation would have emitted 2048-row batches here.
+        let expected_batch_size = initial_batch_size / 2;
+        let max_batch_rows = batches.iter().map(|b| b.num_rows()).max().unwrap_or(0);
+        assert_eq!(
+            max_batch_rows, expected_batch_size,
+            "two re-spills must halve (not quarter) the output: expected \
+             {expected_batch_size}-row batches, got a largest batch of \
+             {max_batch_rows} rows"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn spill_merge_fan_in_is_unlimited_by_default() {
+        assert_eq!(effective_spill_merge_fan_in(0), usize::MAX);
+    }
+
+    #[test]
+    fn spill_merge_fan_in_preserves_merge_progress() {
+        assert_eq!(effective_spill_merge_fan_in(1), 2);
+        assert_eq!(effective_spill_merge_fan_in(2), 2);
+        assert_eq!(effective_spill_merge_fan_in(8), 8);
+    }
+
+    #[test]
+    fn spill_merge_phase_respects_configured_fan_in() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_max_spill_merge_fan_in(2)
+            .build_arc()?;
+        let spill_manager = SpillManager::new(
+            Arc::clone(&runtime),
+            SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            Arc::clone(&schema),
+        );
+        let sorted_spill_files = (0..4)
+            .map(|idx| {
+                Ok(SortedSpillFile {
+                    file: runtime
+                        .disk_manager
+                        .create_tmp_file(&format!("spill fan-in test {idx}"))?,
+                    max_record_batch_memory: 1,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let expr = LexOrdering::new([PhysicalSortExpr::new_default(col("a", &schema)?)])
+            .unwrap();
+        let reservation =
+            MemoryConsumer::new("spill_merge_phase_respects_configured_fan_in")
+                .register(&runtime.memory_pool);
+        let metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let mut builder = MultiLevelMergeBuilder::new(
+            spill_manager,
+            schema,
+            sorted_spill_files,
+            vec![],
+            expr,
+            metrics,
+            1024,
+            reservation,
+            None,
+            false,
+        );
+        let mut merge_reservation = MemoryConsumer::new("spill_merge_fan_in_phase")
+            .register(&runtime.memory_pool);
+
+        let (spills, buffer_len) = match builder.get_sorted_spill_files_to_merge(
+            1,
+            2,
+            &mut merge_reservation,
+        )? {
+            SpillFilesToMerge::Ready(spills, buffer_len) => (spills, buffer_len),
+            SpillFilesToMerge::SplitThenRetry(index) => {
+                panic!("expected ready spill files, got retry for index {index}")
+            }
+        };
+
+        assert_eq!(spills.len(), 2);
+        assert_eq!(buffer_len, 1);
+        assert_eq!(builder.sorted_spill_files.len(), 2);
 
         Ok(())
     }

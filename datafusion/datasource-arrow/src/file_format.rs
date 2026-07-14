@@ -356,7 +356,7 @@ impl DisplayAs for ArrowFileSink {
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: arrow")?;
-                write!(f, "file={}", &self.config.original_url)
+                write!(f, "file={}", self.config.original_url)
             }
         }
     }
@@ -380,7 +380,7 @@ impl DataSink for ArrowFileSink {
 // Custom implementation of inferring schema. Should eventually be moved upstream to arrow-rs.
 // See <https://github.com/apache/arrow-rs/issues/5021>
 
-const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
+const ARROW_MAGIC: [u8; 6] = *b"ARROW1";
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
 async fn infer_stream_schema(

@@ -233,7 +233,7 @@ mod tests {
             .collect()
             .await?;
 
-        let plan = format!("{}", &pretty::pretty_format_batches(&result)?);
+        let plan = format!("{}", pretty::pretty_format_batches(&result)?);
 
         let re = Regex::new(r"file_groups=\{(\d+) group").unwrap();
 

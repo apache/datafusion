@@ -234,16 +234,6 @@ impl CooperativeExec {
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for CooperativeExec {
@@ -288,6 +278,16 @@ impl ExecutionPlan for CooperativeExec {
         );
         check_if_same_properties!(self, children);
         Ok(Arc::new(CooperativeExec::new(children.swap_remove(0))))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(

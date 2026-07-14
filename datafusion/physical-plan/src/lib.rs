@@ -41,6 +41,9 @@ pub use datafusion_physical_expr::{
 };
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+pub use crate::distribution_requirements::{
+    ChildSatisfactionOptions, InputDistributionRequirements,
+};
 pub use crate::execution_plan::{
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, collect, collect_partitioned,
     displayable, execute_input_stream, execute_stream, execute_stream_partitioned,
@@ -72,6 +75,7 @@ pub mod column_rewriter;
 pub mod common;
 pub mod coop;
 pub mod display;
+pub mod distribution_requirements;
 pub mod empty;
 pub mod execution_plan;
 pub mod explain;

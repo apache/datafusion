@@ -38,8 +38,9 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Install HawkEye
-      # This CI job is bound by installation time, use `--profile dev` to speed it up
-        run: cargo install hawkeye --version 6.2.0 --locked --profile dev
+        uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c  # v2.82.10
+        with:
+          tool: hawkeye@6.2.0
       - name: Run license header check
         run: ci/scripts/license_header.sh
 
@@ -65,7 +66,7 @@ jobs:
           source ci/scripts/utils/tool_versions.sh
           echo "LYCHEE_VERSION=${LYCHEE_VERSION}" >> "$GITHUB_ENV"
       - name: Install lychee
-        uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6  # v2.82.6
+        uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c  # v2.82.10
         with:
           tool: lychee@${{ env.LYCHEE_VERSION }}
       - name: Run markdown link check
@@ -89,7 +90,9 @@ jobs:
       # Version fixed on purpose. It uses heuristics to detect typos, so upgrading
       # it may cause checks to fail more often.
       # We can upgrade it manually once a while.
-      - name: Install typos-cli
-        run: cargo install typos-cli --locked --version 1.37.0
+      - name: Install typos
+        uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c  # v2.82.10
+        with:
+          tool: typos@1.37.0
       - name: Run typos check
         run: ci/scripts/typos_check.sh

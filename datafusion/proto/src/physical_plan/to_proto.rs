@@ -31,9 +31,8 @@ use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_expr::WindowFrame;
-use datafusion_physical_expr::ScalarFunctionExpr;
-use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
+use datafusion_physical_expr::{HigherOrderFunctionExpr, ScalarFunctionExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
@@ -318,14 +317,16 @@ pub fn serialize_physical_expr_with_converter(
                 },
             )),
         })
-    } else if let Some(expr) = expr.downcast_ref::<ScalarSubqueryExpr>() {
+    } else if let Some(expr) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
+        let mut buf = Vec::new();
+        codec.try_encode_higher_order_function(expr.fun(), &mut buf)?;
         Ok(protobuf::PhysicalExprNode {
             expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarSubquery(
-                protobuf::PhysicalScalarSubqueryExprNode {
-                    data_type: Some(expr.data_type().try_into()?),
-                    nullable: expr.nullable(),
-                    index: expr.index().as_usize() as u32,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::HigherOrderUdf(
+                protobuf::PhysicalHigherOrderUdfNode {
+                    name: expr.name().to_string(),
+                    args: serialize_physical_exprs(expr.args(), codec, proto_converter)?,
+                    fun_definition: (!buf.is_empty()).then_some(buf),
                 },
             )),
         })
@@ -562,7 +563,9 @@ pub fn serialize_file_scan_config(
         constraints: Some(conf.constraints.clone().into()),
         batch_size: conf.batch_size.map(|s| s as u64),
         projection_exprs,
-        partitioned_by_file_group: Some(conf.partitioned_by_file_group),
+        // Partition grouping is now encoded in `output_partitioning`; this legacy
+        // wire field is left unset (readers rely on `output_partitioning`).
+        partitioned_by_file_group: None,
         output_partitioning,
     })
 }

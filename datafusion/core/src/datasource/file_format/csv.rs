@@ -705,7 +705,7 @@ mod tests {
     ) -> Result<usize> {
         let df = ctx.sql(&format!("EXPLAIN {sql}")).await?;
         let result = df.collect().await?;
-        let plan = format!("{}", &pretty_format_batches(&result)?);
+        let plan = format!("{}", pretty_format_batches(&result)?);
 
         let re = Regex::new(r"DataSourceExec: file_groups=\{(\d+) group").unwrap();
 
