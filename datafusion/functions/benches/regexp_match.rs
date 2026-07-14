@@ -49,7 +49,7 @@ fn data(rng: &mut ThreadRng) -> StringArray {
         .into()
 }
 
-fn run(c: &mut Criterion, name: &str, values: ArrayRef, args: Vec<ColumnarValue>) {
+fn run(c: &mut Criterion, name: &str, values: &ArrayRef, args: &[ColumnarValue]) {
     let func = RegexpMatchFunc::new();
     let arg_fields: Vec<_> = args
         .iter()
@@ -67,7 +67,7 @@ fn run(c: &mut Criterion, name: &str, values: ArrayRef, args: Vec<ColumnarValue>
         b.iter(|| {
             black_box(
                 func.invoke_with_args(ScalarFunctionArgs {
-                    args: args.clone(),
+                    args: args.to_vec(),
                     arg_fields: arg_fields.clone(),
                     number_rows: SIZE,
                     return_field: Arc::clone(&return_field),
@@ -87,8 +87,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     run(
         c,
         "regexp_match_1000 literal pattern",
-        Arc::clone(&utf8),
-        vec![
+        &utf8,
+        &[
             ColumnarValue::Array(Arc::clone(&utf8)),
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(PATTERN.to_string()))),
         ],
@@ -97,8 +97,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     run(
         c,
         "regexp_match_1000 literal pattern and flags",
-        Arc::clone(&utf8),
-        vec![
+        &utf8,
+        &[
             ColumnarValue::Array(Arc::clone(&utf8)),
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(PATTERN.to_string()))),
             ColumnarValue::Scalar(ScalarValue::Utf8(Some("i".to_string()))),
@@ -108,8 +108,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     run(
         c,
         "regexp_match_1000 literal pattern utf8view",
-        Arc::clone(&utf8view),
-        vec![
+        &utf8view,
+        &[
             ColumnarValue::Array(Arc::clone(&utf8view)),
             ColumnarValue::Scalar(ScalarValue::Utf8View(Some(PATTERN.to_string()))),
         ],
@@ -125,8 +125,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     run(
         c,
         "regexp_match_1000 pattern array",
-        Arc::clone(&utf8),
-        vec![
+        &utf8,
+        &[
             ColumnarValue::Array(Arc::clone(&utf8)),
             ColumnarValue::Array(patterns),
         ],
