@@ -626,6 +626,13 @@ fn _date_trunc_coarse_with_tz(
     Ok(truncated.and_then(|value| value.timestamp_nanos_opt()))
 }
 
+// The two helpers below duplicate `chrono::NaiveDate::{from_epoch_days,
+// to_epoch_days}`. They are kept separate because chrono's versions round trip
+// through a validated `NaiveDate`: `from_epoch_days` computes year flags and
+// returns an `Option`, and reading the year/month/day back out decodes them from
+// its packed representation. These helpers stay in plain integers, which is all
+// the truncation below needs.
+
 /// Days from the Unix epoch to 0000-03-01, the epoch used by the civil calendar
 /// conversions below.
 const DAYS_EPOCH_SHIFT: i64 = 719_468;
@@ -635,6 +642,10 @@ const DAYS_PER_ERA: i64 = 146_097;
 
 /// Splits a day count relative to the Unix epoch into a proleptic Gregorian
 /// year, month (1-12) and day of month (1-31).
+///
+/// This is a port of Howard Hinnant's `civil_from_days`, which documents the
+/// derivation of the constants and the March-based year used below:
+/// <https://howardhinnant.github.io/date_algorithms.html#civil_from_days>
 fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let z = days + DAYS_EPOCH_SHIFT;
     let era = z.div_euclid(DAYS_PER_ERA);
@@ -658,6 +669,10 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 
 /// Inverse of [`civil_from_days`]: the day count relative to the Unix epoch for
 /// the given proleptic Gregorian date.
+///
+/// This is a port of Howard Hinnant's `days_from_civil`, which documents the
+/// derivation of the constants and the March-based year used below:
+/// <https://howardhinnant.github.io/date_algorithms.html#days_from_civil>
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = year - i64::from(month <= 2);
     let era = year.div_euclid(400);
