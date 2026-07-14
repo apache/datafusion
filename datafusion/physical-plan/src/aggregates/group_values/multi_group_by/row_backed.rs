@@ -32,8 +32,8 @@
 //! and heavier for the columns that *would* have qualified for the column-wise
 //! fast path. By providing a generic fallback `GroupColumn`, a schema like
 //! `GROUP BY int_col, struct_col` keeps `int_col` on its fast native builder
-//! and only pays the row-encoding cost on `struct_col`, instead of dragging the
-//! entire key onto `GroupValuesRows`.
+//! and only pays the row-encoding cost on `struct_col`, instead of dragging both
+//! columns onto `GroupValuesRows`.
 //!
 //! # Relationship to hashing
 //!
@@ -47,7 +47,7 @@
 //! [`GroupValuesRows`]: crate::aggregates::group_values::GroupValuesRows
 
 use crate::aggregates::group_values::multi_group_by::GroupColumn;
-use crate::aggregates::group_values::row::dictionary_encode_if_necessary;
+use crate::aggregates::group_values::row::encode_array_if_necessary;
 
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::datatypes::DataType;
@@ -118,7 +118,7 @@ impl RowsGroupColumn {
             .expect("row conversion during emit");
         debug_assert_eq!(arrays.len(), 1, "single-field row converter");
         let array = arrays.swap_remove(0);
-        dictionary_encode_if_necessary(&array, &self.output_type)
+        encode_array_if_necessary(&array, &self.output_type)
             .expect("dictionary re-encode during emit")
     }
 
@@ -369,5 +369,52 @@ mod tests {
         let arrow_supports =
             RowConverter::supports_fields(&[SortField::new(map_dt.clone())]);
         assert_eq!(RowsGroupColumn::supports_type(&map_dt), arrow_supports);
+    }
+
+    /// Regression test for the nested-container recursion in
+    /// [`crate::aggregates::group_values::row::encode_array_if_necessary`].
+    /// `RowConverter` flattens dictionary values on the way in, so a
+    /// `List<Dict<Int32, Utf8>>` schema round-trips with `Utf8` values
+    /// unless the helper re-encodes the leaf. Without that recursion,
+    /// `build()` would emit an array whose data type does not match the
+    /// group column's declared type.
+    #[test]
+    fn build_preserves_list_of_dictionary_schema() {
+        use arrow::array::{DictionaryArray, ListArray, StringArray};
+        use arrow::buffer::OffsetBuffer;
+        use arrow::datatypes::Int32Type;
+
+        let dict_dt =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let item_field = Arc::new(Field::new("item", dict_dt.clone(), true));
+        let outer_dt = DataType::List(Arc::clone(&item_field));
+
+        // Skip if this arrow-rs version rejects the nesting — the invariant we
+        // care about is `output().data_type() == declared type` conditional on
+        // supports_type saying yes.
+        if !RowsGroupColumn::supports_type(&outer_dt) {
+            return;
+        }
+
+        let mut col = Box::new(RowsGroupColumn::try_new(outer_dt.clone()).unwrap());
+
+        // Build List<Dict<Int32,Utf8>> of one row = ["a", "b"].
+        let values = Arc::new(StringArray::from(vec!["a", "b"]));
+        let keys = Int32Array::from(vec![0, 1]);
+        let dict = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
+        let offsets = OffsetBuffer::from_lengths([2]);
+        let list =
+            ListArray::try_new(Arc::clone(&item_field), offsets, Arc::new(dict), None)
+                .unwrap();
+        let input: ArrayRef = Arc::new(list);
+
+        col.vectorized_append(&input, &[0]).unwrap();
+        let built = col.build();
+        assert_eq!(
+            built.data_type(),
+            &outer_dt,
+            "build() must return the declared List<Dict> data type, \
+             not the RowConverter-flattened List<Utf8>",
+        );
     }
 }

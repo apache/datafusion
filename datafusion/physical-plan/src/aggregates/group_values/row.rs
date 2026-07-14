@@ -17,8 +17,8 @@
 
 use crate::aggregates::group_values::GroupValues;
 use arrow::array::{
-    Array, ArrayRef, ListArray, PrimitiveArray, RunArray, StructArray,
-    downcast_run_end_index,
+    Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, MapArray,
+    PrimitiveArray, RunArray, StructArray, downcast_run_end_index,
 };
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
@@ -247,7 +247,7 @@ impl GroupValues for GroupValuesRows {
         // https://github.com/apache/datafusion/issues/7647
         for (field, array) in self.schema.fields.iter().zip(&mut output) {
             let expected = field.data_type();
-            *array = dictionary_encode_if_necessary(array, expected)?;
+            *array = encode_array_if_necessary(array, expected)?;
         }
 
         self.group_values = Some(group_values);
@@ -269,13 +269,15 @@ impl GroupValues for GroupValuesRows {
 
 /// Re-apply dictionary / run-end encoding to `array` so it matches `expected`.
 ///
-/// Arrow's [`RowConverter`] decodes dictionary and run-end-encoded values to
-/// their plain value type on the way out, so any group-value array produced
-/// from the row format must be re-encoded to the schema's expected type before
+/// Arrow's [`RowConverter`] flattens dictionary and run-end-encoded values to
+/// their plain value type during row encoding (at [`RowConverter::append`]),
+/// so any group-value array produced from the row format is in that plain
+/// type and must be re-encoded to match the schema's expected type before
 /// being returned. Shared with the generic row-backed `GroupColumn`.
 ///
 /// [`RowConverter`]: arrow::row::RowConverter
-pub(crate) fn dictionary_encode_if_necessary(
+/// [`RowConverter::append`]: arrow::row::RowConverter::append
+pub(crate) fn encode_array_if_necessary(
     array: &ArrayRef,
     expected: &DataType,
 ) -> Result<ArrayRef> {
@@ -286,7 +288,7 @@ pub(crate) fn dictionary_encode_if_necessary(
                 .iter()
                 .zip(struct_array.columns())
                 .map(|(expected_field, column)| {
-                    dictionary_encode_if_necessary(column, expected_field.data_type())
+                    encode_array_if_necessary(column, expected_field.data_type())
                 })
                 .collect::<Result<Vec<_>>>()?;
 
@@ -302,11 +304,53 @@ pub(crate) fn dictionary_encode_if_necessary(
             Ok(Arc::new(ListArray::try_new(
                 Arc::<arrow::datatypes::Field>::clone(expected_field),
                 list.offsets().clone(),
-                dictionary_encode_if_necessary(
-                    list.values(),
-                    expected_field.data_type(),
-                )?,
+                encode_array_if_necessary(list.values(), expected_field.data_type())?,
                 list.nulls().cloned(),
+            )?))
+        }
+        (DataType::LargeList(expected_field), &DataType::LargeList(_)) => {
+            let list = array.as_any().downcast_ref::<LargeListArray>().unwrap();
+
+            Ok(Arc::new(LargeListArray::try_new(
+                Arc::<arrow::datatypes::Field>::clone(expected_field),
+                list.offsets().clone(),
+                encode_array_if_necessary(list.values(), expected_field.data_type())?,
+                list.nulls().cloned(),
+            )?))
+        }
+        (
+            DataType::FixedSizeList(expected_field, expected_size),
+            &DataType::FixedSizeList(_, _),
+        ) => {
+            let list = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+
+            Ok(Arc::new(FixedSizeListArray::try_new(
+                Arc::<arrow::datatypes::Field>::clone(expected_field),
+                *expected_size,
+                encode_array_if_necessary(list.values(), expected_field.data_type())?,
+                list.nulls().cloned(),
+            )?))
+        }
+        (DataType::Map(expected_entries_field, ordered), &DataType::Map(_, _)) => {
+            let map = array.as_any().downcast_ref::<MapArray>().unwrap();
+            // Re-encode the entries `StructArray` (which holds key/value
+            // columns) against the expected entries field's struct type.
+            let entries_as_ref: ArrayRef = Arc::new(map.entries().clone());
+            let entries = encode_array_if_necessary(
+                &entries_as_ref,
+                expected_entries_field.data_type(),
+            )?;
+            let entries = entries
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .expect("Map entries recurse must yield a StructArray")
+                .clone();
+            Ok(Arc::new(MapArray::try_new(
+                Arc::<arrow::datatypes::Field>::clone(expected_entries_field),
+                map.offsets().clone(),
+                entries,
+                map.nulls().cloned(),
+                *ordered,
             )?))
         }
         (DataType::Dictionary(_, _), _) => Ok(cast(array.as_ref(), expected)?),
@@ -320,7 +364,7 @@ pub(crate) fn dictionary_encode_if_necessary(
                         .as_any()
                         .downcast_ref::<RunArray<$run_end_type>>()
                         .unwrap();
-                    let values = dictionary_encode_if_necessary(
+                    let values = encode_array_if_necessary(
                         &(Arc::clone(run_array.values()) as ArrayRef),
                         expected_values_field.data_type(),
                     )?;

@@ -1398,6 +1398,13 @@ mod tests {
     /// forms are equal — this ignores the (opaque, non-semantic) difference in
     /// group-index numbering between the vectorized column path and the
     /// sequential rows fallback.
+    ///
+    /// The [`GroupValues`] trait only guarantees that equal keys receive the
+    /// same group-id and that new keys receive a fresh id; the order in which
+    /// new ids are handed out is deliberately not part of the contract, and
+    /// can differ between correct implementations (e.g. because of internal
+    /// hash-map ordering). Canonicalizing before comparison is what lets us
+    /// assert equivalence across implementations.
     fn canonical_grouping(groups: &[usize]) -> Vec<usize> {
         let mut map = HashMap::new();
         let mut next = 0usize;
