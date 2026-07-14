@@ -848,6 +848,17 @@ fn env_duration(var: &str, default_secs: f64) -> Duration {
     Duration::from_secs_f64(secs)
 }
 
+/// Read a `usize` from `var`. Falls back to `default` when unset; panics if set
+/// to a value that isn't an integer.
+fn env_usize(var: &str, default: usize) -> usize {
+    match std::env::var(var) {
+        Ok(s) => s
+            .parse::<usize>()
+            .unwrap_or_else(|e| panic!("invalid {var}={s:?}: {e}")),
+        Err(_) => default,
+    }
+}
+
 fn sort_axis_benchmark(c: &mut Criterion) {
     let cases: Vec<(&str, AxisGenerator)> = vec![
         (
@@ -868,11 +879,13 @@ fn sort_axis_benchmark(c: &mut Criterion) {
         ),
     ];
 
-    // The axis benches are all floor-bound (short per-iter), so the default
-    // criterion warm-up/measurement windows dominate their wall-clock. Shrink
-    // them here; override with SORT_AXIS_WARMUP_SECS / SORT_AXIS_MEASUREMENT_SECS.
     let mut group = c.benchmark_group("sort_axis");
-    group.sample_size(10);
+    // These benches measure whole-plan sort execution, whose run-to-run variance
+    // is low (~1%), so a small sample count is enough to catch a regression while
+    // avoiding 100 samples of a multi-hundred-ms plan. 10 is criterion's minimum.
+    group.sample_size(env_usize("SORT_AXIS_SAMPLE_SIZE", 10));
+    // Every axis bench is floor-bound (short per-iter), so criterion's default
+    // warm-up/measurement windows dominate their wall-clock; shrink them here.
     group.warm_up_time(env_duration("SORT_AXIS_WARMUP_SECS", 1.0));
     group.measurement_time(env_duration("SORT_AXIS_MEASUREMENT_SECS", 2.0));
 
