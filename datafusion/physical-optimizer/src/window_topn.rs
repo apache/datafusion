@@ -334,6 +334,9 @@ type PlanAndIntermediates = (Arc<dyn ExecutionPlan>, Vec<Arc<dyn ExecutionPlan>>
 /// Walk below a plan node looking for a [`BoundedWindowAggExec`].
 ///
 /// Handles sequences of `ProjectionExec` and `RepartitionExec`.
+/// This is safe because `PartitionedTopKExec` can be pushed below them:
+/// projections only provide aliases, and pushing the limit below repartitions
+/// is safe because the limit is computed per-partition.
 ///
 /// Returns the window exec and a list of intermediate nodes to rebuild,
 /// or `None` if no `BoundedWindowAggExec` is found.

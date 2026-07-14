@@ -910,7 +910,7 @@ SELECT range_key, SUM(value) OVER (ORDER BY value) FROM range_partitioned ORDER 
 
 
 ##########
-# TEST 30: PartitionedTopK on Range Partition Column
+# TEST 26: PartitionedTopK on Range Partition Column
 # Exact Range([range_key]) satisfies the TopK partition key and avoids repartitioning.
 ##########
 
@@ -933,7 +933,7 @@ physical_plan
 01)ProjectionExec: expr=[range_key@0 as range_key, value@1 as value, row_number() PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn]
 02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 03)----PartitionedTopKExec: fn=row_number, fetch=1, partition=[range_key@0], order=[value@1 DESC]
-04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
 query III
 SELECT * FROM (
@@ -953,7 +953,7 @@ ORDER BY range_key;
 
 
 ##########
-# TEST 31: PartitionedTopK on Non-Range Column
+# TEST 27: PartitionedTopK on Non-Range Column
 # Partitioning on a non-range key cannot reuse Range([range_key]) and
 # requires hash repartitioning.
 ##########
@@ -975,7 +975,7 @@ physical_plan
 02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 03)----PartitionedTopKExec: fn=row_number, fetch=1, partition=[non_range_key@0], order=[value@1 DESC]
 04)------RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
-05)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[non_range_key, value], output_partitioning=UnknownPartitioning(4), file_type=csv, has_header=false
+05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[non_range_key, value], output_partitioning=UnknownPartitioning(4), file_type=csv, has_header=false
 
 query III
 SELECT * FROM (
@@ -989,7 +989,7 @@ ORDER BY non_range_key;
 
 
 ##########
-# TEST 32: PartitionedTopK Reuses Range Subset Partitioning
+# TEST 28: PartitionedTopK Reuses Range Subset Partitioning
 # With subset threshold met and preserve-file disabled, Range([range_key])
 # satisfies partitioning by (range_key, non_range_key).
 ##########
@@ -1010,7 +1010,7 @@ physical_plan
 01)ProjectionExec: expr=[range_key@0 as range_key, non_range_key@1 as non_range_key, value@2 as value, row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
 02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 03)----PartitionedTopKExec: fn=row_number, fetch=1, partition=[range_key@0, non_range_key@1], order=[value@2 DESC]
-04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
 query IIII
 SELECT * FROM (
@@ -1030,7 +1030,7 @@ ORDER BY range_key, non_range_key;
 
 
 ##########
-# TEST 34: Range Subset PartitionedTopK Rehashes Below Subset Threshold
+# TEST 29: Range Subset PartitionedTopK Rehashes Below Subset Threshold
 # Range([range_key]) is only a subset of PARTITION BY (range_key, non_range_key),
 # so it should not satisfy the TopK partition key when subset satisfaction is
 # disabled.
@@ -1056,7 +1056,7 @@ physical_plan
 02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 03)----PartitionedTopKExec: fn=row_number, fetch=1, partition=[range_key@0, non_range_key@1], order=[value@2 DESC]
 04)------RepartitionExec: partitioning=Hash([range_key@0, non_range_key@1], 4), input_partitions=4
-05)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
 statement ok
 reset datafusion.optimizer.subset_repartition_threshold;
