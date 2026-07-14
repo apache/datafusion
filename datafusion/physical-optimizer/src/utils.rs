@@ -22,7 +22,6 @@ use datafusion_physical_expr::{
     Distribution, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
     PhysicalExpr, physical_exprs_equal,
 };
-use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -214,24 +213,6 @@ pub(crate) fn range_partitioning_satisfies_key_partitioning(
         }
         _ => false,
     }
-}
-
-/// TODO: remove once Range generally satisfies KeyPartitioned requirements
-/// through Partitioning::satisfaction.
-/// See <https://github.com/apache/datafusion/issues/23266>.
-///
-/// Checks whether an aggregate can reuse range partitioning to satisfy its key
-/// partitioning requirement.
-pub(crate) fn aggregate_can_reuse_range_partitioning(
-    plan: &Arc<dyn ExecutionPlan>,
-) -> bool {
-    plan.downcast_ref::<AggregateExec>()
-        .is_some_and(|aggregate| {
-            matches!(
-                aggregate.mode(),
-                AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned
-            ) && !aggregate.group_expr().has_grouping_set()
-        })
 }
 
 /// Checks whether the given operator is a limit;

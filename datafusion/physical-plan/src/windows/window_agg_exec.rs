@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use super::utils::create_schema;
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::EmptyRecordBatchStream;
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -159,17 +159,6 @@ impl WindowAggExec {
                 .unwrap_or_else(Vec::new)
         }
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for WindowAggExec {
@@ -241,11 +230,15 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.partition_keys().is_empty() {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(if self.partition_keys().is_empty() {
             vec![Distribution::SinglePartition]
         } else {
             vec![Distribution::KeyPartitioned(self.partition_keys())]
-        }
+        })
     }
 
     fn with_new_children(
@@ -258,6 +251,17 @@ impl ExecutionPlan for WindowAggExec {
             children.swap_remove(0),
             true,
         )?))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -281,10 +285,16 @@ impl ExecutionPlan for WindowAggExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let input_stat = Arc::unwrap_or_clone(
-            args.compute_child_statistics(&self.input, args.partition())?,
-        );
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let input_stat = input_stats[0].as_ref().clone();
         let win_cols = self.window_expr.len();
         let input_cols = self.input.schema().fields().len();
         // TODO stats: some windowing function will maintain invariants such as min, max...
