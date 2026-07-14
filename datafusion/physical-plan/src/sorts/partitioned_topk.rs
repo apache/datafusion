@@ -343,12 +343,18 @@ impl ExecutionPlan for PartitionedTopKExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
         let partition_exprs: Vec<Arc<dyn PhysicalExpr>> = self.expr
             [..self.partition_prefix_len]
             .iter()
             .map(|e| Arc::clone(&e.expr))
             .collect();
-        vec![Distribution::HashPartitioned(partition_exprs)]
+        crate::InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(
+            partition_exprs,
+        )])
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

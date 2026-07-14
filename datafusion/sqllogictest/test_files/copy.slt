@@ -33,7 +33,7 @@ COPY source_table TO 'test_files/scratch/copy/partitioned_table1/' STORED AS par
 
 # validate multiple partitioned parquet file output
 statement ok
-CREATE EXTERNAL TABLE validate_partitioned_parquet STORED AS PARQUET 
+CREATE EXTERNAL TABLE validate_partitioned_parquet STORED AS PARQUET
 LOCATION 'test_files/scratch/copy/partitioned_table1/' PARTITIONED BY (col2);
 
 query IT
@@ -44,7 +44,7 @@ select * from validate_partitioned_parquet order by col1, col2;
 
 # validate partition paths were actually generated
 statement ok
-CREATE EXTERNAL TABLE validate_partitioned_parquet_bar STORED AS PARQUET 
+CREATE EXTERNAL TABLE validate_partitioned_parquet_bar STORED AS PARQUET
 LOCATION 'test_files/scratch/copy/partitioned_table1/col2=Bar';
 
 query I
@@ -61,7 +61,7 @@ OPTIONS ('format.compression' 'zstd(10)');
 
 # validate multiple partitioned parquet file output
 statement ok
-CREATE EXTERNAL TABLE validate_partitioned_parquet2 STORED AS PARQUET 
+CREATE EXTERNAL TABLE validate_partitioned_parquet2 STORED AS PARQUET
 LOCATION 'test_files/scratch/copy/partitioned_table2/' PARTITIONED BY (column2, column3);
 
 query ITT
@@ -72,7 +72,7 @@ select * from validate_partitioned_parquet2 order by column1,column2,column3;
 3 c z
 
 statement ok
-CREATE EXTERNAL TABLE validate_partitioned_parquet_a_x STORED AS PARQUET 
+CREATE EXTERNAL TABLE validate_partitioned_parquet_a_x STORED AS PARQUET
 LOCATION 'test_files/scratch/copy/partitioned_table2/column2=a/column3=x';
 
 query I
@@ -89,7 +89,7 @@ OPTIONS ('format.compression' 'zstd(10)');
 
 # validate multiple partitioned parquet file output
 statement ok
-CREATE EXTERNAL TABLE validate_partitioned_parquet3 STORED AS PARQUET 
+CREATE EXTERNAL TABLE validate_partitioned_parquet3 STORED AS PARQUET
 LOCATION 'test_files/scratch/copy/partitioned_table3/' PARTITIONED BY (column1, column3);
 
 query TTT
@@ -100,7 +100,7 @@ select column1, column2, column3 from validate_partitioned_parquet3 order by col
 3 c z
 
 statement ok
-CREATE EXTERNAL TABLE validate_partitioned_parquet_1_x STORED AS PARQUET 
+CREATE EXTERNAL TABLE validate_partitioned_parquet_1_x STORED AS PARQUET
 LOCATION 'test_files/scratch/copy/partitioned_table3/column1=1/column3=x';
 
 query T
@@ -143,7 +143,7 @@ select column1, column2, column3, column4, column5, column6, column7, column8, c
 
 
 statement ok
-create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar); 
+create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar);
 
 # https://github.com/apache/datafusion/issues/9714
 ## Until the partition by parsing uses ColumnDef, this test is meaningless since it becomes an overfit. Even in
@@ -249,7 +249,7 @@ select * from validate_parquet;
 2 Bar
 
 query I
-copy (values (struct(timestamp '2021-01-01 01:00:01', 1)), (struct(timestamp '2022-01-01 01:00:01', 2)), 
+copy (values (struct(timestamp '2021-01-01 01:00:01', 1)), (struct(timestamp '2022-01-01 01:00:01', 2)),
 (struct(timestamp '2023-01-03 01:00:01', 3)), (struct(timestamp '2024-01-01 01:00:01', 4)))
 to 'test_files/scratch/copy/table_nested2/' STORED AS PARQUET;
 ----
@@ -267,15 +267,15 @@ select * from validate_parquet_nested2;
 {c0: 2024-01-01T01:00:01, c1: 4}
 
 query I
-COPY 
-(values (struct ('foo', (struct ('foo', make_array(struct('a',1), struct('b',2))))), make_array(timestamp '2023-01-01 01:00:01',timestamp '2023-01-01 01:00:01')), 
-(struct('bar', (struct ('foo', make_array(struct('aa',10), struct('bb',20))))), make_array(timestamp '2024-01-01 01:00:01', timestamp '2024-01-01 01:00:01'))) 
+COPY
+(values (struct ('foo', (struct ('foo', make_array(struct('a',1), struct('b',2))))), make_array(timestamp '2023-01-01 01:00:01',timestamp '2023-01-01 01:00:01')),
+(struct('bar', (struct ('foo', make_array(struct('aa',10), struct('bb',20))))), make_array(timestamp '2024-01-01 01:00:01', timestamp '2024-01-01 01:00:01')))
 to 'test_files/scratch/copy/table_nested/' STORED AS PARQUET;
 ----
 2
 
 statement ok
-CREATE EXTERNAL TABLE validate_parquet_nested STORED AS PARQUET 
+CREATE EXTERNAL TABLE validate_parquet_nested STORED AS PARQUET
 LOCATION 'test_files/scratch/copy/table_nested/';
 
 query ??
@@ -285,14 +285,14 @@ select * from validate_parquet_nested;
 {c0: bar, c1: {c0: foo, c1: [{c0: aa, c1: 10}, {c0: bb, c1: 20}]}} [2024-01-01T01:00:01, 2024-01-01T01:00:01]
 
 query I
-copy (values ([struct('foo', 1), struct('bar', 2)])) 
+copy (values ([struct('foo', 1), struct('bar', 2)]))
 to 'test_files/scratch/copy/array_of_struct/'
 STORED AS PARQUET;
 ----
 1
 
 statement ok
-CREATE EXTERNAL TABLE validate_array_of_struct 
+CREATE EXTERNAL TABLE validate_array_of_struct
 STORED AS PARQUET LOCATION 'test_files/scratch/copy/array_of_struct/';
 
 query ?
@@ -301,7 +301,7 @@ select * from validate_array_of_struct;
 [{c0: foo, c1: 1}, {c0: bar, c1: 2}]
 
 query I
-copy (values (struct('foo', [1,2,3], struct('bar', [2,3,4])))) 
+copy (values (struct('foo', [1,2,3], struct('bar', [2,3,4]))))
 to 'test_files/scratch/copy/struct_with_array/' STORED AS PARQUET;
 ----
 1
@@ -578,8 +578,8 @@ select * from validate_arrow_file;
 
 # Copy from dict encoded values to single arrow file
 query I
-COPY (values 
-('c', arrow_cast('foo', 'Dictionary(Int32, Utf8)')), ('d', arrow_cast('bar', 'Dictionary(Int32, Utf8)'))) 
+COPY (values
+('c', arrow_cast('foo', 'Dictionary(Int32, Utf8)')), ('d', arrow_cast('bar', 'Dictionary(Int32, Utf8)')))
 to 'test_files/scratch/copy/table_dict.arrow' STORED AS ARROW;
 ----
 2

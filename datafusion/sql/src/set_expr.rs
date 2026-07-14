@@ -25,70 +25,71 @@ use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{SetExpr, SetOperator, SetQuantifier, Spanned};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
-    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     pub(super) fn set_expr_to_plan(
         &self,
         set_expr: SetExpr,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let set_expr_span = Span::try_from_sqlparser_span(set_expr.span());
-        match set_expr {
-            SetExpr::Select(s) => self.select_to_plan(*s, None, planner_context),
-            SetExpr::Values(v) => self.sql_values_to_plan(v, planner_context),
-            SetExpr::SetOperation {
-                op,
-                left,
-                right,
-                set_quantifier,
-            } => {
-                let left_span = Span::try_from_sqlparser_span(left.span());
-                let right_span = Span::try_from_sqlparser_span(right.span());
-                let left_plan = self.set_expr_to_plan(*left, planner_context);
-                // Store the left plan's schema so that the right side can
-                // alias duplicate expressions to match. Skip for BY NAME
-                // operations since those match columns by name, not position.
-                if let Ok(plan) = &left_plan
-                    && plan.schema().fields().len() > 1
-                    && !matches!(
-                        set_quantifier,
-                        SetQuantifier::ByName
-                            | SetQuantifier::AllByName
-                            | SetQuantifier::DistinctByName
-                    )
-                {
-                    planner_context
-                        .set_set_expr_left_schema(Some(Arc::clone(plan.schema())));
-                }
-                let right_plan = self.set_expr_to_plan(*right, planner_context);
-                planner_context.set_set_expr_left_schema(None);
-                let (left_plan, right_plan) = match (left_plan, right_plan) {
-                    (Ok(left_plan), Ok(right_plan)) => (left_plan, right_plan),
-                    (Err(left_err), Err(right_err)) => {
-                        return Err(DataFusionError::Collection(vec![
-                            left_err, right_err,
-                        ]));
+        crate::stack::maybe_grow(|| {
+            let set_expr_span = Span::try_from_sqlparser_span(set_expr.span());
+            match set_expr {
+                SetExpr::Select(s) => self.select_to_plan(*s, None, planner_context),
+                SetExpr::Values(v) => self.sql_values_to_plan(v, planner_context),
+                SetExpr::SetOperation {
+                    op,
+                    left,
+                    right,
+                    set_quantifier,
+                } => {
+                    let left_span = Span::try_from_sqlparser_span(left.span());
+                    let right_span = Span::try_from_sqlparser_span(right.span());
+                    let left_plan = self.set_expr_to_plan(*left, planner_context);
+                    // Store the left plan's schema so that the right side can
+                    // alias duplicate expressions to match. Skip for BY NAME
+                    // operations since those match columns by name, not position.
+                    if let Ok(plan) = &left_plan
+                        && plan.schema().fields().len() > 1
+                        && !matches!(
+                            set_quantifier,
+                            SetQuantifier::ByName
+                                | SetQuantifier::AllByName
+                                | SetQuantifier::DistinctByName
+                        )
+                    {
+                        planner_context
+                            .set_set_expr_left_schema(Some(Arc::clone(plan.schema())));
                     }
-                    (Err(err), _) | (_, Err(err)) => {
-                        return Err(err);
+                    let right_plan = self.set_expr_to_plan(*right, planner_context);
+                    planner_context.set_set_expr_left_schema(None);
+                    let (left_plan, right_plan) = match (left_plan, right_plan) {
+                        (Ok(left_plan), Ok(right_plan)) => (left_plan, right_plan),
+                        (Err(left_err), Err(right_err)) => {
+                            return Err(DataFusionError::Collection(vec![
+                                left_err, right_err,
+                            ]));
+                        }
+                        (Err(err), _) | (_, Err(err)) => {
+                            return Err(err);
+                        }
+                    };
+                    if !(set_quantifier == SetQuantifier::ByName
+                        || set_quantifier == SetQuantifier::AllByName)
+                    {
+                        self.validate_set_expr_num_of_columns(
+                            op,
+                            left_span,
+                            right_span,
+                            &left_plan,
+                            &right_plan,
+                            set_expr_span,
+                        )?;
                     }
-                };
-                if !(set_quantifier == SetQuantifier::ByName
-                    || set_quantifier == SetQuantifier::AllByName)
-                {
-                    self.validate_set_expr_num_of_columns(
-                        op,
-                        left_span,
-                        right_span,
-                        &left_plan,
-                        &right_plan,
-                        set_expr_span,
-                    )?;
+                    self.set_operation_to_plan(op, left_plan, right_plan, set_quantifier)
                 }
-                self.set_operation_to_plan(op, left_plan, right_plan, set_quantifier)
+                SetExpr::Query(q) => self.query_to_plan(*q, planner_context),
+                _ => not_impl_err!("Query {set_expr} not implemented yet"),
             }
-            SetExpr::Query(q) => self.query_to_plan(*q, planner_context),
-            _ => not_impl_err!("Query {set_expr} not implemented yet"),
-        }
+        })
     }
 
     pub(super) fn is_union_all(set_quantifier: SetQuantifier) -> Result<bool> {
