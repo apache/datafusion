@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
+use arrow_schema::Schema;
 use datafusion_common::{Result, assert_or_internal_err};
 
 /// Concatenate multiple [`RecordBatch`]es and apply a limit
@@ -97,6 +99,7 @@ impl LimitedBatchCoalescer {
         if let Some(fetch) = self.fetch {
             // limit previously reached
             if self.total_rows >= fetch {
+                self.release_memory();
                 return Ok(PushBatchStatus::LimitReached);
             }
 
@@ -109,6 +112,8 @@ impl LimitedBatchCoalescer {
                 let batch_head = batch.slice(0, remaining_rows);
                 self.total_rows += batch_head.num_rows();
                 self.inner.push_batch(batch_head)?;
+
+                self.release_memory();
                 return Ok(PushBatchStatus::LimitReached);
             }
         }
@@ -131,6 +136,7 @@ impl LimitedBatchCoalescer {
     pub fn finish(&mut self) -> Result<()> {
         self.inner.finish_buffered_batch()?;
         self.finished = true;
+        self.release_memory();
         Ok(())
     }
 
@@ -141,6 +147,10 @@ impl LimitedBatchCoalescer {
     /// Return the next completed batch, if any
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
         self.inner.next_completed_batch()
+    }
+
+    fn release_memory(&mut self) {
+        self.inner = BatchCoalescer::new(Arc::new(Schema::empty()), 1);
     }
 }
 
