@@ -1784,7 +1784,7 @@ impl Expr {
 
     /// Return `self AS name` alias expression
     pub fn alias(self, name: impl Into<String>) -> Expr {
-        Expr::Alias(Alias::new(self, None::<&str>, name.into()))
+        Expr::Alias(Alias::new(self.unalias(), None::<TableReference>, name))
     }
 
     /// Return `self AS name` alias expression with metadata
@@ -1815,7 +1815,7 @@ impl Expr {
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Expr {
-        Expr::Alias(Alias::new(self, relation, name.into()))
+        Expr::Alias(Alias::new(self.unalias(), relation, name))
     }
 
     /// Return `self AS name` alias expression with a specific qualifier and metadata
@@ -1849,7 +1849,8 @@ impl Expr {
     ///
     /// # Example
     /// ```
-    /// # use datafusion_expr::col;
+    /// # use datafusion_expr::{col, Expr};
+    /// # use datafusion_expr::expr::Alias;
     /// // `foo as "bar"` is unaliased to `foo`
     /// let expr = col("foo").alias("bar");
     /// assert_eq!(expr.unalias(), col("foo"));
@@ -1859,7 +1860,12 @@ impl Expr {
     /// assert_eq!(expr.clone().unalias(), expr);
     ///
     /// // `foo as "bar" as "baz" is unaliased to foo as "bar"
-    /// let expr = col("foo").alias("bar").alias("baz");
+    /// let expr = Expr::Alias(Alias {
+    ///     expr: Box::new(col("foo").alias("bar")),
+    ///     name: "baz".to_owned(),
+    ///     relation: None,
+    ///     metadata: None
+    /// });
     /// assert_eq!(expr.unalias(), col("foo").alias("bar"));
     /// ```
     pub fn unalias(self) -> Expr {

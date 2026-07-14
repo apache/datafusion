@@ -445,7 +445,7 @@ fn eliminate_redundant_null_check_on_count() {
     assert_snapshot!(
     format!("{plan}"),
     @r"
-    Projection: test.col_int32, count(Int64(1)) AS count(*) AS c
+    Projection: test.col_int32, count(Int64(1)) AS c
       Aggregate: groupBy=[[test.col_int32]], aggr=[[count(Int64(1))]]
         TableScan: test projection=[col_int32]
     "
