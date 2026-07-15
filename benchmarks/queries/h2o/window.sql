@@ -117,3 +117,82 @@ SELECT id2, largest2_v2 FROM (
            ROW_NUMBER() OVER (PARTITION BY id2 ORDER BY v2 DESC) AS order_v2
     FROM large WHERE v2 IS NOT NULL
 ) sub_query WHERE order_v2 <= 2;
+
+-- Window Top-N partition cardinality sweep (id3 % N gives N distinct partitions).
+-- These exercise PartitionedTopKExec across cardinalities to validate it stays
+-- competitive with the SortExec+Filter baseline as partition count grows.
+-- Window Top-N: 100 partitions
+SELECT pk, largest2_v2 FROM (
+    SELECT id3 % 100 AS pk, v2 AS largest2_v2,
+           ROW_NUMBER() OVER (PARTITION BY id3 % 100 ORDER BY v2 DESC) AS order_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE order_v2 <= 2;
+
+-- Window Top-N: 1,000 partitions
+SELECT pk, largest2_v2 FROM (
+    SELECT id3 % 1000 AS pk, v2 AS largest2_v2,
+           ROW_NUMBER() OVER (PARTITION BY id3 % 1000 ORDER BY v2 DESC) AS order_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE order_v2 <= 2;
+
+-- Window Top-N: 10,000 partitions
+SELECT pk, largest2_v2 FROM (
+    SELECT id3 % 10000 AS pk, v2 AS largest2_v2,
+           ROW_NUMBER() OVER (PARTITION BY id3 % 10000 ORDER BY v2 DESC) AS order_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE order_v2 <= 2;
+
+-- Window Top-N: 100,000 partitions
+SELECT pk, largest2_v2 FROM (
+    SELECT id3 % 100000 AS pk, v2 AS largest2_v2,
+           ROW_NUMBER() OVER (PARTITION BY id3 % 100000 ORDER BY v2 DESC) AS order_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE order_v2 <= 2;
+
+-- Window Top-N (RANK top-2 per partition, ~100 partitions)
+-- The RANK queries below mirror the ROW_NUMBER cardinality sweep
+-- above and add heavy-ties variants. RANK semantics retain boundary
+-- ties (`WHERE rk <= K` may keep more than K rows per partition), so
+-- this exercises PartitionedTopKRank's ties-Vec path.
+SELECT pk, largest_v2 FROM (
+    SELECT (id3 % 100) AS pk, v2 AS largest_v2,
+           RANK() OVER (PARTITION BY (id3 % 100) ORDER BY v2 DESC) AS rk_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE rk_v2 <= 2;
+
+-- Window Top-N (RANK top-2 per partition, ~1K partitions)
+SELECT pkey, largest_v2 FROM (
+    SELECT (id3 % 1000) AS pkey, v2 AS largest_v2,
+           RANK() OVER (PARTITION BY (id3 % 1000) ORDER BY v2 DESC) AS rk_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE rk_v2 <= 2;
+
+-- Window Top-N (RANK top-2 per partition, ~1K partitions, heavy ties)
+-- v2 % 10 forces 10 distinct OBY values, so most rows tie at the boundary
+-- and exercise PartitionedTopKRank's ties-Vec path.
+SELECT pkey, largest_v2 FROM (
+    SELECT (id3 % 1000) AS pkey, v2 AS largest_v2,
+           RANK() OVER (PARTITION BY (id3 % 1000) ORDER BY (v2 % 10) DESC) AS rk_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE rk_v2 <= 2;
+
+-- Window Top-N (RANK top-2 per partition, ~10K partitions, low ties)
+SELECT id2, largest_v2 FROM (
+    SELECT id2, v2 AS largest_v2,
+           RANK() OVER (PARTITION BY id2 ORDER BY v2 DESC) AS rk_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE rk_v2 <= 2;
+
+-- Window Top-N (RANK top-2 per partition, ~10K partitions, heavy ties)
+SELECT id2, largest_v2 FROM (
+    SELECT id2, v2 AS largest_v2,
+           RANK() OVER (PARTITION BY id2 ORDER BY (v2 % 10) DESC) AS rk_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE rk_v2 <= 2;
+
+-- Window Top-N (RANK top-2 per partition, ~100K partitions)
+SELECT pk, largest_v2 FROM (
+    SELECT (id3 % 100000) AS pk, v2 AS largest_v2,
+           RANK() OVER (PARTITION BY (id3 % 100000) ORDER BY v2 DESC) AS rk_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE rk_v2 <= 2;

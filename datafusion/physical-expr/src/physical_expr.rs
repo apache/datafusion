@@ -60,7 +60,7 @@ pub fn physical_exprs_contains(
 ) -> bool {
     physical_exprs
         .iter()
-        .any(|physical_expr| physical_expr.eq(expr))
+        .any(|physical_expr| physical_expr.as_ref().eq(expr.as_ref()))
 }
 
 /// Checks whether the given physical expression slices are equal.
@@ -68,7 +68,8 @@ pub fn physical_exprs_equal(
     lhs: &[Arc<dyn PhysicalExpr>],
     rhs: &[Arc<dyn PhysicalExpr>],
 ) -> bool {
-    lhs.len() == rhs.len() && izip!(lhs, rhs).all(|(lhs, rhs)| lhs.eq(rhs))
+    lhs.len() == rhs.len()
+        && izip!(lhs, rhs).all(|(lhs, rhs)| lhs.as_ref().eq(rhs.as_ref()))
 }
 
 /// Checks whether the given physical expression slices are equal in the sense
@@ -328,7 +329,7 @@ pub fn add_offset_to_physical_sort_exprs(
 mod tests {
     use super::*;
 
-    use crate::expressions::{BinaryExpr, Literal};
+    use crate::expressions::{BinaryExpr, Literal, UnKnownColumn};
     use crate::physical_expr::{
         physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     };
@@ -374,6 +375,12 @@ mod tests {
         // below expressions are not inside physical_exprs
         assert!(!physical_exprs_contains(&physical_exprs, &col_c_expr));
         assert!(!physical_exprs_contains(&physical_exprs, &lit1));
+
+        let unknown = Arc::new(UnKnownColumn::new("unknown")) as Arc<dyn PhysicalExpr>;
+        assert!(!physical_exprs_contains(
+            std::slice::from_ref(&unknown),
+            &unknown
+        ));
     }
 
     #[test]
@@ -404,6 +411,12 @@ mod tests {
         assert!(!physical_exprs_equal(&vec1, &vec3));
         assert!(!physical_exprs_bag_equal(&vec1, &vec2));
         assert!(!physical_exprs_bag_equal(&vec1, &vec3));
+
+        let unknown = Arc::new(UnKnownColumn::new("unknown")) as Arc<dyn PhysicalExpr>;
+        assert!(!physical_exprs_equal(
+            std::slice::from_ref(&unknown),
+            std::slice::from_ref(&unknown)
+        ));
     }
 
     #[test]

@@ -52,7 +52,7 @@ use datafusion::physical_expr::aggregate::{AggregateExprBuilder, AggregateFuncti
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
-    LexOrdering, PhysicalSortRequirement, ScalarFunctionExpr,
+    HigherOrderFunctionExpr, LexOrdering, PhysicalSortRequirement, ScalarFunctionExpr,
 };
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
@@ -108,7 +108,7 @@ use datafusion_datasource::{TableSchema, TableSchemaBuilder};
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
-    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue,
+    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, HigherOrderUDF,
     ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
     WindowFrame, WindowFrameBound, WindowUDF,
     execution_props::{ScalarSubqueryResults, SubqueryIndex},
@@ -124,7 +124,12 @@ use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
 };
-use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
+use datafusion_proto::physical_plan::from_proto::{
+    parse_protobuf_file_scan_config, parse_table_schema_from_proto,
+};
+use datafusion_proto::physical_plan::to_proto::{
+    serialize_file_scan_config, serialize_physical_expr_with_converter,
+};
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DeduplicatingProtoConverter, DefaultPhysicalExtensionCodec,
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
@@ -135,9 +140,10 @@ use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
 
 use crate::cases::{
-    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
-    MyRegexUdfNode,
+    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyHigherOrderUDF,
+    MyHigherOrderUdfNode, MyRegexUdf, MyRegexUdfNode,
 };
+use datafusion_physical_expr::expressions::{LambdaVariable, is_not_null, lambda};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
@@ -411,6 +417,59 @@ fn roundtrip_nested_loop_join() -> Result<()> {
             None,
             join_type,
             Some(vec![0]),
+        )?))?;
+    }
+    Ok(())
+}
+
+/// Regression: proto3 `repeated` fields cannot distinguish "absent" from "empty",
+/// so a naive encoding collapses `Some(vec![])` and `None` into the same wire
+/// representation. `try_embed_projection` (DataFusion 53+) produces
+/// `HashJoinExec.projection = Some(vec![])` for `SELECT count(1) … JOIN …`,
+/// which previously round-tripped to `None` and caused downstream consumers (e.g.
+/// distributed Flight executors) to receive a different number of output
+/// columns than the planner declared. Verify all three states preserve.
+#[test]
+fn roundtrip_hash_join_projection_states() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Arc::new(Schema::new(vec![field_a.clone()]));
+    let schema_right = Arc::new(Schema::new(vec![field_a]));
+    let on = vec![(
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
+    )];
+
+    for projection in [None, Some(vec![]), Some(vec![0]), Some(vec![1])] {
+        roundtrip_test(Arc::new(HashJoinExec::try_new(
+            Arc::new(EmptyExec::new(schema_left.clone())),
+            Arc::new(EmptyExec::new(schema_right.clone())),
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            projection,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?))?;
+    }
+    Ok(())
+}
+
+/// Same regression coverage for `NestedLoopJoinExec`, which shares the
+/// `repeated uint32 projection` proto field shape with `HashJoinExec`.
+#[test]
+fn roundtrip_nested_loop_join_projection_states() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Arc::new(Schema::new(vec![field_a.clone()]));
+    let schema_right = Arc::new(Schema::new(vec![field_a]));
+
+    for projection in [None, Some(vec![]), Some(vec![0]), Some(vec![1])] {
+        roundtrip_test(Arc::new(NestedLoopJoinExec::try_new(
+            Arc::new(EmptyExec::new(schema_left.clone())),
+            Arc::new(EmptyExec::new(schema_right.clone())),
+            None,
+            &JoinType::Inner,
+            projection,
         )?))?;
     }
     Ok(())
@@ -1414,6 +1473,42 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
         }
         Ok(())
     }
+
+    fn try_decode_higher_order_function(
+        &self,
+        name: &str,
+        buf: &[u8],
+    ) -> Result<Arc<HigherOrderUDF>> {
+        if name == "higher_order_udf" {
+            let proto = MyHigherOrderUdfNode::decode(buf).map_err(|err| {
+                internal_datafusion_err!("failed to decode higher_order_udf: {err}")
+            })?;
+
+            Ok(Arc::new(HigherOrderUDF::new_from_impl(
+                MyHigherOrderUDF::new(proto.payload),
+            )))
+        } else {
+            not_impl_err!("unrecognized higher order UDF implementation, cannot decode")
+        }
+    }
+
+    fn try_encode_higher_order_function(
+        &self,
+        node: &HigherOrderUDF,
+        buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        if let Some(hof) = (node.inner().as_ref() as &dyn std::any::Any)
+            .downcast_ref::<MyHigherOrderUDF>()
+        {
+            let proto = MyHigherOrderUdfNode {
+                payload: hof.payload.clone(),
+            };
+            proto.encode(buf).map_err(|err| {
+                internal_datafusion_err!("failed to encode hof: {err:?}")
+            })?;
+        }
+        Ok(())
+    }
 }
 
 #[test]
@@ -1471,6 +1566,92 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     let ctx = SessionContext::new();
     let proto_converter = DefaultPhysicalProtoConverter {};
     roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec, &proto_converter)?;
+    Ok(())
+}
+
+#[test]
+fn roundtrip_higher_order_udf() -> Result<()> {
+    let element_field = Arc::new(Field::new("v", DataType::Int32, true));
+    let list_field = Field::new(
+        "list_col",
+        DataType::List(Arc::clone(&element_field)),
+        false,
+    );
+    let schema = Arc::new(Schema::new(vec![list_field]));
+
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
+
+    let expr = HigherOrderFunctionExpr::try_new_with_schema(
+        Arc::clone(&hof),
+        vec![
+            col("list_col", &schema)?,
+            lambda(
+                ["v"],
+                is_not_null(Arc::new(LambdaVariable::new(1, element_field)))?,
+            )?,
+        ],
+        &schema,
+        Arc::new(ConfigOptions::default()),
+    )?;
+
+    let project = ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: Arc::new(expr),
+            alias: "a".to_string(),
+        }],
+        input,
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_higher_order_function(hof);
+
+    roundtrip_test_with_context(Arc::new(project), &ctx)
+}
+
+#[test]
+fn roundtrip_higher_order_udf_extension_codec() -> Result<()> {
+    let element_field = Arc::new(Field::new("v", DataType::Int32, true));
+    let list_field = Field::new(
+        "list_col",
+        DataType::List(Arc::clone(&element_field)),
+        false,
+    );
+    let schema = Arc::new(Schema::new(vec![list_field]));
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+
+    let lambda_body = Arc::new(LambdaVariable::new(1, Arc::clone(&element_field)));
+    let lambda_expr = lambda(["v"], lambda_body)?;
+
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
+    let hof_expr = Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
+        hof,
+        vec![col("list_col", &schema)?, lambda_expr],
+        &schema,
+        Arc::new(ConfigOptions::default()),
+    )?);
+
+    let project = ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: hof_expr,
+            alias: "out".to_string(),
+        }],
+        input,
+    )?;
+
+    let ctx = SessionContext::new();
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    roundtrip_test_and_return(
+        Arc::new(project),
+        &ctx,
+        &UDFExtensionCodec,
+        &proto_converter,
+    )?;
     Ok(())
 }
 
@@ -4167,24 +4348,6 @@ fn roundtrip_file_scan_config(scan_config: FileScanConfig) -> Result<FileScanCon
 }
 
 #[test]
-fn roundtrip_parquet_exec_partitioned_by_file_group() -> Result<()> {
-    let file_schema =
-        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
-    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
-    let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-                "/path/to/file.parquet".to_string(),
-                1024,
-            )])])
-            .with_partitioned_by_file_group(true)
-            .build();
-
-    assert!(roundtrip_file_scan_config(scan_config)?.partitioned_by_file_group);
-    Ok(())
-}
-
-#[test]
 fn roundtrip_parquet_exec_output_partitioning() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
@@ -4204,6 +4367,62 @@ fn roundtrip_parquet_exec_output_partitioning() -> Result<()> {
         roundtrip_file_scan_config(scan_config)?.output_partitioning,
         Some(output_partitioning)
     );
+
+    Ok(())
+}
+
+#[test]
+fn parse_legacy_partitioned_by_file_group_as_output_partitioning() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let table_schema = TableSchema::builder(Arc::clone(&file_schema))
+        .with_table_partition_cols(vec![Arc::new(Field::new(
+            "part",
+            DataType::Utf8,
+            false,
+        ))])
+        .build();
+    let file_source = Arc::new(ParquetSource::new(table_schema));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file1.parquet".to_string(),
+                    1024,
+                )]),
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file2.parquet".to_string(),
+                    1024,
+                )]),
+            ])
+            .build();
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let mut proto = serialize_file_scan_config(&scan_config, &codec, &proto_converter)?;
+    proto.partitioned_by_file_group = Some(true);
+    proto.output_partitioning = None;
+
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let parsed = parse_protobuf_file_scan_config(
+        &proto,
+        &decode_ctx,
+        &proto_converter,
+        Arc::new(ParquetSource::new(parse_table_schema_from_proto(&proto)?)),
+    )?;
+
+    match parsed.output_partitioning {
+        Some(Partitioning::Hash(exprs, partition_count)) => {
+            assert_eq!(partition_count, 2);
+            assert_eq!(exprs.len(), 1);
+            let column = exprs[0].downcast_ref::<Column>().unwrap();
+            assert_eq!(column.name(), "part");
+            assert_eq!(column.index(), 1);
+        }
+        other => panic!("Expected legacy hash output partitioning, got {other:?}"),
+    }
 
     Ok(())
 }

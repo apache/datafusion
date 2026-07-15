@@ -584,6 +584,19 @@ impl Unparser<'_> {
         self.project_window_output(&window_expr, select, None)
     }
 
+    fn extract_join_input_table_scan_filters(
+        plan: &Arc<LogicalPlan>,
+        table_scan_filters: &mut Vec<Expr>,
+    ) -> Result<Arc<LogicalPlan>> {
+        match try_transform_to_simple_table_scan_with_filters(plan)? {
+            Some((plan, filters)) => {
+                table_scan_filters.extend(filters);
+                Ok(Arc::new(plan))
+            }
+            None => Ok(Arc::clone(plan)),
+        }
+    }
+
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn select_to_sql_recursively(
         &self,
@@ -1153,14 +1166,10 @@ impl Unparser<'_> {
                 // The outer projection plan will handle projecting the correct columns.
                 let already_projected = select.already_projected();
 
-                let left_plan =
-                    match try_transform_to_simple_table_scan_with_filters(left_plan)? {
-                        Some((plan, filters)) => {
-                            table_scan_filters.extend(filters);
-                            Arc::new(plan)
-                        }
-                        None => Arc::clone(left_plan),
-                    };
+                let left_plan = Self::extract_join_input_table_scan_filters(
+                    left_plan,
+                    &mut table_scan_filters,
+                )?;
                 let left_plan = if already_projected {
                     Self::unwrap_qualified_passthrough_join_projection(left_plan)
                 } else {
@@ -1181,14 +1190,10 @@ impl Unparser<'_> {
                     None
                 };
 
-                let right_plan =
-                    match try_transform_to_simple_table_scan_with_filters(right_plan)? {
-                        Some((plan, filters)) => {
-                            table_scan_filters.extend(filters);
-                            Arc::new(plan)
-                        }
-                        None => Arc::clone(right_plan),
-                    };
+                let right_plan = Self::extract_join_input_table_scan_filters(
+                    right_plan,
+                    &mut table_scan_filters,
+                )?;
 
                 let mut right_relation = RelationBuilder::default();
                 if already_projected
@@ -1987,6 +1992,21 @@ impl Unparser<'_> {
         Ok(Some(relation))
     }
 
+    /// Strip the table qualifier from every column in a pushdown pass-through
+    /// projection expression, so it resolves against the unnamed derived table
+    /// rendered for the inner pushdown projection rather than a deeper table
+    /// alias that is out of scope at this nesting level.
+    fn strip_pushdown_column_qualifiers(expr: Expr) -> Result<Expr> {
+        expr.transform(|e| match e {
+            Expr::Column(mut column) => {
+                column.relation = None;
+                Ok(Transformed::yes(Expr::Column(column)))
+            }
+            other => Ok(Transformed::no(other)),
+        })
+        .data()
+    }
+
     /// Try to unparse a table scan with pushdown operations into a new subquery plan.
     /// If the table scan is without any pushdown operations, return None.
     fn unparse_table_scan_pushdown(
@@ -2116,6 +2136,33 @@ impl Unparser<'_> {
                     alias.clone(),
                     already_projected,
                 )? {
+                    // The pushed-down scan alias is only in scope for the
+                    // projection directly above the aliased table scan. `plan`
+                    // is the result of pushing the alias further down: if it is
+                    // itself a `Projection`, the input was another projection
+                    // (e.g. common subexpression elimination stacked one), so
+                    // this projection sits over a derived table rather than
+                    // directly over the aliased scan, and the alias is out of
+                    // scope here. Its qualified pass-through columns must then
+                    // reference the derived table's output unqualified instead
+                    // of being rebased to the alias. Build it directly so the
+                    // unqualified columns are not re-normalized back to the
+                    // alias. (Otherwise `plan` is the scan-derived plan and we
+                    // fall through to rebase to the alias, correct one level
+                    // above the scan.)
+                    if alias.is_some() && matches!(plan, LogicalPlan::Projection(_)) {
+                        let exprs = projection
+                            .expr
+                            .iter()
+                            .cloned()
+                            .map(Self::strip_pushdown_column_qualifiers)
+                            .collect::<Result<Vec<_>>>()?;
+                        return Ok(Some(LogicalPlan::Projection(Projection::try_new(
+                            exprs,
+                            Arc::new(plan),
+                        )?)));
+                    }
+
                     let exprs = if alias.is_some() {
                         let mut alias_rewriter =
                             alias.as_ref().map(|alias_name| TableAliasRewriter {
