@@ -374,8 +374,12 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         if let Some(cursor) = &mut self.cursors[stream_idx] {
             let _ = cursor.advance();
             if cursor.is_finished() {
-                // Take the current cursor, leaving `None` in its place
-                self.prev_cursors[stream_idx] = self.cursors[stream_idx].take();
+                if self.enable_round_robin_tie_breaker {
+                    // Take the current cursor, leaving `None` in its place
+                    self.prev_cursors[stream_idx] = self.cursors[stream_idx].take();
+                } else {
+                    self.cursors[stream_idx].take();
+                }
             }
             true
         } else {
