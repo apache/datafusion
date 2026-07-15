@@ -45,6 +45,7 @@ use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, Partitio
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
+    StatisticsContext,
     execution_plan::{Boundedness, EmissionType},
 };
 
@@ -248,17 +249,15 @@ async fn test_join_with_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        swapped_join
-            .left()
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join
-            .right()
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -296,17 +295,15 @@ async fn test_left_join_no_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        swapped_join
-            .left()
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join
-            .right()
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -347,17 +344,15 @@ async fn test_join_with_swap_semi() {
 
         assert_eq!(swapped_join.schema().fields().len(), 1);
         assert_eq!(
-            swapped_join
-                .left()
-                .statistics_with_args(&StatisticsArgs::new())
+            StatisticsContext::new()
+                .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(8192)
         );
         assert_eq!(
-            swapped_join
-                .right()
-                .statistics_with_args(&StatisticsArgs::new())
+            StatisticsContext::new()
+                .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(2097152)
@@ -400,17 +395,15 @@ async fn test_join_with_swap_mark() {
 
         assert_eq!(swapped_join.schema().fields().len(), 2);
         assert_eq!(
-            swapped_join
-                .left()
-                .statistics_with_args(&StatisticsArgs::new())
+            StatisticsContext::new()
+                .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(8192)
         );
         assert_eq!(
-            swapped_join
-                .right()
-                .statistics_with_args(&StatisticsArgs::new())
+            StatisticsContext::new()
+                .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(2097152)
@@ -528,17 +521,15 @@ async fn test_join_no_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        swapped_join
-            .left()
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join
-            .right()
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -603,17 +594,15 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     );
 
     assert_eq!(
-        swapped_join
-            .left()
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join
-            .right()
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -676,17 +665,15 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
     );
 
     assert_eq!(
-        swapped_join
-            .left()
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join
-            .right()
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -1152,7 +1139,11 @@ impl ExecutionPlan for StatisticsExec {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
         Ok(Arc::new(if args.partition().is_some() {
             Statistics::new_unknown(&self.schema)
         } else {
