@@ -41,6 +41,9 @@ pub use datafusion_physical_expr::{
 };
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+pub use crate::distribution_requirements::{
+    ChildSatisfactionOptions, InputDistributionRequirements,
+};
 pub use crate::execution_plan::{
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, collect, collect_partitioned,
     displayable, execute_input_stream, execute_stream, execute_stream_partitioned,
@@ -49,7 +52,7 @@ pub use crate::execution_plan::{
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::sort_pushdown::SortOrderPushdownResult;
-pub use crate::statistics::StatisticsArgs;
+pub use crate::statistics::{ChildStats, StatisticsArgs, StatisticsContext};
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
 pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};
@@ -72,6 +75,7 @@ pub mod column_rewriter;
 pub mod common;
 pub mod coop;
 pub mod display;
+pub mod distribution_requirements;
 pub mod empty;
 pub mod execution_plan;
 pub mod explain;

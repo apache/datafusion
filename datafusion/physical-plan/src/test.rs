@@ -165,7 +165,11 @@ impl ExecutionPlan for TestMemoryExec {
         unimplemented!()
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
         if args.partition().is_some() {
             Ok(Arc::new(Statistics::new_unknown(&self.schema)))
         } else {

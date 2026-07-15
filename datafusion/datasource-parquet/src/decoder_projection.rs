@@ -45,7 +45,7 @@ use parquet::arrow::ProjectionMask;
 use parquet::schema::types::SchemaDescriptor;
 
 use crate::opener::{VirtualColumnsState, append_fields};
-use crate::row_filter::build_projection_read_plan;
+use crate::projection_read_plan::build_projection_read_plan;
 
 /// Per-file decoder projection: the [`ProjectionMask`] installed on the
 /// parquet decoder, plus the per-batch transform that maps the decoder's

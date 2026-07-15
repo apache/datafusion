@@ -98,7 +98,7 @@ impl ScalarUDFImpl for AsciiFunc {
                     ScalarValue::Utf8(Some(s))
                     | ScalarValue::LargeUtf8(Some(s))
                     | ScalarValue::Utf8View(Some(s)) => {
-                        let result = s.chars().next().map_or(0, |c| c as i32);
+                        let result = first_char_code(&s);
                         Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(result))))
                     }
                     _ => {
@@ -118,22 +118,53 @@ impl ScalarUDFImpl for AsciiFunc {
     }
 }
 
+/// Returns the Unicode scalar value of the first character of `s`, or 0 when
+/// `s` is empty. Reads the leading byte first so the common all-ASCII case
+/// avoids constructing a `char` iterator and decoding a multi-byte sequence.
+#[inline]
+fn first_char_code(s: &str) -> i32 {
+    match s.as_bytes().first() {
+        None => 0,
+        // ASCII byte: the codepoint equals the byte value.
+        Some(&b) if b < 0x80 => b as i32,
+        // Leading byte of a multi-byte sequence: decode the first char.
+        Some(_) => s.chars().next().map_or(0, |c| c as i32),
+    }
+}
+
 fn calculate_ascii<'a, V>(array: &V) -> Result<ArrayRef, ArrowError>
 where
     V: StringArrayType<'a, Item = &'a str>,
 {
-    let values: Vec<_> = (0..array.len())
-        .map(|i| {
-            if array.is_null(i) {
-                0
-            } else {
-                let s = array.value(i);
-                s.chars().next().map_or(0, |c| c as i32)
-            }
-        })
-        .collect();
+    let len = array.len();
+    let nulls = array.nulls().cloned();
 
-    let array = Int32Array::new(values.into(), array.nulls().cloned());
+    // Split the null-handling out of the hot loop: when there is no null
+    // buffer every index is valid, so we can skip the per-element null check
+    // and use unchecked accessors.
+    let values: Vec<i32> = match nulls {
+        Some(ref n) => (0..len)
+            .map(|i| {
+                if n.is_null(i) {
+                    0
+                } else {
+                    // SAFETY: `n.is_null(i)` was false, so `i` is a valid,
+                    // non-null index.
+                    let s = unsafe { array.value_unchecked(i) };
+                    first_char_code(s)
+                }
+            })
+            .collect(),
+        None => (0..len)
+            .map(|i| {
+                // SAFETY: no null buffer means every index in `0..len` is valid.
+                let s = unsafe { array.value_unchecked(i) };
+                first_char_code(s)
+            })
+            .collect(),
+    };
+
+    let array = Int32Array::new(values.into(), nulls);
 
     Ok(Arc::new(array))
 }

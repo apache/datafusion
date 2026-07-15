@@ -87,7 +87,7 @@ impl ListingTableConfigExt for ListingTableConfig {
 
         let listing_file_extension =
             if let Some(compression_type) = maybe_compression_type {
-                format!("{}.{}", &file_extension, &compression_type)
+                format!("{file_extension}.{compression_type}")
             } else {
                 file_extension
             };
@@ -145,7 +145,7 @@ mod tests {
     use datafusion_physical_expr::expressions::{Column, binary};
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::empty::EmptyExec;
-    use datafusion_physical_plan::statistics::StatisticsArgs;
+    use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
     use datafusion_physical_plan::{
         ExecutionPlanProperties, Partitioning, RangePartitioning, SplitPoint, collect,
     };
@@ -266,11 +266,14 @@ mod tests {
 
         // test metadata
         assert_eq!(
-            exec.statistics_with_args(&StatisticsArgs::new())?.num_rows,
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
+                .num_rows,
             Precision::Exact(8)
         );
         assert_eq!(
-            exec.statistics_with_args(&StatisticsArgs::new())?
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
                 .total_byte_size,
             Precision::Absent,
         );
@@ -1612,16 +1615,16 @@ mod tests {
 
         let exec_default = table_default.scan(&state, None, &[], None).await?;
         assert_eq!(
-            exec_default
-                .statistics_with_args(&StatisticsArgs::new())?
+            StatisticsContext::new()
+                .compute(exec_default.as_ref(), &StatisticsArgs::new())?
                 .num_rows,
             Precision::Exact(8)
         );
 
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
-            exec_default
-                .statistics_with_args(&StatisticsArgs::new())?
+            StatisticsContext::new()
+                .compute(exec_default.as_ref(), &StatisticsArgs::new())?
                 .total_byte_size,
             Precision::Absent
         );
@@ -1638,14 +1641,14 @@ mod tests {
 
         let exec_disabled = table_disabled.scan(&state, None, &[], None).await?;
         assert_eq!(
-            exec_disabled
-                .statistics_with_args(&StatisticsArgs::new())?
+            StatisticsContext::new()
+                .compute(exec_disabled.as_ref(), &StatisticsArgs::new())?
                 .num_rows,
             Precision::Absent
         );
         assert_eq!(
-            exec_disabled
-                .statistics_with_args(&StatisticsArgs::new())?
+            StatisticsContext::new()
+                .compute(exec_disabled.as_ref(), &StatisticsArgs::new())?
                 .total_byte_size,
             Precision::Absent
         );
@@ -1662,15 +1665,15 @@ mod tests {
 
         let exec_enabled = table_enabled.scan(&state, None, &[], None).await?;
         assert_eq!(
-            exec_enabled
-                .statistics_with_args(&StatisticsArgs::new())?
+            StatisticsContext::new()
+                .compute(exec_enabled.as_ref(), &StatisticsArgs::new())?
                 .num_rows,
             Precision::Exact(8)
         );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
-            exec_enabled
-                .statistics_with_args(&StatisticsArgs::new())?
+            StatisticsContext::new()
+                .compute(exec_enabled.as_ref(), &StatisticsArgs::new())?
                 .total_byte_size,
             Precision::Absent,
         );

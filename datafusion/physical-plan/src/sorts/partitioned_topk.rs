@@ -23,10 +23,13 @@
 //! FROM t WHERE rn <= N
 //! ```
 //!
-//! Instead of sorting the entire dataset, this operator maintains a
-//! [`TopK`](crate::topk::TopK) heap per partition (reusing the existing TopK implementation)
-//! and emits only the top-K rows per partition in sorted order
-//! `(partition_keys, order_keys)`.
+//! Instead of sorting the entire dataset, this operator delegates to a
+//! per-partition heap-of-K implementation (one variant for `ROW_NUMBER`
+//! and a sibling variant for `RANK`), both of which maintain one heap per
+//! distinct partition key while sharing a single [`arrow::row::RowConverter`],
+//! [`MemoryReservation`](datafusion_execution::memory_pool::MemoryReservation),
+//! and metrics set across all partitions, and emit only the top-K rows
+//! per partition in sorted order `(partition_keys, order_keys)`.
 
 use std::fmt::{self, Formatter};
 use std::sync::Arc;
@@ -43,11 +46,26 @@ use futures::TryStreamExt;
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::metrics::ExecutionPlanMetricsSet;
-use crate::topk::{PartitionedTopK, build_sort_fields};
+use crate::topk::{PartitionedTopK, PartitionedTopKRank, build_sort_fields};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, SendableRecordBatchStream, stream::RecordBatchStreamAdapter,
 };
+
+/// Which window function `PartitionedTopKExec` is optimizing.
+///
+/// Different ranking functions have different per-partition retention rules:
+/// - [`RowNumber`](Self::RowNumber): exactly K rows per partition.
+/// - [`Rank`](Self::Rank): K rows plus any rows tied at the boundary
+///   ORDER BY value (RANK semantics — `WHERE rk <= K` may keep more
+///   than K rows when ties straddle the boundary).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowFnKind {
+    /// `ROW_NUMBER()` — keep exactly K rows per partition.
+    RowNumber,
+    /// `RANK()` — keep K rows plus any rows tied at the boundary.
+    Rank,
+}
 
 /// Per-partition Top-K operator for window function queries.
 ///
@@ -89,9 +107,14 @@ use crate::{
 ///     DataSourceExec
 /// ```
 ///
-/// Instead of sorting the entire dataset, this operator reads unsorted input,
-/// maintains a [`TopK`](crate::topk::TopK) heap per distinct partition key, and emits only the
-/// top-K rows per partition in sorted order `(partition_keys, order_keys)`.
+/// Instead of sorting the entire dataset, this operator reads unsorted input
+/// and delegates to a per-partition heap-of-K implementation (`PartitionedTopK`
+/// for `ROW_NUMBER` and `PartitionedTopKRank` for `RANK`), each maintaining
+/// one heap per distinct partition key while sharing a single
+/// [`arrow::row::RowConverter`] /
+/// [`MemoryReservation`](datafusion_execution::memory_pool::MemoryReservation)
+/// across all partitions, and emits only the top-K rows per partition in
+/// sorted order `(partition_keys, order_keys)`.
 ///
 /// Cost: O(N log K) time instead of O(N log N), and O(K × P × row_size)
 /// memory where K = fetch, P = number of distinct partitions.
@@ -139,9 +162,11 @@ use crate::{
 ///
 /// # Limitations
 ///
-/// - Only activated when the window function is `ROW_NUMBER` with a
-///   `PARTITION BY` clause. Global top-K (no `PARTITION BY`) is already
-///   handled efficiently by `SortExec` with `fetch`.
+/// - Only activated when the window function is `ROW_NUMBER` or `RANK` with
+///   a `PARTITION BY` clause. `RANK` additionally requires a non-empty
+///   `ORDER BY` (with an empty `ORDER BY`, every row ties at rank 1 and the
+///   heap-of-K rewrite doesn't apply). Global top-K (no `PARTITION BY`) is
+///   already handled efficiently by `SortExec` with `fetch`.
 /// - For very high cardinality partition keys (millions of distinct values),
 ///   both memory usage and runtime overhead can become significant. In such
 ///   cases, the sort-based plan is more robust. Therefore, this optimization
@@ -164,6 +189,9 @@ pub struct PartitionedTopKExec {
     /// Derived from the filter predicate: `rn <= 3` → `fetch = 3`,
     /// `rn < 3` → `fetch = 2`.
     fetch: usize,
+    /// Which window function this operator is optimizing. Selects the
+    /// per-partition retention policy (see [`WindowFnKind`]).
+    fn_kind: WindowFnKind,
     /// Execution metrics
     metrics_set: ExecutionPlanMetricsSet,
     /// Cached plan properties (output ordering, partitioning, etc.)
@@ -181,6 +209,8 @@ impl PartitionedTopKExec {
     /// * `partition_prefix_len` - Number of leading expressions in `expr`
     ///   that form the partition key. Must be >= 1.
     /// * `fetch` - Maximum rows to retain per partition (the K in "top-K").
+    /// * `fn_kind` - Which ranking window function this operator optimizes
+    ///   ([`WindowFnKind::RowNumber`] or [`WindowFnKind::Rank`]).
     ///
     /// # Example
     ///
@@ -191,6 +221,7 @@ impl PartitionedTopKExec {
     ///     LexOrdering([store ASC, revenue DESC]),
     ///     1,    // partition_prefix_len: 1 partition column (store)
     ///     5,    // fetch: keep top 5 per partition
+    ///     WindowFnKind::RowNumber,
     /// )
     /// ```
     pub fn try_new(
@@ -198,6 +229,7 @@ impl PartitionedTopKExec {
         expr: LexOrdering,
         partition_prefix_len: usize,
         fetch: usize,
+        fn_kind: WindowFnKind,
     ) -> Result<Self> {
         let cache = Self::compute_properties(&input, expr.clone())?;
         Ok(Self {
@@ -205,6 +237,7 @@ impl PartitionedTopKExec {
             expr,
             partition_prefix_len,
             fetch,
+            fn_kind,
             metrics_set: ExecutionPlanMetricsSet::new(),
             cache: Arc::new(cache),
         })
@@ -231,6 +264,11 @@ impl PartitionedTopKExec {
         self.fetch
     }
 
+    /// Returns which window function this operator is optimizing.
+    pub fn fn_kind(&self) -> WindowFnKind {
+        self.fn_kind
+    }
+
     /// Compute [`PlanProperties`] for this operator.
     ///
     /// The output is sorted by `sort_exprs` (partition keys then order keys),
@@ -254,6 +292,10 @@ impl PartitionedTopKExec {
 
 impl DisplayAs for PartitionedTopKExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        let fn_label = match self.fn_kind {
+            WindowFnKind::RowNumber => "row_number",
+            WindowFnKind::Rank => "rank",
+        };
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let partition_exprs: Vec<String> = self.expr[..self.partition_prefix_len]
@@ -266,7 +308,8 @@ impl DisplayAs for PartitionedTopKExec {
                     .collect();
                 write!(
                     f,
-                    "PartitionedTopKExec: fetch={}, partition=[{}], order=[{}]",
+                    "PartitionedTopKExec: fn={}, fetch={}, partition=[{}], order=[{}]",
+                    fn_label,
                     self.fetch,
                     partition_exprs.join(", "),
                     order_exprs.join(", "),
@@ -281,6 +324,7 @@ impl DisplayAs for PartitionedTopKExec {
                     .iter()
                     .map(|e| format!("{e}"))
                     .collect();
+                writeln!(f, "fn={fn_label}")?;
                 writeln!(f, "fetch={}", self.fetch)?;
                 writeln!(f, "partition=[{}]", partition_exprs.join(", "))?;
                 writeln!(f, "order=[{}]", order_exprs.join(", "))
@@ -299,12 +343,18 @@ impl ExecutionPlan for PartitionedTopKExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
         let partition_exprs: Vec<Arc<dyn PhysicalExpr>> = self.expr
             [..self.partition_prefix_len]
             .iter()
             .map(|e| Arc::clone(&e.expr))
             .collect();
-        vec![Distribution::KeyPartitioned(partition_exprs)]
+        crate::InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(
+            partition_exprs,
+        )])
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -325,6 +375,7 @@ impl ExecutionPlan for PartitionedTopKExec {
             self.expr.clone(),
             self.partition_prefix_len,
             self.fetch,
+            self.fn_kind,
         )?))
     }
 
@@ -348,6 +399,7 @@ impl ExecutionPlan for PartitionedTopKExec {
             LexOrdering::new(self.expr[self.partition_prefix_len..].iter().cloned())
                 .expect("PartitionedTopKExec requires at least one order-by expression");
         let fetch = self.fetch;
+        let fn_kind = self.fn_kind;
         let batch_size = context.session_config().batch_size();
         let runtime = Arc::clone(&context.runtime_env());
         let metrics_set = self.metrics_set.clone();
@@ -361,6 +413,7 @@ impl ExecutionPlan for PartitionedTopKExec {
                 partition_sort_fields,
                 order_expr,
                 fetch,
+                fn_kind,
                 batch_size,
                 runtime,
                 metrics_set,
@@ -376,25 +429,29 @@ impl ExecutionPlan for PartitionedTopKExec {
     }
 }
 
-/// Read all input, feed each batch into a [`PartitionedTopK`] (which
-/// maintains one heap per distinct partition key), then emit results
-/// ordered by `(partition_keys, order_keys)`.
+/// Read all input, feed each batch into a per-partition top-K state
+/// (either [`PartitionedTopK`] for `ROW_NUMBER` or
+/// [`PartitionedTopKRank`] for `RANK`), then emit results ordered by
+/// `(partition_keys, order_keys)`.
 ///
 /// # Phases
 ///
-/// 1. **Accumulation** — forward each input `RecordBatch` to
-///    [`PartitionedTopK::insert_batch`], which demultiplexes rows by
-///    partition key and dispatches them into the per-key heap. The
-///    `RowConverter` and `MemoryReservation` are shared across all
-///    partitions for this operator instance.
+/// 1. **Accumulation** — forward each input `RecordBatch` to the
+///    per-partition state's `insert_batch`. The `RowConverter` for
+///    ORDER BY columns, the operator's `MemoryReservation`, and the
+///    `TopKMetrics` are shared across all distinct partition keys for
+///    this operator instance.
 ///
-/// 2. **Emission** — [`PartitionedTopK::emit`] drains all heaps in
-///    sorted partition-key order, returning a coalesced batch stream.
+/// 2. **Emission** — `emit` drains all per-partition heaps in sorted
+///    partition-key order, returning a coalesced batch stream. For
+///    `RANK`, boundary-tied rows are materialized and emitted after
+///    each partition's heap rows.
 ///
 /// # Cost
 ///
 /// - Time: O(N log K) where N = total rows, K = fetch
 /// - Memory: O(K × P × row_size) where P = number of distinct partitions
+///   plus, for RANK, the boundary ties' rows
 #[expect(clippy::too_many_arguments)]
 async fn do_partitioned_topk(
     partition_id: usize,
@@ -404,26 +461,47 @@ async fn do_partitioned_topk(
     partition_sort_fields: Vec<SortField>,
     order_expr: LexOrdering,
     fetch: usize,
+    fn_kind: WindowFnKind,
     batch_size: usize,
     runtime: Arc<RuntimeEnv>,
     metrics_set: ExecutionPlanMetricsSet,
 ) -> Result<SendableRecordBatchStream> {
-    let mut state = PartitionedTopK::try_new(
-        partition_id,
-        schema,
-        partition_exprs,
-        partition_sort_fields,
-        order_expr,
-        fetch,
-        batch_size,
-        &runtime,
-        &metrics_set,
-    )?;
-
-    while let Some(batch) = input.next().await {
-        state.insert_batch(&batch?)?;
+    match fn_kind {
+        WindowFnKind::RowNumber => {
+            let mut state = PartitionedTopK::try_new(
+                partition_id,
+                schema,
+                partition_exprs,
+                partition_sort_fields,
+                order_expr,
+                fetch,
+                batch_size,
+                &runtime,
+                &metrics_set,
+            )?;
+            while let Some(batch) = input.next().await {
+                state.insert_batch(&batch?)?;
+            }
+            drop(input);
+            state.emit()
+        }
+        WindowFnKind::Rank => {
+            let mut state = PartitionedTopKRank::try_new(
+                partition_id,
+                schema,
+                partition_exprs,
+                partition_sort_fields,
+                order_expr,
+                fetch,
+                batch_size,
+                &runtime,
+                &metrics_set,
+            )?;
+            while let Some(batch) = input.next().await {
+                state.insert_batch(&batch?)?;
+            }
+            drop(input);
+            state.emit()
+        }
     }
-    drop(input);
-
-    state.emit()
 }

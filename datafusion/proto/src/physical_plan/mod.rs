@@ -54,7 +54,7 @@ use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
@@ -3943,6 +3943,24 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
     }
 
     fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
+
+    fn try_decode_higher_order_function(
+        &self,
+        name: &str,
+        _buf: &[u8],
+    ) -> Result<Arc<HigherOrderUDF>> {
+        not_impl_err!(
+            "PhysicalExtensionCodec is not provided for higher order function {name}"
+        )
+    }
+
+    fn try_encode_higher_order_function(
+        &self,
+        _node: &HigherOrderUDF,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
         Ok(())
     }
 

@@ -40,7 +40,7 @@ use crate::projection::{ProjectionExec, all_columns, make_with_child, update_exp
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolWriter};
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
     DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics,
@@ -1228,18 +1228,6 @@ impl RepartitionExec {
     pub fn name(&self) -> &str {
         "RepartitionExec"
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            state: Default::default(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for RepartitionExec {
@@ -1316,6 +1304,18 @@ impl ExecutionPlan for RepartitionExec {
             repartition = repartition.with_preserve_order();
         }
         Ok(Arc::new(repartition))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            state: Default::default(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -1479,22 +1479,27 @@ impl ExecutionPlan for RepartitionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        if let Some(partition) = args.partition() {
-            let partition_count = self.partitioning().partition_count();
-            if partition_count == 0 {
-                return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
-            }
+    fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(None)]
+    }
 
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        if args.partition().is_some() {
+            let partition_count = self.partitioning().partition_count();
+            // `StatisticsContext::compute` validates the partition index against
+            // this same count before calling, so it is non-zero here; guard
+            // defensively against a direct call so the division below cannot
+            // divide by zero
             assert_or_internal_err!(
-                partition < partition_count,
-                "RepartitionExec invalid partition {} (expected less than {})",
-                partition,
-                partition_count
+                partition_count > 0,
+                "RepartitionExec statistics requested for a partition but the partition count is 0"
             );
 
-            let mut stats =
-                Arc::unwrap_or_clone(args.compute_child_statistics(&self.input, None)?);
+            let mut stats = input_stats[0].as_ref().clone();
 
             // Distribute statistics across partitions
             stats.num_rows = stats
@@ -1517,7 +1522,7 @@ impl ExecutionPlan for RepartitionExec {
 
             Ok(Arc::new(stats))
         } else {
-            args.compute_child_statistics(&self.input, None)
+            Ok(Arc::clone(&input_stats[0]))
         }
     }
 
