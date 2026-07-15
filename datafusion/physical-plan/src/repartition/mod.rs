@@ -1561,10 +1561,35 @@ impl ExecutionPlan for RepartitionExec {
                 }
                 Partitioning::Hash(new_partitions, *size)
             }
-            Partitioning::Range(_) => {
-                // Range partitioning optimizer propagation is tracked in
-                // https://github.com/apache/datafusion/issues/23230
-                return Ok(None);
+            Partitioning::Range(range_partitioning) => {
+                let updated_exprs = range_partitioning
+                    .ordering()
+                    .iter()
+                    .map(|sort_expr| Arc::clone(&sort_expr.expr))
+                    .filter_map(|expr| {
+                        update_expr(&expr, projection.expr(), false).ok()?
+                    })
+                    // .filter_map(|expr| expr.transpose()?)
+                    .collect::<Vec<_>>();
+
+                if updated_exprs.len() != range_partitioning.ordering().len() {
+                    return Ok(None);
+                }
+
+                let sort_exprs = range_partitioning
+                    .ordering()
+                    .iter()
+                    .zip(updated_exprs)
+                    .map(|(sort_expr, expr)| {
+                        PhysicalSortExpr::new(expr, sort_expr.options)
+                    })
+                    .collect::<Vec<_>>();
+                let ordering = LexOrdering::new(sort_exprs)?;
+
+                Partitioning::Range(RangePartitioning::new(
+                    ordering,
+                    range_partitioning.split_points().clone(),
+                ))
             }
             others => others.clone(),
         };
