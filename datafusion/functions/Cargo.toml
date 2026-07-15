@@ -245,6 +245,10 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "upper"
+
+[[bench]]
+harness = false
+name = "upper_unicode"
 required-features = ["string_expressions"]
 
 [[bench]]
