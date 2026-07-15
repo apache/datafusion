@@ -143,6 +143,35 @@ pub trait PhysicalPlanner: Send + Sync {
     ) -> Result<Arc<dyn PhysicalExpr>>;
 }
 
+/// A planner adapter that lowers expressions with the properties for the plan
+/// currently being built rather than the properties stored on the session.
+struct PhysicalPlannerWithProps<'a> {
+    inner: &'a dyn PhysicalPlanner,
+    execution_props: &'a ExecutionProps,
+}
+
+#[async_trait]
+impl PhysicalPlanner for PhysicalPlannerWithProps<'_> {
+    async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        session_state: &SessionState,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.inner
+            .create_physical_plan(logical_plan, session_state)
+            .await
+    }
+
+    fn create_physical_expr(
+        &self,
+        expr: &Expr,
+        input_dfschema: &DFSchema,
+        _session_state: &SessionState,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        create_physical_expr(expr, input_dfschema, self.execution_props)
+    }
+}
+
 /// This trait exposes the ability to plan an [`ExecutionPlan`] out of a [`LogicalPlan`].
 #[async_trait]
 pub trait ExtensionPlanner {
@@ -469,8 +498,8 @@ impl DefaultPhysicalPlanner {
             // Create the shared `ScalarSubqueryResults` container and register
             // it in `ExecutionProps` so that `create_physical_expr` can resolve
             // `Expr::ScalarSubquery` into `ScalarSubqueryExpr` nodes. We clone
-            // the `SessionState` so these are available throughout physical
-            // planning without mutating the caller's state.
+            // the session's `ExecutionProps` so these are available throughout
+            // physical planning without mutating the caller's state.
             //
             // Ideally, the subquery state would live in a dedicated planning
             // context rather than in `ExecutionProps`. It's here because
@@ -694,13 +723,18 @@ impl DefaultPhysicalPlanner {
                     Arc::clone(res.plan())
                 } else {
                     let mut maybe_plan = None;
-                    for planner in &self.extension_planners {
+                    let planner = PhysicalPlannerWithProps {
+                        inner: self,
+                        execution_props,
+                    };
+                    for extension_planner in &self.extension_planners {
                         if maybe_plan.is_some() {
                             break;
                         }
 
-                        maybe_plan =
-                            planner.plan_table_scan(self, scan, session_state).await?;
+                        maybe_plan = extension_planner
+                            .plan_table_scan(&planner, scan, session_state)
+                            .await?;
                     }
 
                     let plan = match maybe_plan {
@@ -1819,15 +1853,19 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Extension(Extension { node }) => {
                 let mut maybe_plan = None;
                 let children = children.vec();
-                for planner in &self.extension_planners {
+                let planner = PhysicalPlannerWithProps {
+                    inner: self,
+                    execution_props,
+                };
+                for extension_planner in &self.extension_planners {
                     if maybe_plan.is_some() {
                         break;
                     }
 
                     let logical_input = node.inputs();
-                    maybe_plan = planner
+                    maybe_plan = extension_planner
                         .plan_extension(
-                            self,
+                            &planner,
                             node.as_ref(),
                             &logical_input,
                             &children,
@@ -3889,7 +3927,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "demonstrates scalar subquery context is not propagated to extension planners"]
     async fn scalar_subquery_in_extension_expr_plans() -> Result<()> {
         let subquery = LogicalPlanBuilder::empty(true)
             .project(vec![lit(42_i32)])?
@@ -3905,7 +3942,7 @@ mod tests {
         )]);
 
         let plan = planner
-            .create_physical_plan(&logical_plan, &make_session_state())
+            .create_initial_plan(&logical_plan, &make_session_state())
             .await?;
 
         assert_contains!(format!("{plan:?}"), "ScalarSubqueryExec");
