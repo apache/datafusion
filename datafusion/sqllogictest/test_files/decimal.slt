@@ -1291,3 +1291,52 @@ ORDER BY c1;
 
 statement ok
 DROP TABLE decimal_div_mismatch;
+
+# Regression tests: `avg` of a decimal column must accumulate its intermediate
+# sum in a type wide enough not to overflow the input's native type. Each row
+# count below is chosen so that the sum just exceeds the input's native maximum
+# and would silently wrap if accumulated unwidened.
+
+# 21476 * 99999 = 2,147,578,524 > i32::MAX
+query RT
+select avg(d), arrow_typeof(avg(d))
+from (
+    select arrow_cast(99999.0, 'Decimal32(5, 0)') as d
+    from generate_series(1, 21476)
+) t;
+----
+99999 Decimal32(9, 4)
+
+# 92235 * 99999999999999 ~= 9.22e18 > i64::MAX
+query RT
+select avg(d), arrow_typeof(avg(d))
+from (
+    select arrow_cast('99999999999999', 'Decimal64(14, 0)') as d
+    from generate_series(1, 92235)
+) t;
+----
+99999999999999 Decimal64(18, 4)
+
+# 21476 * (10^34 - 1) ~= 2.15e38 > i128::MAX
+query RT
+select avg(d), arrow_typeof(avg(d))
+from (
+    select arrow_cast('9999999999999999999999999999999999', 'Decimal128(34, 0)') as d
+    from generate_series(1, 21476)
+) t;
+----
+9999999999999999999999999999999999 Decimal128(38, 4)
+
+# Regression: `avg(DISTINCT ...)` must widen its intermediate sum the same way.
+# The second distinct aggregate keeps `single_distinct_to_group_by` from
+# rewriting the plan, so the distinct accumulator is the code under test.
+
+# sum(1..65536) = 2,147,516,416 > i32::MAX, avg = 32768.5
+query RTR
+select avg(distinct d), arrow_typeof(avg(distinct d)), avg(distinct v)
+from (
+    select arrow_cast(v, 'Decimal32(9, 0)') as d, v
+    from generate_series(1, 65536) t(v)
+) t;
+----
+32768.5 Decimal32(9, 4) 32768.5
