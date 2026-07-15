@@ -123,8 +123,8 @@ impl SharedSpillPoolWriter {
         // implementation of `SpillPoolWriter`.
         self.inner.shared.lock().remaining_writer_count += 1;
         SpillPoolWriter {
-                max_file_size_bytes: self.inner.max_file_size_bytes,
-                shared: Arc::clone(&self.inner.shared),
+            max_file_size_bytes: self.inner.max_file_size_bytes,
+            shared: Arc::clone(&self.inner.shared),
         }
     }
 }
