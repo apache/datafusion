@@ -281,6 +281,10 @@ impl Accumulator for CorrelationAccumulator {
         self.stddev2.retract_batch(&values[1..2])?;
         Ok(())
     }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Default)]
@@ -485,11 +489,65 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         ])
     }
 
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        assert_eq!(values.len(), 2, "two arguments to convert_to_state");
+        let array_x = downcast_array::<Float64Array>(&values[0]);
+        let array_y = downcast_array::<Float64Array>(&values[1]);
+
+        let len = array_x.len();
+        let mut counts = Vec::with_capacity(len);
+        let mut sum_x = Vec::with_capacity(len);
+        let mut sum_y = Vec::with_capacity(len);
+        let mut sum_xy = Vec::with_capacity(len);
+        let mut sum_xx = Vec::with_capacity(len);
+        let mut sum_yy = Vec::with_capacity(len);
+
+        for row in 0..len {
+            let included = array_x.is_valid(row)
+                && array_y.is_valid(row)
+                && opt_filter
+                    .is_none_or(|filter| filter.is_valid(row) && filter.value(row));
+            if included {
+                let x = array_x.value(row);
+                let y = array_y.value(row);
+                counts.push(1);
+                sum_x.push(x);
+                sum_y.push(y);
+                sum_xy.push(x * y);
+                sum_xx.push(x * x);
+                sum_yy.push(y * y);
+            } else {
+                counts.push(0);
+                sum_x.push(0.0);
+                sum_y.push(0.0);
+                sum_xy.push(0.0);
+                sum_xx.push(0.0);
+                sum_yy.push(0.0);
+            }
+        }
+
+        Ok(vec![
+            Arc::new(UInt64Array::from(counts)),
+            Arc::new(Float64Array::from(sum_x)),
+            Arc::new(Float64Array::from(sum_y)),
+            Arc::new(Float64Array::from(sum_xy)),
+            Arc::new(Float64Array::from(sum_xx)),
+            Arc::new(Float64Array::from(sum_yy)),
+        ])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         // Resize vectors to accommodate total number of groups
@@ -507,11 +565,6 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         let partial_sum_xy = values[3].as_primitive::<Float64Type>();
         let partial_sum_xx = values[4].as_primitive::<Float64Type>();
         let partial_sum_yy = values[5].as_primitive::<Float64Type>();
-
-        assert!(
-            opt_filter.is_none(),
-            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
-        );
 
         accumulate_correlation_states(
             group_indices,
@@ -594,5 +647,91 @@ mod tests {
             )
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn convert_to_state_roundtrips_through_merge() -> Result<()> {
+        let x = Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            Some(2.0),
+            None,
+            Some(4.0),
+            Some(8.0),
+            Some(16.0),
+            Some(32.0),
+        ])) as ArrayRef;
+        let y = Arc::new(Float64Array::from(vec![
+            Some(2.0),
+            Some(4.0),
+            Some(6.0),
+            None,
+            Some(16.0),
+            Some(32.0),
+            Some(64.0),
+        ])) as ArrayRef;
+        let filter = BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(true),
+            None,
+            Some(true),
+            Some(true),
+        ]);
+        let values = vec![x, y];
+        let group_indices = vec![0, 1, 0, 1, 0, 0, 0];
+
+        let mut direct = CorrelationGroupsAccumulator::new();
+        direct.update_batch(&values, &group_indices, Some(&filter), 2)?;
+        let direct = direct.evaluate(EmitTo::All)?;
+
+        let converter = CorrelationGroupsAccumulator::new();
+        let state = converter.convert_to_state(&values, Some(&filter))?;
+        let mut merged = CorrelationGroupsAccumulator::new();
+        merged.merge_batch(&state, &group_indices, 2)?;
+        let merged = merged.evaluate(EmitTo::All)?;
+
+        assert_eq!(
+            direct.as_any().downcast_ref::<Float64Array>().unwrap(),
+            merged.as_any().downcast_ref::<Float64Array>().unwrap()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn convert_to_state_preserves_empty_and_filtered_rows() -> Result<()> {
+        let converter = CorrelationGroupsAccumulator::new();
+        let empty_values = vec![
+            Arc::new(Float64Array::from(Vec::<Option<f64>>::new())) as ArrayRef,
+            Arc::new(Float64Array::from(Vec::<Option<f64>>::new())) as ArrayRef,
+        ];
+        let state = converter.convert_to_state(&empty_values, None)?;
+        for state_array in &state {
+            assert_eq!(state_array.len(), 0);
+            assert_eq!(state_array.null_count(), 0);
+        }
+
+        let values = vec![
+            Arc::new(Float64Array::from(vec![Some(1.0), Some(2.0), None])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![Some(2.0), None, Some(4.0)])) as ArrayRef,
+        ];
+        let filter = BooleanArray::from(vec![Some(false), None, Some(false)]);
+        let group_indices = vec![0, 1, 0];
+        let state = converter.convert_to_state(&values, Some(&filter))?;
+        for state_array in &state {
+            assert_eq!(state_array.len(), values[0].len());
+            assert_eq!(state_array.null_count(), 0);
+        }
+
+        let counts = state[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        assert_eq!(counts, &UInt64Array::from(vec![0, 0, 0]));
+
+        let mut merged = CorrelationGroupsAccumulator::new();
+        merged.merge_batch(&state, &group_indices, 2)?;
+        let result = merged.evaluate(EmitTo::All)?;
+        let result = result.as_any().downcast_ref::<Float64Array>().unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.null_count(), 2);
+        Ok(())
     }
 }

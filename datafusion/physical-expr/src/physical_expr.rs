@@ -21,15 +21,17 @@ use crate::expressions::{self, Column};
 use crate::{LexOrdering, PhysicalSortExpr, create_physical_expr};
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{DFSchema, HashMap};
+use datafusion_common::{DFSchema, HashMap, ScalarValue, SplitPoint};
 use datafusion_common::{Result, plan_err};
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::{Expr, SortExpr};
+use datafusion_expr::{Expr, Partitioning as LogicalPartitioning, SortExpr};
+use datafusion_expr_common::casts::try_cast_literal_to_type;
 
 use itertools::izip;
 // Exports:
+use crate::{Partitioning, RangePartitioning};
 pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
@@ -58,7 +60,7 @@ pub fn physical_exprs_contains(
 ) -> bool {
     physical_exprs
         .iter()
-        .any(|physical_expr| physical_expr.eq(expr))
+        .any(|physical_expr| physical_expr.as_ref().eq(expr.as_ref()))
 }
 
 /// Checks whether the given physical expression slices are equal.
@@ -66,7 +68,8 @@ pub fn physical_exprs_equal(
     lhs: &[Arc<dyn PhysicalExpr>],
     rhs: &[Arc<dyn PhysicalExpr>],
 ) -> bool {
-    lhs.len() == rhs.len() && izip!(lhs, rhs).all(|(lhs, rhs)| lhs.eq(rhs))
+    lhs.len() == rhs.len()
+        && izip!(lhs, rhs).all(|(lhs, rhs)| lhs.as_ref().eq(rhs.as_ref()))
 }
 
 /// Checks whether the given physical expression slices are equal in the sense
@@ -216,6 +219,99 @@ pub fn create_physical_sort_exprs(
         .collect()
 }
 
+/// Create physical partitioning from logical partitioning.
+pub fn create_physical_partitioning(
+    partitioning: &LogicalPartitioning,
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<Partitioning> {
+    match partitioning {
+        LogicalPartitioning::RoundRobinBatch(n) => Ok(Partitioning::RoundRobinBatch(*n)),
+        LogicalPartitioning::Hash(exprs, partition_count) => {
+            let exprs = exprs
+                .iter()
+                .map(|expr| create_physical_expr(expr, input_dfschema, execution_props))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Partitioning::Hash(exprs, *partition_count))
+        }
+        LogicalPartitioning::Range(range) => {
+            let ordering = create_physical_sort_exprs(
+                range.ordering(),
+                input_dfschema,
+                execution_props,
+            )?;
+            let Some(ordering) = LexOrdering::new(ordering) else {
+                return plan_err!("Range partitioning requires non-empty ordering");
+            };
+            let split_points = normalize_range_split_points(
+                &ordering,
+                range.split_points(),
+                input_dfschema.as_arrow(),
+            )?;
+            let range = RangePartitioning::try_new(ordering, split_points)?;
+            Ok(Partitioning::Range(range))
+        }
+        LogicalPartitioning::DistributeBy(_) => {
+            datafusion_common::not_impl_err!(
+                "Physical plan does not support DistributeBy partitioning"
+            )
+        }
+    }
+}
+
+fn normalize_range_split_points(
+    ordering: &LexOrdering,
+    split_points: &[SplitPoint],
+    schema: &Schema,
+) -> Result<Vec<SplitPoint>> {
+    split_points
+        .iter()
+        .enumerate()
+        .map(|(split_idx, split_point)| {
+            let values = split_point
+                .values()
+                .iter()
+                .zip(ordering.iter())
+                .enumerate()
+                .map(|(value_idx, (value, sort_expr))| {
+                    let target_type = sort_expr.expr.data_type(schema)?;
+                    normalize_range_split_point_value(
+                        value,
+                        &target_type,
+                        split_idx,
+                        value_idx,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(SplitPoint::new(values))
+        })
+        .collect()
+}
+
+fn normalize_range_split_point_value(
+    value: &ScalarValue,
+    target_type: &DataType,
+    split_idx: usize,
+    value_idx: usize,
+) -> Result<ScalarValue> {
+    let value_type = value.data_type();
+    if &value_type == target_type {
+        return Ok(value.clone());
+    }
+
+    if let Some(casted) = try_cast_literal_to_type(value, target_type) {
+        // Split points define physical partition boundaries, so normalization
+        // must reject casts that would change the advertised boundary.
+        if try_cast_literal_to_type(&casted, &value_type).as_ref() == Some(value) {
+            return Ok(casted);
+        }
+    }
+
+    plan_err!(
+        "Range output partitioning split point {split_idx} value {value_idx} with type {value_type} cannot be represented exactly as ordering expression type {target_type}"
+    )
+}
+
 pub fn add_offset_to_physical_sort_exprs(
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     offset: isize,
@@ -233,7 +329,7 @@ pub fn add_offset_to_physical_sort_exprs(
 mod tests {
     use super::*;
 
-    use crate::expressions::{BinaryExpr, Literal};
+    use crate::expressions::{BinaryExpr, Literal, UnKnownColumn};
     use crate::physical_expr::{
         physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     };
@@ -279,6 +375,12 @@ mod tests {
         // below expressions are not inside physical_exprs
         assert!(!physical_exprs_contains(&physical_exprs, &col_c_expr));
         assert!(!physical_exprs_contains(&physical_exprs, &lit1));
+
+        let unknown = Arc::new(UnKnownColumn::new("unknown")) as Arc<dyn PhysicalExpr>;
+        assert!(!physical_exprs_contains(
+            std::slice::from_ref(&unknown),
+            &unknown
+        ));
     }
 
     #[test]
@@ -309,6 +411,12 @@ mod tests {
         assert!(!physical_exprs_equal(&vec1, &vec3));
         assert!(!physical_exprs_bag_equal(&vec1, &vec2));
         assert!(!physical_exprs_bag_equal(&vec1, &vec3));
+
+        let unknown = Arc::new(UnKnownColumn::new("unknown")) as Arc<dyn PhysicalExpr>;
+        assert!(!physical_exprs_equal(
+            std::slice::from_ref(&unknown),
+            std::slice::from_ref(&unknown)
+        ));
     }
 
     #[test]

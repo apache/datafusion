@@ -20,8 +20,7 @@
 use crate::utils;
 use arrow::array::{
     Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullBufferBuilder,
-    OffsetBufferBuilder, OffsetSizeTrait, Scalar, cast::AsArray, make_array,
-    new_null_array,
+    OffsetSizeTrait, Scalar, cast::AsArray, make_array, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef};
@@ -403,6 +402,7 @@ fn array_remove_internal(
             let list_array = array.as_list::<i64>();
             general_remove::<i64>(list_array, element_array, arr_n)
         }
+        DataType::Null => Ok(new_null_array(array.data_type(), array.len())),
         array_type => {
             exec_err!("array_remove_all does not support type '{array_type}'.")
         }
@@ -425,6 +425,7 @@ fn array_remove_with_scalar_args(
             let list_array = array.as_list::<i64>();
             general_remove_with_scalar::<i64>(list_array, scalar_needle, max_removals)
         }
+        DataType::Null => Ok(new_null_array(array.data_type(), array.len())),
         array_type => exec_err!(
             "array_remove/array_remove_n/array_remove_all does not support type '{array_type}'."
         ),
@@ -464,7 +465,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     };
     let original_data = list_array.values().to_data();
     // Build up the offsets for the final output array
-    let mut offsets = Vec::<OffsetSize>::with_capacity(arr_n.len() + 1);
+    let mut offsets = Vec::<OffsetSize>::with_capacity(list_array.len() + 1);
     offsets.push(OffsetSize::zero());
 
     let mut mutable = MutableArrayData::with_capacities(
@@ -507,7 +508,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
 
         // Fast path: no elements to remove, copy entire row
         if num_to_remove == 0 {
-            mutable.extend(0, start, end);
+            mutable.try_extend(0, start, end)?;
             offsets.push(offsets[row_index] + OffsetSize::usize_as(end - start));
             valid.append_non_null();
             continue;
@@ -523,7 +524,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
             if keep == Some(false) && removed < max_removals {
                 // Flush pending batch before skipping this element
                 if let Some(bs) = pending_batch_to_retain {
-                    mutable.extend(0, start + bs, start + i);
+                    mutable.try_extend(0, start + bs, start + i)?;
                     copied += i - bs;
                     pending_batch_to_retain = None;
                 }
@@ -535,7 +536,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
 
         // Flush remaining batch
         if let Some(bs) = pending_batch_to_retain {
-            mutable.extend(0, start + bs, start + eq_array.len());
+            mutable.try_extend(0, start + bs, start + eq_array.len())?;
             copied += eq_array.len() - bs;
         }
 
@@ -582,7 +583,8 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
     let values_range_len = last_offset - first_offset;
     let values_slice = list_array.values().slice(first_offset, values_range_len);
     let original_data = values_slice.to_data();
-    let mut offsets = OffsetBufferBuilder::<OffsetSize>::new(list_array.len());
+    let mut offsets = Vec::<OffsetSize>::with_capacity(list_array.len() + 1);
+    offsets.push(OffsetSize::zero());
 
     let mut mutable = MutableArrayData::with_capacities(
         vec![&original_data],
@@ -596,7 +598,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
 
     for (row_index, offset_window) in list_offsets.windows(2).enumerate() {
         if nulls.as_ref().is_some_and(|nulls| nulls.is_null(row_index)) {
-            offsets.push_length(0);
+            offsets.push(offsets[row_index]);
             continue;
         }
 
@@ -608,8 +610,8 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
         let num_to_remove = row_remove_bits.count_set_bits();
 
         if num_to_remove == 0 {
-            mutable.extend(0, start, end);
-            offsets.push_length(row_len);
+            mutable.try_extend(0, start, end)?;
+            offsets.push(offsets[row_index] + OffsetSize::usize_as(row_len));
             continue;
         }
 
@@ -624,7 +626,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
         for remove_pos in row_remove_bits.set_indices() {
             let abs_pos = start + remove_pos;
             if abs_pos > prev_end {
-                mutable.extend(0, prev_end, abs_pos);
+                mutable.try_extend(0, prev_end, abs_pos)?;
                 copied += abs_pos - prev_end;
             }
             prev_end = abs_pos + 1;
@@ -635,17 +637,17 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
         }
         // Copy the remaining tail after the last removal
         if prev_end < end {
-            mutable.extend(0, prev_end, end);
+            mutable.try_extend(0, prev_end, end)?;
             copied += end - prev_end;
         }
 
-        offsets.push_length(copied);
+        offsets.push(offsets[row_index] + OffsetSize::usize_as(copied));
     }
 
     let new_values = make_array(mutable.freeze());
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
         Arc::clone(list_field),
-        offsets.finish(),
+        OffsetBuffer::new(offsets.into()),
         new_values,
         nulls,
     )?))

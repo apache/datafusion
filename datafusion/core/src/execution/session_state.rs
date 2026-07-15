@@ -440,7 +440,7 @@ impl SessionState {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
-                Dialect::AVAILABLE
+                Dialect::available()
             )
         })?;
 
@@ -488,7 +488,7 @@ impl SessionState {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
-                Dialect::AVAILABLE
+                Dialect::available()
             )
         })?;
 
@@ -2354,13 +2354,11 @@ mod tests {
     use crate::logical_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
     use crate::physical_plan::ExecutionPlan;
     use crate::sql::planner::ContextProvider;
-    use crate::sql::{ResolvedTableReference, TableReference};
     use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_catalog::MemoryCatalogProviderList;
-    use datafusion_common::DFSchema;
-    use datafusion_common::Result;
     use datafusion_common::config::Dialect;
+    use datafusion_common::{DFSchema, ResolvedTableReference, Result, TableReference};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
     use datafusion_expr::HigherOrderUDF;
@@ -2370,6 +2368,18 @@ mod tests {
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    #[test]
+    #[cfg(feature = "sql")]
+    fn test_configured_dialect_names_are_accepted_by_sqlparser() {
+        for info in Dialect::metadata() {
+            assert!(
+                sqlparser::dialect::dialect_from_str(info.canonical_name).is_some(),
+                "sqlparser should accept configured dialect {}",
+                info.canonical_name
+            );
+        }
+    }
 
     #[test]
     #[cfg(feature = "sql")]

@@ -57,3 +57,71 @@ drop table t1;
 
 statement count 0
 drop table t2;
+
+
+# Test table-aliasing a subquery with case sensitive columns
+# (https://github.com/apache/datafusion/issues/22916)
+
+statement ok
+create table t ("A" int, "B.C" int);
+
+query II
+select * from (select * from t) t_(x, y);
+----
+
+query TT
+explain select * from (select * from t) t_(x, y);
+----
+logical_plan
+01)SubqueryAlias: t_
+02)--Projection: t.A AS x, t.B.C AS y
+03)----TableScan: t projection=[A, B.C]
+physical_plan
+01)ProjectionExec: expr=[A@0 as x, B.C@1 as y]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain select * from (select * from t) t_(X, Y);
+----
+logical_plan
+01)SubqueryAlias: t_
+02)--Projection: t.A AS x, t.B.C AS y
+03)----TableScan: t projection=[A, B.C]
+physical_plan
+01)ProjectionExec: expr=[A@0 as x, B.C@1 as y]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain select * from (select * from t) t_("X", "Y");
+----
+logical_plan
+01)SubqueryAlias: t_
+02)--Projection: t.A AS X, t.B.C AS Y
+03)----TableScan: t projection=[A, B.C]
+physical_plan
+01)ProjectionExec: expr=[A@0 as X, B.C@1 as Y]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+statement ok
+insert into t values (1, 2);
+
+query II
+select t_.x, t_.y
+from (select "B.C", "A" from t) as t_(x, y);
+----
+2 1
+
+query I
+select "x.y"
+from (select "B.C" from t) as t_("x.y");
+----
+2
+
+query I
+select t_."x.y"
+from (select "B.C" from t) as t_("x.y");
+----
+2
+
+statement ok
+drop table t;

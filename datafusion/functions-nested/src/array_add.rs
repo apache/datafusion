@@ -19,10 +19,9 @@
 
 use crate::utils::{coerce_array_math_arg_types, make_scalar_function};
 use arrow::array::{
-    Array, ArrayRef, Float64Array, GenericListArray, NullBufferBuilder,
-    OffsetBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, Float64Array, GenericListArray, NullBufferBuilder, OffsetSizeTrait,
 };
-use arrow::buffer::NullBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{
     DataType,
     DataType::{LargeList, List},
@@ -147,12 +146,13 @@ fn general_array_add<O: OffsetSizeTrait>(
 
     let mut out_values: Vec<f64> = Vec::with_capacity(lhs_values.len());
     let mut out_inner_nulls = NullBufferBuilder::new(lhs_values.len());
-    let mut out_offsets = OffsetBufferBuilder::<O>::new(lhs.len());
+    let mut out_offsets = Vec::<O>::with_capacity(lhs.len() + 1);
+    out_offsets.push(O::zero());
 
     for row in 0..lhs.len() {
         // Whole-row NULL on either side -> NULL output row, no elements.
         if row_nulls.as_ref().is_some_and(|nb| nb.is_null(row)) {
-            out_offsets.push_length(0);
+            out_offsets.push(out_offsets[row]);
             continue;
         }
 
@@ -185,7 +185,7 @@ fn general_array_add<O: OffsetSizeTrait>(
             None => out_inner_nulls.append_n_non_nulls(len1),
         }
 
-        out_offsets.push_length(len1);
+        out_offsets.push(out_offsets[row] + O::usize_as(len1));
     }
 
     let values_array = Arc::new(Float64Array::new(
@@ -196,7 +196,7 @@ fn general_array_add<O: OffsetSizeTrait>(
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
         field,
-        out_offsets.finish(),
+        OffsetBuffer::new(out_offsets.into()),
         values_array,
         row_nulls,
     )?))

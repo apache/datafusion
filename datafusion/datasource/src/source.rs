@@ -45,6 +45,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::SortOrderPushdownResult;
+use datafusion_physical_plan::StatisticsArgs;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
@@ -243,9 +244,16 @@ pub trait DataSource: Any + Send + Sync + Debug {
     /// Create per execution state to share across sibling instances of this
     /// data source during one execution.
     ///
+    /// `config` is the session configuration, so implementations can honor
+    /// options that disable sibling sharing (returning `None`) for consumers
+    /// that cannot poll all partitions in one process.
+    ///
     /// Returns `None` (the default) if this data source has
     /// no sibling-shared execution state.
-    fn create_sibling_state(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+    fn create_sibling_state(
+        &self,
+        _config: &ConfigOptions,
+    ) -> Option<Arc<dyn Any + Send + Sync>> {
         None
     }
 
@@ -391,7 +399,10 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Result<SendableRecordBatchStream> {
         let shared_state = self
             .execution_state
-            .get_or_init(|| self.data_source.create_sibling_state())
+            .get_or_init(|| {
+                self.data_source
+                    .create_sibling_state(context.session_config().options())
+            })
             .clone();
         let args = OpenArgs::new(partition, Arc::clone(&context))
             .with_shared_state(shared_state);
@@ -426,8 +437,12 @@ impl ExecutionPlan for DataSourceExec {
         Some(metrics)
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.data_source.partition_statistics(partition)
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        self.data_source.partition_statistics(args.partition())
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

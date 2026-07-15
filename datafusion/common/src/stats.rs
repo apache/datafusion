@@ -829,8 +829,8 @@ pub fn estimate_ndv_with_overlap(
     let right_min = right.min_value.get_value()?;
     let right_max = right.max_value.get_value()?;
 
-    let range_left = left_max.distance(left_min)?;
-    let range_right = right_max.distance(right_min)?;
+    let range_left = left_max.distance_u64(left_min)?;
+    let range_right = right_max.distance_u64(right_min)?;
 
     // Constant columns (range == 0) can't use the proportional overlap
     // formula below, so check interval overlap directly instead.
@@ -859,7 +859,7 @@ pub fn estimate_ndv_with_overlap(
         return Some(ndv_left + ndv_right);
     }
 
-    let overlap_range = overlap_max.distance(overlap_min)? as f64;
+    let overlap_range = overlap_max.distance_u64(overlap_min)? as f64;
 
     let overlap_left = overlap_range / range_left as f64;
     let overlap_right = overlap_range / range_right as f64;

@@ -3007,22 +3007,22 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
         @r"
-    +---------------+------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                               |
-    +---------------+------------------------------------------------------------------------------------+
-    | logical_plan  | Sort: count(*) ASC NULLS LAST                                                      |
-    |               |   Projection: t1.b, count(Int64(1)) AS count(*)                                    |
-    |               |     Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1))]]                          |
-    |               |       TableScan: t1 projection=[b]                                                 |
-    | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                               |
-    |               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true]         |
-    |               |     ProjectionExec: expr=[b@0 as b, count(Int64(1))@1 as count(*)]                 |
-    |               |       AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(Int64(1))] |
-    |               |         RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1           |
-    |               |           AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]      |
-    |               |             DataSourceExec: partitions=1, partition_sizes=[1]                      |
-    |               |                                                                                    |
-    +---------------+------------------------------------------------------------------------------------+
+    +---------------+-------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                |
+    +---------------+-------------------------------------------------------------------------------------+
+    | logical_plan  | Sort: count(*) ASC NULLS LAST                                                       |
+    |               |   Projection: t1.b, count(Int64(1)) AS count(*)                                     |
+    |               |     Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1))]]                           |
+    |               |       TableScan: t1 projection=[b]                                                  |
+    | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                                |
+    |               |   ProjectionExec: expr=[b@0 as b, count(Int64(1))@1 as count(*)]                    |
+    |               |     SortExec: expr=[count(Int64(1))@1 ASC NULLS LAST], preserve_partitioning=[true] |
+    |               |       AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(Int64(1))]  |
+    |               |         RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1            |
+    |               |           AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]       |
+    |               |             DataSourceExec: partitions=1, partition_sizes=[1]                       |
+    |               |                                                                                     |
+    +---------------+-------------------------------------------------------------------------------------+
     "
     );
 
@@ -6472,11 +6472,8 @@ async fn test_fill_null() -> Result<()> {
 
     // Use fill_null to replace nulls on each column.
     let df_filled = df
-        .fill_null(ScalarValue::Int32(Some(0)), vec!["a".to_string()])?
-        .fill_null(
-            ScalarValue::Utf8(Some("default".to_string())),
-            vec!["b".to_string()],
-        )?;
+        .fill_null(&ScalarValue::Int32(Some(0)), &["a"])?
+        .fill_null(&ScalarValue::Utf8(Some("default".to_string())), &["b"])?;
 
     let results = df_filled.collect().await?;
     assert_snapshot!(
@@ -6502,8 +6499,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
     // Use fill_null to replace nulls on all columns.
     // Only column "b" will be replaced since ScalarValue::Utf8(Some("default".to_string()))
     // can be cast to Utf8.
-    let df_filled =
-        df.fill_null(ScalarValue::Utf8(Some("default".to_string())), vec![])?;
+    let df_filled = df.fill_null(&ScalarValue::Utf8(Some("default".to_string())), &[])?;
 
     let results = df_filled.clone().collect().await?;
 
@@ -6521,7 +6517,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
     );
 
     // Fill column "a" null values with a value that cannot be cast to Int32.
-    let df_filled = df_filled.fill_null(ScalarValue::Int32(Some(0)), vec![])?;
+    let df_filled = df_filled.fill_null(&ScalarValue::Int32(Some(0)), &[])?;
 
     let results = df_filled.collect().await?;
     assert_snapshot!(

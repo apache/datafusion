@@ -92,8 +92,8 @@ message ListingTableScanNode {
   datafusion_common.Schema schema = 5;
   repeated LogicalExprNode filters = 6;
   repeated PartitionColumn table_partition_cols = 7;
-  bool collect_stat = 8;
-  uint32 target_partitions = 9;
+  reserved 8; // was bool collect_stat
+  reserved 9; // was uint32 target_partitions
   oneof FileFormatType {
     datafusion_common.CsvFormat csv = 10;
     datafusion_common.ParquetFormat parquet = 11;
@@ -148,7 +148,17 @@ message RepartitionNode {
   oneof partition_method {
     uint64 round_robin = 2;
     HashRepartition hash = 3;
+    RangeRepartition range = 4;
   }
+}
+
+message RangeSplitPoint {
+  repeated datafusion_common.ScalarValue value = 1;
+}
+
+message RangeRepartition {
+  repeated SortExprNode sort_expr = 1;
+  repeated RangeSplitPoint split_point = 2;
 }
 
 message HashRepartition {
@@ -303,7 +313,7 @@ message FileFormatProto {
 }
 
 message DmlNode{
-   enum Type {
+  enum Type {
     UPDATE = 0;
     DELETE = 1;
     CTAS = 2;
@@ -311,12 +321,62 @@ message DmlNode{
     INSERT_OVERWRITE = 4;
     INSERT_REPLACE = 5;
     TRUNCATE = 6;
+    MERGE_INTO = 7;
   }
   Type dml_type = 1;
   LogicalPlanNode input = 2;
   TableReference table_name = 3;
   LogicalPlanNode target = 5;
+  // Populated only when dml_type == MERGE_INTO.
+  MergeIntoOpNode merge_into = 6;
 }
+
+// Carries the ON condition and WHEN clauses of a MERGE INTO operation.
+message MergeIntoOpNode {
+  LogicalExprNode on = 1;
+  repeated MergeIntoClauseNode clauses = 2;
+}
+
+// A single WHEN clause within a MERGE INTO statement.
+message MergeIntoClauseNode {
+  enum Kind {
+    MATCHED = 0;
+    NOT_MATCHED = 1;
+    NOT_MATCHED_BY_TARGET = 2;
+    NOT_MATCHED_BY_SOURCE = 3;
+  }
+  Kind kind = 1;
+  // Optional `AND <expr>` predicate. Absent when the clause has no predicate.
+  LogicalExprNode predicate = 2;
+  MergeIntoActionNode action = 3;
+}
+
+// The action for a single WHEN clause.
+message MergeIntoActionNode {
+  oneof action {
+    MergeUpdateAction update = 1;
+    MergeInsertAction insert = 2;
+    MergeDeleteAction delete = 3;
+  }
+}
+
+message MergeUpdateAction {
+  repeated MergeAssignment assignments = 1;
+}
+
+message MergeAssignment {
+  string column = 1;
+  LogicalExprNode value = 2;
+}
+
+message MergeInsertAction {
+  // May be empty (meaning all columns).
+  repeated string columns = 1;
+  // One expression per inserted column.
+  repeated LogicalExprNode values = 2;
+}
+
+message MergeDeleteAction {}
 
 message UnnestNode {
   LogicalPlanNode input = 1;
@@ -441,6 +501,10 @@ message LogicalExprNode {
 
     // Subquery expressions
     ScalarSubqueryExprNode scalar_subquery_expr = 36;
+
+    HigherOrderUDFExprNode higher_order_udf_expr = 37;
+    Lambda lambda = 38;
+    LambdaVariable lambda_variable = 39;
   }
 }
 
@@ -576,6 +640,22 @@ message ScalarUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
   optional bytes fun_definition = 3;
+}
+
+message HigherOrderUDFExprNode {
+  string fun_name = 1;
+  repeated LogicalExprNode args = 2;
+  optional bytes fun_definition = 3;
+}
+
+message Lambda {
+  repeated string params = 1;
+  LogicalExprNode body = 2;
+}
+
+message LambdaVariable {
+  string name = 1;
+  datafusion_common.Field field = 2;
 }
 
 message WindowExprNode {
@@ -947,6 +1027,10 @@ message PhysicalExprNode {
     PhysicalScalarSubqueryExprNode scalar_subquery = 22;
 
     PhysicalDynamicFilterNode dynamic_filter = 23;
+
+    PhysicalHigherOrderUdfNode higher_order_udf = 24;
+    PhysicalLambdaExprNode lambda = 25;
+    PhysicalLambdaVariableExprNode lambda_variable = 26;
   }
 }
 
@@ -965,6 +1049,22 @@ message PhysicalScalarUdfNode {
   datafusion_common.ArrowType return_type = 4;
   bool nullable = 5;
   string return_field_name = 6;
+}
+
+message PhysicalHigherOrderUdfNode {
+  string name = 1;
+  repeated PhysicalExprNode args = 2;
+  optional bytes fun_definition = 3;
+}
+
+message PhysicalLambdaExprNode {
+  repeated string params = 1;
+  PhysicalExprNode body = 2;
+}
+
+message PhysicalLambdaVariableExprNode {
+  uint32 index = 1;
+  datafusion_common.Field field = 2;
 }
 
 message PhysicalAggregateExprNode {
@@ -1131,6 +1231,7 @@ message FileScanExecConf {
 
   optional ProjectionExprs projection_exprs = 13;
   optional bool partitioned_by_file_group = 14;
+  optional Partitioning output_partitioning = 15;
 }
 
 message ParquetScanExecNode {
@@ -1462,15 +1563,15 @@ message RecursiveQueryNode {
 }
 
 message CteWorkTableScanNode {
-    string name = 1;
-    datafusion_common.Schema schema = 2;
+  string name = 1;
+  datafusion_common.Schema schema = 2;
 }
 
 message EmptyTableScanNode {
-    TableReference table_name = 1;
-    datafusion_common.Schema schema = 2;
-    ProjectionColumns projection = 3;
-    repeated LogicalExprNode filters = 4;
+  TableReference table_name = 1;
+  datafusion_common.Schema schema = 2;
+  ProjectionColumns projection = 3;
+  repeated LogicalExprNode filters = 4;
 }
 
 enum GenerateSeriesName {
@@ -1479,44 +1580,44 @@ enum GenerateSeriesName {
 }
 
 message GenerateSeriesArgsContainsNull {
-    GenerateSeriesName name = 1;
+  GenerateSeriesName name = 1;
 }
 
 message GenerateSeriesArgsInt64 {
-    int64 start = 1;
-    int64 end = 2;
-    int64 step = 3;
-    bool include_end = 4;
-    GenerateSeriesName name = 5;
+  int64 start = 1;
+  int64 end = 2;
+  int64 step = 3;
+  bool include_end = 4;
+  GenerateSeriesName name = 5;
 }
 
 message GenerateSeriesArgsTimestamp {
-    int64 start = 1;
-    int64 end = 2;
-    datafusion_common.IntervalMonthDayNanoValue step = 3;
-    optional string tz = 4;
-    bool include_end = 5;
-    GenerateSeriesName name = 6;
+  int64 start = 1;
+  int64 end = 2;
+  datafusion_common.IntervalMonthDayNanoValue step = 3;
+  optional string tz = 4;
+  bool include_end = 5;
+  GenerateSeriesName name = 6;
 }
 
 message GenerateSeriesArgsDate {
-    int64 start = 1;
-    int64 end = 2;
-    datafusion_common.IntervalMonthDayNanoValue step = 3;
-    bool include_end = 4;
-    GenerateSeriesName name = 5;
+  int64 start = 1;
+  int64 end = 2;
+  datafusion_common.IntervalMonthDayNanoValue step = 3;
+  bool include_end = 4;
+  GenerateSeriesName name = 5;
 }
 
 message GenerateSeriesNode {
-    datafusion_common.Schema schema = 1;
-    uint32 target_batch_size = 2;
+  datafusion_common.Schema schema = 1;
+  uint32 target_batch_size = 2;
 
-    oneof args {
-        GenerateSeriesArgsContainsNull contains_null = 3;
-        GenerateSeriesArgsInt64 int64_args = 4;
-        GenerateSeriesArgsTimestamp timestamp_args = 5;
-        GenerateSeriesArgsDate date_args = 6;
-    }
+  oneof args {
+    GenerateSeriesArgsContainsNull contains_null = 3;
+    GenerateSeriesArgsInt64 int64_args = 4;
+    GenerateSeriesArgsTimestamp timestamp_args = 5;
+    GenerateSeriesArgsDate date_args = 6;
+  }
 }
 
 message SortMergeJoinExecNode {

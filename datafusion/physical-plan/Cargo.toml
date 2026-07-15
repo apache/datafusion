@@ -65,6 +65,7 @@ arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
+bytes = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
@@ -84,7 +85,7 @@ itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 num-traits = { workspace = true }
 parking_lot = { workspace = true }
-pin-project-lite = "^0.2.7"
+pin-project-lite = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
 tokio = { workspace = true }
 
@@ -127,12 +128,16 @@ required-features = ["test_utils"]
 
 [[bench]]
 harness = false
-name = "hash_join_semi_anti"
-required-features = ["test_utils"]
+name = "compute_statistics"
 
 [[bench]]
 harness = false
 name = "dictionary_group_values"
+
+[[bench]]
+harness = false
+name = "hash_join_semi_anti"
+required-features = ["test_utils"]
 
 [[bench]]
 harness = false

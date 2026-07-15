@@ -64,7 +64,7 @@ impl MemoryPool for UnboundedMemoryPool {
 impl Display for UnboundedMemoryPool {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let used = self.used.load(Ordering::Relaxed);
-        write!(f, "{}(used: {})", &self.name(), human_readable_size(used))
+        write!(f, "{}(used: {})", self.name(), human_readable_size(used))
     }
 }
 
@@ -73,15 +73,9 @@ impl Display for UnboundedMemoryPool {
 /// This pool works well for queries that do not need to spill or have
 /// a single spillable operator. See [`FairSpillPool`] if there are
 /// multiple spillable operators that all will spill.
-///
-/// Supports [`MemoryPool::try_resize`] for in-place limit adjustment, so
-/// callers routing through
-/// [`RuntimeEnvBuilder::with_memory_limit`](crate::runtime_env::RuntimeEnvBuilder::with_memory_limit)
-/// can keep the existing pool (and any wrappers around it) rather than
-/// replacing it on every change.
 #[derive(Debug)]
 pub struct GreedyMemoryPool {
-    pool_size: AtomicUsize,
+    pool_size: usize,
     used: AtomicUsize,
 }
 
@@ -90,7 +84,7 @@ impl GreedyMemoryPool {
     pub fn new(pool_size: usize) -> Self {
         debug!("Created new GreedyMemoryPool(pool_size={pool_size})");
         Self {
-            pool_size: AtomicUsize::new(pool_size),
+            pool_size,
             used: AtomicUsize::new(0),
         }
     }
@@ -110,17 +104,16 @@ impl MemoryPool for GreedyMemoryPool {
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
-        let pool_size = self.pool_size.load(Ordering::Relaxed);
         self.used
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 let new_used = used + additional;
-                (new_used <= pool_size).then_some(new_used)
+                (new_used <= self.pool_size).then_some(new_used)
             })
             .map_err(|used| {
                 insufficient_capacity_err(
                     reservation,
                     additional,
-                    pool_size.saturating_sub(used),
+                    self.pool_size.saturating_sub(used),
                     self,
                 )
             })?;
@@ -132,25 +125,19 @@ impl MemoryPool for GreedyMemoryPool {
     }
 
     fn memory_limit(&self) -> MemoryLimit {
-        MemoryLimit::Finite(self.pool_size.load(Ordering::Relaxed))
-    }
-
-    fn try_resize(&self, new_limit: usize) -> Result<()> {
-        self.pool_size.store(new_limit, Ordering::Relaxed);
-        Ok(())
+        MemoryLimit::Finite(self.pool_size)
     }
 }
 
 impl Display for GreedyMemoryPool {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let used = self.used.load(Ordering::Relaxed);
-        let pool_size = self.pool_size.load(Ordering::Relaxed);
         write!(
             f,
             "{}(used: {}, pool_size: {})",
-            &self.name(),
+            self.name(),
             human_readable_size(used),
-            human_readable_size(pool_size)
+            human_readable_size(self.pool_size)
         )
     }
 }
@@ -303,7 +290,7 @@ impl Display for FairSpillPool {
         write!(
             f,
             "{}(pool_size: {})",
-            &self.name(),
+            self.name(),
             human_readable_size(self.pool_size),
         )
     }
@@ -429,9 +416,9 @@ impl<I: MemoryPool> Display for TrackConsumersPool<I> {
         write!(
             f,
             "{}(inner_pool: {}, num_of_top_consumers: {})",
-            &self.name(),
-            &self.inner,
-            &self.top,
+            self.name(),
+            self.inner,
+            self.top,
         )
     }
 }
@@ -612,10 +599,6 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
 
     fn memory_limit(&self) -> MemoryLimit {
         self.inner.memory_limit()
-    }
-
-    fn try_resize(&self, new_limit: usize) -> Result<()> {
-        self.inner.try_resize(new_limit)
     }
 }
 
@@ -1062,44 +1045,5 @@ mod tests {
             "track_consumers(inner_pool: unbounded(used: 0.0 B), num_of_top_consumers: 5)",
             "TrackConsumersPool<UnboundedMemoryPool> Display"
         );
-    }
-
-    #[test]
-    fn test_greedy_try_resize_in_place() {
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(100));
-        let r = MemoryConsumer::new("r").register(&pool);
-
-        // Fill the pool, then verify it rejects further growth.
-        r.try_grow(100).unwrap();
-        r.try_grow(1).unwrap_err();
-
-        // Resize *up*: previously-rejected growth now succeeds.
-        pool.try_resize(200).unwrap();
-        assert!(matches!(pool.memory_limit(), MemoryLimit::Finite(200)));
-        r.try_grow(50).unwrap();
-        assert_eq!(pool.reserved(), 150);
-
-        // Resize *down* below current usage: subsequent grows fail because
-        // reserved (150) already exceeds the new limit (120). Already-issued
-        // reservations are not retroactively shrunk.
-        pool.try_resize(120).unwrap();
-        assert!(matches!(pool.memory_limit(), MemoryLimit::Finite(120)));
-        r.try_grow(1).unwrap_err();
-    }
-
-    #[test]
-    fn test_track_consumers_try_resize_forwards() {
-        let pool: Arc<dyn MemoryPool> = Arc::new(TrackConsumersPool::new(
-            GreedyMemoryPool::new(100),
-            NonZeroUsize::new(3).unwrap(),
-        ));
-        pool.try_resize(500).unwrap();
-        assert!(matches!(pool.memory_limit(), MemoryLimit::Finite(500)));
-    }
-
-    #[test]
-    fn test_unbounded_try_resize_returns_err() {
-        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-        assert!(pool.try_resize(100).is_err());
     }
 }

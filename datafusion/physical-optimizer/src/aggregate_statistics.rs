@@ -25,7 +25,10 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
-use datafusion_physical_plan::udaf::{AggregateFunctionExpr, StatisticsArgs};
+use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+use datafusion_physical_plan::udaf::{
+    AggregateFunctionExpr, StatisticsArgs as PlanStatisticsArgs,
+};
 use datafusion_physical_plan::{ExecutionPlan, expressions};
 use std::sync::Arc;
 
@@ -55,12 +58,13 @@ impl PhysicalOptimizerRule for AggregateStatistics {
             let partial_agg_exec = partial_agg_exec
                 .downcast_ref::<AggregateExec>()
                 .expect("take_optimizable() ensures that this is a AggregateExec");
-            let stats = partial_agg_exec.input().partition_statistics(None)?;
+            let stats = StatisticsContext::new()
+                .compute(partial_agg_exec.input().as_ref(), &StatisticsArgs::new())?;
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 let field = expr.field();
                 let args = expr.expressions();
-                let statistics_args = StatisticsArgs {
+                let statistics_args = PlanStatisticsArgs {
                     statistics: &stats,
                     return_type: field.data_type(),
                     is_distinct: expr.is_distinct(),
@@ -148,7 +152,7 @@ fn take_optimizable(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPl
 
 /// If this agg_expr is a max that is exactly defined in the statistics, return it.
 fn take_optimizable_value_from_statistics(
-    statistics_args: &StatisticsArgs,
+    statistics_args: &PlanStatisticsArgs,
     agg_expr: &AggregateFunctionExpr,
 ) -> Option<(ScalarValue, String)> {
     let value = agg_expr.fun().value_from_stats(statistics_args);

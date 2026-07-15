@@ -118,7 +118,7 @@ impl GroupsAccumulator for MinMaxStructAccumulator {
         let mut copy = MutableArrayData::new(min_maxes_refs, true, min_maxes_data.len());
 
         for (i, item) in min_maxes_data.iter().enumerate() {
-            copy.extend(i, 0, item.len());
+            copy.try_extend(i, 0, item.len())?;
         }
         let result = copy.freeze();
         assert_eq!(&self.inner.data_type, result.data_type());
@@ -134,11 +134,10 @@ impl GroupsAccumulator for MinMaxStructAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         // min/max are their own states (no transition needed)
-        self.update_batch(values, group_indices, opt_filter, total_num_groups)
+        self.update_batch(values, group_indices, None, total_num_groups)
     }
 
     fn convert_to_state(

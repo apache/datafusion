@@ -18,7 +18,9 @@
 use std::sync::Arc;
 
 use super::LogicalExtensionCodec;
-use crate::convert::{FromProto, TryFromProto};
+use crate::convert::FromProto;
+#[cfg(feature = "parquet")]
+use crate::convert::TryFromProto;
 use crate::protobuf::{
     CsvOptions as CsvOptionsProto, CsvQuoteStyle as CsvQuoteStyleProto,
     JsonOptions as JsonOptionsProto,
