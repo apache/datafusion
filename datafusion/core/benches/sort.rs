@@ -67,6 +67,7 @@
 //! ```
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use arrow::array::{ArrayRef, StringViewArray, StringViewBuilder};
 use arrow::{
@@ -823,34 +824,81 @@ type AxisGenerator = Box<dyn Fn(DataProfile, Cardinality, usize) -> PartitionedB
 ///    copy while reordering and more memory to hold
 /// 3. Value cardinality - whether the sort-key values overlap or not
 /// 4. Input ordering - already sorted / unsorted / nearly sorted
-fn sort_axis_benchmark(c: &mut Criterion) {
-    let input_size = 1_000_000u64;
-    let size_label = "1M";
+/// Input size for the axis benchmark at a given extra-column count. The
+/// wide-payload cases (20+ extra cols) are dominated by payload reordering, so
+/// 100k rows still exercises the wide-take path without the multi-second-per-iter
+/// cost of 1M.
+fn axis_input_size(extra: usize) -> (u64, &'static str) {
+    if extra >= 20 {
+        (100_000, "100k")
+    } else {
+        (1_000_000, "1M")
+    }
+}
 
+/// Read a duration (seconds, may be fractional) from `var`. Falls back to
+/// `default_secs` when unset; panics if set to a value that isn't a number.
+fn env_duration(var: &str, default_secs: f64) -> Duration {
+    let secs = match std::env::var(var) {
+        Ok(s) => s
+            .parse::<f64>()
+            .unwrap_or_else(|e| panic!("invalid {var}={s:?}: {e}")),
+        Err(_) => default_secs,
+    };
+    Duration::from_secs_f64(secs)
+}
+
+/// Read a `usize` from `var`. Falls back to `default` when unset; panics if set
+/// to a value that isn't an integer.
+fn env_usize(var: &str, default: usize) -> usize {
+    match std::env::var(var) {
+        Ok(s) => s
+            .parse::<usize>()
+            .unwrap_or_else(|e| panic!("invalid {var}={s:?}: {e}")),
+        Err(_) => default,
+    }
+}
+
+fn sort_axis_benchmark(c: &mut Criterion) {
     let cases: Vec<(&str, AxisGenerator)> = vec![
         (
             "i64",
-            Box::new(move |p, card, extra| i64_axis(p, card, extra, input_size)),
+            Box::new(|p, card, extra| i64_axis(p, card, extra, axis_input_size(extra).0)),
         ),
         (
             "utf8 view",
-            Box::new(move |p, card, extra| utf8_view_axis(p, card, extra, input_size)),
+            Box::new(|p, card, extra| {
+                utf8_view_axis(p, card, extra, axis_input_size(extra).0)
+            }),
         ),
         (
             "mixed tuple",
-            Box::new(move |p, card, extra| mixed_tuple_axis(p, card, extra, input_size)),
+            Box::new(|p, card, extra| {
+                mixed_tuple_axis(p, card, extra, axis_input_size(extra).0)
+            }),
         ),
     ];
+
+    let mut group = c.benchmark_group("sort_axis");
+    // These benches measure whole-plan sort execution, whose run-to-run variance
+    // is low (~1%), so a small sample count is enough to catch a regression while
+    // avoiding 100 samples of a multi-hundred-ms plan. 10 is criterion's minimum.
+    group.sample_size(env_usize("SORT_AXIS_SAMPLE_SIZE", 10));
+    // Every axis bench is floor-bound (short per-iter), so criterion's default
+    // warm-up/measurement windows dominate their wall-clock; shrink them here.
+    group.warm_up_time(env_duration("SORT_AXIS_WARMUP_SECS", 1.0));
+    group.measurement_time(env_duration("SORT_AXIS_MEASUREMENT_SECS", 2.0));
 
     for (name, f) in &cases {
         for card in [Cardinality::Low, Cardinality::High] {
             for &extra in EXTRA_COLUMN_COUNTS {
+                let size_label = axis_input_size(extra).1;
                 for profile in [
                     DataProfile::Sorted,
                     DataProfile::Unsorted,
                     DataProfile::NearlySorted,
                 ] {
-                    c.bench_function(
+                    group.bench_function(
                         &format!(
                             "sort {name} {size_label} {card:?} cardinality {profile:?} +{extra}cols",
                         ),
@@ -864,6 +912,7 @@ fn sort_axis_benchmark(c: &mut Criterion) {
             }
         }
     }
+    group.finish();
 }
 
 /// Single-column i64 batches
