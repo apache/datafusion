@@ -435,11 +435,11 @@ pub trait SubstraitProducer: Send + Sync + Sized {
 
     fn handle_outer_reference_column(
         &mut self,
-        field: &FieldRef,
+        _field: &FieldRef,
         column: &Column,
-        schema: &DFSchemaRef,
+        _schema: &DFSchemaRef,
     ) -> datafusion::common::Result<Expression> {
-        from_outer_reference_column(self, field, column, schema)
+        from_outer_reference_column(self, column)
     }
 
     fn handle_placeholder(

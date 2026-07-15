@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::logical_plan::producer::SubstraitProducer;
-use datafusion::arrow::datatypes::FieldRef;
 use datafusion::common::{Column, DFSchemaRef, substrait_err};
 use datafusion::logical_expr::Expr;
 use substrait::proto::Expression;
@@ -95,9 +94,7 @@ pub(crate) fn try_to_substrait_field_reference(
 /// crosses (`steps_out = 1` is the immediately enclosing query).
 pub fn from_outer_reference_column(
     producer: &mut impl SubstraitProducer,
-    _field: &FieldRef,
     col: &Column,
-    _schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
     let mut steps_out = 1;
     while let Some(outer_schema) = producer.get_outer_schema(steps_out) {

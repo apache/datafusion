@@ -887,6 +887,52 @@ async fn roundtrip_nested_correlated_subquery() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_correlated_subquery_shadowed_outer_column() -> Result<()> {
+    let ctx = create_context().await?;
+    // Both the outermost query and the middle subquery scan `data`, so the
+    // qualified name `data.a` is present in two enclosing scopes when the
+    // innermost subquery references it. Following SQL scoping rules (and
+    // SqlToRel's own resolution), the reference binds to the *nearest*
+    // enclosing scope: the producer must emit steps_out = 1, not 2.
+    let plan = ctx
+        .sql(
+            "SELECT b FROM data WHERE EXISTS (\
+               SELECT 1 FROM data WHERE EXISTS (\
+                 SELECT 1 FROM book WHERE book.isbn = data.a))",
+        )
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_contains_outer_reference(&proto, 1);
+    let proto_str = format!("{proto:?}");
+    assert!(
+        !proto_str.contains("OuterReference { steps_out: 2 }"),
+        "shadowed column must resolve to the nearest enclosing scope, not skip to an outer one"
+    );
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.b
+      Filter: EXISTS (<subquery>)
+        Subquery:
+          Projection: Int64(1)
+            Filter: EXISTS (<subquery>)
+              Subquery:
+                Projection: Int64(1)
+                  Filter: book.isbn = outer_ref(data.a)
+                    TableScan: book
+              TableScan: data
+        TableScan: data
+    "
+            );
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_not_exists_filter_left_anti_join() -> Result<()> {
     let plan = generate_plan_from_sql(
         "SELECT ba.isbn, ba.author FROM book_author ba WHERE NOT EXISTS (SELECT 1 FROM book b WHERE b.isbn = ba.isbn)",
