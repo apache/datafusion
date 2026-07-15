@@ -2583,7 +2583,11 @@ mod tests {
         ]));
         let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
         let partitioning = Partitioning::Range(RangePartitioning::try_new(
-            [PhysicalSortExpr::new(col("id", &schema)?, SortOptions::default())].into(),
+            [PhysicalSortExpr::new(
+                col("id", &schema)?,
+                SortOptions::default(),
+            )]
+            .into(),
             vec![
                 SplitPoint::new(vec![ScalarValue::UInt32(Some(10))]),
                 SplitPoint::new(vec![ScalarValue::UInt32(Some(20))]),
@@ -2649,7 +2653,11 @@ mod tests {
         ]));
         let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
         let partitioning = Partitioning::Range(RangePartitioning::try_new(
-            [PhysicalSortExpr::new(col("id", &schema)?, SortOptions::default())].into(),
+            [PhysicalSortExpr::new(
+                col("id", &schema)?,
+                SortOptions::default(),
+            )]
+            .into(),
             vec![SplitPoint::new(vec![ScalarValue::UInt32(Some(10))])],
         )?);
         let repartition = Arc::new(RepartitionExec::try_new(input, partitioning)?);
@@ -2695,7 +2703,11 @@ mod tests {
         ]));
         let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
         let partitioning = Partitioning::Range(RangePartitioning::try_new(
-            [PhysicalSortExpr::new(col("id", &schema)?, SortOptions::default())].into(),
+            [PhysicalSortExpr::new(
+                col("id", &schema)?,
+                SortOptions::default(),
+            )]
+            .into(),
             vec![SplitPoint::new(vec![ScalarValue::UInt32(Some(10))])],
         )?);
         let repartition = Arc::new(RepartitionExec::try_new(input, partitioning)?);
@@ -2725,8 +2737,8 @@ mod tests {
     }
 
     #[test]
-    fn range_repartition_does_not_swap_when_projection_drops_compound_key_part(
-    ) -> Result<()> {
+    fn range_repartition_does_not_swap_when_projection_drops_compound_key_part()
+    -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::UInt32, false),
             Field::new("b", DataType::UInt32, false),
