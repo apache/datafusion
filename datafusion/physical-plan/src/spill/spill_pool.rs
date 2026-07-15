@@ -97,10 +97,6 @@ impl SpillPoolShared {
 /// examples.
 ///
 /// This writer is `Clone`, allowing multiple producers to coordinate on the same pool.
-/// All clones share the same pool of write files and coordinate file rotation.
-/// The writer automatically manages file rotation based on the `max_file_size_bytes`
-/// configured in [`shared_channel`]. When the last writer clone is dropped, it finalizes any
-/// open write files so readers can access all written data.
 pub struct SharedSpillPoolWriter {
     /// The underlying shared writer. Kept private and never cloned, so this pool always has
     /// exactly one writer.
@@ -474,7 +470,8 @@ pub fn channel(
 }
 
 /// Creates a paired writer and reader for a spill pool with MPSC (multi-producer,
-/// single-consumer) semantics.
+/// single-consumer) semantics. See [`channel`] for the general architecture description
+/// of the spill pool.
 ///
 /// Additional writers can be created by cloning the returned [`SharedSpillPoolWriter`].
 ///
@@ -483,6 +480,23 @@ pub fn channel(
 ///
 /// If you need strict end-to-end FIFO (a single writer whose batches are read back in exact
 /// write order), use [`channel`] instead.
+///
+/// # File Management
+///
+/// The shared channel uses the same size-based rotation trigger as the [single producer channel](channel).
+/// All writers share the smae pool of write files and coordinate file rotation. The number of open
+/// files is kept as small as possible. When more writes occur concurrently than there are open write
+/// files an additional file will be opened to write to. This prevents multiple writers from blocking
+/// each other.
+///
+/// When the last writer clone is dropped, it finalizes any remaining open write files so that all
+/// written data can be accessed by the reader.
+///
+/// # Returns
+///
+/// A tuple of `(SharedSpillPoolWriter, SendableRecordBatchStream)` that share the same
+/// underlying pool. The reader is returned as a stream for immediate use with
+/// async stream combinators. The writer can be cloned to create additional writers.
 pub fn shared_channel(
     max_file_size_bytes: usize,
     spill_manager: Arc<SpillManager>,
