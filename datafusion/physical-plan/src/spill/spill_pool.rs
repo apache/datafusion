@@ -48,7 +48,7 @@ use super::spill_manager::SpillManager;
 /// **Lock ordering discipline**: Never hold both locks simultaneously to prevent deadlock.
 /// Always: acquire outer lock → release outer lock → acquire inner lock (if needed).
 struct SpillPoolShared {
-    /// Queue of ALL files (including the current write file if it exists).
+    /// Queue of ALL files (including the current write files if any exist).
     /// Readers always read from the front of this queue (FIFO).
     /// Each file has its own lock to enable concurrent reader/writer access.
     files: VecDeque<Arc<Mutex<ActiveSpillFileShared>>>,
@@ -59,10 +59,11 @@ struct SpillPoolShared {
     /// FIFO queue of open write files. The queue may contain multiple items when multiple
     /// writers concurrently write to the pool.
     /// Each write file has its own lock to allow I/O without blocking queue access.
-    current_write_files: VecDeque<Arc<Mutex<ActiveSpillFileShared>>>,
-    /// Number of active writer clones. As long as this value is greater than zero, readers should
-    /// assume batches may still be pushed. This prevents premature EOF signaling.
-    active_writer_count: usize,
+    open_write_files: VecDeque<Arc<Mutex<ActiveSpillFileShared>>>,
+    /// Number of `SpillPoolWriter` instances that have not been dropped yet. As long as this value
+    /// is greater than zero, readers should assume batches may still be pushed. This prevents
+    /// premature EOF signaling.
+    remaining_writer_count: usize,
 }
 
 impl SpillPoolShared {
@@ -72,8 +73,8 @@ impl SpillPoolShared {
             files: VecDeque::new(),
             spill_manager,
             waker: None,
-            current_write_files: VecDeque::new(),
-            active_writer_count: 1,
+            open_write_files: VecDeque::new(),
+            remaining_writer_count: 1,
         }
     }
 
@@ -90,33 +91,27 @@ impl SpillPoolShared {
     }
 }
 
-/// Writer for a spill pool. Provides coordinated write access with FIFO semantics.
+/// Writer for a spill pool. Provides coordinated write access.
 ///
 /// Created by [`channel`]. See that function for architecture diagrams and usage examples.
 ///
 /// The writer is `Clone`, allowing multiple writers to coordinate on the same pool.
-/// All clones share the same current write file and coordinate file rotation.
+///
+/// All clones share the same pool of write files and coordinate file rotation.
 /// The writer automatically manages file rotation based on the `max_file_size_bytes`
-/// configured in [`channel`]. When the last writer clone is dropped, it finalizes the
-/// current file so readers can access all written data.
+/// configured in [`channel`]. When the last writer clone is dropped, it finalizes any open write
+/// files so readers can access all written data.
+///
+/// When only a single writer exists, the reader will receive batches in the order the writer
+/// writes them (FIFO semantics).
+/// When multiple writers are used this guarantee is dropped. To prevent writers from blocking
+/// each other, concurrent writes by multiple writers may cause new write files to be created.
 pub struct SpillPoolWriter {
     /// Maximum size in bytes before rotating to a new file.
     /// Typically set from configuration `datafusion.execution.max_spill_file_size_bytes`.
     max_file_size_bytes: usize,
     /// Shared state with readers (includes current_write_file for coordination)
     shared: Arc<Mutex<SpillPoolShared>>,
-}
-
-impl Clone for SpillPoolWriter {
-    fn clone(&self) -> Self {
-        // Increment the active writer count so that `writer_dropped` is only
-        // set to true when the *last* clone is dropped.
-        self.shared.lock().active_writer_count += 1;
-        Self {
-            max_file_size_bytes: self.max_file_size_bytes,
-            shared: Arc::clone(&self.shared),
-        }
-    }
 }
 
 impl SpillPoolWriter {
@@ -168,9 +163,9 @@ impl SpillPoolWriter {
         // Fine-grained locking: Lock shared state briefly for queue access
         let mut shared = self.shared.lock();
 
-        // Create new file if we don't have one yet
-        let current_write_file = if !shared.current_write_files.is_empty() {
-            shared.current_write_files.pop_front().unwrap()
+        // Create new file if there is none available to append to
+        let write_file = if !shared.open_write_files.is_empty() {
+            shared.open_write_files.pop_front().unwrap()
         } else {
             let spill_manager = Arc::clone(&shared.spill_manager);
             // Release shared lock before disk I/O (fine-grained locking)
@@ -203,7 +198,7 @@ impl SpillPoolWriter {
         drop(shared);
 
         // Write batch to current file - lock only the specific file
-        let mut file_shared = current_write_file.lock();
+        let mut file_shared = write_file.lock();
 
         // Append the batch
         if let Some(ref mut writer) = file_shared.writer {
@@ -217,10 +212,9 @@ impl SpillPoolWriter {
         // Wake reader waiting on this specific file
         file_shared.wake();
 
-        // Check if we need to rotate
-        let needs_rotation = file_shared.estimated_size > self.max_file_size_bytes;
+        let max_file_size_reached = file_shared.estimated_size > self.max_file_size_bytes;
 
-        if needs_rotation {
+        if max_file_size_reached {
             // Finish the IPC writer
             if let Some(mut writer) = file_shared.writer.take() {
                 writer.finish()?;
@@ -229,16 +223,30 @@ impl SpillPoolWriter {
             file_shared.writer_finished = true;
             // Wake reader waiting on this file (it's now finished)
             file_shared.wake();
-            // Don't put back current_write_file - let it rotate
+
+            // Don't place `write_file` back in the `open_write_files` queue so we don't
+            // try writing to it again
         } else {
             // Release file lock
             drop(file_shared);
             // Put back the current file for further writing
             let mut shared = self.shared.lock();
-            shared.current_write_files.push_back(current_write_file);
+            shared.open_write_files.push_back(write_file);
         }
 
         Ok(())
+    }
+}
+
+impl Clone for SpillPoolWriter {
+    fn clone(&self) -> Self {
+        // Increment `remaining_writer_count`. The corresponding decrement is done in the `Drop`
+        // implementation.
+        self.shared.lock().remaining_writer_count += 1;
+        Self {
+            max_file_size_bytes: self.max_file_size_bytes,
+            shared: Arc::clone(&self.shared),
+        }
     }
 }
 
@@ -246,8 +254,8 @@ impl Drop for SpillPoolWriter {
     fn drop(&mut self) {
         let mut shared = self.shared.lock();
 
-        shared.active_writer_count -= 1;
-        let is_last_writer = shared.active_writer_count == 0;
+        shared.remaining_writer_count -= 1;
+        let is_last_writer = shared.remaining_writer_count == 0;
 
         if !is_last_writer {
             // Other writer clones are still active; do not finalize or
@@ -256,9 +264,8 @@ impl Drop for SpillPoolWriter {
         }
 
         // Finalize any spill files that were not finished yet
-
-        if !shared.current_write_files.is_empty() {
-            let files = mem::take(&mut shared.current_write_files);
+        if !shared.open_write_files.is_empty() {
+            let files = mem::take(&mut shared.open_write_files);
             drop(shared);
 
             for file in files {
@@ -291,7 +298,8 @@ impl Drop for SpillPoolWriter {
 ///
 /// This is the recommended way to create a spill pool. The writer is `Clone`, allowing
 /// multiple producers to coordinate writes to the same pool. The reader can consume batches
-/// in FIFO order. The reader can start reading immediately after a writer appends a batch
+/// in FIFO order if a single writer is used. Otherwise the read order is undefined.
+/// The reader can start reading immediately after a writer appends a batch
 /// to the spill file, without waiting for the file to be sealed, while writers continue to
 /// write more data.
 ///
@@ -324,13 +332,13 @@ impl Drop for SpillPoolWriter {
 /// │       │             │  ┌────┐┌────┐      │          │                   │
 /// │  push_batch()       │  │ F1 ││ F2 │ ...  │      next().await            │
 /// │       │             │  └────┘└────┘      │          │                   │
-/// │       ▼             │   (FIFO order)     │          ▼                   │
+/// │       ▼             │                    │          ▼                   │
 /// │  ┌─────────┐        │                    │    ┌──────────┐              │
 /// │  │Current  │───────▶│ Coordination:      │◀───│ Current  │              │
 /// │  │Write    │        │ - Wakers           │    │ Read     │              │
 /// │  │File     │        │ - Batch counts     │    │ File     │              │
 /// │  └─────────┘        │ - Writer status    │    └──────────┘              │
-/// │       │             └────────────────────┘          │                   │
+/// │       │             └────────────────────┘           │                  │
 /// │       │                                              │                  │
 /// │  Size > limit?                                Read all batches?         │
 /// │       │                                              │                  │
@@ -338,7 +346,7 @@ impl Drop for SpillPoolWriter {
 /// │  Rotate to new file                            Pop from queue           │
 /// └─────────────────────────────────────────────────────────────────────────┘
 ///
-/// Writer produces → Shared FIFO queue → Reader consumes
+/// Writer produces → Shared queue → Reader consumes
 /// ```
 ///
 /// # File State Machine
@@ -606,7 +614,7 @@ impl Stream for SpillPoolFile {
     }
 }
 
-/// A stream that reads from a SpillPool in FIFO order.
+/// A stream that reads from a SpillPool. The reader guarantees FIFO order if a single writer is used.
 ///
 /// Created by [`channel`]. See that function for architecture diagrams and usage examples.
 ///
@@ -721,7 +729,7 @@ impl Stream for SpillPoolReader {
             }
 
             // No files in queue - check if writer is done
-            if shared.active_writer_count == 0 {
+            if shared.remaining_writer_count == 0 {
                 // Writer is done and no more files will be added - EOF
                 return Poll::Ready(None);
             }
