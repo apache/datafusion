@@ -19,9 +19,10 @@ use insta::assert_snapshot;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    bounded_window_exec, global_limit_exec, hash_join_exec, local_limit_exec,
-    memory_exec, projection_exec, repartition_exec, sort_exec, sort_expr,
-    sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
+    bounded_window_exec, bounded_window_exec_with_can_repartition, global_limit_exec,
+    hash_join_exec, local_limit_exec, memory_exec, projection_exec, repartition_exec,
+    sort_exec, sort_exec_with_preserve_partitioning, sort_expr, sort_expr_options,
+    sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
 };
 
 use arrow::compute::SortOptions;
@@ -497,6 +498,76 @@ async fn test_bounded_window_agg_no_sort_requirement() -> Result<()> {
     "#
     );
     // Order requirement of the `BoundedWindowAggExec` is not satisfied. We expect to receive error during sanity check.
+    assert_sanity_check(&bw, false);
+    Ok(())
+}
+
+#[tokio::test]
+/// Tests that a window over a compatible range-partitioned input satisfies
+/// the window's key distribution requirement without a hash repartition.
+async fn test_bounded_window_agg_range_partitioning() -> Result<()> {
+    let schema = create_test_schema2();
+    let source = range_partitioned_exec(&schema, "a", [10, 20, 30])?;
+    let ordering: LexOrdering = [sort_expr_options(
+        "a",
+        &schema,
+        SortOptions {
+            descending: false,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let partition_by = vec![col("a", &schema)?];
+    let sort = sort_exec_with_preserve_partitioning(ordering, source);
+    let bw =
+        bounded_window_exec_with_can_repartition("a", vec![], &partition_by, sort, true);
+    let plan_str = displayable(bw.as_ref()).indent(true).to_string();
+    let actual = plan_str.trim();
+    assert_snapshot!(
+        actual,
+        @r#"
+    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+        RepartitionExec: partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), input_partitions=1
+          DataSourceExec: partitions=1, partition_sizes=[0]
+    "#
+    );
+    assert_sanity_check(&bw, true);
+    Ok(())
+}
+
+#[tokio::test]
+/// Tests that a window over an incompatible range-partitioned input fails
+/// the window's key distribution requirement.
+async fn test_bounded_window_agg_incompatible_range_partitioning() -> Result<()> {
+    let schema = create_test_schema2();
+    let source = range_partitioned_exec(&schema, "a", [10, 20, 30])?;
+    let ordering: LexOrdering = [sort_expr_options(
+        "b",
+        &schema,
+        SortOptions {
+            descending: false,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let partition_by = vec![col("b", &schema)?];
+    let sort = sort_exec_with_preserve_partitioning(ordering, source);
+    let bw =
+        bounded_window_exec_with_can_repartition("b", vec![], &partition_by, sort, true);
+    let plan_str = displayable(bw.as_ref()).indent(true).to_string();
+    let actual = plan_str.trim();
+    assert_snapshot!(
+        actual,
+        @r#"
+    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[true]
+        RepartitionExec: partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), input_partitions=1
+          DataSourceExec: partitions=1, partition_sizes=[0]
+    "#
+    );
+    // Range([a]) does not colocate `b` values, so the window's key
+    // distribution requirement is not satisfied.
     assert_sanity_check(&bw, false);
     Ok(())
 }
