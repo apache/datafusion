@@ -91,6 +91,7 @@ use std::time::Duration;
 /// Benchmarks for SortPreservingMerge stream
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures::StreamExt;
+use itertools::Itertools;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -815,10 +816,14 @@ where
 
 fn create_single_partition<T, F>(input: Vec<T>, f: F) -> Vec<RecordBatch>
 where
-    T: Clone,
     F: Fn(Vec<T>) -> RecordBatch,
 {
-    input.chunks(BATCH_SIZE).map(|x| f(x.to_vec())).collect()
+    input
+        .into_iter()
+        .chunks(BATCH_SIZE)
+        .into_iter()
+        .map(|x| f(x.collect_vec()))
+        .collect()
 }
 
 /// Read a duration (seconds, may be fractional) from `var`. panics if set to a value that isn't a number.
