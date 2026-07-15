@@ -190,7 +190,7 @@ impl ArrowHashTable for StringHashTable {
         let eq = move |mi: &Option<String>| id_for_eq.as_deref() == mi.as_deref();
 
         // Use entry API to avoid double lookup
-        self.map.find_or_insert(hash, id, replace_idx, eq)
+        self.map.find_or_insert(hash, id.map(ToOwned::to_owned), replace_idx, eq)
     }
 }
 
