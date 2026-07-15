@@ -782,8 +782,8 @@ reset datafusion.optimizer.preserve_file_partitions;
 
 ##########
 # TEST 22: Union of Range Partitioned Inputs
-# Each input exposes Range partitioning on range_key. These changes do not add a
-# cross-child Range relationship for UNION ALL.
+# Each input exposes the same Range partitioning on range_key, so the optimizer
+# converts UnionExec to InterleaveExec to avoid redundant repartitioning.
 ##########
 
 query TT
@@ -792,7 +792,7 @@ UNION ALL
 SELECT range_key, value FROM range_partitioned;
 ----
 physical_plan
-01)UnionExec
+01)InterleaveExec
 02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 03)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
