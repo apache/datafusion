@@ -126,9 +126,10 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Current reset count
     current_reset_epoch: usize,
 
-    /// Stores the previous value of each partitions for tracking the poll counts on the same value
-    /// when round_robin_tie_breaker is enabled
-    prev_cursors: Option<Vec<Option<Cursor<C>>>>,
+    /// Stores an owned copy of the last row of each partition's most
+    /// recently exhausted cursor, for tracking the poll counts on the same
+    /// value across a batch boundary.
+    prev_cursors: Option<Vec<Option<C::SingleRowValue>>>,
 
     /// Optional number of rows to fetch
     fetch: Option<usize>,
@@ -388,7 +389,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 // Take the current cursor, leaving `None` in its place
                 let taken = self.cursors[stream_idx].take();
                 if self.enable_round_robin_tie_breaker {
-                    self.prev_cursors.as_mut().expect("prev_cursor should be set when round robin tie breaker is enabled")[stream_idx] = taken;
+                    self.prev_cursors.as_mut().expect("prev_cursor should be set when round robin tie breaker is enabled")[stream_idx] = taken.map(|c| c.last_value());
                 }
             }
             true
@@ -628,6 +629,8 @@ mod tests {
     struct DummyValues;
 
     impl CursorValues for DummyValues {
+        type SingleRowValue = ();
+
         fn len(&self) -> usize {
             0
         }
@@ -641,6 +644,18 @@ mod tests {
         }
 
         fn compare(_l: &Self, _l_idx: usize, _r: &Self, _r_idx: usize) -> Ordering {
+            unreachable!("done-path test should not compare cursors")
+        }
+
+        fn get_value(&self, _idx: usize) -> Self::SingleRowValue {
+            unreachable!("done-path test should not compare cursors")
+        }
+
+        fn eq_to_single_row_value(
+            _l: &Self,
+            _l_idx: usize,
+            _r: &Self::SingleRowValue,
+        ) -> bool {
             unreachable!("done-path test should not compare cursors")
         }
     }
