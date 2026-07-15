@@ -189,7 +189,7 @@ impl PartitionSpillWriters {
             PartitionSpillWriters::PerInput(writers) => writers[input]
                 .take()
                 .expect("spill writer for input partition requested more than once"),
-            PartitionSpillWriters::Shared(writer) => writer.shared_writer(),
+            PartitionSpillWriters::Shared(writer) => writer.new_writer(),
         }
     }
 }

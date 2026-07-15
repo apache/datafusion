@@ -118,7 +118,7 @@ impl SharedSpillPoolWriter {
 
 impl SharedSpillPoolWriter {
     /// Returns a new shared writer that can be used to spill batches to the pool.
-    pub fn shared_writer(&self) -> SpillPoolWriter {
+    pub fn new_writer(&self) -> SpillPoolWriter {
         // Increment `remaining_writer_count`. The corresponding decrement is done in the `Drop`
         // implementation of `SpillPoolWriter`.
         self.inner.shared.lock().remaining_writer_count += 1;
@@ -132,7 +132,7 @@ impl SharedSpillPoolWriter {
 impl Clone for SharedSpillPoolWriter {
     fn clone(&self) -> Self {
         Self {
-            inner: self.shared_writer(),
+            inner: self.new_writer(),
         }
     }
 }
@@ -182,7 +182,7 @@ impl Drop for SpillPoolWriter {
 
 /// Single writer for a spill pool that cannot be cloned further.
 ///
-/// Created by [`channel`] and [`SharedSpillPoolWriter::shared_writer`].
+/// Created by [`channel`] and [`SharedSpillPoolWriter::new_writer`].
 pub struct SpillPoolWriter {
     /// Maximum size in bytes before rotating to a new file.
     /// Typically set from configuration `datafusion.execution.max_spill_file_size_bytes`.
