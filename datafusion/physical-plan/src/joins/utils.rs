@@ -69,7 +69,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
-    not_impl_err, plan_err,
+    internal_datafusion_err, not_impl_err, plan_err,
 };
 use datafusion_expr::Operator;
 use datafusion_expr::interval_arithmetic::Interval;
@@ -151,8 +151,11 @@ pub fn adjust_right_output_partitioning(
                 range.ordering().iter().cloned(),
                 left_columns_len as _,
             )?;
-            let ordering = LexOrdering::new(ordering)
-                .expect("offsetting a range ordering keeps it non-empty");
+            let ordering = LexOrdering::new(ordering).ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Offsetting range partitioning produced an empty ordering"
+                )
+            })?;
             Partitioning::Range(RangePartitioning::new(
                 ordering,
                 range.split_points().to_vec(),
