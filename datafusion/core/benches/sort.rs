@@ -66,8 +66,6 @@
 //!     ~10% duplicates                                          rows)
 //! ```
 
-use std::sync::Arc;
-
 use arrow::array::{ArrayRef, StringViewArray, StringViewBuilder};
 use arrow::{
     array::{Array, DictionaryArray, Float64Array, Int64Array, StringArray},
@@ -87,6 +85,8 @@ use datafusion::{
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Benchmarks for SortPreservingMerge stream
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -311,6 +311,25 @@ impl BenchCase {
 
         let exec = MemorySourceConfig::try_new_exec(partitions, schema, None).unwrap();
         let exec = Arc::new(CoalescePartitionsExec::new(exec));
+        let plan = Arc::new(SortExec::new(sort, exec));
+
+        Self {
+            runtime,
+            task_ctx,
+            plan,
+        }
+    }
+
+    /// Test SortExec with 1 partition
+    fn sort_single_partition(partition: Vec<RecordBatch>) -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+
+        let schema = partition[0].schema();
+        let sort = make_sort_exprs(schema.as_ref());
+
+        let exec = MemorySourceConfig::try_new_exec(&[partition], schema, None).unwrap();
         let plan = Arc::new(SortExec::new(sort, exec));
 
         Self {
@@ -813,9 +832,38 @@ where
         .collect()
 }
 
-type AxisGenerator = Box<dyn Fn(DataProfile, Cardinality, usize) -> PartitionedBatches>;
+fn create_single_partition<T, F>(input: Vec<T>, f: F) -> Vec<RecordBatch>
+where
+    T: Clone,
+    F: Fn(Vec<T>) -> RecordBatch,
+{
+    input.chunks(BATCH_SIZE).map(|x| f(x.to_vec())).collect()
+}
 
-/// Benchmarks `SortExec` (at the 1M input size) across the following axes:
+/// Read a duration (seconds, may be fractional) from `var`. panics if set to a value that isn't a number.
+fn env_duration(var: &str) -> Option<Duration> {
+    let s = std::env::var(var).ok()?;
+
+    let secs = s
+        .parse::<f64>()
+        .unwrap_or_else(|e| panic!("invalid {var}={s:?}: {e}"));
+
+    Some(Duration::from_secs_f64(secs))
+}
+
+/// Read a `usize` from `var`. panics if set to a value that isn't an integer.
+fn env_usize(var: &str) -> Option<usize> {
+    let s = std::env::var(var).ok()?;
+
+    Some(
+        s.parse::<usize>()
+            .unwrap_or_else(|e| panic!("invalid {var}={s:?}: {e}")),
+    )
+}
+
+type AxisGenerator = Box<dyn Fn(DataProfile, Cardinality, usize) -> Vec<RecordBatch>>;
+
+/// Benchmarks `SortExec` (at the 1M input size) on single partition across the following axes:
 /// 1. Sort columns
 ///     - single column with a specialized impl (primitive or byte(view))
 ///     - multiple columns, which will use fallback impl
@@ -842,6 +890,20 @@ fn sort_axis_benchmark(c: &mut Criterion) {
         ),
     ];
 
+    let mut group = c.benchmark_group("sort_axis");
+
+    if let Some(sample_size) = env_usize("SORT_AXIS_SAMPLE_SIZE") {
+        group.sample_size(sample_size);
+    }
+
+    if let Some(warm_up_time) = env_duration("SORT_AXIS_WARMUP_SECS") {
+        group.warm_up_time(warm_up_time);
+    }
+
+    if let Some(measurement_time) = env_duration("SORT_AXIS_MEASUREMENT_SECS") {
+        group.measurement_time(measurement_time);
+    }
+
     for (name, f) in &cases {
         for card in [Cardinality::Low, Cardinality::High] {
             for &extra in EXTRA_COLUMN_COUNTS {
@@ -850,13 +912,13 @@ fn sort_axis_benchmark(c: &mut Criterion) {
                     DataProfile::Unsorted,
                     DataProfile::NearlySorted,
                 ] {
-                    c.bench_function(
+                    group.bench_function(
                         &format!(
                             "sort {name} {size_label} {card:?} cardinality {profile:?} +{extra}cols",
                         ),
                         |b| {
                             let data = f(profile, card, extra);
-                            let case = BenchCase::sort(&data);
+                            let case = BenchCase::sort_single_partition(data);
                             b.iter(move || case.run())
                         },
                     );
@@ -864,6 +926,8 @@ fn sort_axis_benchmark(c: &mut Criterion) {
             }
         }
     }
+
+    group.finish();
 }
 
 /// Single-column i64 batches
@@ -872,9 +936,9 @@ fn i64_axis(
     card: Cardinality,
     extra: usize,
     input_size: u64,
-) -> PartitionedBatches {
+) -> Vec<RecordBatch> {
     let values = profile.apply(DataGenerator::new(input_size).i64_values_by(card));
-    let batches = split_tuples(values, build_i64_batch);
+    let batches = create_single_partition(values, build_i64_batch);
     with_extra_columns(batches, extra)
 }
 
@@ -884,9 +948,10 @@ fn utf8_view_axis(
     card: Cardinality,
     extra: usize,
     input_size: u64,
-) -> PartitionedBatches {
+) -> Vec<RecordBatch> {
     let values = profile.apply(DataGenerator::new(input_size).utf8_values_by(card));
-    let batches = split_tuples(values, |v| build_utf8_view_batch("utf_view", v));
+    let batches =
+        create_single_partition(values, |v| build_utf8_view_batch("utf_view", v));
     with_extra_columns(batches, extra)
 }
 
@@ -896,7 +961,7 @@ fn mixed_tuple_axis(
     card: Cardinality,
     extra: usize,
     input_size: u64,
-) -> PartitionedBatches {
+) -> Vec<RecordBatch> {
     let mut data_gen = DataGenerator::new(input_size);
     let tuples: Vec<MixedTuple> = data_gen
         .i64_values_by(card)
@@ -905,12 +970,12 @@ fn mixed_tuple_axis(
         .zip(data_gen.utf8_values_by(card))
         .zip(data_gen.i64_values_by(card))
         .collect();
-    let batches = split_tuples(profile.apply(tuples), build_mixed_tuple_batch);
+    let batches = create_single_partition(profile.apply(tuples), build_mixed_tuple_batch);
     with_extra_columns(batches, extra)
 }
 
 /// Append `n` extra non-sort-key payload columns to every batch, split across i64, string, string view and dictionary
-fn with_extra_columns(batches: PartitionedBatches, n: usize) -> PartitionedBatches {
+fn with_extra_columns(batches: Vec<RecordBatch>, n: usize) -> Vec<RecordBatch> {
     if n == 0 {
         return batches;
     }
@@ -960,31 +1025,25 @@ fn with_extra_columns(batches: PartitionedBatches, n: usize) -> PartitionedBatch
 
     batches
         .into_iter()
-        .map(|stream| {
-            stream
-                .into_iter()
-                .map(|batch| {
-                    let num_rows = batch.num_rows();
-                    let mut fields =
-                        batch.schema().fields().iter().cloned().collect::<Vec<_>>();
-                    let mut columns = batch.columns().to_vec();
-                    generator.input_size = num_rows as u64;
+        .map(|batch| {
+            let num_rows = batch.num_rows();
+            let mut fields = batch.schema().fields().iter().cloned().collect::<Vec<_>>();
+            let mut columns = batch.columns().to_vec();
+            generator.input_size = num_rows as u64;
 
-                    for (col_index, gen_index) in generator_index.iter().enumerate() {
-                        let gen_fn = &generators[*gen_index];
+            for (col_index, gen_index) in generator_index.iter().enumerate() {
+                let gen_fn = &generators[*gen_index];
 
-                        let array = gen_fn(&mut generator);
-                        fields.push(Arc::new(Field::new(
-                            format!("{EXTRA_COLUMN_NAME_PREFIX}{col_index}"),
-                            array.data_type().clone(),
-                            array.logical_null_count() > 0,
-                        )));
-                        columns.push(array);
-                    }
+                let array = gen_fn(&mut generator);
+                fields.push(Arc::new(Field::new(
+                    format!("{EXTRA_COLUMN_NAME_PREFIX}{col_index}"),
+                    array.data_type().clone(),
+                    array.logical_null_count() > 0,
+                )));
+                columns.push(array);
+            }
 
-                    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
-                })
-                .collect()
+            RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
         })
         .collect()
 }

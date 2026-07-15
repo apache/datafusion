@@ -234,11 +234,6 @@ impl<'a> StreamingMergeBuilder<'a> {
         let reservation =
             reservation.expect("Reservation cannot be empty for streaming merge");
 
-        // TODO - on only 1 stream use coalesce (so we keep the batch size contract) with observed (so the end time will be set)
-        // if streams.len() == 1 {
-        //     return streams[0].clone();
-        // }
-
         // Special case single column comparisons with optimized cursor implementations
         if expressions.len() == 1 {
             let sort = expressions[0].clone();

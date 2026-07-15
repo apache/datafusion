@@ -44,17 +44,7 @@ pub trait CursorValues: Debug + Sync + Send {
     fn eq_to_previous(cursor: &Self, idx: usize) -> bool;
 
     /// Returns comparison of `l[l_idx]` and `r[r_idx]`
-    ///
-    /// Only called with the cursors' *current* offsets, so caching
-    /// implementations may serve it from their cache.
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering;
-
-    /// Returns comparison of `l[l_idx]` and `r[r_idx]` for *arbitrary*
-    /// indices, unlike [`Self::compare`]. Cold path: caching implementations
-    /// must override this to index directly.
-    fn compare_at(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
-        Self::compare(l, l_idx, r, r_idx)
-    }
 
     /// Notifies the values that the owning [`Cursor`] moved to `offset` (always
     /// `< len()`), so caching implementations can refresh the value(s) read by
@@ -106,19 +96,14 @@ impl<T: CursorValues> Cursor<T> {
     /// Returns true if there are no more rows in this cursor
     #[inline]
     pub fn is_finished(&self) -> bool {
-        self.len() == 0
+        self.offset == self.values.len()
     }
 
     /// Advance the cursor, returning the previous row index
     #[inline]
     pub fn advance(&mut self) -> usize {
-        self.advance_n(1)
-    }
-
-    #[inline]
-    pub(crate) fn advance_n(&mut self, n: usize) -> usize {
         let t = self.offset;
-        self.offset += n;
+        self.offset += 1;
         // Refresh the cache for the new position. The guard keeps `set_offset`
         // in bounds; a finished cursor's stale cache is never read (it is taken
         // before the next comparison).
@@ -126,18 +111,6 @@ impl<T: CursorValues> Cursor<T> {
             self.values.set_offset(self.offset);
         }
         t
-    }
-
-    /// Compare this cursor's *last* row to `other`'s current row. Since the
-    /// values are sorted, `Less` means every remaining row of this cursor
-    /// sorts before all of `other`'s remaining rows.
-    pub fn compare_last_to(&self, other: &Self) -> Ordering {
-        T::compare_at(
-            &self.values,
-            self.values.len() - 1,
-            &other.values,
-            other.offset,
-        )
     }
 
     pub fn is_eq_to_prev_one(&self, prev_cursor: Option<&Cursor<T>>) -> bool {
@@ -148,10 +121,6 @@ impl<T: CursorValues> Cursor<T> {
         } else {
             false
         }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.values.len() - self.offset
     }
 }
 
@@ -316,11 +285,6 @@ impl<T: ArrowNativeTypeOp> CursorValues for PrimitiveValues<T> {
         debug_assert_eq!(l_idx, l.offset);
         debug_assert_eq!(r_idx, r.offset);
         l.current.compare(r.current)
-    }
-
-    fn compare_at(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
-        // Arbitrary indices (cold path), so index directly instead of using the cache.
-        l.values[l_idx].compare(r.values[r_idx])
     }
 
     #[inline(always)]
@@ -548,26 +512,6 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
             (false, false) => match l.options.descending {
                 true => T::compare(&r.values, r_idx, &l.values, l_idx),
                 false => T::compare(&l.values, l_idx, &r.values, r_idx),
-            },
-        }
-    }
-
-    fn compare_at(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
-        // Same null handling as `compare`, but delegates to the inner
-        // `compare_at` so arbitrary indices work with caching values.
-        match (l.is_null(l_idx), r.is_null(r_idx)) {
-            (true, true) => Ordering::Equal,
-            (true, false) => match l.options.nulls_first {
-                true => Ordering::Less,
-                false => Ordering::Greater,
-            },
-            (false, true) => match l.options.nulls_first {
-                true => Ordering::Greater,
-                false => Ordering::Less,
-            },
-            (false, false) => match l.options.descending {
-                true => T::compare_at(&r.values, r_idx, &l.values, l_idx),
-                false => T::compare_at(&l.values, l_idx, &r.values, r_idx),
             },
         }
     }

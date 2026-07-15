@@ -47,9 +47,6 @@ pub trait PartitionedStream: std::fmt::Debug + Send {
     /// Returns the number of partitions
     fn partitions(&self) -> usize;
 
-    fn take_partition(&mut self, partition_idx: usize)
-    -> Fuse<SendableRecordBatchStream>;
-
     fn poll_next(
         &mut self,
         cx: &mut Context<'_>,
@@ -70,17 +67,6 @@ impl std::fmt::Debug for FusedStreams {
 }
 
 impl FusedStreams {
-    fn take_stream(&mut self, stream_idx: usize) -> Fuse<SendableRecordBatchStream> {
-        let stream_schema = self.0[stream_idx].get_ref().schema();
-
-        // Replace the stream with an empty stream, so we can drop memory usage
-        let empty_stream: Fuse<SendableRecordBatchStream> =
-            (Box::pin(EmptyRecordBatchStream::new(stream_schema))
-                as SendableRecordBatchStream)
-                .fuse();
-        mem::replace(&mut self.0[stream_idx], empty_stream)
-    }
-
     fn poll_next(
         &mut self,
         cx: &mut Context<'_>,
@@ -223,10 +209,6 @@ impl PartitionedStream for RowCursorStream {
         self.streams.0.len()
     }
 
-    fn take_partition(&mut self, stream_idx: usize) -> Fuse<SendableRecordBatchStream> {
-        self.streams.take_stream(stream_idx)
-    }
-
     fn poll_next(
         &mut self,
         cx: &mut Context<'_>,
@@ -295,10 +277,6 @@ impl<T: CursorArray> PartitionedStream for FieldCursorStream<T> {
 
     fn partitions(&self) -> usize {
         self.streams.0.len()
-    }
-
-    fn take_partition(&mut self, stream_idx: usize) -> Fuse<SendableRecordBatchStream> {
-        self.streams.take_stream(stream_idx)
     }
 
     fn poll_next(
