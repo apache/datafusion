@@ -303,6 +303,11 @@ required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
+name = "trunc_precision"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "initcap"
 required-features = ["unicode_expressions"]
 
