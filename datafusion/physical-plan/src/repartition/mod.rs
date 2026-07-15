@@ -3873,6 +3873,33 @@ mod test {
         Ok(())
     }
 
+    #[test]
+    fn test_range_repartitioned_returns_none() -> Result<()> {
+        let schema = test_schema();
+        let source = memory_exec(&schema);
+        let partitioning = Partitioning::Range(RangePartitioning::try_new(
+            [PhysicalSortExpr::new(
+                col("c0", &schema)?,
+                SortOptions::default(),
+            )]
+            .into(),
+            vec![
+                SplitPoint::new(vec![ScalarValue::UInt32(Some(10))]),
+                SplitPoint::new(vec![ScalarValue::UInt32(Some(20))]),
+            ],
+        )?);
+        let exec = RepartitionExec::try_new(source, partitioning)?;
+
+        // Range partition count is fixed by split points, so repartitioned()
+        // cannot change it to an arbitrary target.
+        let result = exec.repartitioned(10, &Default::default())?;
+        assert!(
+            result.is_none(),
+            "range repartitioning should not support changing partition count"
+        );
+        Ok(())
+    }
+
     fn test_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
     }
