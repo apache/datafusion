@@ -773,6 +773,7 @@ mod tests {
         MemoryConsumer, MemoryPool, UnboundedMemoryPool,
     };
     use futures::TryStreamExt;
+    use futures::stream::Fuse;
     use std::cmp::Ordering;
 
     #[derive(Debug)]
