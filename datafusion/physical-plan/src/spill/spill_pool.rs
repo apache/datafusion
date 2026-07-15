@@ -753,7 +753,7 @@ mod tests {
     use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common_runtime::SpawnedTask;
+    use datafusion_common_runtime::{JoinSet, SpawnedTask};
     use datafusion_execution::runtime_env::RuntimeEnv;
 
     fn create_test_schema() -> SchemaRef {
@@ -1207,6 +1207,57 @@ mod tests {
         writer_handle.await.unwrap();
         let batches_read = reader_handle.await.unwrap();
         assert_eq!(batches_read, 10);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_concurrent_writers() -> Result<()> {
+        let (writer, mut reader) = create_spill_channel(1024 * 1024);
+
+        // Spawn writer tasks
+        let mut writer_join_set = JoinSet::new();
+        for w in 0..10 {
+            let writer = writer.clone();
+            writer_join_set.spawn(async move {
+                for b in 0..10 {
+                    let batch = create_test_batch((w * 100) + (b * 10), 10);
+                    writer.push_batch(&batch).unwrap();
+                }
+            });
+        }
+        drop(writer);
+
+        // Reader task (runs concurrently)
+        let reader_handle = SpawnedTask::spawn(async move {
+            let mut batch_order = vec![];
+            loop {
+                match reader.next().await {
+                    None => break,
+                    Some(batch) => {
+                        let batch = batch.unwrap();
+
+                        assert_eq!(batch.num_rows(), 10);
+
+                        let col = batch
+                            .column(0)
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .unwrap();
+                        batch_order.push(col.value(0) / 10);
+                    }
+                }
+            }
+            batch_order
+        });
+
+        // Wait for both to complete
+        writer_join_set.join_all().await;
+        let mut batch_order = reader_handle.await.unwrap();
+
+        // When used with multiple writers, order is not guaranteed
+        batch_order.sort();
+        assert_eq!(batch_order, (0i32..100i32).collect::<Vec<_>>());
 
         Ok(())
     }
