@@ -484,7 +484,7 @@ pub fn channel(
 /// # File Management
 ///
 /// The shared channel uses the same size-based rotation trigger as the [single producer channel](channel).
-/// All writers share the smae pool of write files and coordinate file rotation. The number of open
+/// All writers share the same pool of write files and coordinate file rotation. The number of open
 /// files is kept as small as possible. When more writes occur concurrently than there are open write
 /// files an additional file will be opened to write to. This prevents multiple writers from blocking
 /// each other.
