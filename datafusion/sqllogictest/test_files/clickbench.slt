@@ -728,58 +728,58 @@ SELECT "SearchPhrase" FROM hits WHERE "SearchPhrase" <> '' ORDER BY "EventTime",
 
 ## Q27
 query TT
-EXPLAIN SELECT "CounterID", AVG(length("URL")) AS l, COUNT(*) AS c FROM hits WHERE "URL" <> '' GROUP BY "CounterID" HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
+EXPLAIN SELECT "CounterID", AVG(octet_length("URL")) AS l, COUNT(*) AS c FROM hits WHERE "URL" <> '' GROUP BY "CounterID" HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
 ----
 logical_plan
 01)Sort: l DESC NULLS FIRST, fetch=25
-02)--Projection: hits.CounterID, avg(length(hits.URL)) AS l, count(Int64(1)) AS count(*) AS c
+02)--Projection: hits.CounterID, avg(octet_length(hits.URL)) AS l, count(Int64(1)) AS count(*) AS c
 03)----Filter: count(Int64(1)) > Int64(100000)
-04)------Aggregate: groupBy=[[hits.CounterID]], aggr=[[avg(CAST(character_length(hits.URL) AS length(hits.URL) AS Float64)), count(Int64(1))]]
+04)------Aggregate: groupBy=[[hits.CounterID]], aggr=[[avg(CAST(octet_length(hits.URL) AS Float64)), count(Int64(1))]]
 05)--------SubqueryAlias: hits
 06)----------Filter: hits_raw.URL != Utf8View("")
 07)------------TableScan: hits_raw projection=[CounterID, URL], partial_filters=[hits_raw.URL != Utf8View("")]
 physical_plan
 01)SortPreservingMergeExec: [l@1 DESC], fetch=25
-02)--ProjectionExec: expr=[CounterID@0 as CounterID, avg(length(hits.URL))@1 as l, count(Int64(1))@2 as c]
-03)----SortExec: TopK(fetch=25), expr=[avg(length(hits.URL))@1 DESC], preserve_partitioning=[true]
+02)--ProjectionExec: expr=[CounterID@0 as CounterID, avg(octet_length(hits.URL))@1 as l, count(Int64(1))@2 as c]
+03)----SortExec: TopK(fetch=25), expr=[avg(octet_length(hits.URL))@1 DESC], preserve_partitioning=[true]
 04)------FilterExec: count(Int64(1))@2 > 100000
-05)--------AggregateExec: mode=FinalPartitioned, gby=[CounterID@0 as CounterID], aggr=[avg(length(hits.URL)), count(Int64(1))]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[CounterID@0 as CounterID], aggr=[avg(octet_length(hits.URL)), count(Int64(1))]
 06)----------RepartitionExec: partitioning=Hash([CounterID@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[CounterID@0 as CounterID], aggr=[avg(length(hits.URL)), count(Int64(1))]
+07)------------AggregateExec: mode=Partial, gby=[CounterID@0 as CounterID], aggr=[avg(octet_length(hits.URL)), count(Int64(1))]
 08)--------------FilterExec: URL@1 !=
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CounterID, URL], file_type=parquet, predicate=URL@13 != , pruning_predicate=URL_null_count@2 != row_count@3 AND (URL_min@0 !=  OR  != URL_max@1), required_guarantees=[URL not in ()]
 
 query IRI
-SELECT "CounterID", AVG(length("URL")) AS l, COUNT(*) AS c FROM hits WHERE "URL" <> '' GROUP BY "CounterID" HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
+SELECT "CounterID", AVG(octet_length("URL")) AS l, COUNT(*) AS c FROM hits WHERE "URL" <> '' GROUP BY "CounterID" HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
 ----
 
 ## Q28
 query TT
-EXPLAIN SELECT REGEXP_REPLACE("Referer", '^https?://(?:www\.)?([^/]+)/.*$', '\1') AS k, AVG(length("Referer")) AS l, COUNT(*) AS c, MIN("Referer") FROM hits WHERE "Referer" <> '' GROUP BY k HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
+EXPLAIN SELECT REGEXP_REPLACE("Referer", '^https?://(?:www\.)?([^/]+)/.*$', '\1') AS k, AVG(octet_length("Referer")) AS l, COUNT(*) AS c, MIN("Referer") FROM hits WHERE "Referer" <> '' GROUP BY k HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
 ----
 logical_plan
 01)Sort: l DESC NULLS FIRST, fetch=25
-02)--Projection: regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1")) AS k, avg(length(hits.Referer)) AS l, count(Int64(1)) AS count(*) AS c, min(hits.Referer)
+02)--Projection: regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1")) AS k, avg(octet_length(hits.Referer)) AS l, count(Int64(1)) AS count(*) AS c, min(hits.Referer)
 03)----Filter: count(Int64(1)) > Int64(100000)
-04)------Aggregate: groupBy=[[regexp_replace(hits.Referer, Utf8View("^https?://(?:www\.)?([^/]+)/.*$"), Utf8View("\1")) AS regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))]], aggr=[[avg(CAST(character_length(hits.Referer) AS length(hits.Referer) AS Float64)), count(Int64(1)), min(hits.Referer)]]
+04)------Aggregate: groupBy=[[regexp_replace(hits.Referer, Utf8View("^https?://(?:www\.)?([^/]+)/.*$"), Utf8View("\1")) AS regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))]], aggr=[[avg(CAST(octet_length(hits.Referer) AS Float64)), count(Int64(1)), min(hits.Referer)]]
 05)--------SubqueryAlias: hits
 06)----------Filter: hits_raw.Referer != Utf8View("")
 07)------------TableScan: hits_raw projection=[Referer], partial_filters=[hits_raw.Referer != Utf8View("")]
 physical_plan
 01)SortPreservingMergeExec: [l@1 DESC], fetch=25
-02)--ProjectionExec: expr=[regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))@0 as k, avg(length(hits.Referer))@1 as l, count(Int64(1))@2 as c, min(hits.Referer)@3 as min(hits.Referer)]
-03)----SortExec: TopK(fetch=25), expr=[avg(length(hits.Referer))@1 DESC], preserve_partitioning=[true]
+02)--ProjectionExec: expr=[regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))@0 as k, avg(octet_length(hits.Referer))@1 as l, count(Int64(1))@2 as c, min(hits.Referer)@3 as min(hits.Referer)]
+03)----SortExec: TopK(fetch=25), expr=[avg(octet_length(hits.Referer))@1 DESC], preserve_partitioning=[true]
 04)------FilterExec: count(Int64(1))@2 > 100000
-05)--------AggregateExec: mode=FinalPartitioned, gby=[regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))@0 as regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))], aggr=[avg(length(hits.Referer)), count(Int64(1)), min(hits.Referer)]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))@0 as regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))], aggr=[avg(octet_length(hits.Referer)), count(Int64(1)), min(hits.Referer)]
 06)----------RepartitionExec: partitioning=Hash([regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[regexp_replace(Referer@0, ^https?://(?:www\.)?([^/]+)/.*$, \1) as regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))], aggr=[avg(length(hits.Referer)), count(Int64(1)), min(hits.Referer)]
+07)------------AggregateExec: mode=Partial, gby=[regexp_replace(Referer@0, ^https?://(?:www\.)?([^/]+)/.*$, \1) as regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))], aggr=[avg(octet_length(hits.Referer)), count(Int64(1)), min(hits.Referer)]
 08)--------------FilterExec: Referer@0 !=
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[Referer], file_type=parquet, predicate=Referer@14 != , pruning_predicate=Referer_null_count@2 != row_count@3 AND (Referer_min@0 !=  OR  != Referer_max@1), required_guarantees=[Referer not in ()]
 
 query TRIT
-SELECT REGEXP_REPLACE("Referer", '^https?://(?:www\.)?([^/]+)/.*$', '\1') AS k, AVG(length("Referer")) AS l, COUNT(*) AS c, MIN("Referer") FROM hits WHERE "Referer" <> '' GROUP BY k HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
+SELECT REGEXP_REPLACE("Referer", '^https?://(?:www\.)?([^/]+)/.*$', '\1') AS k, AVG(octet_length("Referer")) AS l, COUNT(*) AS c, MIN("Referer") FROM hits WHERE "Referer" <> '' GROUP BY k HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
 ----
 
 ## Q29
