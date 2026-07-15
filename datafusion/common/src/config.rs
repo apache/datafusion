@@ -301,7 +301,7 @@ config_namespace! {
         pub collect_spans: bool, default = false
 
         /// Specifies the recursion depth limit when parsing complex SQL Queries
-        pub recursion_limit: usize, default = 50
+        pub recursion_limit: ConfigNonZeroUsize, default = non_zero_usize_default(50)
 
         /// Specifies the default null ordering for query results. There are 4 options:
         /// - `nulls_max`: Nulls appear last in ascending order.

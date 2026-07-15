@@ -245,6 +245,10 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "upper"
+
+[[bench]]
+harness = false
+name = "upper_unicode"
 required-features = ["string_expressions"]
 
 [[bench]]
@@ -299,6 +303,11 @@ required-features = ["unicode_expressions"]
 [[bench]]
 harness = false
 name = "trunc"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "trunc_precision"
 required-features = ["math_expressions"]
 
 [[bench]]

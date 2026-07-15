@@ -90,7 +90,9 @@ use std::time::Duration;
 
 /// Benchmarks for SortPreservingMerge stream
 use criterion::{Criterion, criterion_group, criterion_main};
+use datafusion_execution::config::SessionConfig;
 use futures::StreamExt;
+use itertools::Itertools;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -224,25 +226,25 @@ fn criterion_benchmark(c: &mut Criterion) {
         for (name, f) in &cases {
             c.bench_function(&format!("merge sorted {name} {size_label}"), |b| {
                 let data = f(true);
-                let case = BenchCase::merge_sorted(&data);
+                let case = BenchCase::merge_sorted(BATCH_SIZE, &data);
                 b.iter(move || case.run())
             });
 
             c.bench_function(&format!("sort merge {name} {size_label}"), |b| {
                 let data = f(false);
-                let case = BenchCase::sort_merge(&data);
+                let case = BenchCase::sort_merge(BATCH_SIZE, &data);
                 b.iter(move || case.run())
             });
 
             c.bench_function(&format!("sort {name} {size_label}"), |b| {
                 let data = f(false);
-                let case = BenchCase::sort(&data);
+                let case = BenchCase::sort(BATCH_SIZE, &data);
                 b.iter(move || case.run())
             });
 
             c.bench_function(&format!("sort partitioned {name} {size_label}"), |b| {
                 let data = f(false);
-                let case = BenchCase::sort_partitioned(&data);
+                let case = BenchCase::sort_partitioned(BATCH_SIZE, &data);
                 b.iter(move || case.run())
             });
         }
@@ -261,9 +263,11 @@ struct BenchCase {
 impl BenchCase {
     /// Prepare to run a benchmark that merges the specified
     /// pre-sorted partitions (streams) together using all keys
-    fn merge_sorted(partitions: &[Vec<RecordBatch>]) -> Self {
+    fn merge_sorted(batch_size: usize, partitions: &[Vec<RecordBatch>]) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
-        let session_ctx = SessionContext::new();
+        let session_ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_batch_size(batch_size),
+        );
         let task_ctx = session_ctx.task_ctx();
 
         let schema = partitions[0][0].schema();
@@ -280,9 +284,11 @@ impl BenchCase {
     }
 
     /// Test SortExec in  "partitioned" mode followed by a SortPreservingMerge
-    fn sort_merge(partitions: &[Vec<RecordBatch>]) -> Self {
+    fn sort_merge(batch_size: usize, partitions: &[Vec<RecordBatch>]) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
-        let session_ctx = SessionContext::new();
+        let session_ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_batch_size(batch_size),
+        );
         let task_ctx = session_ctx.task_ctx();
 
         let schema = partitions[0][0].schema();
@@ -301,9 +307,11 @@ impl BenchCase {
 
     /// Test SortExec in "partitioned" mode which sorts the input streams
     /// individually into some number of output streams
-    fn sort(partitions: &[Vec<RecordBatch>]) -> Self {
+    fn sort(batch_size: usize, partitions: &[Vec<RecordBatch>]) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
-        let session_ctx = SessionContext::new();
+        let session_ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_batch_size(batch_size),
+        );
         let task_ctx = session_ctx.task_ctx();
 
         let schema = partitions[0][0].schema();
@@ -320,30 +328,13 @@ impl BenchCase {
         }
     }
 
-    /// Test SortExec with 1 partition
-    fn sort_single_partition(partition: Vec<RecordBatch>) -> Self {
-        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-
-        let schema = partition[0].schema();
-        let sort = make_sort_exprs(schema.as_ref());
-
-        let exec = MemorySourceConfig::try_new_exec(&[partition], schema, None).unwrap();
-        let plan = Arc::new(SortExec::new(sort, exec));
-
-        Self {
-            runtime,
-            task_ctx,
-            plan,
-        }
-    }
-
     /// Test SortExec in "partitioned" mode which sorts the input streams
     /// individually into some number of output streams
-    fn sort_partitioned(partitions: &[Vec<RecordBatch>]) -> Self {
+    fn sort_partitioned(batch_size: usize, partitions: &[Vec<RecordBatch>]) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
-        let session_ctx = SessionContext::new();
+        let session_ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_batch_size(batch_size),
+        );
         let task_ctx = session_ctx.task_ctx();
 
         let schema = partitions[0][0].schema();
@@ -832,12 +823,20 @@ where
         .collect()
 }
 
-fn create_single_partition<T, F>(input: Vec<T>, f: F) -> Vec<RecordBatch>
+fn create_single_partition<T, F>(
+    input: Vec<T>,
+    f: F,
+    batch_size: usize,
+) -> Vec<RecordBatch>
 where
-    T: Clone,
     F: Fn(Vec<T>) -> RecordBatch,
 {
-    input.chunks(BATCH_SIZE).map(|x| f(x.to_vec())).collect()
+    input
+        .into_iter()
+        .chunks(batch_size)
+        .into_iter()
+        .map(|x| f(x.collect_vec()))
+        .collect()
 }
 
 /// Read a duration (seconds, may be fractional) from `var`. panics if set to a value that isn't a number.
@@ -875,18 +874,26 @@ fn sort_axis_benchmark(c: &mut Criterion) {
     let input_size = 1_000_000u64;
     let size_label = "1M";
 
+    const AXIS_BATCH_SIZE: usize = 8192;
+
     let cases: Vec<(&str, AxisGenerator)> = vec![
         (
             "i64",
-            Box::new(move |p, card, extra| i64_axis(p, card, extra, input_size)),
+            Box::new(move |p, card, extra| {
+                i64_axis(p, card, extra, input_size, AXIS_BATCH_SIZE)
+            }),
         ),
         (
             "utf8 view",
-            Box::new(move |p, card, extra| utf8_view_axis(p, card, extra, input_size)),
+            Box::new(move |p, card, extra| {
+                utf8_view_axis(p, card, extra, input_size, AXIS_BATCH_SIZE)
+            }),
         ),
         (
             "mixed tuple",
-            Box::new(move |p, card, extra| mixed_tuple_axis(p, card, extra, input_size)),
+            Box::new(move |p, card, extra| {
+                mixed_tuple_axis(p, card, extra, input_size, AXIS_BATCH_SIZE)
+            }),
         ),
     ];
 
@@ -913,12 +920,12 @@ fn sort_axis_benchmark(c: &mut Criterion) {
                     DataProfile::NearlySorted,
                 ] {
                     group.bench_function(
-                        &format!(
+                        format!(
                             "sort {name} {size_label} {card:?} cardinality {profile:?} +{extra}cols",
                         ),
                         |b| {
                             let data = f(profile, card, extra);
-                            let case = BenchCase::sort_single_partition(data);
+                            let case = BenchCase::sort_partitioned(AXIS_BATCH_SIZE, &[data]);
                             b.iter(move || case.run())
                         },
                     );
@@ -936,9 +943,10 @@ fn i64_axis(
     card: Cardinality,
     extra: usize,
     input_size: u64,
+    batch_size: usize,
 ) -> Vec<RecordBatch> {
     let values = profile.apply(DataGenerator::new(input_size).i64_values_by(card));
-    let batches = create_single_partition(values, build_i64_batch);
+    let batches = create_single_partition(values, build_i64_batch, batch_size);
     with_extra_columns(batches, extra)
 }
 
@@ -948,10 +956,14 @@ fn utf8_view_axis(
     card: Cardinality,
     extra: usize,
     input_size: u64,
+    batch_size: usize,
 ) -> Vec<RecordBatch> {
     let values = profile.apply(DataGenerator::new(input_size).utf8_values_by(card));
-    let batches =
-        create_single_partition(values, |v| build_utf8_view_batch("utf_view", v));
+    let batches = create_single_partition(
+        values,
+        |v| build_utf8_view_batch("utf_view", v),
+        batch_size,
+    );
     with_extra_columns(batches, extra)
 }
 
@@ -961,6 +973,7 @@ fn mixed_tuple_axis(
     card: Cardinality,
     extra: usize,
     input_size: u64,
+    batch_size: usize,
 ) -> Vec<RecordBatch> {
     let mut data_gen = DataGenerator::new(input_size);
     let tuples: Vec<MixedTuple> = data_gen
@@ -970,7 +983,11 @@ fn mixed_tuple_axis(
         .zip(data_gen.utf8_values_by(card))
         .zip(data_gen.i64_values_by(card))
         .collect();
-    let batches = create_single_partition(profile.apply(tuples), build_mixed_tuple_batch);
+    let batches = create_single_partition(
+        profile.apply(tuples),
+        build_mixed_tuple_batch,
+        batch_size,
+    );
     with_extra_columns(batches, extra)
 }
 
