@@ -810,7 +810,7 @@ mod tests {
         .collect()
         .await?;
 
-        let sql = "SELECT metadata_size_bytes, expires_in, metadata_list FROM list_files_cache()";
+        let sql = "SELECT metadata_size_bytes, expires_in, metadata_list, hits FROM list_files_cache()";
         let df = ctx
             .sql(sql)
             .await?
@@ -838,16 +838,17 @@ mod tests {
                 "filename",
                 "file_size_bytes",
                 "etag",
+                "hits",
             ])?
             .sort(vec![col("filename").sort(true, false)])?;
         let rbs = df.collect().await?;
         assert_snapshot!(batches_to_string(&rbs),@r"
-        +---------------------+-----------+-----------------+------+
-        | metadata_size_bytes | filename  | file_size_bytes | etag |
-        +---------------------+-----------+-----------------+------+
-        | 212                 | 0.parquet | 3642            | 0    |
-        | 212                 | 1.parquet | 3642            | 1    |
-        +---------------------+-----------+-----------------+------+
+        +---------------------+-----------+-----------------+------+------+
+        | metadata_size_bytes | filename  | file_size_bytes | etag | hits |
+        +---------------------+-----------+-----------------+------+------+
+        | 212                 | 0.parquet | 3642            | 0    | 2    |
+        | 212                 | 1.parquet | 3642            | 1    | 2    |
+        +---------------------+-----------+-----------------+------+------+
         ");
 
         Ok(())
