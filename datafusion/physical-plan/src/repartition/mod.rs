@@ -39,7 +39,7 @@ use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
-use crate::spill::spill_pool::{self, SharedSpillPoolWriter};
+use crate::spill::spill_pool::{self, SharedSpillPoolWriter, SpillPoolWriter};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
@@ -164,33 +164,8 @@ type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeB
 struct OutputChannel {
     sender: DistributionSender<MaybeBatch>,
     reservation: SharedMemoryReservation,
-    spill_writer: SpillWriter,
+    spill_writer: SpillPoolWriter,
     shared_coalescer: Option<SharedCoalescer>,
-}
-
-/// Per-input-task handle to a spill pool.
-///
-/// The variant is fixed by the repartition mode and dispatches [`push_batch`] to the matching
-/// writer type. Making the mode a type distinction (rather than a runtime flag) is what prevents
-/// a `preserve_order` pool from ever being fed by a shared multi-producer writer, which would
-/// silently break the ordering the merge downstream relies on.
-///
-/// [`push_batch`]: SpillWriter::push_batch
-enum SpillWriter {
-    /// `preserve_order` mode: a dedicated single-producer FIFO pool, moved into exactly one input
-    /// task and never cloned, so batches are read back in write order.
-    Ordered(SpillPoolWriter),
-    /// Non-preserve-order mode: a shared multi-producer pool cloned across all input tasks.
-    Shared(SharedSpillPoolWriter),
-}
-
-impl SpillWriter {
-    fn push_batch(&self, batch: &RecordBatch) -> Result<()> {
-        match self {
-            SpillWriter::Ordered(writer) => writer.push_batch(batch),
-            SpillWriter::Shared(writer) => writer.push_batch(batch),
-        }
-    }
 }
 
 /// The set of spill-pool writers for a single output partition, before they are handed to the
@@ -209,14 +184,12 @@ impl PartitionSpillWriters {
     ///
     /// In `PerInput` mode this moves the dedicated writer out (it must only be requested once per
     /// input); in `Shared` mode it clones the shared writer.
-    fn take_for_input(&mut self, input: usize) -> SpillWriter {
+    fn take_for_input(&mut self, input: usize) -> SpillPoolWriter {
         match self {
-            PartitionSpillWriters::PerInput(writers) => SpillWriter::Ordered(
-                writers[input]
-                    .take()
-                    .expect("spill writer for input partition requested more than once"),
-            ),
-            PartitionSpillWriters::Shared(writer) => SpillWriter::Shared(writer.clone()),
+            PartitionSpillWriters::PerInput(writers) => writers[input]
+                .take()
+                .expect("spill writer for input partition requested more than once"),
+            PartitionSpillWriters::Shared(writer) => writer.shared_writer(),
         }
     }
 }
