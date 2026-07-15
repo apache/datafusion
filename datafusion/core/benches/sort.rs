@@ -899,7 +899,7 @@ fn sort_axis_benchmark(c: &mut Criterion) {
                     DataProfile::NearlySorted,
                 ] {
                     group.bench_function(
-                        &format!(
+                        format!(
                             "sort {name} {size_label} {card:?} cardinality {profile:?} +{extra}cols",
                         ),
                         |b| {
