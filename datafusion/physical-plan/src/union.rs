@@ -477,7 +477,10 @@ impl ExecutionPlan for UnionExec {
 
 /// Combines multiple input streams by interleaving them.
 ///
-/// This only works if all inputs have the same hash-partitioning.
+/// All inputs must share an identical [`Partitioning::Hash`] or [`Partitioning::Range`] so that
+/// partition `k` covers the same data across every input. Each output partition is the
+/// interleaving of the same-indexed partition from all inputs:
+/// `output[k] = input[0][k] + input[1][k] + ... + input[n-1][k]`
 ///
 /// # Data Flow
 /// ```text
@@ -522,7 +525,7 @@ impl InterleaveExec {
     pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
         assert_or_internal_err!(
             can_interleave(inputs.iter()),
-            "Not all InterleaveExec children have a consistent hash partitioning"
+            "Not all InterleaveExec children have a consistent hash or range partitioning"
         );
         let cache = Self::compute_properties(&inputs)?;
         Ok(InterleaveExec {
@@ -682,8 +685,9 @@ impl ExecutionPlan for InterleaveExec {
     }
 }
 
-/// If all the input partitions have the same Hash partition spec with the first_input_partition
-/// The InterleaveExec is partition aware.
+/// Returns true if all inputs have the same [`Partitioning::Hash`] or [`Partitioning::Range`]
+/// spec, making them safe to interleave. Two inputs are interleave-compatible when partition
+/// `k` covers the identical key range or hash bucket across every input.
 ///
 /// It might be too strict here in the case that the input partition specs are compatible but not exactly the same.
 /// For example one input partition has the partition spec Hash('a','b','c') and
@@ -696,7 +700,7 @@ pub fn can_interleave<T: Borrow<Arc<dyn ExecutionPlan>>>(
     };
 
     let reference = first.borrow().output_partitioning();
-    matches!(reference, Partitioning::Hash(_, _))
+    matches!(reference, Partitioning::Hash(_, _) | Partitioning::Range(_))
         && inputs
             .map(|plan| plan.borrow().output_partitioning().clone())
             .all(|partition| partition == *reference)
@@ -844,10 +848,13 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::DataType;
+    use datafusion_common::SplitPoint;
     use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, ScalarValue};
+    use datafusion_physical_expr::RangePartitioning;
     use datafusion_physical_expr::equivalence::convert_to_orderings;
     use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -1286,6 +1293,66 @@ mod tests {
                 "UnionExec/InterleaveExec requires all inputs to have the same number of fields"
             )
         );
+    }
+
+    fn make_range_exec(
+        schema: &SchemaRef,
+        split_values: Vec<i32>,
+        descending: bool,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let sort_expr = PhysicalSortExpr::new(
+            col("a", schema)?,
+            SortOptions {
+                descending,
+                nulls_first: false,
+            },
+        );
+        let ordering = LexOrdering::new(vec![sort_expr]).unwrap();
+        let split_points = split_values
+            .into_iter()
+            .map(|v| SplitPoint::new(vec![ScalarValue::Int32(Some(v))]))
+            .collect();
+        let partitioning =
+            Partitioning::Range(RangePartitioning::try_new(ordering, split_points)?);
+        let base = Arc::new(TestMemoryExec::try_new(&[], Arc::clone(schema), None)?);
+        Ok(Arc::new(RepartitionExec::try_new(base, partitioning)?))
+    }
+
+    #[test]
+    fn test_can_interleave_range_matching() -> Result<()> {
+        let schema = create_test_schema()?;
+        let range_partitioning_a = make_range_exec(&schema, vec![10, 20], false)?;
+        let range_partitioning_b = make_range_exec(&schema, vec![10, 20], false)?;
+        assert!(can_interleave(
+            [&range_partitioning_a, &range_partitioning_b].into_iter()
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_can_interleave_range_mismatched_split_points() -> Result<()> {
+        let schema = create_test_schema()?;
+        let range_partitioning_a = make_range_exec(&schema, vec![10, 20], false)?;
+        let range_partitioning_b = make_range_exec(&schema, vec![10, 30], false)?;
+        assert!(!can_interleave(
+            [&range_partitioning_a, &range_partitioning_b].into_iter()
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_can_interleave_range_mixed_with_hash() -> Result<()> {
+        let schema = create_test_schema()?;
+        let range_partitioning = make_range_exec(&schema, vec![10, 20], false)?;
+        let hash_partitioning: Arc<dyn ExecutionPlan> =
+            Arc::new(RepartitionExec::try_new(
+                Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?),
+                Partitioning::Hash(vec![col("a", &schema)?], 3),
+            )?);
+        assert!(!can_interleave(
+            [&range_partitioning, &hash_partitioning].into_iter()
+        ));
+        Ok(())
     }
 
     #[test]
