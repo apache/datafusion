@@ -3260,6 +3260,7 @@ mod tests {
         Accumulator, AggregateUDF, AggregateUDFImpl, ExprFunctionExt, LogicalPlanBuilder,
         Partitioning as LogicalPartitioning, RangePartitioning, Signature, TableSource,
         UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col, lit,
+        scalar_subquery,
     };
     use datafusion_functions_aggregate::count::{count_all, count_udaf};
     use datafusion_functions_aggregate::expr_fn::sum;
@@ -3888,6 +3889,30 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "demonstrates scalar subquery context is not propagated to extension planners"]
+    async fn scalar_subquery_in_extension_expr_plans() -> Result<()> {
+        let subquery = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(42_i32)])?
+            .build()?;
+        let logical_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoOpExtensionNode {
+                expressions: vec![scalar_subquery(Arc::new(subquery))],
+                ..Default::default()
+            }),
+        });
+        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+            ExpressionExtensionPlanner,
+        )]);
+
+        let plan = planner
+            .create_physical_plan(&logical_plan, &make_session_state())
+            .await?;
+
+        assert_contains!(format!("{plan:?}"), "ScalarSubqueryExec");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn error_during_extension_planning() {
         let session_state = make_session_state();
         let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
@@ -4416,6 +4441,7 @@ mod tests {
     #[derive(PartialEq, Eq, Hash)]
     struct NoOpExtensionNode {
         schema: DFSchemaRef,
+        expressions: Vec<Expr>,
     }
 
     impl Default for NoOpExtensionNode {
@@ -4428,6 +4454,7 @@ mod tests {
                     )
                     .unwrap(),
                 ),
+                expressions: vec![],
             }
         }
     }
@@ -4460,7 +4487,7 @@ mod tests {
         }
 
         fn expressions(&self) -> Vec<Expr> {
-            vec![]
+            self.expressions.clone()
         }
 
         fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -4469,10 +4496,13 @@ mod tests {
 
         fn with_exprs_and_inputs(
             &self,
-            _exprs: Vec<Expr>,
+            exprs: Vec<Expr>,
             _inputs: Vec<LogicalPlan>,
         ) -> Result<Self> {
-            unimplemented!("NoOp");
+            Ok(Self {
+                schema: Arc::clone(&self.schema),
+                expressions: exprs,
+            })
         }
 
         fn supports_limit_pushdown(&self) -> bool {
@@ -4545,6 +4575,27 @@ mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
+        }
+    }
+
+    struct ExpressionExtensionPlanner;
+
+    #[async_trait]
+    impl ExtensionPlanner for ExpressionExtensionPlanner {
+        async fn plan_extension(
+            &self,
+            planner: &dyn PhysicalPlanner,
+            node: &dyn UserDefinedLogicalNode,
+            _logical_inputs: &[&LogicalPlan],
+            _physical_inputs: &[Arc<dyn ExecutionPlan>],
+            session_state: &SessionState,
+        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+            for expr in node.expressions() {
+                planner.create_physical_expr(&expr, node.schema(), session_state)?;
+            }
+            Ok(Some(Arc::new(NoOpExecutionPlan::new(Arc::clone(
+                node.schema().inner(),
+            )))))
         }
     }
 
