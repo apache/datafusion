@@ -463,7 +463,8 @@ impl RepartitionExecState {
                 .session_config()
                 .options()
                 .execution
-                .max_spill_file_size_bytes;
+                .max_spill_file_size_bytes
+                .get();
             let num_spill_channels = if preserve_order {
                 num_input_partitions
             } else {
