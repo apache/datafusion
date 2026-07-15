@@ -100,6 +100,11 @@ tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [[bench]]
 harness = false
+name = "round_dense"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "ascii"
 required-features = ["string_expressions"]
 
@@ -180,6 +185,11 @@ required-features = ["datetime_expressions"]
 [[bench]]
 harness = false
 name = "date_trunc"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "date_part"
 required-features = ["datetime_expressions"]
 
 [[bench]]

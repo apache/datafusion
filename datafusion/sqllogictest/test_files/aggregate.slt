@@ -1936,6 +1936,203 @@ SELECT g, approx_distinct(arrow_cast(s, 'Utf8View')) FROM approx_distinct_group_
 3 0
 4 1
 
+# BinaryView non-grouped
+query I
+SELECT approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'BinaryView')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+
+# BinaryView grouped
+query II
+SELECT g, approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'BinaryView')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+
+# FixedSizeBinary non-grouped
+query I
+SELECT approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'FixedSizeBinary(1)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+# FixedSizeBinary grouped
+query II
+SELECT g, approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'FixedSizeBinary(1)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+
+# List
+statement ok
+CREATE TABLE approx_distinct_list_test (g INT, l INT[]) AS VALUES
+  (1, [1, 2]), (1, [1, 2]), (1, [3, 4]),
+  (2, [5, 6]), (2, NULL),
+  (3, NULL), (3, NULL),
+  (4, [7, 8]);
+
+# List non-grouped
+query I
+SELECT approx_distinct(l) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# List grouped
+# Group 1 -> {[1,2],[3,4]}=2,
+# Group 2 -> {[5,6]}=1 (NULL excluded),
+# Group 3 -> all null=0,
+# Group 4 -> {[7,8]}=1
+query II
+SELECT g, approx_distinct(l) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(l) FROM approx_distinct_list_test;
+----
+4
+
+# LargeList non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeList(Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# LargeList grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'LargeList(Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeList(Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+# ListView non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'ListView(Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# ListView grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'ListView(Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'ListView(Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+# LargeListView non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeListView(Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# LargeListView grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'LargeListView(Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeListView(Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+
+# FixedSizeList non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'FixedSizeList(2, Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# FixedSizeList grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'FixedSizeList(2, Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'FixedSizeList(2, Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+statement ok
+DROP TABLE approx_distinct_list_test;
+
+# Map
+statement ok
+CREATE TABLE approx_distinct_map_test AS SELECT * FROM (VALUES
+  (1, MAP {'a': 1, 'b': 2}), (1, MAP {'a': 1, 'b': 2}), (1, MAP {'c': 3}),
+  (2, MAP {'d': 4}), (2, NULL),
+  (3, NULL), (3, NULL),
+  (4, MAP {'e': 5})
+) AS t(g, m);
+
+# Map non-grouped
+query I
+SELECT approx_distinct(m) FROM approx_distinct_map_test WHERE g = 1;
+----
+2
+
+# Map grouped
+# Group 1 -> {{a:1,b:2},{c:3}}=2,
+# Group 2 -> {{d:4}}=1 (NULL excluded),
+# Group 3 -> all null=0,
+# Group 4 -> {{e:5}}=1
+query II
+SELECT g, approx_distinct(m) FROM approx_distinct_map_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct maps across groups are still counted overall.
+query I
+SELECT approx_distinct(m) FROM approx_distinct_map_test;
+----
+4
+
+statement ok
+DROP TABLE approx_distinct_map_test;
+
 # Integers (Int32): group 1 -> {10,20}=2, group 2 -> {30,40}=2, group 3 -> 0, group 4 -> {50}=1
 query II
 SELECT g, approx_distinct(i) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
@@ -1977,6 +2174,91 @@ true
 
 statement ok
 DROP TABLE approx_distinct_dense_test;
+
+# This test runs approx_distinct over decimal128 and decimal256 for the scalar and the grouped path.
+statement ok
+CREATE TABLE approx_distinct_decimal_test (g INT, dec128 DECIMAL(20, 2), dec256 DECIMAL(40, 2)) AS VALUES
+  (1, 12345678901234.56,  12345678901234567890123456.78),
+  (1, 98765432109876.54,  98765432109876543210987654.32),
+  (1, 98765432109876.54,  98765432109876543210987654.32),
+  (2, 55555555555555.55,  55555555555555555555555555.55),
+  (2, -0.0,               -0.0),
+  (2, 0.0,                0.0);
+
+# Scalar path
+query II
+SELECT approx_distinct(dec128), approx_distinct(dec256) FROM approx_distinct_decimal_test;
+----
+4 4
+
+# Grouped path
+query III
+SELECT g, approx_distinct(dec128), approx_distinct(dec256)
+FROM approx_distinct_decimal_test GROUP BY g ORDER BY g;
+----
+1 2 2
+2 2 2
+
+statement ok
+DROP TABLE approx_distinct_decimal_test;
+
+# This test runs approx_distinct over all four Duration units for the scalar and the grouped path.
+statement ok
+CREATE TABLE approx_distinct_duration_test AS VALUES
+  (1, arrow_cast(1, 'Duration(Second)'),  arrow_cast(1, 'Duration(Millisecond)'),  arrow_cast(1, 'Duration(Microsecond)'),  arrow_cast(1, 'Duration(Nanosecond)')),
+  (1, arrow_cast(2, 'Duration(Second)'),  arrow_cast(2, 'Duration(Millisecond)'),  arrow_cast(2, 'Duration(Microsecond)'),  arrow_cast(2, 'Duration(Nanosecond)')),
+  (1, arrow_cast(2, 'Duration(Second)'),  arrow_cast(2, 'Duration(Millisecond)'),  arrow_cast(2, 'Duration(Microsecond)'),  arrow_cast(2, 'Duration(Nanosecond)')),
+  (2, arrow_cast(3, 'Duration(Second)'),  arrow_cast(3, 'Duration(Millisecond)'),  arrow_cast(3, 'Duration(Microsecond)'),  arrow_cast(3, 'Duration(Nanosecond)')),
+  (2, arrow_cast(0, 'Duration(Second)'),  arrow_cast(0, 'Duration(Millisecond)'),  arrow_cast(0, 'Duration(Microsecond)'),  arrow_cast(0, 'Duration(Nanosecond)')),
+  (2, arrow_cast(0, 'Duration(Second)'),  arrow_cast(0, 'Duration(Millisecond)'),  arrow_cast(0, 'Duration(Microsecond)'),  arrow_cast(0, 'Duration(Nanosecond)'));
+
+# Scalar path
+query IIII
+SELECT approx_distinct(column2), approx_distinct(column3), approx_distinct(column4), approx_distinct(column5) FROM approx_distinct_duration_test;
+----
+4 4 4 4
+
+# Grouped path
+query IIIII
+SELECT column1, approx_distinct(column2), approx_distinct(column3), approx_distinct(column4), approx_distinct(column5)
+FROM approx_distinct_duration_test GROUP BY column1 ORDER BY column1;
+----
+1 2 2 2 2
+2 2 2 2 2
+
+statement ok
+DROP TABLE approx_distinct_duration_test;
+
+
+# This test runs approx_distinct over the intervals YearMonth,
+# DayTime, MonthDayNano for the scalar and the grouped path.
+statement ok
+CREATE TABLE approx_distinct_interval_test (g INT, ym INTERVAL, dt INTERVAL, mdn INTERVAL) AS VALUES
+  (1, INTERVAL '1' MONTH,  INTERVAL '1' DAY,             INTERVAL '1' MONTH),
+  (1, INTERVAL '2' MONTH,  INTERVAL '1 day 5 hours',     INTERVAL '1 day 5 nanoseconds'),
+  (1, INTERVAL '2' MONTH,  INTERVAL '1 day 5 hours',     INTERVAL '1 day 5 nanoseconds'),
+  (2, INTERVAL '3' YEAR,   INTERVAL '2' DAY,             INTERVAL '2' DAY),
+  (2, INTERVAL '0' MONTH,  INTERVAL '0' DAY,             INTERVAL '0' DAY),
+  (2, INTERVAL '0' MONTH,  INTERVAL '0' DAY,             INTERVAL '0' DAY);
+
+# Scalar path
+query III
+SELECT approx_distinct(ym), approx_distinct(dt), approx_distinct(mdn) FROM approx_distinct_interval_test;
+----
+4 4 4
+
+# Grouped path
+query IIII
+SELECT g, approx_distinct(ym), approx_distinct(dt), approx_distinct(mdn)
+FROM approx_distinct_interval_test GROUP BY g ORDER BY g;
+----
+1 2 2 2
+2 2 2 2
+
+statement ok
+DROP TABLE approx_distinct_interval_test;
+
+
 
 ## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
 ## data, asserting the estimated quantiles are ±5% their actual values.
@@ -6551,6 +6833,99 @@ c NULL 2
 statement ok
 drop table dn;
 
+# sum_interval
+# Component-wise sum across all three Interval variants (matches PostgreSQL).
+
+# Basic Interval(MonthDayNano): the issue's repro.
+# (0 mons, 0 days, 1s) + (12 mons, 0, 0) + (1 mon, 0, 0) = (13 mons, 0, 1s)
+query T?
+SELECT arrow_typeof(sum(v)), sum(v) FROM (VALUES
+  (interval '1 second'),
+  (interval '1 year'),
+  (interval '1 month')) t(v);
+----
+Interval(MonthDayNano) 13 mons 1.000000000 secs
+
+# NULLs are skipped.
+query ?
+SELECT sum(v) FROM (VALUES
+  (interval '1 day'),
+  (NULL),
+  (interval '2 days')) t(v);
+----
+3 days
+
+# Empty input → NULL.
+query ?
+SELECT sum(v) FROM (VALUES (interval '1 day')) t(v) WHERE 1 = 0;
+----
+NULL
+
+# GROUP BY exercises the PrimitiveGroupsAccumulator path.
+query I? rowsort
+SELECT k, sum(v) FROM (VALUES
+  (1, interval '1 day'),
+  (1, interval '2 days'),
+  (2, interval '1 month')) t(k, v)
+GROUP BY k;
+----
+1 3 days
+2 1 mons
+
+# Interval(YearMonth) via cast.
+query T?
+SELECT arrow_typeof(sum(v)), sum(v) FROM (VALUES
+  (arrow_cast('1 year', 'Interval(YearMonth)')),
+  (arrow_cast('6 months', 'Interval(YearMonth)'))) t(v);
+----
+Interval(YearMonth) 1 years 6 mons
+
+# Interval(DayTime) via cast.
+query T?
+SELECT arrow_typeof(sum(v)), sum(v) FROM (VALUES
+  (arrow_cast('1 day', 'Interval(DayTime)')),
+  (arrow_cast('1 day', 'Interval(DayTime)'))) t(v);
+----
+Interval(DayTime) 2 days
+
+# Sliding window sum on intervals.
+query ??
+SELECT v, sum(v) OVER (ORDER BY v ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (VALUES
+  (interval '1 day'),
+  (interval '2 days'),
+  (interval '3 days')) t(v);
+----
+1 days 1 days
+2 days 3 days
+3 days 5 days
+
+# DISTINCT sum drops duplicates (DistinctSumAccumulator path).
+query ?
+SELECT sum(DISTINCT v) FROM (VALUES
+  (interval '1 day'),
+  (interval '1 day'),
+  (interval '2 days')) t(v);
+----
+3 days
+
+# SUM(col + interval_lit) — exercises the simplify_expr_op_literal path.
+query ?
+SELECT sum(v + interval '1 day') FROM (VALUES
+  (interval '1 day'),
+  (interval '2 days'),
+  (interval '3 days')) t(v);
+----
+9 days
+
+# Negative intervals: component-wise wrapping_add over signed i32/i64.
+query ?
+SELECT sum(v) FROM (VALUES
+  (interval '1 day'),
+  (interval '-3 days')) t(v);
+----
+-2 days
+
 # Prepare the table with dictionary values for testing
 statement ok
 CREATE TABLE value(x bigint) AS VALUES (1), (2), (3), (1), (3), (4), (5), (2);
@@ -9028,7 +9403,7 @@ ORDER BY g;
 
 # Config reset
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

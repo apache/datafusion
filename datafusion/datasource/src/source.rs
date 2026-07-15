@@ -244,9 +244,16 @@ pub trait DataSource: Any + Send + Sync + Debug {
     /// Create per execution state to share across sibling instances of this
     /// data source during one execution.
     ///
+    /// `config` is the session configuration, so implementations can honor
+    /// options that disable sibling sharing (returning `None`) for consumers
+    /// that cannot poll all partitions in one process.
+    ///
     /// Returns `None` (the default) if this data source has
     /// no sibling-shared execution state.
-    fn create_sibling_state(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+    fn create_sibling_state(
+        &self,
+        _config: &ConfigOptions,
+    ) -> Option<Arc<dyn Any + Send + Sync>> {
         None
     }
 
@@ -392,7 +399,10 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Result<SendableRecordBatchStream> {
         let shared_state = self
             .execution_state
-            .get_or_init(|| self.data_source.create_sibling_state())
+            .get_or_init(|| {
+                self.data_source
+                    .create_sibling_state(context.session_config().options())
+            })
             .clone();
         let args = OpenArgs::new(partition, Arc::clone(&context))
             .with_shared_state(shared_state);
@@ -427,7 +437,11 @@ impl ExecutionPlan for DataSourceExec {
         Some(metrics)
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
         self.data_source.partition_statistics(args.partition())
     }
 
