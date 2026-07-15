@@ -83,6 +83,9 @@ where
 
         for (i, (&lhs_row, &rhs_row)) in lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
         {
+            if !equal_to_results.get_bit(i) {
+                continue;
+            }
             let left = if cfg!(debug_assertions) {
                 self.group_values[lhs_row]
             } else {
@@ -127,7 +130,6 @@ where
             if !equal_to_results.get_bit(idx) {
                 continue;
             }
-
             let exist_null = self.nulls.is_null(lhs_row);
             let input_null = array.is_null(rhs_row);
             if let Some(result) = nulls_equal_to(exist_null, input_null) {
@@ -293,9 +295,10 @@ mod tests {
 
     use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
     use arrow::array::{
-        ArrayRef, BooleanBufferBuilder, Float32Array, Int64Array, NullBufferBuilder,
+        ArrayRef, BooleanBufferBuilder, Float32Array, Int32Array, Int64Array,
+        NullBufferBuilder,
     };
-    use arrow::datatypes::{DataType, Float32Type, Int64Type};
+    use arrow::datatypes::{DataType, Float32Type, Int32Type, Int64Type};
 
     use super::GroupColumn;
 
@@ -592,6 +595,25 @@ mod tests {
         assert!(results[2]);
         assert!(results[3]);
         assert!(results[4]);
+    }
+
+    // All bits false: every row must be skipped; accessing any lhs/rhs index would panic.
+    #[test]
+    fn test_vectorized_equal_to_skips_false_rows() {
+        let mut builder =
+            PrimitiveGroupValueBuilder::<Int32Type, true>::new(DataType::Int32);
+        let array = Arc::new(Int32Array::from(vec![None::<i32>, None])) as ArrayRef;
+        builder.vectorized_append(&array, &[0, 1]).unwrap();
+
+        let mut results = BooleanBufferBuilder::new(2);
+        results.append_n(2, false);
+
+        builder.vectorized_equal_to(
+            &[usize::MAX, usize::MAX],
+            &array,
+            &[usize::MAX, usize::MAX],
+            &mut results,
+        );
     }
 
     #[test]

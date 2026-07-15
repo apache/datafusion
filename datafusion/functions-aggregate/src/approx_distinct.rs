@@ -24,9 +24,12 @@ use arrow::array::{
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Field, FieldRef, Int32Type,
-    Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type,
+    Decimal128Type, Decimal256Type, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Field, FieldRef, Int32Type, Int64Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt32Type, UInt64Type,
 };
 use datafusion_common::ScalarValue;
@@ -580,6 +583,43 @@ impl GroupsAccumulator for HllGroupsAccumulator {
         Ok(vec![Arc::new(builder.finish())])
     }
 
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        assert_eq!(values.len(), 1, "single argument to convert_to_state");
+        let array = values[0].as_ref();
+        let mut hashes = vec![0; array.len()];
+        create_hashes([array], &HLL_HASH_STATE, &mut hashes)?;
+
+        let filter_nulls = opt_filter.map(filter_to_nulls);
+        let value_nulls = array.logical_nulls();
+        let combined_nulls =
+            NullBuffer::union(filter_nulls.as_ref(), value_nulls.as_ref());
+
+        let mut builder = BinaryBuilder::new();
+        let mut scratch = Vec::new();
+        for (row, hash) in hashes.into_iter().enumerate() {
+            if combined_nulls
+                .as_ref()
+                .is_none_or(|nulls| nulls.is_valid(row))
+            {
+                scratch.clear();
+                scratch.extend_from_slice(&hash.to_le_bytes());
+                builder.append_value(&scratch);
+            } else {
+                builder.append_value([]);
+            }
+        }
+
+        Ok(vec![Arc::new(builder.finish())])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         self.groups.capacity() * size_of::<GroupHll>()
             + self.allocated_bytes
@@ -758,10 +798,51 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 Box::new(NumericHLLAccumulator::<TimestampNanosecondType>::new())
             }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                Box::new(NumericHLLAccumulator::<IntervalYearMonthType>::new())
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                Box::new(NumericHLLAccumulator::<IntervalDayTimeType>::new())
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                Box::new(NumericHLLAccumulator::<IntervalMonthDayNanoType>::new())
+            }
+            DataType::Decimal32(_, _) => {
+                Box::new(NumericHLLAccumulator::<Decimal32Type>::new())
+            }
+            DataType::Decimal64(_, _) => {
+                Box::new(NumericHLLAccumulator::<Decimal64Type>::new())
+            }
+            DataType::Decimal128(_, _) => {
+                Box::new(NumericHLLAccumulator::<Decimal128Type>::new())
+            }
+            DataType::Decimal256(_, _) => {
+                Box::new(NumericHLLAccumulator::<Decimal256Type>::new())
+            }
+            DataType::Duration(TimeUnit::Second) => {
+                Box::new(NumericHLLAccumulator::<DurationSecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                Box::new(NumericHLLAccumulator::<DurationMillisecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                Box::new(NumericHLLAccumulator::<DurationMicrosecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                Box::new(NumericHLLAccumulator::<DurationNanosecondType>::new())
+            }
             DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
             | DataType::Binary
+            | DataType::BinaryView
+            | DataType::FixedSizeBinary(_)
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::Map(_, _)
             | DataType::LargeBinary => Box::new(HLLAccumulator::new()),
             DataType::Null => {
                 Box::new(NoopAccumulator::new(ScalarValue::UInt64(Some(0))))
@@ -818,11 +899,27 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
             | DataType::Timestamp(TimeUnit::Millisecond, _)
             | DataType::Timestamp(TimeUnit::Microsecond, _)
             | DataType::Timestamp(TimeUnit::Nanosecond, _)
+            | DataType::Interval(IntervalUnit::YearMonth)
+            | DataType::Interval(IntervalUnit::DayTime)
+            | DataType::Interval(IntervalUnit::MonthDayNano)
+            | DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
+            | DataType::Duration(_)
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
             | DataType::Binary
+            | DataType::BinaryView
+            | DataType::FixedSizeBinary(_)
             | DataType::LargeBinary
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::Map(_, _)
     )
 }
 
@@ -834,7 +931,12 @@ mod tests {
     #[cfg(not(feature = "force_hash_collisions"))]
     mod real_hash_test {
         use super::*;
-        use arrow::array::{AsArray, Int64Array, StringViewArray};
+        use arrow::array::{
+            AsArray, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+            Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+            IntervalYearMonthArray, StringViewArray,
+        };
+        use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, i256};
         use std::sync::Arc;
         // A string longer than the 12-byte inline limit
         const LONG: &str = "this string is definitely longer than twelve bytes";
@@ -844,6 +946,164 @@ mod tests {
                 ScalarValue::UInt64(Some(v)) => v,
                 other => panic!("unexpected evaluate result: {other:?}"),
             }
+        }
+
+        fn assert_count_numerical_acc_and_group_acc<T>(array: ArrayRef, expected: u64)
+        where
+            T: ArrowPrimitiveType + Debug,
+            T::Native: Hash,
+        {
+            assert!(
+                is_hll_groups_type(array.data_type()),
+                "{} should be groups-capable",
+                array.data_type()
+            );
+
+            let mut acc = NumericHLLAccumulator::<T>::new();
+            acc.update_batch(&[Arc::clone(&array)]).unwrap();
+            let per_group_count = match acc.evaluate().unwrap() {
+                ScalarValue::UInt64(Some(v)) => v,
+                other => panic!("unexpected evaluate result: {other:?}"),
+            };
+
+            let group_indices = vec![0usize; array.len()];
+            let mut acc = HllGroupsAccumulator::new();
+            acc.update_batch(std::slice::from_ref(&array), &group_indices, None, 1)
+                .unwrap();
+            let groups_count = acc
+                .evaluate(EmitTo::All)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .value(0);
+
+            assert_eq!(
+                per_group_count,
+                groups_count,
+                "paths disagree for {}",
+                array.data_type()
+            );
+            assert_eq!(
+                per_group_count,
+                expected,
+                "wrong count for {}",
+                array.data_type()
+            );
+        }
+
+        #[test]
+        fn decimal_support_numerical_acc_and_group_acc() {
+            let decimal_32: ArrayRef = Arc::new(
+                Decimal32Array::from(vec![
+                    1i32,
+                    2,
+                    2,
+                    3,
+                    3,
+                    3,
+                    0,
+                    0,
+                    123_456_789,
+                    999_999_999,
+                    999_999_999,
+                ])
+                .with_precision_and_scale(9, 2)
+                .unwrap(),
+            );
+            assert_count_numerical_acc_and_group_acc::<Decimal32Type>(decimal_32, 6);
+
+            let decimal_64: ArrayRef = Arc::new(
+                Decimal64Array::from(vec![
+                    1i64,
+                    2,
+                    2,
+                    3,
+                    3,
+                    3,
+                    0,
+                    0,
+                    1_234_567_890_123,
+                    9_999_999_999_999,
+                    9_999_999_999_999,
+                ])
+                .with_precision_and_scale(18, 2)
+                .unwrap(),
+            );
+            assert_count_numerical_acc_and_group_acc::<Decimal64Type>(decimal_64, 6);
+
+            let decimal_128: ArrayRef = Arc::new(
+                Decimal128Array::from(vec![
+                    1i128,
+                    2,
+                    2,
+                    3,
+                    3,
+                    3,
+                    0,
+                    0,
+                    1_234_567_890,
+                    9_999_999_999,
+                    9_999_999_999,
+                ])
+                .with_precision_and_scale(38, 2)
+                .unwrap(),
+            );
+            assert_count_numerical_acc_and_group_acc::<Decimal128Type>(decimal_128, 6);
+
+            let big_256_a =
+                i256::from_string("123456789012345678901234567890123456").unwrap();
+            let big_256_b =
+                i256::from_string("987654321098765432109876543210987654").unwrap();
+
+            let decimal_256: ArrayRef = Arc::new(
+                Decimal256Array::from(vec![
+                    i256::from_i128(1),
+                    i256::from_i128(2),
+                    i256::from_i128(2),
+                    i256::from_i128(3),
+                    i256::from_i128(3),
+                    i256::from_i128(3),
+                    i256::from_i128(0),
+                    i256::from_i128(0),
+                    big_256_a,
+                    big_256_b,
+                    big_256_b,
+                ])
+                .with_precision_and_scale(40, 2)
+                .unwrap(),
+            );
+            assert_count_numerical_acc_and_group_acc::<Decimal256Type>(decimal_256, 6);
+        }
+
+        #[test]
+        fn interval_support_numerical_acc_and_group_acc() {
+            let year_month: ArrayRef =
+                Arc::new(IntervalYearMonthArray::from(vec![1, 2, 2, 3, 3, 3, 0, 0]));
+            assert_count_numerical_acc_and_group_acc::<IntervalYearMonthType>(
+                year_month, 4,
+            );
+
+            let day_time: ArrayRef = Arc::new(IntervalDayTimeArray::from(vec![
+                IntervalDayTime::new(1, 0),
+                IntervalDayTime::new(1, 0),
+                IntervalDayTime::new(1, 5),
+                IntervalDayTime::new(2, 0),
+            ]));
+            assert_count_numerical_acc_and_group_acc::<IntervalDayTimeType>(day_time, 3);
+
+            let month_day_nano: ArrayRef =
+                Arc::new(IntervalMonthDayNanoArray::from(vec![
+                    IntervalMonthDayNano::new(1, 0, 0),
+                    IntervalMonthDayNano::new(1, 0, 0),
+                    IntervalMonthDayNano::new(1, 0, 5),
+                    IntervalMonthDayNano::new(0, 2, 0),
+                    IntervalMonthDayNano::new(0, 0, 0),
+                ]));
+            assert_count_numerical_acc_and_group_acc::<IntervalMonthDayNanoType>(
+                month_day_nano,
+                4,
+            );
         }
 
         /// `approx_distinct(v) FILTER (WHERE nullable_bool)` — a NULL filter row
@@ -868,6 +1128,98 @@ mod tests {
             // reference: hash 1 and 5 into a dense sketch
             let expected = reference_count(&[h(1), h(5)]);
             assert_eq!(counts.value(0), expected);
+        }
+
+        #[test]
+        fn groups_convert_to_state_roundtrips_through_merge() {
+            let values: ArrayRef = Arc::new(Int64Array::from(vec![
+                Some(1),
+                Some(2),
+                Some(2),
+                None,
+                Some(3),
+            ]));
+            let filter = BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(true),
+                None,
+            ]);
+            let group_indices = vec![0usize, 1, 0, 1, 0];
+
+            let mut direct = HllGroupsAccumulator::new();
+            direct
+                .update_batch(
+                    std::slice::from_ref(&values),
+                    &group_indices,
+                    Some(&filter),
+                    2,
+                )
+                .unwrap();
+            let direct = direct
+                .evaluate(EmitTo::All)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .clone();
+
+            let converter = HllGroupsAccumulator::new();
+            let state = converter
+                .convert_to_state(std::slice::from_ref(&values), Some(&filter))
+                .unwrap();
+            assert_eq!(state[0].null_count(), 0);
+            let mut merged = HllGroupsAccumulator::new();
+            merged.merge_batch(&state, &group_indices, 2).unwrap();
+            let merged = merged
+                .evaluate(EmitTo::All)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .clone();
+
+            assert_eq!(direct, merged);
+        }
+
+        #[test]
+        fn groups_convert_to_state_preserves_empty_and_filtered_rows() {
+            let converter = HllGroupsAccumulator::new();
+            let empty_values: ArrayRef =
+                Arc::new(Int64Array::from(Vec::<Option<i64>>::new()));
+            let state = converter
+                .convert_to_state(std::slice::from_ref(&empty_values), None)
+                .unwrap();
+            assert_eq!(state[0].len(), 0);
+            assert_eq!(state[0].null_count(), 0);
+
+            let values: ArrayRef =
+                Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+            let filter = BooleanArray::from(vec![Some(false), None, Some(false)]);
+            let group_indices = vec![0usize, 1, 0];
+            let state = converter
+                .convert_to_state(std::slice::from_ref(&values), Some(&filter))
+                .unwrap();
+            assert_eq!(state[0].len(), values.len());
+            assert_eq!(state[0].null_count(), 0);
+            let state = state[0].as_any().downcast_ref::<BinaryArray>().unwrap();
+            for row in 0..state.len() {
+                assert_eq!(state.value(row), b"");
+            }
+
+            let mut merged = HllGroupsAccumulator::new();
+            merged
+                .merge_batch(&[Arc::new(state.clone())], &group_indices, 2)
+                .unwrap();
+            let result = merged
+                .evaluate(EmitTo::All)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .clone();
+            assert_eq!(result, UInt64Array::from(vec![0, 0]));
         }
 
         /// Regression: a short (≤ 12-byte) Utf8View string must hash identically

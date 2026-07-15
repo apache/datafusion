@@ -880,11 +880,6 @@ impl TypeSignature {
         }
     }
 
-    #[deprecated(since = "46.0.0", note = "See get_example_types instead")]
-    pub fn get_possible_types(&self) -> Vec<Vec<DataType>> {
-        self.get_example_types()
-    }
-
     /// Return example acceptable types for this `TypeSignature`'
     ///
     /// Returns a `Vec<DataType>` for each argument to the function
@@ -1054,6 +1049,8 @@ pub enum Coercion {
     Exact {
         /// The required type for the argument
         desired_type: TypeSignatureClass,
+        /// Physical encoding preservation requested by the function.
+        encoding_preservation: EncodingPreservation,
     },
 
     /// Coercion that accepts the desired type and can implicitly coerce from other types.
@@ -1062,12 +1059,44 @@ pub enum Coercion {
         desired_type: TypeSignatureClass,
         /// Rules for implicit coercion from other types
         implicit_coercion: ImplicitCoercion,
+        /// Physical encoding preservation requested by the function.
+        encoding_preservation: EncodingPreservation,
     },
+}
+
+/// Controls whether a [`Coercion`] preserves an argument's physical encoding
+/// (e.g. dictionary) instead of materializing it to the coerced value type.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Hash)]
+pub struct EncodingPreservation {
+    preserve_dictionary: bool,
+}
+
+impl EncodingPreservation {
+    /// Preserve dictionary encoding and coerce only the dictionary values.
+    pub const fn dictionary() -> Self {
+        Self {
+            preserve_dictionary: true,
+        }
+    }
+
+    /// Preserve dictionary encoding and coerce only the dictionary values.
+    pub const fn with_dictionary(mut self) -> Self {
+        self.preserve_dictionary = true;
+        self
+    }
+
+    /// Returns whether dictionary encoding should be preserved.
+    pub const fn preserve_dictionary(self) -> bool {
+        self.preserve_dictionary
+    }
 }
 
 impl Coercion {
     pub fn new_exact(desired_type: TypeSignatureClass) -> Self {
-        Self::Exact { desired_type }
+        Self::Exact {
+            desired_type,
+            encoding_preservation: EncodingPreservation::default(),
+        }
     }
 
     /// Create a new coercion with implicit coercion rules.
@@ -1085,6 +1114,37 @@ impl Coercion {
                 allowed_source_types,
                 default_casted_type,
             },
+            encoding_preservation: EncodingPreservation::default(),
+        }
+    }
+
+    pub fn with_encoding_preservation(
+        mut self,
+        encoding_preservation: EncodingPreservation,
+    ) -> Self {
+        match &mut self {
+            Coercion::Exact {
+                encoding_preservation: current,
+                ..
+            }
+            | Coercion::Implicit {
+                encoding_preservation: current,
+                ..
+            } => *current = encoding_preservation,
+        }
+        self
+    }
+
+    pub fn encoding_preservation(&self) -> EncodingPreservation {
+        match self {
+            Coercion::Exact {
+                encoding_preservation,
+                ..
+            }
+            | Coercion::Implicit {
+                encoding_preservation,
+                ..
+            } => *encoding_preservation,
         }
     }
 
@@ -1108,7 +1168,7 @@ impl Coercion {
 
     pub fn desired_type(&self) -> &TypeSignatureClass {
         match self {
-            Coercion::Exact { desired_type } => desired_type,
+            Coercion::Exact { desired_type, .. } => desired_type,
             Coercion::Implicit { desired_type, .. } => desired_type,
         }
     }
@@ -1133,6 +1193,7 @@ impl PartialEq for Coercion {
     fn eq(&self, other: &Self) -> bool {
         self.desired_type() == other.desired_type()
             && self.implicit_coercion() == other.implicit_coercion()
+            && self.encoding_preservation() == other.encoding_preservation()
     }
 }
 
@@ -1140,6 +1201,7 @@ impl Hash for Coercion {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.desired_type().hash(state);
         self.implicit_coercion().hash(state);
+        self.encoding_preservation().hash(state);
     }
 }
 
@@ -2181,6 +2243,20 @@ mod tests {
             NativeType::Int64,
         );
         assert_snapshot!(implicit_with_multiple_sources, @"Int64");
+    }
+
+    #[test]
+    fn test_coercion_encoding_preservation_affects_equality() {
+        assert!(!EncodingPreservation::default().preserve_dictionary());
+        let preserve_dictionary = EncodingPreservation::dictionary();
+        assert!(preserve_dictionary.preserve_dictionary());
+
+        let default = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+        let preserving = default
+            .clone()
+            .with_encoding_preservation(preserve_dictionary);
+
+        assert_ne!(default, preserving);
     }
 
     #[test]

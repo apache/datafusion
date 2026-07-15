@@ -52,10 +52,11 @@ use crate::projection::{
     try_pushdown_through_join,
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    InputDistributionRequirements, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
     common::can_project,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
@@ -882,7 +883,32 @@ impl HashJoinExec {
             return false;
         }
 
+        if self.mode == PartitionMode::Partitioned
+            && !self.has_partitioned_dynamic_filter_routing()
+        {
+            // TODO: support partition-routed dynamic filters for compatible
+            // range co-partitioned joins.
+            // <https://github.com/apache/datafusion/issues/23376>.
+            return false;
+        }
+
         true
+    }
+
+    fn has_partitioned_dynamic_filter_routing(&self) -> bool {
+        match (
+            self.left.output_partitioning(),
+            self.right.output_partitioning(),
+        ) {
+            (
+                Partitioning::Hash(_, left_partition_count),
+                Partitioning::Hash(_, right_partition_count),
+            ) => left_partition_count == right_partition_count,
+            (left_partitioning, right_partitioning) => {
+                left_partitioning.partition_count() == 1
+                    && right_partitioning.partition_count() == 1
+            }
+        }
     }
 
     /// left (build) side which gets hashed
@@ -1092,6 +1118,12 @@ impl HashJoinExec {
         &self,
         partition_mode: PartitionMode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_or_internal_err!(
+            self.dynamic_filter.is_none(),
+            "Cannot swap HashJoinExec inputs after dynamic filters have been constructed. \
+             Optimizer rules that reorder join inputs must run before optimizer rules `FilterPushdown::new_post_optimization()`"
+        );
+
         let left = self.left();
         let right = self.right();
         let new_join = self
@@ -1235,26 +1267,36 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        match self.mode {
-            PartitionMode::CollectLeft => vec![
-                Distribution::SinglePartition,
-                Distribution::UnspecifiedDistribution,
-            ],
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        let requirements = match self.mode {
             PartitionMode::Partitioned => {
                 let (left_expr, right_expr) = self
                     .on
                     .iter()
                     .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
                     .unzip();
-                vec![
-                    Distribution::HashPartitioned(left_expr),
-                    Distribution::HashPartitioned(right_expr),
-                ]
+                InputDistributionRequirements::co_partitioned(vec![
+                    Distribution::KeyPartitioned(left_expr),
+                    Distribution::KeyPartitioned(right_expr),
+                ])
             }
-            PartitionMode::Auto => vec![
+            PartitionMode::CollectLeft => InputDistributionRequirements::new(vec![
+                Distribution::SinglePartition,
+                Distribution::UnspecifiedDistribution,
+            ]),
+            PartitionMode::Auto => InputDistributionRequirements::new(vec![
                 Distribution::UnspecifiedDistribution,
                 Distribution::UnspecifiedDistribution,
-            ],
+            ]),
+        };
+
+        if self.mode == PartitionMode::Partitioned && self.join_type == JoinType::Inner {
+            requirements.allow_range_satisfaction_for_key_partitioning()
+        } else {
+            requirements
         }
     }
 
@@ -1468,72 +1510,43 @@ impl ExecutionPlan for HashJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let stats = match (args.partition(), self.mode) {
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        match (partition, self.mode) {
             // Left side is broadcast, so it always needs overall stats
             // Right side is partitioned, so it needs per-partition stats
             (Some(_), PartitionMode::CollectLeft) => {
-                let left_stats = args.compute_child_statistics(&self.left, None)?;
-                let right_stats =
-                    args.compute_child_statistics(&self.right, args.partition())?;
-
-                estimate_join_statistics(
-                    Arc::unwrap_or_clone(left_stats),
-                    Arc::unwrap_or_clone(right_stats),
-                    &self.on,
-                    self.null_equality,
-                    &self.join_type,
-                    &self.join_schema,
-                )?
+                vec![ChildStats::At(None), ChildStats::At(partition)]
             }
-
             // For Partitioned mode, both sides are hash-partitioned symmetrically,
             // so each output partition uses the matching partition from both sides.
             (Some(_), PartitionMode::Partitioned) => {
-                let left_stats =
-                    args.compute_child_statistics(&self.left, args.partition())?;
-                let right_stats =
-                    args.compute_child_statistics(&self.right, args.partition())?;
-
-                estimate_join_statistics(
-                    Arc::unwrap_or_clone(left_stats),
-                    Arc::unwrap_or_clone(right_stats),
-                    &self.on,
-                    self.null_equality,
-                    &self.join_type,
-                    &self.join_schema,
-                )?
+                vec![ChildStats::At(partition), ChildStats::At(partition)]
             }
-
             // Overall stats requested, look up overall child stats.
-            (None, _) => {
-                let left_stats = args.compute_child_statistics(&self.left, None)?;
-                let right_stats = args.compute_child_statistics(&self.right, None)?;
-                estimate_join_statistics(
-                    Arc::unwrap_or_clone(left_stats),
-                    Arc::unwrap_or_clone(right_stats),
-                    &self.on,
-                    self.null_equality,
-                    &self.join_type,
-                    &self.join_schema,
-                )?
-            }
-
+            (None, _) => vec![ChildStats::At(None), ChildStats::At(None)],
             // Auto mode hasn't decided partitioning yet, so it needs
             // overall stats from both sides.
             (Some(_), PartitionMode::Auto) => {
-                let left_stats = args.compute_child_statistics(&self.left, None)?;
-                let right_stats = args.compute_child_statistics(&self.right, None)?;
-                estimate_join_statistics(
-                    Arc::unwrap_or_clone(left_stats),
-                    Arc::unwrap_or_clone(right_stats),
-                    &self.on,
-                    self.null_equality,
-                    &self.join_type,
-                    &self.join_schema,
-                )?
+                vec![ChildStats::At(None), ChildStats::At(None)]
             }
-        };
+        }
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let left_stats = Arc::clone(&input_stats[0]);
+        let right_stats = Arc::clone(&input_stats[1]);
+        let stats = estimate_join_statistics(
+            Arc::unwrap_or_clone(left_stats),
+            Arc::unwrap_or_clone(right_stats),
+            &self.on,
+            self.null_equality,
+            &self.join_type,
+            &self.join_schema,
+        )?;
         // Project statistics if there is a projection
         let stats = stats.project(self.projection.as_ref());
         // Apply fetch limit to statistics
@@ -2185,6 +2198,7 @@ mod tests {
     }
 
     use crate::coalesce_partitions::CoalescePartitionsExec;
+    use crate::execution_plan::Boundedness;
     use crate::joins::hash_join::stream::lookup_join_hashmap;
     use crate::test::{TestMemoryExec, assert_join_metrics};
     use crate::{
@@ -2207,10 +2221,66 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+    use datafusion_physical_expr::{
+        EquivalenceProperties, PhysicalSortExpr, RangePartitioning, SplitPoint,
+    };
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};
     use rstest::*;
     use rstest_reuse::*;
+
+    #[derive(Debug)]
+    struct PartitionedTestExec {
+        cache: Arc<PlanProperties>,
+    }
+
+    impl PartitionedTestExec {
+        fn try_new(schema: SchemaRef, partitioning: Partitioning) -> Result<Self> {
+            Ok(Self {
+                cache: Arc::new(PlanProperties::new(
+                    EquivalenceProperties::new(Arc::clone(&schema)),
+                    partitioning,
+                    EmissionType::Incremental,
+                    Boundedness::Bounded,
+                )),
+            })
+        }
+    }
+
+    impl DisplayAs for PartitionedTestExec {
+        fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "PartitionedTestExec")
+        }
+    }
+
+    impl ExecutionPlan for PartitionedTestExec {
+        fn name(&self) -> &'static str {
+            "PartitionedTestExec"
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            &self.cache
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unreachable!()
+        }
+    }
 
     fn div_ceil(a: usize, b: usize) -> usize {
         a.div_ceil(b)
@@ -6629,6 +6699,45 @@ mod tests {
     }
 
     #[test]
+    fn test_swap_inputs_rejects_dynamic_filter() -> Result<()> {
+        let left = build_table(
+            ("l_key", &vec![1]),
+            ("l_payload", &vec![10]),
+            ("l_other", &vec![100]),
+        );
+        let right = build_table(
+            ("r_payload", &vec![20]),
+            ("r_key", &vec![1]),
+            ("r_other", &vec![200]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("l_key", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("r_key", &right.schema())?) as _,
+        )];
+
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftSemi,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?
+        .with_dynamic_filter_expr(dynamic_filter)?;
+
+        let err = join.swap_inputs(PartitionMode::CollectLeft).unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Cannot swap HashJoinExec inputs after dynamic filters have been constructed"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_dynamic_filter_pushdown_rejects_null_equal_join() -> Result<()> {
         let (_, _, on) = build_schema_and_on()?;
         let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
@@ -6649,6 +6758,58 @@ mod tests {
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNull,
+            false,
+        )?;
+
+        assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_partitioned_dynamic_filter_pushdown_rejects_range_partitioning() -> Result<()>
+    {
+        let (left_schema, right_schema, on) = build_schema_and_on()?;
+        let left_partitioning = Partitioning::Range(RangePartitioning::try_new(
+            [PhysicalSortExpr {
+                expr: Arc::clone(&on[0].0),
+                options: Default::default(),
+            }]
+            .into(),
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+        )?);
+        let right_partitioning = Partitioning::Range(RangePartitioning::try_new(
+            [PhysicalSortExpr {
+                expr: Arc::clone(&on[0].1),
+                options: Default::default(),
+            }]
+            .into(),
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+        )?);
+        let left = Arc::new(PartitionedTestExec::try_new(
+            left_schema,
+            left_partitioning,
+        )?);
+        let right = Arc::new(PartitionedTestExec::try_new(
+            right_schema,
+            right_partitioning,
+        )?);
+
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = true;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
             false,
         )?;
 
