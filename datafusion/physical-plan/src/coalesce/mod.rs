@@ -22,8 +22,9 @@ use datafusion_common::{Result, assert_or_internal_err};
 
 /// Concatenate owned batches into a single [`RecordBatch`].
 ///
-/// Unlike https://docs.rs/arrow-select/59.1.0/arrow_select/concat/fn.concat_batches.html,
-/// This copies array types incrementally, allowing input batch to be released after it is copied.
+/// Unlike <https://docs.rs/arrow-select/59.1.0/arrow_select/concat/fn.concat_batches.html>,
+/// This copies array types incrementally, allowing input batches to be
+/// released after they are copied.
 pub(crate) fn concat_batches_owned(
     schema: SchemaRef,
     batches: Vec<RecordBatch>,
