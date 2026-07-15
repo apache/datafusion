@@ -320,25 +320,6 @@ impl BenchCase {
         }
     }
 
-    /// Test SortExec with 1 partition
-    fn sort_single_partition(partition: Vec<RecordBatch>) -> Self {
-        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-
-        let schema = partition[0].schema();
-        let sort = make_sort_exprs(schema.as_ref());
-
-        let exec = MemorySourceConfig::try_new_exec(&[partition], schema, None).unwrap();
-        let plan = Arc::new(SortExec::new(sort, exec));
-
-        Self {
-            runtime,
-            task_ctx,
-            plan,
-        }
-    }
-
     /// Test SortExec in "partitioned" mode which sorts the input streams
     /// individually into some number of output streams
     fn sort_partitioned(partitions: &[Vec<RecordBatch>]) -> Self {
@@ -918,7 +899,7 @@ fn sort_axis_benchmark(c: &mut Criterion) {
                         ),
                         |b| {
                             let data = f(profile, card, extra);
-                            let case = BenchCase::sort_single_partition(data);
+                            let case = BenchCase::sort_partitioned(&[data]);
                             b.iter(move || case.run())
                         },
                     );
