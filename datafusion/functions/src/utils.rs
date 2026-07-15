@@ -217,8 +217,7 @@ where
             } else {
                 let right = R::Native::try_from(scalar.clone()).map_err(|_| {
                     DataFusionError::NotImplemented(format!(
-                        "Cannot convert scalar value {} to {}",
-                        &scalar, cast_target
+                        "Cannot convert scalar value {scalar} to {cast_target}"
                     ))
                 })?;
                 left.try_unary::<_, O, _>(|lvalue| fun(lvalue, right))?

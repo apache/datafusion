@@ -45,11 +45,10 @@ select empty(arrow_cast(make_array(), 'LargeList(Int64)'));
 ----
 true
 
-#TODO: https://github.com/apache/datafusion/issues/9158
-#query B
-#select empty(arrow_cast(make_array(), 'FixedSizeList(0, Null)'));
-#----
-#true
+query B
+select empty(arrow_cast(make_array(), 'FixedSizeList(0, Null)'));
+----
+true
 
 # empty scalar function #3
 query B
@@ -69,10 +68,8 @@ false
 
 #TODO: https://github.com/apache/datafusion/issues/7142
 # empty scalar function #4
-#query B
-#select empty(NULL);
-#----
-#NULL
+query error array_empty does not support type Null
+select empty(NULL);
 
 # empty scalar function #5
 query B

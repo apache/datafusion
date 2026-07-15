@@ -1480,7 +1480,7 @@ config_namespace! {
         pub repartition_file_scans: bool, default = true
 
         /// Minimum number of distinct partition values required to group files by their
-        /// Hive partition column values (enabling Hash partitioning declaration).
+        /// Hive partition column values (enabling output partitioning declaration).
         ///
         /// How the option is used:
         ///     - preserve_file_partitions=0: Disable it.

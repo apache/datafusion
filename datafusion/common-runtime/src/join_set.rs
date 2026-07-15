@@ -21,10 +21,13 @@ use std::task::{Context, Poll};
 use tokio::runtime::Handle;
 use tokio::task::{AbortHandle, Id, JoinError, LocalSet};
 
-/// A wrapper around Tokio's JoinSet that forwards all API calls while optionally
+/// A wrapper around [Tokio's `JoinSet`] that forwards all API calls while optionally
 /// instrumenting spawned tasks and blocking closures with custom tracing behavior.
-/// If no tracer is injected via `trace_utils::set_tracer`, tasks and closures are executed
+/// If no tracer is injected via [`set_join_set_tracer`], tasks and closures are executed
 /// without any instrumentation.
+///
+/// [Tokio's `JoinSet`]: tokio::task::JoinSet
+/// [`set_join_set_tracer`]: crate::trace_utils::set_join_set_tracer
 #[derive(Debug)]
 pub struct JoinSet<T> {
     inner: tokio::task::JoinSet<T>,
