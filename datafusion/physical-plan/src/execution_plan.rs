@@ -48,7 +48,7 @@ use crate::metrics::MetricsSet;
 use crate::projection::ProjectionExec;
 use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 
 use arrow::array::{Array, RecordBatch};
@@ -538,10 +538,10 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
 
     /// Returns statistics for a specific partition of this `ExecutionPlan` node.
     ///
-    /// Deprecated: use [`Self::statistics_with_args`] instead,
-    /// which accepts a [`StatisticsArgs`] carrying pre-computed child
-    /// statistics.
-    #[deprecated(since = "55.0.0", note = "Use statistics_with_args instead")]
+    /// Deprecated: use [`StatisticsContext::compute`] instead.
+    ///
+    /// [`StatisticsContext::compute`]: crate::statistics::StatisticsContext::compute
+    #[deprecated(since = "55.0.0", note = "Use StatisticsContext::compute instead")]
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(idx) = partition {
             // Validate partition index
@@ -556,19 +556,45 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         Ok(Arc::new(Statistics::new_unknown(&self.schema())))
     }
 
-    /// Returns statistics for a specific partition of this `ExecutionPlan` node.
+    /// Returns statistics for a specific partition of this `ExecutionPlan` node,
+    /// given pre-computed child statistics.
+    ///
     /// If statistics are not available, should return [`Statistics::new_unknown`]
     /// (the default), not an error.
-    /// If `partition` is `None`, it returns statistics for all partitions.
+    /// If `args.partition()` is `None`, it returns statistics for all partitions.
     ///
-    /// [`StatisticsArgs`] carries the partition index and a shared cache.
-    /// Create one with [`StatisticsArgs::new`] and pass it to this method.
+    /// Implementations should not call [`StatisticsContext::compute`] from within
+    /// this method; child statistics are provided via `input_stats`.
     ///
-    /// [`StatisticsArgs`]: crate::statistics::StatisticsArgs
-    /// [`StatisticsArgs::new`]: crate::statistics::StatisticsArgs::new
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+    /// Use [`StatisticsContext::compute`] to initiate a full plan-tree walk.
+    ///
+    /// [`StatisticsContext::compute`]: crate::statistics::StatisticsContext::compute
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
         #[expect(deprecated)]
         self.partition_statistics(args.partition())
+    }
+
+    /// Returns, per child, which statistics the [`StatisticsContext`] should resolve
+    /// before calling [`Self::statistics_from_inputs`].
+    ///
+    /// One entry per child (same order as [`Self::children`]): [`ChildStats::At`]
+    /// requests the child's statistics at a partition (`None` = overall);
+    /// [`ChildStats::Skip`] omits a child whose statistics this node does not need
+    /// (a `Statistics::new_unknown` placeholder fills its `input_stats` slot).
+    ///
+    /// The default skips every child, so a node that derives nothing from its
+    /// children (for example one that only overrides the deprecated
+    /// [`Self::partition_statistics`]) triggers no child traversal. A node that reads
+    /// `input_stats` in [`Self::statistics_from_inputs`] must override this to declare
+    /// the children it uses.
+    ///
+    /// [`StatisticsContext`]: crate::statistics::StatisticsContext
+    fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
+        self.children().iter().map(|_| ChildStats::Skip).collect()
     }
 
     /// Returns `true` if a limit can be safely pushed down through this
@@ -1727,8 +1753,9 @@ mod tests {
             unimplemented!()
         }
 
-        fn statistics_with_args(
+        fn statistics_from_inputs(
             &self,
+            _input_stats: &[Arc<Statistics>],
             _args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
             unimplemented!()
@@ -1789,8 +1816,9 @@ mod tests {
             unimplemented!()
         }
 
-        fn statistics_with_args(
+        fn statistics_from_inputs(
             &self,
+            _input_stats: &[Arc<Statistics>],
             _args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
             unimplemented!()

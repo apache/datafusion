@@ -53,7 +53,8 @@ use crate::projection::{
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    InputDistributionRequirements, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
@@ -415,23 +416,27 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         self.input_distribution_requirements().into_per_child()
     }
 
-    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
-        crate::InputDistributionRequirements::new(match self.mode {
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        match self.mode {
             StreamJoinPartitionMode::Partitioned => {
                 let (left_expr, right_expr) = self
                     .on
                     .iter()
                     .map(|(l, r)| (Arc::clone(l) as _, Arc::clone(r) as _))
                     .unzip();
-                vec![
+                InputDistributionRequirements::co_partitioned(vec![
                     Distribution::KeyPartitioned(left_expr),
                     Distribution::KeyPartitioned(right_expr),
-                ]
+                ])
+                .allow_range_satisfaction_for_key_partitioning()
             }
             StreamJoinPartitionMode::SinglePartition => {
-                vec![Distribution::SinglePartition, Distribution::SinglePartition]
+                InputDistributionRequirements::new(vec![
+                    Distribution::SinglePartition,
+                    Distribution::SinglePartition,
+                ])
             }
-        })
+        }
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
