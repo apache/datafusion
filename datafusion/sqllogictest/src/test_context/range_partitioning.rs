@@ -121,7 +121,7 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         "range_partitioned_shifted",
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("test_files/scratch_range_partitioning/range_partitioned_shifted"),
-        schema,
+        Arc::clone(&schema),
         [
             "1,1,10\n5,2,50\n10,1,100\n",
             "15,2,150\n",
@@ -129,6 +129,34 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
             "30,1,300\n35,2,350\n",
         ],
         Some(shifted_output_partitioning),
+    );
+
+    // Same rows as `range_partitioned` but split into only three range
+    // partitions on `range_key`. Used to exercise the co-partition check when
+    // two Range inputs disagree on partition count.
+    let narrow_output_partitioning = Partitioning::Range(
+        RangePartitioning::try_new(
+            vec![col("range_key").sort(true, true)],
+            vec![
+                SplitPoint::new(vec![ScalarValue::Int32(Some(10))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(20))]),
+            ],
+        )
+        .expect("range partitioning should be valid"),
+    );
+
+    register_csv_listing_table(
+        ctx,
+        "range_partitioned_narrow",
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test_files/scratch_range_partitioning/range_partitioned_narrow"),
+        schema,
+        [
+            "1,1,10\n5,2,50\n",
+            "10,1,100\n15,2,150\n",
+            "20,1,200\n25,2,250\n30,1,300\n35,2,350\n",
+        ],
+        Some(narrow_output_partitioning),
     );
 }
 
