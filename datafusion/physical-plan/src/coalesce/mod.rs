@@ -20,6 +20,31 @@ use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, assert_or_internal_err};
 
+/// Concatenate owned batches into a single [`RecordBatch`].
+///
+/// Unlike https://docs.rs/arrow-select/59.1.0/arrow_select/concat/fn.concat_batches.html,
+/// This copies array types incrementally, allowing input batch to be released after it is copied.
+pub(crate) fn concat_batches_owned(
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+) -> Result<RecordBatch> {
+    let num_rows = batches.iter().map(RecordBatch::num_rows).sum();
+    if num_rows == 0 {
+        return Ok(RecordBatch::new_empty(schema));
+    }
+
+    let mut coalescer = BatchCoalescer::new(schema, num_rows);
+    for batch in batches {
+        coalescer.push_batch(batch)?;
+    }
+    coalescer.finish_buffered_batch()?;
+    coalescer.next_completed_batch().ok_or_else(|| {
+        datafusion_common::internal_datafusion_err!(
+            "BatchCoalescer did not produce a completed batch"
+        )
+    })
+}
+
 /// Concatenate multiple [`RecordBatch`]es and apply a limit
 ///
 /// See [`BatchCoalescer`] for more details on how this works.
@@ -150,9 +175,67 @@ mod tests {
     use std::ops::Range;
     use std::sync::Arc;
 
-    use arrow::array::UInt32Array;
+    use arrow::array::{RecordBatchOptions, StringArray, UInt32Array};
     use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Field, Schema};
+
+    #[test]
+    fn test_concat_batches_owned() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("number", DataType::UInt32, false),
+            Field::new("string", DataType::Utf8, false),
+        ]));
+        let batches = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(UInt32Array::from(vec![1, 2])),
+                    Arc::new(StringArray::from(vec!["a", "b"])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(UInt32Array::from(vec![3, 4])),
+                    Arc::new(StringArray::from(vec!["c", "d"])),
+                ],
+            )
+            .unwrap(),
+        ];
+        let expected = concat_batches(&schema, &batches).unwrap();
+
+        let actual = concat_batches_owned(schema, batches).unwrap();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_concat_batches_owned_empty_input() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "number",
+            DataType::UInt32,
+            false,
+        )]));
+
+        let actual = concat_batches_owned(Arc::clone(&schema), vec![]).unwrap();
+
+        assert_eq!(actual, RecordBatch::new_empty(schema));
+    }
+
+    #[test]
+    fn test_concat_batches_owned_empty_schema() {
+        let schema = Arc::new(Schema::empty());
+        let options = RecordBatchOptions::new().with_row_count(Some(2));
+        let batch =
+            RecordBatch::try_new_with_options(Arc::clone(&schema), vec![], &options)
+                .unwrap();
+
+        let actual = concat_batches_owned(schema, vec![batch.clone(), batch]).unwrap();
+
+        assert_eq!(actual.num_rows(), 4);
+        assert_eq!(actual.num_columns(), 0);
+    }
 
     #[test]
     fn test_coalesce() {

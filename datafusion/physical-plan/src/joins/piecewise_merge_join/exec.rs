@@ -18,7 +18,6 @@
 use arrow::array::Array;
 use arrow::{
     array::{ArrayRef, BooleanBufferBuilder, RecordBatch},
-    compute::concat_batches,
     util::bit_util,
 };
 use arrow_schema::{SchemaRef, SortOptions};
@@ -41,6 +40,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
+use crate::coalesce::concat_batches_owned;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 
 use crate::joins::piecewise_merge_join::classic_join::{
@@ -668,17 +668,16 @@ async fn build_buffered_data(
         })
         .await?;
 
-    let single_batch = concat_batches(&schema, batches.iter())?;
+    let single_batch = concat_batches_owned(schema, batches)?;
 
     // Evaluate physical expression on the buffered side.
     let buffered_values = on_buffered
         .evaluate(&single_batch)?
         .into_array(single_batch.num_rows())?;
 
-    // We add the single batch size + the memory of the join keys
-    // size of the size estimation
-    let size_estimation = get_record_batch_memory_size(&single_batch)
-        + buffered_values.get_array_memory_size();
+    // The existing reservation transfers from the consumed input batches to
+    // the concatenated batch, so only reserve additional join-key memory.
+    let size_estimation = buffered_values.get_array_memory_size();
     reservation.try_grow(size_estimation)?;
     metrics.build_mem_used.add(size_estimation);
 

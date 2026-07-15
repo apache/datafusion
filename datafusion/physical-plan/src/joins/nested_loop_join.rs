@@ -27,6 +27,7 @@ use super::utils::{
     asymmetric_join_output_partitioning, need_produce_result_in_final,
     reorder_output_after_swap, swap_join_projection,
 };
+use crate::coalesce::concat_batches_owned;
 use crate::common::can_project;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::joins::SharedBitmapBuilder;
@@ -852,7 +853,7 @@ async fn collect_left_input(
         )
         .await?;
 
-    let merged_batch = concat_batches(&schema, &batches)?;
+    let merged_batch = concat_batches_owned(schema, batches)?;
 
     // Reserve memory for visited_left_side bitmap if required by join type
     let visited_left_side = if with_visited_left_side {

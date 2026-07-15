@@ -25,6 +25,7 @@ use super::utils::{
     OnceAsync, OnceFut, StatefulStreamResult, adjust_right_output_partitioning,
     reorder_output_after_swap,
 };
+use crate::coalesce::concat_batches_owned;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
@@ -40,7 +41,6 @@ use crate::{
 };
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -223,7 +223,7 @@ async fn load_left_input(
         )
         .await?;
 
-    let merged_batch = concat_batches(&left_schema, &batches)?;
+    let merged_batch = concat_batches_owned(left_schema, batches)?;
 
     Ok(JoinLeftData {
         merged_batch,

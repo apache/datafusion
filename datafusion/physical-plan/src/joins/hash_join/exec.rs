@@ -23,6 +23,7 @@ use std::sync::{Arc, OnceLock};
 use std::vec;
 
 use crate::ExecutionPlanProperties;
+use crate::coalesce::concat_batches_owned;
 use crate::execution_plan::{
     EmissionType, boundedness_from_children, has_same_children_properties,
     stub_properties,
@@ -67,7 +68,6 @@ use crate::{
 };
 
 use arrow::array::{ArrayRef, BooleanBufferBuilder};
-use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
@@ -103,17 +103,14 @@ pub(crate) const HASH_JOIN_SEED: SeededRandomState =
 
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
 
-#[expect(clippy::too_many_arguments)]
-fn try_create_array_map(
+fn array_map_bounds(
     bounds: &Option<PartitionBounds>,
-    schema: &SchemaRef,
     batches: &[RecordBatch],
     on_left: &[PhysicalExprRef],
-    reservation: &mut MemoryReservation,
     perfect_hash_join_small_build_threshold: usize,
     perfect_hash_join_min_key_density: f64,
     null_equality: NullEquality,
-) -> Result<Option<(ArrayMap, RecordBatch, Vec<ArrayRef>)>> {
+) -> Result<Option<(u64, u64)>> {
     if on_left.len() != 1 {
         return Ok(None);
     }
@@ -175,15 +172,7 @@ fn try_create_array_map(
         return Ok(None);
     }
 
-    let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_row);
-    reservation.try_grow(mem_size)?;
-
-    let batch = concat_batches(schema, batches)?;
-    let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
-
-    let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
-
-    Ok(Some((array_map, batch, left_values)))
+    Ok(Some((min_val, max_val)))
 }
 
 /// HashTable and input data for the left (build side) of a join
@@ -568,7 +557,7 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 /// 4. build_side.num_rows() < u32::MAX
 /// 5. NullEqualsNothing || (NullEqualsNull && build side doesn't contain null)
 ///
-/// See [`try_create_array_map`] for more details.
+/// See [`array_map_bounds`] for more details.
 ///
 /// Note that when using [`PartitionMode::Partitioned`], the build side is split into multiple
 /// partitions. This can cause a dense build side to become sparse within each partition,
@@ -2009,7 +1998,7 @@ async fn collect_left_input(
         batches,
         num_rows,
         metrics,
-        mut reservation,
+        reservation,
         bounds_accumulators,
         memory_counter: _,
     } = state;
@@ -2026,21 +2015,28 @@ async fn collect_left_input(
         _ => None,
     };
 
+    let array_map_bounds = array_map_bounds(
+        &bounds,
+        &batches,
+        &on_left,
+        config.execution.perfect_hash_join_small_build_threshold,
+        config.execution.perfect_hash_join_min_key_density,
+        null_equality,
+    )?;
+
     let (join_hash_map, batch, left_values) =
-        if let Some((array_map, batch, left_value)) = try_create_array_map(
-            &bounds,
-            &schema,
-            &batches,
-            &on_left,
-            &mut reservation,
-            config.execution.perfect_hash_join_small_build_threshold,
-            config.execution.perfect_hash_join_min_key_density,
-            null_equality,
-        )? {
+        if let Some((min_val, max_val)) = array_map_bounds {
+            let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_rows);
+            reservation.try_grow(mem_size)?;
+
+            let batch = concat_batches_owned(Arc::clone(&schema), batches)?;
+            let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
+            let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
+
             array_map_created_count.add(1);
             metrics.build_mem_used.add(array_map.size());
 
-            (Map::ArrayMap(array_map), batch, left_value)
+            (Map::ArrayMap(array_map), batch, left_values)
         } else {
             // Estimation of memory size, required for hashtable, prior to allocation.
             // Final result can be verified using `RawTable.allocation_info()`
@@ -2088,7 +2084,10 @@ async fn collect_left_input(
             }
 
             // Merge all batches into a single batch, so we can directly index into the arrays
-            let batch = concat_batches(&schema, batches_iter.clone())?;
+            let batch = concat_batches_owned(
+                Arc::clone(&schema),
+                batches.into_iter().rev().collect(),
+            )?;
 
             let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
 
