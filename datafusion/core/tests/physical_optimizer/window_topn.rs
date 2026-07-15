@@ -33,7 +33,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::window_topn::WindowTopN;
 use datafusion_physical_plan::displayable;
-use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -605,5 +605,71 @@ fn dense_rank_no_change() -> Result<()> {
         before, after,
         "DENSE_RANK is unsupported and must not be rewritten"
     );
+    Ok(())
+}
+
+/// Regression: FilterExec that carries an embedded projection (e.g. from
+/// an earlier filter/projection pushdown pass) used to make the rule bail
+/// out entirely. The rule now captures the projection, applies the
+/// PartitionedTopKExec rewrite, and wraps the result in a ProjectionExec
+/// that reproduces the original output schema.
+#[test]
+fn filter_with_projection_still_rewrites() -> Result<()> {
+    let s = schema();
+    let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
+
+    let ordering = LexOrdering::new(vec![
+        PhysicalSortExpr::new_default(col("pk", &s)?).asc(),
+        PhysicalSortExpr::new_default(col("val", &s)?).asc(),
+    ])
+    .unwrap();
+    let sort: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(ordering, input).with_preserve_partitioning(true));
+
+    let partition_by = vec![col("pk", &s)?];
+    let order_by = vec![PhysicalSortExpr::new_default(col("val", &s)?).asc()];
+    let window_expr = Arc::new(StandardWindowExpr::new(
+        create_udwf_window_expr(
+            &row_number_udwf(),
+            &[],
+            &s,
+            "row_number".to_string(),
+            false,
+        )?,
+        &partition_by,
+        &order_by,
+        Arc::new(WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            WindowFrameBound::CurrentRow,
+        )),
+    ));
+    let window: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
+        vec![window_expr],
+        sort,
+        InputOrderMode::Sorted,
+        true,
+    )?);
+
+    // Filter: row_number@2 <= 3, with an embedded projection that keeps
+    // only [pk, val] (drops the row_number column) — the shape produced
+    // by filter/projection pushdown when downstream doesn't need the
+    // window column.
+    let rn_col = Arc::new(Column::new("row_number", 2));
+    let limit_lit = lit(ScalarValue::UInt64(Some(3)));
+    let predicate = Arc::new(BinaryExpr::new(rn_col, Operator::LtEq, limit_lit));
+    let filter: Arc<dyn ExecutionPlan> = Arc::new(
+        FilterExecBuilder::new(predicate, window)
+            .apply_projection(Some(vec![0, 1]))?
+            .build()?,
+    );
+
+    let optimized = optimize(filter)?;
+    assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+    ProjectionExec: expr=[pk@0 as pk, val@1 as val]
+      BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+        PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC]
+          PlaceholderRowExec
+    "#);
     Ok(())
 }

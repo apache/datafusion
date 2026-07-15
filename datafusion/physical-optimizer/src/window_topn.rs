@@ -56,6 +56,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_plan::ExecutionPlan;
@@ -132,10 +133,14 @@ impl WindowTopN {
         // Step 1: Match FilterExec at the top
         let filter = plan.downcast_ref::<FilterExec>()?;
 
-        // Don't handle filters with projections
-        if filter.projection().is_some() {
-            return None;
-        }
+        // A projection embedded in the FilterExec (from an earlier
+        // filter/projection pushdown pass) is captured here and re-applied
+        // via a wrapping ProjectionExec at the end so the rewrite preserves
+        // the original output schema.
+        let filter_projection: Option<Vec<usize>> = filter
+            .projection()
+            .as_ref()
+            .map(|p| p.iter().copied().collect());
 
         // Step 2: Extract limit from predicate (rn <= K, rn < K, etc.)
         let (col_idx, limit_n) = extract_window_limit(filter.predicate())?;
@@ -195,12 +200,40 @@ impl WindowTopN {
             .ok()?;
 
         // Step 9: If ProjectionExec was between Filter and Window, rebuild it
-        let result = match proj_between {
+        let mut result = match proj_between {
             Some(proj) => Arc::clone(&child_as_arc(proj))
                 .with_new_children(vec![new_window])
                 .ok()?,
             None => new_window,
         };
+
+        // Step 10: Re-apply the FilterExec's embedded projection (if any)
+        // as an outer ProjectionExec. The projection indices refer to
+        // columns in `filter.input().schema()`, which equals `result`'s
+        // schema at this point (Steps 8-9 preserve schema), so the
+        // indices remain valid.
+        if let Some(indices) = filter_projection {
+            let input_schema = result.schema();
+            let field_count = input_schema.fields().len();
+            // Validate before indexing: an out-of-range index would panic
+            // in `input_schema.field(idx)`. Bail out of the rewrite instead
+            // so a malformed FilterExec projection can never crash the
+            // optimizer.
+            if indices.iter().any(|&idx| idx >= field_count) {
+                return None;
+            }
+            let projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = indices
+                .iter()
+                .map(|&idx| {
+                    let field = input_schema.field(idx);
+                    (
+                        Arc::new(Column::new(field.name(), idx)) as Arc<dyn PhysicalExpr>,
+                        field.name().clone(),
+                    )
+                })
+                .collect();
+            result = Arc::new(ProjectionExec::try_new(projection_exprs, result).ok()?);
+        }
 
         Some(result)
     }
@@ -264,9 +297,7 @@ impl PhysicalOptimizerRule for WindowTopN {
 /// - `10 >= rn` → `Some((2, 10))`
 /// - `rn = 1` → `None` (equality not supported)
 /// - `val <= 5` → `Some((1, 5))` (caller must verify it's a window column)
-fn extract_window_limit(
-    predicate: &Arc<dyn datafusion_physical_expr::PhysicalExpr>,
-) -> Option<(usize, usize)> {
+fn extract_window_limit(predicate: &Arc<dyn PhysicalExpr>) -> Option<(usize, usize)> {
     let binary = predicate.downcast_ref::<BinaryExpr>()?;
     let op = binary.op();
     let left = binary.left();
