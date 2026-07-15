@@ -50,6 +50,16 @@ pub(crate) fn try_as_scalar_i64(cv: &ColumnarValue) -> Option<i64> {
     }
 }
 
+/// Estimates data capacity for `pad` based on `length_array` with row length.
+/// For ASCII, one row is at most `target_len` bytes.
+/// For UTF8, it could be larger
+pub(crate) fn pad_data_capacity(length_array: &Int64Array) -> usize {
+    length_array
+        .iter()
+        .flatten()
+        .fold(0, |acc, len| acc.saturating_add(len as usize))
+}
+
 /// A trait for `left` and `right` byte slicing operations
 pub(crate) trait LeftRightSlicer {
     fn slice(string: &str, n: i64) -> Range<usize>;
