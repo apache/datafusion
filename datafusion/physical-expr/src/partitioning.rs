@@ -18,16 +18,25 @@
 //! [`Partitioning`] and [`Distribution`] for `ExecutionPlans`
 
 use crate::{
-    EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
-    expressions::UnKnownColumn, physical_exprs_contains, physical_exprs_equal,
+    EquivalenceProperties, PhysicalExpr, ScalarFunctionExpr,
+    equivalence::ProjectionMapping,
+    expressions::{Literal, UnKnownColumn},
+    physical_exprs_contains, physical_exprs_equal,
 };
+use arrow::array::types::{IntervalDayTimeType, IntervalMonthDayNanoType};
+use arrow::datatypes::DataType;
 pub use datafusion_common::SplitPoint;
-use datafusion_common::{Result, validate_range_split_points};
+use datafusion_common::{Result, ScalarValue, validate_range_split_points};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
+
+const NANOS_PER_MICRO: i64 = 1_000;
+const NANOS_PER_MILLI: i64 = 1_000_000;
+const NANOS_PER_SECOND: i64 = 1_000_000_000;
+const NANOS_PER_DAY: i128 = 86_400_000_000_000;
 
 /// Output partitioning supported by [`ExecutionPlan`]s.
 ///
@@ -260,23 +269,248 @@ impl RangePartitioning {
             .collect::<Vec<_>>();
         let projected_exprs = input_eq_properties
             .project_expressions(&exprs, mapping)
-            .collect::<Option<Vec<_>>>()?;
-        let sort_exprs = self
-            .ordering
-            .iter()
-            .zip(projected_exprs)
-            .map(|(sort_expr, expr)| PhysicalSortExpr::new(expr, sort_expr.options))
-            .collect::<Vec<_>>();
-        let ordering = LexOrdering::new(sort_exprs)?;
-        if ordering.len() != self.ordering.len() {
+            .collect::<Option<Vec<_>>>();
+
+        if let Some(projected_exprs) = projected_exprs {
+            let sort_exprs = self
+                .ordering
+                .iter()
+                .zip(projected_exprs)
+                .map(|(sort_expr, expr)| PhysicalSortExpr::new(expr, sort_expr.options))
+                .collect::<Vec<_>>();
+            let ordering = LexOrdering::new(sort_exprs)?;
+            if ordering.len() != self.ordering.len() {
+                return None;
+            }
+
+            return Some(Self {
+                ordering,
+                split_points: self.split_points.clone(),
+            });
+        }
+
+        self.project_date_bin(mapping, input_eq_properties)
+    }
+
+    fn project_date_bin(
+        &self,
+        mapping: &ProjectionMapping,
+        input_eq_properties: &EquivalenceProperties,
+    ) -> Option<Self> {
+        let leading_sort_expr = self.ordering.first();
+        let leading_expr = &leading_sort_expr.expr;
+
+        for (source_expr, targets) in mapping.iter() {
+            let Some(date_bin) = DateBinPartitionExpr::try_new(source_expr) else {
+                continue;
+            };
+            if !exprs_equivalent(leading_expr, &date_bin.source_expr, input_eq_properties)
+            {
+                continue;
+            }
+
+            let split_points =
+                date_bin_projected_split_points(self, &date_bin, input_eq_properties)?;
+            let (target_expr, _) = targets.first();
+            let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+                Arc::clone(target_expr),
+                leading_sort_expr.options,
+            )])?;
+
+            return RangePartitioning::try_new(ordering, split_points).ok();
+        }
+
+        None
+    }
+}
+
+struct DateBinPartitionExpr {
+    source_expr: Arc<dyn PhysicalExpr>,
+    stride_nanos: i64,
+    origin_nanos: i64,
+}
+
+impl DateBinPartitionExpr {
+    fn try_new(expr: &Arc<dyn PhysicalExpr>) -> Option<Self> {
+        let func = expr.downcast_ref::<ScalarFunctionExpr>()?;
+        if func.name() != "date_bin" {
             return None;
         }
 
+        let args = func.args();
+        if !(2..=3).contains(&args.len()) {
+            return None;
+        }
+
+        let stride_nanos = literal_value(&args[0]).and_then(stride_to_nanos)?;
+        if stride_nanos <= 0 {
+            return None;
+        }
+
+        let origin_nanos = if args.len() == 3 {
+            literal_value(&args[2]).and_then(timestamp_to_nanos)?
+        } else {
+            0
+        };
+
         Some(Self {
-            ordering,
-            split_points: self.split_points.clone(),
+            source_expr: Arc::clone(&args[1]),
+            stride_nanos,
+            origin_nanos,
         })
     }
+
+    fn project_boundary(&self, value: &ScalarValue) -> Option<ScalarValue> {
+        let binned = date_bin_timestamp(value, self.stride_nanos, self.origin_nanos)?;
+        (binned == *value).then_some(binned)
+    }
+}
+
+fn literal_value(expr: &Arc<dyn PhysicalExpr>) -> Option<&ScalarValue> {
+    expr.downcast_ref::<Literal>().map(Literal::value)
+}
+
+fn stride_to_nanos(value: &ScalarValue) -> Option<i64> {
+    let nanos = match value {
+        ScalarValue::IntervalDayTime(Some(value)) => {
+            let (days, millis) = IntervalDayTimeType::to_parts(*value);
+            i128::from(days) * NANOS_PER_DAY
+                + i128::from(millis) * i128::from(NANOS_PER_MILLI)
+        }
+        ScalarValue::IntervalMonthDayNano(Some(value)) => {
+            let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(*value);
+            if months != 0 {
+                return None;
+            }
+            i128::from(days) * NANOS_PER_DAY + i128::from(nanos)
+        }
+        _ => return None,
+    };
+
+    i64::try_from(nanos).ok()
+}
+
+fn timestamp_to_nanos(value: &ScalarValue) -> Option<i64> {
+    match value {
+        ScalarValue::TimestampSecond(Some(value), _) => {
+            value.checked_mul(NANOS_PER_SECOND)
+        }
+        ScalarValue::TimestampMillisecond(Some(value), _) => {
+            value.checked_mul(NANOS_PER_MILLI)
+        }
+        ScalarValue::TimestampMicrosecond(Some(value), _) => {
+            value.checked_mul(NANOS_PER_MICRO)
+        }
+        ScalarValue::TimestampNanosecond(Some(value), _) => Some(*value),
+        _ => None,
+    }
+}
+
+fn date_bin_timestamp(
+    value: &ScalarValue,
+    stride_nanos: i64,
+    origin_nanos: i64,
+) -> Option<ScalarValue> {
+    let source_nanos = timestamp_to_nanos(value)?;
+    let binned_nanos = date_bin_nanos(stride_nanos, source_nanos, origin_nanos)?;
+
+    match value {
+        ScalarValue::TimestampSecond(_, timezone) => Some(ScalarValue::TimestampSecond(
+            Some(binned_nanos / NANOS_PER_SECOND),
+            timezone.clone(),
+        )),
+        ScalarValue::TimestampMillisecond(_, timezone) => {
+            Some(ScalarValue::TimestampMillisecond(
+                Some(binned_nanos / NANOS_PER_MILLI),
+                timezone.clone(),
+            ))
+        }
+        ScalarValue::TimestampMicrosecond(_, timezone) => {
+            Some(ScalarValue::TimestampMicrosecond(
+                Some(binned_nanos / NANOS_PER_MICRO),
+                timezone.clone(),
+            ))
+        }
+        ScalarValue::TimestampNanosecond(_, timezone) => Some(
+            ScalarValue::TimestampNanosecond(Some(binned_nanos), timezone.clone()),
+        ),
+        _ => None,
+    }
+}
+
+fn date_bin_nanos(stride: i64, source: i64, origin: i64) -> Option<i64> {
+    if stride <= 0 {
+        return None;
+    }
+
+    let time_diff = source.checked_sub(origin)?;
+    let remainder = time_diff.checked_rem(stride)?;
+    let time_delta = time_diff.checked_sub(remainder)?;
+    let time_delta = if time_diff < 0 && stride > 1 && time_delta != time_diff {
+        time_delta.checked_sub(stride)?
+    } else {
+        time_delta
+    };
+
+    origin.checked_add(time_delta)
+}
+
+fn date_bin_projected_split_points(
+    range: &RangePartitioning,
+    date_bin: &DateBinPartitionExpr,
+    eq_properties: &EquivalenceProperties,
+) -> Option<Vec<SplitPoint>> {
+    let schema = eq_properties.schema();
+    let ordering = range.ordering();
+    let leading_sort_expr = ordering.first();
+    if leading_sort_expr.options.descending
+        || leading_sort_expr
+            .expr
+            .nullable(schema.as_ref())
+            .ok()
+            .unwrap_or(true)
+    {
+        return None;
+    }
+
+    let leading_type = leading_sort_expr.expr.data_type(schema.as_ref()).ok()?;
+    if !matches!(leading_type, DataType::Timestamp(_, _)) {
+        return None;
+    }
+
+    let trailing_min_values = ordering
+        .iter()
+        .skip(1)
+        .map(|sort_expr| {
+            if sort_expr.options.descending
+                || sort_expr
+                    .expr
+                    .nullable(schema.as_ref())
+                    .ok()
+                    .unwrap_or(true)
+            {
+                return None;
+            }
+            let data_type = sort_expr.expr.data_type(schema.as_ref()).ok()?;
+            ScalarValue::min(&data_type)
+        })
+        .collect::<Option<Vec<_>>>()?;
+
+    range
+        .split_points()
+        .iter()
+        .map(|split_point| {
+            let values = split_point.values();
+            let first = values.first()?;
+            let projected = date_bin.project_boundary(first)?;
+            for (value, min_value) in values.iter().skip(1).zip(&trailing_min_values) {
+                if value != min_value {
+                    return None;
+                }
+            }
+            Some(SplitPoint::new(vec![projected]))
+        })
+        .collect()
 }
 
 impl Display for RangePartitioning {
@@ -320,6 +554,18 @@ fn equivalent_exprs(
     physical_exprs_equal(&normalized_left, &normalized_right)
 }
 
+fn exprs_equivalent(
+    left: &Arc<dyn PhysicalExpr>,
+    right: &Arc<dyn PhysicalExpr>,
+    eq_properties: &EquivalenceProperties,
+) -> bool {
+    equivalent_exprs(
+        std::slice::from_ref(left),
+        std::slice::from_ref(right),
+        eq_properties,
+    )
+}
+
 fn normalize_exprs(
     exprs: &[Arc<dyn PhysicalExpr>],
     eq_properties: &EquivalenceProperties,
@@ -329,6 +575,84 @@ fn normalize_exprs(
         .iter()
         .map(|expr| eq_groups.normalize_expr(Arc::clone(expr)))
         .collect()
+}
+
+/// Returns how [`Partitioning::Range`] satisfies a key partitioning
+/// requirement.
+///
+/// This is intentionally separate from [`Partitioning::satisfaction`] while
+/// range reuse is rolled out operator by operator. In addition to exact and
+/// subset expression checks, this recognizes `date_bin` keys when all range
+/// split points are aligned to the bin boundaries.
+pub fn range_partitioning_satisfaction_for_key_partitioning(
+    partitioning: &Partitioning,
+    required_exprs: &[Arc<dyn PhysicalExpr>],
+    eq_properties: &EquivalenceProperties,
+    allow_subset: bool,
+) -> PartitioningSatisfaction {
+    let Partitioning::Range(range) = partitioning else {
+        return PartitioningSatisfaction::NotSatisfied;
+    };
+
+    let partition_exprs = range
+        .ordering()
+        .iter()
+        .map(|sort_expr| Arc::clone(&sort_expr.expr))
+        .collect::<Vec<_>>();
+
+    if partition_exprs.is_empty() || required_exprs.is_empty() {
+        return PartitioningSatisfaction::NotSatisfied;
+    }
+
+    let normalized_partition_exprs = normalize_exprs(&partition_exprs, eq_properties);
+    let normalized_required_exprs = normalize_exprs(required_exprs, eq_properties);
+
+    if physical_exprs_equal(&normalized_required_exprs, &normalized_partition_exprs) {
+        return PartitioningSatisfaction::Exact;
+    }
+
+    if allow_subset
+        && normalized_partition_exprs.len() < normalized_required_exprs.len()
+        && normalized_partition_exprs.iter().all(|partition_expr| {
+            normalized_required_exprs
+                .iter()
+                .any(|required_expr| partition_expr.eq(required_expr))
+        })
+    {
+        return PartitioningSatisfaction::Subset;
+    }
+
+    range_date_bin_satisfaction(range, required_exprs, eq_properties, allow_subset)
+        .unwrap_or(PartitioningSatisfaction::NotSatisfied)
+}
+
+fn range_date_bin_satisfaction(
+    range: &RangePartitioning,
+    required_exprs: &[Arc<dyn PhysicalExpr>],
+    eq_properties: &EquivalenceProperties,
+    allow_subset: bool,
+) -> Option<PartitioningSatisfaction> {
+    let leading_expr = &range.ordering().first().expr;
+
+    for required_expr in required_exprs {
+        let Some(date_bin) = DateBinPartitionExpr::try_new(required_expr) else {
+            continue;
+        };
+        if !exprs_equivalent(leading_expr, &date_bin.source_expr, eq_properties) {
+            continue;
+        }
+        date_bin_projected_split_points(range, &date_bin, eq_properties)?;
+
+        return if required_exprs.len() == 1 {
+            Some(PartitioningSatisfaction::Exact)
+        } else if allow_subset {
+            Some(PartitioningSatisfaction::Subset)
+        } else {
+            Some(PartitioningSatisfaction::NotSatisfied)
+        };
+    }
+
+    None
 }
 
 /// Represents how a [`Partitioning`] satisfies a [`Distribution`] requirement.
@@ -572,9 +896,12 @@ mod tests {
     use crate::expressions::Column;
     use crate::projection::ProjectionTargets;
 
+    use arrow::array::types::IntervalMonthDayNanoType;
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
+    use datafusion_functions::datetime::date_bin;
 
     struct PartitioningTestFixture {
         schema: SchemaRef,
@@ -1095,6 +1422,181 @@ mod tests {
                 .map(|value| ScalarValue::Int64(Some(value)))
                 .collect(),
         )
+    }
+
+    fn timestamp_fixture() -> Result<PartitioningTestFixture> {
+        PartitioningTestFixture::new(vec![(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])
+    }
+
+    fn timestamp_a_fixture() -> Result<PartitioningTestFixture> {
+        PartitioningTestFixture::new(vec![
+            ("ts", DataType::Timestamp(TimeUnit::Nanosecond, None)),
+            ("a", DataType::Int32),
+        ])
+    }
+
+    fn timestamp_split_point(value: i64) -> SplitPoint {
+        SplitPoint::new(vec![ScalarValue::TimestampNanosecond(Some(value), None)])
+    }
+
+    fn timestamp_a_split_point(timestamp: i64, a: i32) -> SplitPoint {
+        SplitPoint::new(vec![
+            ScalarValue::TimestampNanosecond(Some(timestamp), None),
+            ScalarValue::Int32(Some(a)),
+        ])
+    }
+
+    fn date_bin_hour_expr(
+        fixture: &PartitioningTestFixture,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let stride = Arc::new(Literal::new(ScalarValue::IntervalMonthDayNano(Some(
+            IntervalMonthDayNanoType::make_value(0, 0, 3_600_000_000_000),
+        )))) as Arc<dyn PhysicalExpr>;
+        Ok(Arc::new(ScalarFunctionExpr::try_new(
+            date_bin(),
+            vec![stride, fixture.col(0)],
+            &fixture.schema,
+            Arc::new(ConfigOptions::new()),
+        )?))
+    }
+
+    #[test]
+    fn test_range_partitioning_satisfies_aligned_date_bin() -> Result<()> {
+        let fixture = timestamp_fixture()?;
+        let date_bin = date_bin_hour_expr(&fixture)?;
+        let partitioning = fixture.range_partitioning(
+            [0],
+            vec![
+                timestamp_split_point(1_704_070_800_000_000_000),
+                timestamp_split_point(1_704_074_400_000_000_000),
+            ],
+        );
+
+        assert_eq!(
+            range_partitioning_satisfaction_for_key_partitioning(
+                &partitioning,
+                &[Arc::clone(&date_bin)],
+                &fixture.eq_properties,
+                false,
+            ),
+            PartitioningSatisfaction::Exact
+        );
+        assert_eq!(
+            range_partitioning_satisfaction_for_key_partitioning(
+                &partitioning,
+                &[date_bin],
+                &fixture.eq_properties,
+                true,
+            ),
+            PartitioningSatisfaction::Exact
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_does_not_satisfy_crossing_date_bin() -> Result<()> {
+        let fixture = timestamp_fixture()?;
+        let date_bin = date_bin_hour_expr(&fixture)?;
+        let partitioning = fixture.range_partitioning(
+            [0],
+            vec![
+                timestamp_split_point(1_704_069_000_000_000_000),
+                timestamp_split_point(1_704_072_600_000_000_000),
+            ],
+        );
+
+        assert_eq!(
+            range_partitioning_satisfaction_for_key_partitioning(
+                &partitioning,
+                &[date_bin],
+                &fixture.eq_properties,
+                true,
+            ),
+            PartitioningSatisfaction::NotSatisfied
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hierarchical_range_partitioning_satisfies_aligned_date_bin_subset()
+    -> Result<()> {
+        let fixture = timestamp_a_fixture()?;
+        let date_bin = date_bin_hour_expr(&fixture)?;
+        let required_exprs = vec![fixture.col(1), Arc::clone(&date_bin)];
+        let partitioning = fixture.range_partitioning(
+            [0, 1],
+            vec![
+                timestamp_a_split_point(1_704_070_800_000_000_000, i32::MIN),
+                timestamp_a_split_point(1_704_074_400_000_000_000, i32::MIN),
+            ],
+        );
+
+        assert_eq!(
+            range_partitioning_satisfaction_for_key_partitioning(
+                &partitioning,
+                &required_exprs,
+                &fixture.eq_properties,
+                true,
+            ),
+            PartitioningSatisfaction::Subset
+        );
+        assert_eq!(
+            range_partitioning_satisfaction_for_key_partitioning(
+                &partitioning,
+                &required_exprs,
+                &fixture.eq_properties,
+                false,
+            ),
+            PartitioningSatisfaction::NotSatisfied
+        );
+
+        let mapping = ProjectionMapping::try_new(
+            vec![
+                (fixture.col(1), "a".to_string()),
+                (date_bin, "bucket".to_string()),
+            ],
+            &fixture.schema,
+        )?;
+        assert_eq!(
+            partitioning
+                .project(&mapping, &fixture.eq_properties)
+                .to_string(),
+            "Range([bucket@1 ASC], [(1704070800000000000), (1704074400000000000)], 3)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hierarchical_range_partitioning_rejects_non_boundary_trailing_key()
+    -> Result<()> {
+        let fixture = timestamp_a_fixture()?;
+        let date_bin = date_bin_hour_expr(&fixture)?;
+        let required_exprs = vec![fixture.col(1), date_bin];
+        let partitioning = fixture.range_partitioning(
+            [0, 1],
+            vec![
+                timestamp_a_split_point(1_704_070_800_000_000_000, 0),
+                timestamp_a_split_point(1_704_074_400_000_000_000, i32::MIN),
+            ],
+        );
+
+        assert_eq!(
+            range_partitioning_satisfaction_for_key_partitioning(
+                &partitioning,
+                &required_exprs,
+                &fixture.eq_properties,
+                true,
+            ),
+            PartitioningSatisfaction::NotSatisfied
+        );
+
+        Ok(())
     }
 
     fn assert_range_try_new_error(

@@ -22,6 +22,14 @@
 # partition 1: range_key in [10, 20), rows (10, 1, 100), (15, 2, 150)
 # partition 2: range_key in [20, 30), rows (20, 1, 200), (25, 2, 250)
 # partition 3: range_key in [30, ...), rows (30, 1, 300), (35, 2, 350)
+#
+# It also registers range_partitioned_time(ts, value), split at half-hour
+# boundaries. This makes hourly date_bin buckets cross range partitions.
+#
+# It also registers range_partitioned_time_a_crossing(ts, a, value) and
+# range_partitioned_time_a_aligned(ts, a, value), both range partitioned by
+# (ts, a). The first uses half-hour timestamp boundaries and the second uses
+# hourly timestamp boundaries.
 
 statement ok
 set datafusion.explain.physical_plan_only = true;
@@ -259,6 +267,119 @@ set datafusion.execution.target_partitions = 4;
 
 statement ok
 reset datafusion.optimizer.preserve_file_partitions;
+
+##########
+# TEST 8A: Date Bin Aggregate Repartitions Range Partitioned Timestamps
+# Range([ts]) cannot satisfy GROUP BY date_bin('1 hour', ts) because the raw
+# timestamp range boundaries are not aligned with the hourly bucket boundaries.
+##########
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 4;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 0;
+
+query TT
+EXPLAIN SELECT
+  date_bin(INTERVAL '1 hour', ts) AS bucket,
+  SUM(value)
+FROM range_partitioned_time
+GROUP BY date_bin(INTERVAL '1 hour', ts);
+----
+physical_plan
+01)ProjectionExec: expr=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }"),range_partitioned_time.ts)@0 as bucket, sum(range_partitioned_time.value)@1 as sum(range_partitioned_time.value)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }"),range_partitioned_time.ts)@0 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }"),range_partitioned_time.ts)], aggr=[sum(range_partitioned_time.value)]
+03)----RepartitionExec: partitioning=Hash([date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }"),range_partitioned_time.ts)@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }, ts@0) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }"),range_partitioned_time.ts)], aggr=[sum(range_partitioned_time.value)]
+05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[ts, value], output_partitioning=Range([ts@0 ASC], [(1704069000000000000), (1704072600000000000), (1704076200000000000)], 4), file_type=csv, has_header=false
+
+query PI
+SELECT
+  date_bin(INTERVAL '1 hour', ts) AS bucket,
+  SUM(value)
+FROM range_partitioned_time
+GROUP BY date_bin(INTERVAL '1 hour', ts)
+ORDER BY bucket;
+----
+2024-01-01T00:00:00 3
+2024-01-01T01:00:00 12
+2024-01-01T02:00:00 48
+
+##########
+# TEST 8B: Hierarchical Date Bin Aggregate Repartitions When Buckets Cross Ranges
+# Range([ts, a]) cannot satisfy GROUP BY a, date_bin('1 hour', ts) when
+# timestamp range boundaries split hourly buckets.
+##########
+
+query TT
+EXPLAIN SELECT
+  a,
+  date_bin(INTERVAL '1 hour', ts) AS bucket,
+  SUM(value)
+FROM range_partitioned_time_a_crossing
+GROUP BY a, date_bin(INTERVAL '1 hour', ts);
+----
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }"),range_partitioned_time_a_crossing.ts)@1 as bucket, sum(range_partitioned_time_a_crossing.value)@2 as sum(range_partitioned_time_a_crossing.value)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }"),range_partitioned_time_a_crossing.ts)@1 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }"),range_partitioned_time_a_crossing.ts)], aggr=[sum(range_partitioned_time_a_crossing.value)]
+03)----RepartitionExec: partitioning=Hash([a@0, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }"),range_partitioned_time_a_crossing.ts)@1], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[a@1 as a, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }, ts@0) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }"),range_partitioned_time_a_crossing.ts)], aggr=[sum(range_partitioned_time_a_crossing.value)]
+05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[ts, a, value], output_partitioning=Range([ts@0 ASC, a@1 ASC], [(1704069000000000000, -2147483648), (1704072600000000000, -2147483648), (1704076200000000000, -2147483648)], 4), file_type=csv, has_header=false
+
+query IPI
+SELECT
+  a,
+  date_bin(INTERVAL '1 hour', ts) AS bucket,
+  SUM(value)
+FROM range_partitioned_time_a_crossing
+GROUP BY a, date_bin(INTERVAL '1 hour', ts)
+ORDER BY a, bucket;
+----
+1 2024-01-01T00:00:00 3
+1 2024-01-01T01:00:00 12
+1 2024-01-01T02:00:00 48
+1 2024-01-01T03:00:00 64
+2 2024-01-01T00:00:00 10
+2 2024-01-01T01:00:00 20
+
+##########
+# TEST 8C: Hierarchical Date Bin Aggregate Reuses Aligned Range Partitioning
+# Range([ts, a]) satisfies GROUP BY a, date_bin('1 hour', ts) when every
+# timestamp range boundary is an hourly date_bin boundary.
+##########
+
+query TT
+EXPLAIN SELECT
+  a,
+  date_bin(INTERVAL '1 hour', ts) AS bucket,
+  SUM(value)
+FROM range_partitioned_time_a_aligned
+GROUP BY a, date_bin(INTERVAL '1 hour', ts);
+----
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }"),range_partitioned_time_a_aligned.ts)@1 as bucket, sum(range_partitioned_time_a_aligned.value)@2 as sum(range_partitioned_time_a_aligned.value)]
+02)--AggregateExec: mode=SinglePartitioned, gby=[a@1 as a, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }, ts@0) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 3600000000000 }"),range_partitioned_time_a_aligned.ts)], aggr=[sum(range_partitioned_time_a_aligned.value)]
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[ts, a, value], output_partitioning=Range([ts@0 ASC, a@1 ASC], [(1704070800000000000, -2147483648), (1704074400000000000, -2147483648), (1704078000000000000, -2147483648)], 4), file_type=csv, has_header=false
+
+query IPI
+SELECT
+  a,
+  date_bin(INTERVAL '1 hour', ts) AS bucket,
+  SUM(value)
+FROM range_partitioned_time_a_aligned
+GROUP BY a, date_bin(INTERVAL '1 hour', ts)
+ORDER BY a, bucket;
+----
+1 2024-01-01T00:00:00 3
+1 2024-01-01T01:00:00 12
+1 2024-01-01T02:00:00 48
+1 2024-01-01T03:00:00 64
+2 2024-01-01T00:00:00 10
+2 2024-01-01T01:00:00 20
 
 statement ok
 set datafusion.optimizer.prefer_hash_join = true;
