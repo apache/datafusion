@@ -506,9 +506,8 @@ set datafusion.optimizer.preserve_file_partitions = 0;
 
 ##########
 # TEST 15: Nested Range Joins
-# Compatible Range partitioning satisfies the lower join inputs. The upper join
-# still repairs the intermediate join output with Hash repartitioning because
-# HashJoinExec does not currently expose Range output partitioning.
+# Compatible Range partitioning is preserved through the lower join, allowing
+# the upper join to consume it without Hash repartitioning either input.
 ##########
 
 query TT
@@ -519,12 +518,10 @@ JOIN range_partitioned s ON r.range_key = s.range_key;
 ----
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@2, range_key@0)], projection=[range_key@0, value@1, value@3, value@5]
-02)--RepartitionExec: partitioning=Hash([range_key@2], 4), input_partitions=4
-03)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)]
-04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
-05)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
-06)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-07)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)]
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+05)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
 query IIII
 SELECT l.range_key, l.value, r.value, s.value
@@ -599,9 +596,8 @@ ORDER BY l.range_key;
 
 ##########
 # TEST 17: Range Join Feeds Aggregate
-# The join inputs avoid Hash repartitioning, but the aggregate above the join
-# still repartitions because HashJoinExec does not currently expose Range
-# output partitioning.
+# The join preserves compatible Range partitioning on range_key, allowing the
+# aggregate above it to avoid Hash repartitioning.
 ##########
 
 query TT
@@ -611,12 +607,10 @@ JOIN range_partitioned r ON l.range_key = r.range_key
 GROUP BY l.range_key;
 ----
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[range_key@0 as range_key], aggr=[sum(l.value + r.value)]
-02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-03)----AggregateExec: mode=Partial, gby=[range_key@0 as range_key], aggr=[sum(l.value + r.value)]
-04)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
-05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
-06)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+01)AggregateExec: mode=SinglePartitioned, gby=[range_key@0 as range_key], aggr=[sum(l.value + r.value)]
+02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
 query II
 SELECT l.range_key, SUM(l.value + r.value)
