@@ -1370,6 +1370,96 @@ where t1_id > 40 or not exists (select 1 from t2 where t2.t2_int > t1.t1_int)
 33
 44
 
+##########
+# Regression for https://github.com/apache/datafusion/issues/23010:
+# a projection that selects / reorders a subset of columns over a mark join.
+# Schema-aware projection pushdown (driven by ColumnIndex / JoinSide) must keep
+# the synthetic `mark` column (JoinSide::None) at the join output while pushing
+# the child columns down. These lock the query results (which must stay stable
+# across the refactor) and the current plan shape (the physical plan is expected
+# to change once child pushdown is enabled for mark joins). Cover hash LeftMark,
+# negated mark, and nested-loop mark.
+##########
+
+query TT
+EXPLAIN SELECT t1_name, t1_id FROM t1
+WHERE t1_id > 40 OR t1_id IN (SELECT t2_id FROM t2 WHERE t1_int > 0)
+----
+logical_plan
+01)Projection: t1.t1_name, t1.t1_id
+02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_1.mark
+03)----Projection: t1.t1_id, t1.t1_name, __correlated_sq_1.mark
+04)------LeftMark Join: t1.t1_id = __correlated_sq_1.t2_id Filter: t1.t1_int > Int32(0)
+05)--------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------TableScan: t2 projection=[t2_id]
+physical_plan
+01)FilterExec: t1_id@0 > 40 OR mark@2, projection=[t1_name@1, t1_id@0]
+02)--HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(t2_id@0, t1_id@0)], filter=t1_int@0 > 0, projection=[t1_id@0, t1_name@1, mark@3]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)------DataSourceExec: partitions=1, partition_sizes=[2]
+
+query TI rowsort
+SELECT t1_name, t1_id FROM t1
+WHERE t1_id > 40 OR t1_id IN (SELECT t2_id FROM t2 WHERE t1_int > 0)
+----
+a 11
+b 22
+d 44
+
+query TT
+EXPLAIN SELECT t1_int, t1_name FROM t1
+WHERE t1_id < 20 OR NOT EXISTS (SELECT 1 FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+logical_plan
+01)Projection: t1.t1_int, t1.t1_name
+02)--Filter: t1.t1_id < Int32(20) OR NOT __correlated_sq_1.mark
+03)----LeftMark Join: t1.t1_id = __correlated_sq_1.t2_id
+04)------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------TableScan: t2 projection=[t2_id]
+physical_plan
+01)FilterExec: t1_id@0 < 20 OR NOT mark@3, projection=[t1_int@2, t1_name@1]
+02)--HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(t2_id@0, t1_id@0)]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)------DataSourceExec: partitions=1, partition_sizes=[2]
+
+query IT rowsort
+SELECT t1_int, t1_name FROM t1
+WHERE t1_id < 20 OR NOT EXISTS (SELECT 1 FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+1 a
+3 c
+
+query TT
+EXPLAIN SELECT t1_name FROM t1
+WHERE t1_id > 40 OR EXISTS (SELECT 1 FROM t2 WHERE t1.t1_int > t2.t2_int)
+----
+logical_plan
+01)Projection: t1.t1_name
+02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_1.mark
+03)----Projection: t1.t1_id, t1.t1_name, __correlated_sq_1.mark
+04)------LeftMark Join:  Filter: t1.t1_int > __correlated_sq_1.t2_int
+05)--------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------TableScan: t2 projection=[t2_int]
+physical_plan
+01)FilterExec: t1_id@0 > 40 OR mark@2, projection=[t1_name@1]
+02)--NestedLoopJoinExec: join_type=RightMark, filter=t1_int@0 > t2_int@1, projection=[t1_id@0, t1_name@1, mark@3]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)------DataSourceExec: partitions=1, partition_sizes=[2]
+
+query T rowsort
+SELECT t1_name FROM t1
+WHERE t1_id > 40 OR EXISTS (SELECT 1 FROM t2 WHERE t1.t1_int > t2.t2_int)
+----
+b
+c
+d
+
 statement ok
 set datafusion.explain.logical_plan_only = true;
 
