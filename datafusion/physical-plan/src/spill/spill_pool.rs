@@ -1281,7 +1281,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_concurrent_writers() -> Result<()> {
-        let (writer, mut reader) = create_spill_channel(1024 * 1024);
+        let (writer, mut reader) = create_shared_spill_channel(1024 * 1024);
 
         // Spawn writer tasks
         let mut writer_join_set = JoinSet::new();
