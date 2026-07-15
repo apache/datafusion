@@ -87,14 +87,10 @@ pub trait CursorValues: Debug + Sync + Send {
 /// │                       │
 /// │     CursorValues      │
 /// └───────────────────────┘
+/// ```
 ///
-///
-/// Store logical rows using
-/// one of several  formats,
-/// with specialized
-/// implementations
-/// depending on the column
-/// types
+/// Store logical rows using one of several  formats, with specialized
+/// implementations depending on the column types
 #[derive(Debug)]
 pub struct Cursor<T: CursorValues> {
     offset: usize,
