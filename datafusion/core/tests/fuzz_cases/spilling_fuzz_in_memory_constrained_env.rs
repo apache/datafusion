@@ -385,9 +385,6 @@ async fn run_sort_preserving_merge_peak_memory_with_spilled_input(
         while let Some(batch) = stream.next().await {
             ipc_batches.push(batch?);
         }
-        if stream_idx == 0 {
-            use datafusion_physical_plan::spill::get_record_batch_memory_size;
-        }
         partition_batches.push(ipc_batches);
     }
 
