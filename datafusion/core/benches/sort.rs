@@ -834,9 +834,10 @@ where
 
 fn create_single_partition<T, F>(input: Vec<T>, f: F) -> Vec<RecordBatch>
 where
+    T: Clone,
     F: Fn(Vec<T>) -> RecordBatch,
 {
-    input.chunks(BATCH_SIZE).map(&f).collect()
+    input.chunks(BATCH_SIZE).map(|x| f(x.to_vec())).collect()
 }
 
 /// Read a duration (seconds, may be fractional) from `var`. panics if set to a value that isn't a number.
