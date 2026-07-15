@@ -91,22 +91,29 @@ impl SpillPoolShared {
     }
 }
 
-/// Writer for a spill pool. Provides coordinated write access.
+/// Multi-producer writer for a spill pool. Provides coordinated write access shared by
+/// multiple concurrent writers.
 ///
-/// Created by [`channel`]. See that function for architecture diagrams and usage examples.
+/// Created by [`shared_channel`]. See that function for architecture diagrams and usage
+/// examples.
 ///
-/// The writer is `Clone`, allowing multiple writers to coordinate on the same pool.
-///
+/// This writer is `Clone`, allowing multiple producers to coordinate on the same pool.
 /// All clones share the same pool of write files and coordinate file rotation.
 /// The writer automatically manages file rotation based on the `max_file_size_bytes`
-/// configured in [`channel`]. When the last writer clone is dropped, it finalizes any open write
-/// files so readers can access all written data.
+/// configured in [`shared_channel`]. When the last writer clone is dropped, it finalizes any
+/// open write files so readers can access all written data.
 ///
-/// When only a single writer exists, the reader will receive batches in the order the writer
-/// writes them (FIFO semantics).
-/// When multiple writers are used this guarantee is dropped. To prevent writers from blocking
-/// each other, concurrent writes by multiple writers may cause new write files to be created.
-pub struct SpillPoolWriter {
+/// # Ordering guarantee
+///
+/// Each individual writer's batches are read back in the order that writer wrote them
+/// (**per-writer FIFO**). When multiple writers are used, no *global* order across writers is
+/// promised: to prevent writers from blocking each other, concurrent writes may create separate
+/// write files that the reader interleaves arbitrarily.
+///
+/// If you need strict end-to-end FIFO (a single writer whose batches are read back in exact
+/// write order), use [`channel`] and [`SpillPoolWriter`] instead — that type is not `Clone`,
+/// so the single-writer invariant is enforced by the compiler.
+pub struct SharedSpillPoolWriter {
     /// Maximum size in bytes before rotating to a new file.
     /// Typically set from configuration `datafusion.execution.max_spill_file_size_bytes`.
     max_file_size_bytes: usize,
@@ -114,7 +121,7 @@ pub struct SpillPoolWriter {
     shared: Arc<Mutex<SpillPoolShared>>,
 }
 
-impl SpillPoolWriter {
+impl SharedSpillPoolWriter {
     /// Spills a batch to the pool, rotating files when necessary.
     ///
     /// If the current file would exceed `max_file_size_bytes` after adding
@@ -238,7 +245,7 @@ impl SpillPoolWriter {
     }
 }
 
-impl Clone for SpillPoolWriter {
+impl Clone for SharedSpillPoolWriter {
     fn clone(&self) -> Self {
         // Increment `remaining_writer_count`. The corresponding decrement is done in the `Drop`
         // implementation.
@@ -250,7 +257,7 @@ impl Clone for SpillPoolWriter {
     }
 }
 
-impl Drop for SpillPoolWriter {
+impl Drop for SharedSpillPoolWriter {
     fn drop(&mut self) {
         let mut shared = self.shared.lock();
 
@@ -293,14 +300,45 @@ impl Drop for SpillPoolWriter {
     }
 }
 
-/// Creates a paired writer and reader for a spill pool with MPSC (multi-producer, single-consumer)
-/// semantics.
+/// Single-producer writer for a spill pool that guarantees strict FIFO ordering.
 ///
-/// This is the recommended way to create a spill pool. The writer is `Clone`, allowing
-/// multiple producers to coordinate writes to the same pool. The reader can consume batches
-/// in FIFO order if a single writer is used. Otherwise the read order is undefined.
-/// The reader can start reading immediately after a writer appends a batch
-/// to the spill file, without waiting for the file to be sealed, while writers continue to
+/// Created by [`channel`]. Unlike [`SharedSpillPoolWriter`], this type is **not** `Clone`, so
+/// exactly one writer can ever exist for the pool. That makes the "single writer" invariant a
+/// compile-time property rather than a runtime convention: the reader is guaranteed to observe
+/// batches in the exact order they were written.
+///
+/// Use this variant whenever downstream correctness depends on preserving order across the spill
+/// boundary — e.g. a `RepartitionExec` with `preserve_order = true`, where each input partition
+/// owns its own pool and its output feeds an order-sensitive merge. Reach for [`shared_channel`]
+/// / [`SharedSpillPoolWriter`] only when several producers must share one pool and the consumer
+/// treats the output as an unordered multiset.
+pub struct SpillPoolWriter {
+    /// The underlying shared writer. Kept private and never cloned, so this pool always has
+    /// exactly one writer.
+    inner: SharedSpillPoolWriter,
+}
+
+impl SpillPoolWriter {
+    /// Spills a batch to the pool, rotating files when necessary.
+    ///
+    /// See [`SharedSpillPoolWriter::push_batch`] for the rotation semantics; the only difference
+    /// is that this writer cannot be cloned, so batches are always read back in write order.
+    pub fn push_batch(&self, batch: &RecordBatch) -> Result<()> {
+        self.inner.push_batch(batch)
+    }
+}
+
+/// Creates a paired writer and reader for a spill pool with SPSC (single-producer,
+/// single-consumer) semantics and strict FIFO ordering.
+///
+/// This is the recommended way to create a spill pool. The returned [`SpillPoolWriter`] is
+/// **not** `Clone`, so exactly one writer exists for the pool and the reader is guaranteed to
+/// consume batches in the exact order they were written. If you instead need several producers
+/// to share one pool, use [`shared_channel`] (which returns a `Clone` [`SharedSpillPoolWriter`]
+/// and only promises per-writer FIFO).
+///
+/// The reader can start reading immediately after the writer appends a batch
+/// to the spill file, without waiting for the file to be sealed, while the writer continues to
 /// write more data.
 ///
 /// Internally this coordinates rotating spill files based on size limits, and
@@ -469,10 +507,29 @@ pub fn channel(
     max_file_size_bytes: usize,
     spill_manager: Arc<SpillManager>,
 ) -> (SpillPoolWriter, SendableRecordBatchStream) {
+    let (inner, reader) = shared_channel(max_file_size_bytes, spill_manager);
+    (SpillPoolWriter { inner }, reader)
+}
+
+/// Creates a paired writer and reader for a spill pool with MPSC (multi-producer,
+/// single-consumer) semantics.
+///
+/// Unlike [`channel`], the returned [`SharedSpillPoolWriter`] is `Clone`, so multiple producers
+/// can push to the same pool concurrently. This relaxes the ordering guarantee to **per-writer
+/// FIFO**: each writer's batches are read back in that writer's write order, but no global order
+/// across writers is promised (see [`SharedSpillPoolWriter`]).
+///
+/// Use this only when the consumer treats the spilled output as an unordered multiset. If
+/// downstream correctness depends on order (e.g. `preserve_order = true`), use [`channel`]
+/// instead so the compiler enforces a single writer.
+pub fn shared_channel(
+    max_file_size_bytes: usize,
+    spill_manager: Arc<SpillManager>,
+) -> (SharedSpillPoolWriter, SendableRecordBatchStream) {
     let schema = Arc::clone(spill_manager.schema());
     let shared = Arc::new(Mutex::new(SpillPoolShared::new(spill_manager)));
 
-    let writer = SpillPoolWriter {
+    let writer = SharedSpillPoolWriter {
         max_file_size_bytes,
         shared: Arc::clone(&shared),
     };
@@ -777,6 +834,17 @@ mod tests {
         let spill_manager = Arc::new(SpillManager::new(env, metrics, schema));
 
         channel(max_file_size, spill_manager)
+    }
+
+    fn create_shared_spill_channel(
+        max_file_size: usize,
+    ) -> (SharedSpillPoolWriter, SendableRecordBatchStream) {
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let schema = create_test_schema();
+        let spill_manager = Arc::new(SpillManager::new(env, metrics, schema));
+
+        shared_channel(max_file_size, spill_manager)
     }
 
     fn create_spill_channel_with_metrics(
@@ -1376,7 +1444,7 @@ mod tests {
 
     /// Verifies that the reader stays alive as long as any writer clone exists.
     ///
-    /// `SpillPoolWriter` is `Clone`, and in non-preserve-order repartitioning
+    /// `SharedSpillPoolWriter` is `Clone`, and in non-preserve-order repartitioning
     /// mode multiple input partition tasks share clones of the same writer.
     /// The reader must not see EOF until **all** clones have been dropped,
     /// even if the queue is temporarily empty between writes from different
@@ -1391,7 +1459,7 @@ mod tests {
     /// 5. EOF is only signalled after writer2 is also dropped.
     #[tokio::test]
     async fn test_clone_drop_does_not_signal_eof_prematurely() -> Result<()> {
-        let (writer1, mut reader) = create_spill_channel(1024 * 1024);
+        let (writer1, mut reader) = create_shared_spill_channel(1024 * 1024);
         let writer2 = writer1.clone();
 
         // Synchronization: tell writer2 when it may proceed.
