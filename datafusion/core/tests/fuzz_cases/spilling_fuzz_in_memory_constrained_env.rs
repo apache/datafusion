@@ -505,13 +505,7 @@ async fn run_sort_preserving_merge_peak_memory_with_spilled_input(
     // BatchBuilder needs to hold 3 Record batches simultaneously to merge two
     // streams (because a stream can cross a record batch boundary)
     // there is also one cursor needed per stream
-    let mut max_peak = 3 * ipc_batch_size + 2 * cursor_unit + converter_size;
-
-    // with round robin enabled, 2 extra cursors live in memory
-    // see https://github.com/apache/datafusion/issues/23604
-    if round_robin {
-        max_peak += 2 * cursor_unit;
-    };
+    let max_peak = 3 * ipc_batch_size + 2 * cursor_unit + converter_size;
 
     assert!(
         peak_bytes <= max_peak,
