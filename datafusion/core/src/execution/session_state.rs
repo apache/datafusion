@@ -445,7 +445,7 @@ impl SessionState {
             )
         })?;
 
-        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+        let recursion_limit = self.config.options().sql_parser.recursion_limit.get();
 
         let mut statements = DFParserBuilder::new(sql)
             .with_dialect(dialect.as_ref())
@@ -493,7 +493,7 @@ impl SessionState {
             )
         })?;
 
-        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+        let recursion_limit = self.config.options().sql_parser.recursion_limit.get();
         let expr = DFParserBuilder::new(sql)
             .with_dialect(dialect.as_ref())
             .with_recursion_limit(recursion_limit)
