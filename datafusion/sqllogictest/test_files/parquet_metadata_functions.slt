@@ -52,5 +52,33 @@ logical_plan
 02)--TableScan: test_table projection=[column1]
 physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/first.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/second.parquet]]}, projection=[input_file_name() as input_file_name(), CAST(__datafusion_file_row_index@1 AS Int64) as file_row_index(), column1], file_type=parquet
 
+
+# Make sure it also behaves consistently regardless of filter pushdown
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = false;
+
+query TII
+SELECT input_file_name(), file_row_index(), column1
+FROM test_table
+WHERE file_row_index() = 2 AND input_file_name() LIKE '%parquet';
+----
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/first.parquet 2 30
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/second.parquet 2 60
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+query TII
+SELECT input_file_name(), file_row_index(), column1
+FROM test_table
+WHERE file_row_index() = 2 AND input_file_name() LIKE '%parquet';
+----
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/first.parquet 2 30
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_functions/second.parquet 2 60
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
+
 statement ok
 DROP TABLE test_table;
