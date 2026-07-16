@@ -23,7 +23,6 @@ use arrow::{
 };
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::not_impl_err;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{JoinSide, Result, internal_err};
 use datafusion_execution::{
     SendableRecordBatchStream,
@@ -468,31 +467,6 @@ impl PiecewiseMergeJoinExec {
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         todo!()
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        let buffered = children.swap_remove(0);
-        let streamed = children.swap_remove(0);
-        Self {
-            buffered,
-            streamed,
-            on: self.on.clone(),
-            operator: self.operator,
-            join_type: self.join_type,
-            schema: Arc::clone(&self.schema),
-            left_child_plan_required_order: self.left_child_plan_required_order.clone(),
-            right_batch_required_orders: self.right_batch_required_orders.clone(),
-            sort_options: self.sort_options,
-            cache: Arc::clone(&self.cache),
-            num_partitions: self.num_partitions,
-
-            // Re-set state.
-            metrics: ExecutionPlanMetricsSet::new(),
-            buffered_fut: Default::default(),
-        }
-    }
 }
 
 impl ExecutionPlan for PiecewiseMergeJoinExec {
@@ -508,19 +482,15 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         vec![&self.buffered, &self.streamed]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to the two expressions being compared in the range predicate
-        f(self.on.0.as_ref())?.visit_sibling(|| f(self.on.1.as_ref()))
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.input_distribution_requirements().into_per_child()
     }
 
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![
             Distribution::SinglePartition,
             Distribution::UnspecifiedDistribution,
-        ]
+        ])
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -559,11 +529,35 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         }
     }
 
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let buffered = children.swap_remove(0);
+        let streamed = children.swap_remove(0);
+        Ok(Arc::new(Self {
+            buffered,
+            streamed,
+            on: self.on.clone(),
+            operator: self.operator,
+            join_type: self.join_type,
+            schema: Arc::clone(&self.schema),
+            left_child_plan_required_order: self.left_child_plan_required_order.clone(),
+            right_batch_required_orders: self.right_batch_required_orders.clone(),
+            sort_options: self.sort_options,
+            cache: Arc::clone(&self.cache),
+            num_partitions: self.num_partitions,
+
+            // Re-set state.
+            metrics: ExecutionPlanMetricsSet::new(),
+            buffered_fut: Default::default(),
+        }))
+    }
+
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(self.with_new_children_and_same_properties(vec![
-            Arc::clone(&self.buffered),
-            Arc::clone(&self.streamed),
-        ])))
+        let buffered = Arc::clone(&self.buffered);
+        let streamed = Arc::clone(&self.streamed);
+        self.with_new_children_and_same_properties(vec![buffered, streamed])
     }
 
     fn execute(

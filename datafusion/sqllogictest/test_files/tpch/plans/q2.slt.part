@@ -65,9 +65,9 @@ limit 10;
 logical_plan
 01)Sort: supplier.s_acctbal DESC NULLS FIRST, nation.n_name ASC NULLS LAST, supplier.s_name ASC NULLS LAST, part.p_partkey ASC NULLS LAST, fetch=10
 02)--Projection: supplier.s_acctbal, supplier.s_name, nation.n_name, part.p_partkey, part.p_mfgr, supplier.s_address, supplier.s_phone, supplier.s_comment
-03)----Inner Join: part.p_partkey = __scalar_sq_1.ps_partkey, partsupp.ps_supplycost = __scalar_sq_1.min(partsupp.ps_supplycost)
+03)----LeftSemi Join: part.p_partkey = __scalar_sq_1.ps_partkey, partsupp.ps_supplycost = __scalar_sq_1.min(partsupp.ps_supplycost)
 04)------Projection: part.p_partkey, part.p_mfgr, supplier.s_name, supplier.s_address, supplier.s_phone, supplier.s_acctbal, supplier.s_comment, partsupp.ps_supplycost, nation.n_name
-05)--------Inner Join: nation.n_regionkey = region.r_regionkey
+05)--------LeftSemi Join: nation.n_regionkey = region.r_regionkey
 06)----------Projection: part.p_partkey, part.p_mfgr, supplier.s_name, supplier.s_address, supplier.s_phone, supplier.s_acctbal, supplier.s_comment, partsupp.ps_supplycost, nation.n_name, nation.n_regionkey
 07)------------Inner Join: supplier.s_nationkey = nation.n_nationkey
 08)--------------Projection: part.p_partkey, part.p_mfgr, supplier.s_name, supplier.s_address, supplier.s_nationkey, supplier.s_phone, supplier.s_acctbal, supplier.s_comment, partsupp.ps_supplycost
@@ -87,7 +87,7 @@ logical_plan
 22)--------Projection: min(partsupp.ps_supplycost), partsupp.ps_partkey
 23)----------Aggregate: groupBy=[[partsupp.ps_partkey]], aggr=[[min(partsupp.ps_supplycost)]]
 24)------------Projection: partsupp.ps_partkey, partsupp.ps_supplycost
-25)--------------Inner Join: nation.n_regionkey = region.r_regionkey
+25)--------------LeftSemi Join: nation.n_regionkey = region.r_regionkey
 26)----------------Projection: partsupp.ps_partkey, partsupp.ps_supplycost, nation.n_regionkey
 27)------------------Inner Join: supplier.s_nationkey = nation.n_nationkey
 28)--------------------Projection: partsupp.ps_partkey, partsupp.ps_supplycost, supplier.s_nationkey
@@ -101,9 +101,9 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [s_acctbal@0 DESC, n_name@2 ASC NULLS LAST, s_name@1 ASC NULLS LAST, p_partkey@3 ASC NULLS LAST], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[s_acctbal@0 DESC, n_name@2 ASC NULLS LAST, s_name@1 ASC NULLS LAST, p_partkey@3 ASC NULLS LAST], preserve_partitioning=[true]
-03)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(p_partkey@0, ps_partkey@1), (ps_supplycost@7, min(partsupp.ps_supplycost)@0)], projection=[s_acctbal@5, s_name@2, n_name@8, p_partkey@0, p_mfgr@1, s_address@3, s_phone@4, s_comment@6]
+03)----HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(p_partkey@0, ps_partkey@1), (ps_supplycost@7, min(partsupp.ps_supplycost)@0)], projection=[s_acctbal@5, s_name@2, n_name@8, p_partkey@0, p_mfgr@1, s_address@3, s_phone@4, s_comment@6]
 04)------RepartitionExec: partitioning=Hash([p_partkey@0, ps_supplycost@7], 4), input_partitions=4
-05)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(n_regionkey@9, r_regionkey@0)], projection=[p_partkey@0, p_mfgr@1, s_name@2, s_address@3, s_phone@4, s_acctbal@5, s_comment@6, ps_supplycost@7, n_name@8]
+05)--------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(n_regionkey@9, r_regionkey@0)], projection=[p_partkey@0, p_mfgr@1, s_name@2, s_address@3, s_phone@4, s_acctbal@5, s_comment@6, ps_supplycost@7, n_name@8]
 06)----------RepartitionExec: partitioning=Hash([n_regionkey@9], 4), input_partitions=4
 07)------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@4, n_nationkey@0)], projection=[p_partkey@0, p_mfgr@1, s_name@2, s_address@3, s_phone@5, s_acctbal@6, s_comment@7, ps_supplycost@8, n_name@10, n_regionkey@11]
 08)--------------RepartitionExec: partitioning=Hash([s_nationkey@4], 4), input_partitions=4
@@ -112,35 +112,34 @@ physical_plan
 11)--------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(p_partkey@0, ps_partkey@0)], projection=[p_partkey@0, p_mfgr@1, ps_suppkey@3, ps_supplycost@4]
 12)----------------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
 13)------------------------FilterExec: p_size@3 = 15 AND p_type@2 LIKE %BRASS, projection=[p_partkey@0, p_mfgr@1]
-14)--------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-15)----------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl]]}, projection=[p_partkey, p_mfgr, p_type, p_size], file_type=csv, has_header=false
-16)----------------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
-17)------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_partkey, ps_suppkey, ps_supplycost], file_type=csv, has_header=false
-18)------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=1
-19)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment], file_type=csv, has_header=false
-20)--------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=1
-21)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name, n_regionkey], file_type=csv, has_header=false
-22)----------RepartitionExec: partitioning=Hash([r_regionkey@0], 4), input_partitions=4
-23)------------FilterExec: r_name@1 = EUROPE, projection=[r_regionkey@0]
-24)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-25)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/region.tbl]]}, projection=[r_regionkey, r_name], file_type=csv, has_header=false
-26)------RepartitionExec: partitioning=Hash([ps_partkey@1, min(partsupp.ps_supplycost)@0], 4), input_partitions=4
-27)--------ProjectionExec: expr=[min(partsupp.ps_supplycost)@1 as min(partsupp.ps_supplycost), ps_partkey@0 as ps_partkey]
-28)----------AggregateExec: mode=FinalPartitioned, gby=[ps_partkey@0 as ps_partkey], aggr=[min(partsupp.ps_supplycost)]
-29)------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
-30)--------------AggregateExec: mode=Partial, gby=[ps_partkey@0 as ps_partkey], aggr=[min(partsupp.ps_supplycost)]
-31)----------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(n_regionkey@2, r_regionkey@0)], projection=[ps_partkey@0, ps_supplycost@1]
-32)------------------RepartitionExec: partitioning=Hash([n_regionkey@2], 4), input_partitions=4
-33)--------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@2, n_nationkey@0)], projection=[ps_partkey@0, ps_supplycost@1, n_regionkey@4]
-34)----------------------RepartitionExec: partitioning=Hash([s_nationkey@2], 4), input_partitions=4
-35)------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(ps_suppkey@1, s_suppkey@0)], projection=[ps_partkey@0, ps_supplycost@2, s_nationkey@4]
-36)--------------------------RepartitionExec: partitioning=Hash([ps_suppkey@1], 4), input_partitions=4
-37)----------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_partkey, ps_suppkey, ps_supplycost], file_type=csv, has_header=false
-38)--------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=1
-39)----------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_nationkey], file_type=csv, has_header=false
-40)----------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=1
-41)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_regionkey], file_type=csv, has_header=false
-42)------------------RepartitionExec: partitioning=Hash([r_regionkey@0], 4), input_partitions=4
-43)--------------------FilterExec: r_name@1 = EUROPE, projection=[r_regionkey@0]
-44)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-45)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/region.tbl]]}, projection=[r_regionkey, r_name], file_type=csv, has_header=false
+14)--------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:0..597773], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:597773..1195546], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:1195546..1793319], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:1793319..2391090]]}, projection=[p_partkey, p_mfgr, p_type, p_size], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
+15)----------------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
+16)------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_partkey, ps_suppkey, ps_supplycost], constraints=[PrimaryKey([0, 1])], file_type=csv, has_header=false
+17)------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=1
+18)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
+19)--------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=1
+20)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name, n_regionkey], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
+21)----------RepartitionExec: partitioning=Hash([r_regionkey@0], 4), input_partitions=4
+22)------------FilterExec: r_name@1 = EUROPE, projection=[r_regionkey@0]
+23)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+24)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/region.tbl]]}, projection=[r_regionkey, r_name], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
+25)------RepartitionExec: partitioning=Hash([ps_partkey@1, min(partsupp.ps_supplycost)@0], 4), input_partitions=4
+26)--------ProjectionExec: expr=[min(partsupp.ps_supplycost)@1 as min(partsupp.ps_supplycost), ps_partkey@0 as ps_partkey]
+27)----------AggregateExec: mode=FinalPartitioned, gby=[ps_partkey@0 as ps_partkey], aggr=[min(partsupp.ps_supplycost)]
+28)------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
+29)--------------AggregateExec: mode=Partial, gby=[ps_partkey@0 as ps_partkey], aggr=[min(partsupp.ps_supplycost)]
+30)----------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(n_regionkey@2, r_regionkey@0)], projection=[ps_partkey@0, ps_supplycost@1]
+31)------------------RepartitionExec: partitioning=Hash([n_regionkey@2], 4), input_partitions=4
+32)--------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@2, n_nationkey@0)], projection=[ps_partkey@0, ps_supplycost@1, n_regionkey@4]
+33)----------------------RepartitionExec: partitioning=Hash([s_nationkey@2], 4), input_partitions=4
+34)------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(ps_suppkey@1, s_suppkey@0)], projection=[ps_partkey@0, ps_supplycost@2, s_nationkey@4]
+35)--------------------------RepartitionExec: partitioning=Hash([ps_suppkey@1], 4), input_partitions=4
+36)----------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_partkey, ps_suppkey, ps_supplycost], constraints=[PrimaryKey([0, 1])], file_type=csv, has_header=false
+37)--------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=1
+38)----------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_nationkey], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
+39)----------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=1
+40)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_regionkey], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
+41)------------------RepartitionExec: partitioning=Hash([r_regionkey@0], 4), input_partitions=4
+42)--------------------FilterExec: r_name@1 = EUROPE, projection=[r_regionkey@0]
+43)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+44)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/region.tbl]]}, projection=[r_regionkey, r_name], constraints=[PrimaryKey([0])], file_type=csv, has_header=false

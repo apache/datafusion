@@ -33,6 +33,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, FilterRemapper, PushedDownPredicate,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr, check_if_same_properties};
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -45,7 +46,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{DataFusionError, JoinSide, Result, internal_err};
+use datafusion_common::{DataFusionError, JoinSide, Result, internal_err, plan_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -221,17 +222,6 @@ impl ProjectionExec {
         }
         Ok(alias_map)
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for ProjectionExec {
@@ -312,17 +302,6 @@ impl ExecutionPlan for ProjectionExec {
         vec![&self.input]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for proj_expr in self.projector.projection().as_ref().iter() {
-            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
-        }
-        Ok(tnr)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -333,6 +312,17 @@ impl ExecutionPlan for ProjectionExec {
             children.swap_remove(0),
         )
         .map(|p| Arc::new(p) as _)
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -359,9 +349,16 @@ impl ExecutionPlan for ProjectionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let input_stats =
-            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let input_stats = input_stats[0].as_ref().clone();
         let output_schema = self.schema();
         Ok(Arc::new(
             self.projector
@@ -382,12 +379,9 @@ impl ExecutionPlan for ProjectionExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let maybe_unified = try_unifying_projections(projection, self)?;
-        if let Some(new_plan) = maybe_unified {
-            // To unify 3 or more sequential projections:
-            remove_unnecessary_projections(new_plan).data().map(Some)
-        } else {
-            Ok(Some(Arc::new(projection.clone())))
+        match try_collapse_projection_chain(projection)? {
+            Some(plan) => Ok(Some(plan)),
+            None => Ok(Some(Arc::new(projection.clone()))),
         }
     }
 
@@ -654,6 +648,10 @@ pub struct JoinData {
     pub join_on: JoinOn,
 }
 
+#[deprecated(
+    since = "55.0.0",
+    note = "Use try_pushdown_through_join_with_column_indices instead"
+)]
 pub fn try_pushdown_through_join(
     projection: &ProjectionExec,
     join_left: &Arc<dyn ExecutionPlan>,
@@ -662,53 +660,149 @@ pub fn try_pushdown_through_join(
     schema: &SchemaRef,
     filter: Option<&JoinFilter>,
 ) -> Result<Option<JoinData>> {
+    let left_field_count = join_left.schema().fields().len();
+    let column_indices = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            if index < left_field_count {
+                ColumnIndex {
+                    index,
+                    side: JoinSide::Left,
+                }
+            } else {
+                ColumnIndex {
+                    index: index - left_field_count,
+                    side: JoinSide::Right,
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+
+    try_pushdown_through_join_with_column_indices(
+        projection,
+        join_left,
+        join_right,
+        join_on,
+        schema,
+        filter,
+        &column_indices,
+    )
+}
+
+/// Attempts to move a projection below a join by mapping each join output
+/// column to the child column that produced it.
+///
+/// `schema` is the complete output schema of the join, not either child's
+/// schema. `column_indices` must contain one entry for each field in `schema`.
+/// Each [`JoinSide::Left`] or [`JoinSide::Right`] entry identifies the source
+/// child and uses an index relative to that child's schema.
+///
+/// [`JoinSide::None`] identifies a column produced by the join itself, such as
+/// a mark column. If `projection` references such a column, this function
+/// returns `Ok(None)` because neither child can produce it.
+///
+/// Returns `Ok(None)` when the projection cannot be pushed down safely.
+///
+/// # Errors
+///
+/// Returns an error if `column_indices` does not match `schema` or contains an
+/// index outside the corresponding child schema.
+pub fn try_pushdown_through_join_with_column_indices(
+    projection: &ProjectionExec,
+    join_left: &Arc<dyn ExecutionPlan>,
+    join_right: &Arc<dyn ExecutionPlan>,
+    join_on: JoinOnRef,
+    schema: &SchemaRef,
+    filter: Option<&JoinFilter>,
+    column_indices: &[ColumnIndex],
+) -> Result<Option<JoinData>> {
+    if column_indices.len() != schema.fields().len() {
+        return plan_err!(
+            "Column index mapping has {} entries but join schema has {} fields",
+            column_indices.len(),
+            schema.fields().len()
+        );
+    }
+    // Validate each output-to-child mapping before using it to rewrite the
+    // projection. Synthetic outputs have no child index to validate.
+    for (output_index, column_index) in column_indices.iter().enumerate() {
+        let (side, child_field_count) = match column_index.side {
+            JoinSide::Left => ("left", join_left.schema().fields().len()),
+            JoinSide::Right => ("right", join_right.schema().fields().len()),
+            JoinSide::None => continue,
+        };
+        if column_index.index >= child_field_count {
+            return plan_err!(
+                "Join output column {output_index} maps to {side} child column {}, but the child has {child_field_count} fields",
+                column_index.index
+            );
+        }
+    }
+
     // Convert projected expressions to columns. We can not proceed if this is not possible.
     let Some(projection_as_columns) = physical_to_column_exprs(projection.expr()) else {
         return Ok(None);
     };
 
-    let (far_right_left_col_ind, far_left_right_col_ind) =
-        join_table_borders(join_left.schema().fields().len(), &projection_as_columns);
+    if projection_as_columns.len() >= schema.fields().len() {
+        return Ok(None);
+    }
+    let mut left_proj: Vec<(Column, String)> = Vec::new();
+    let mut right_proj: Vec<(Column, String)> = Vec::new();
+    let mut seen_right = false;
+    for (col, alias) in &projection_as_columns {
+        let Some(origin) = column_indices.get(col.index()) else {
+            return plan_err!(
+                "Projection column {} is outside the {}-entry column index mapping",
+                col.index(),
+                column_indices.len()
+            );
+        };
+        match origin.side {
+            // Keep the "left block before right block" contiguity the current
+            // pushdown supports; a left column after a right one is "mixed".
+            JoinSide::Left => {
+                if seen_right {
+                    return Ok(None);
+                }
+                left_proj.push((Column::new(col.name(), origin.index), alias.clone()));
+            }
+            JoinSide::Right => {
+                seen_right = true;
+                right_proj.push((Column::new(col.name(), origin.index), alias.clone()));
+            }
+            // Synthetic column (e.g. mark): belongs to neither child.
+            // Phase 2 declines; Phase 3 keeps it at the join output instead.
+            JoinSide::None => return Ok(None),
+        }
+    }
 
-    if !join_allows_pushdown(
-        &projection_as_columns,
-        schema,
-        far_right_left_col_ind,
-        far_left_right_col_ind,
-    ) {
+    // Parity: neither side fully dropped.
+    if left_proj.is_empty() || right_proj.is_empty() {
         return Ok(None);
     }
 
+    // `left_proj` / `right_proj` carry *child* indices (from `column_indices`),
+    // so the shared `update_join_*` helpers must use a 0 column-index offset for
+    // both sides (the offset bridges child -> join-output index, which is the
+    // identity here).
     let new_filter = if let Some(filter) = filter {
-        match update_join_filter(
-            &projection_as_columns[0..=far_right_left_col_ind as _],
-            &projection_as_columns[far_left_right_col_ind as _..],
-            filter,
-            join_left.schema().fields().len(),
-        ) {
-            Some(updated_filter) => Some(updated_filter),
+        match update_join_filter(&left_proj, &right_proj, filter, 0) {
+            Some(updated) => Some(updated),
             None => return Ok(None),
         }
     } else {
         None
     };
 
-    let Some(new_on) = update_join_on(
-        &projection_as_columns[0..=far_right_left_col_ind as _],
-        &projection_as_columns[far_left_right_col_ind as _..],
-        join_on,
-        join_left.schema().fields().len(),
-    ) else {
+    let Some(new_on) = update_join_on(&left_proj, &right_proj, join_on, 0) else {
         return Ok(None);
     };
 
-    let (new_left, new_right) = new_join_children(
-        &projection_as_columns,
-        far_right_left_col_ind,
-        far_left_right_col_ind,
-        join_left,
-        join_right,
-    )?;
+    let (new_left, new_right) =
+        new_join_children_from_groups(&left_proj, &right_proj, join_left, join_right)?;
 
     Ok(Some(JoinData {
         projected_left_child: new_left,
@@ -892,6 +986,34 @@ pub fn new_join_children(
     Ok((new_left, new_right))
 }
 
+/// Build the projected left and right children from side-grouped projection
+/// columns whose indices are already *child*-relative (e.g. derived from a
+/// join's `ColumnIndex`). Unlike [`new_join_children`], this does not infer
+/// child ownership from output position, so it is safe for join schemas whose
+/// output is not a plain `left ++ right` (used by the schema-aware
+/// `try_pushdown_through_join_with_column_indices`).
+fn new_join_children_from_groups(
+    left_proj: &[(Column, String)],
+    right_proj: &[(Column, String)],
+    left_child: &Arc<dyn ExecutionPlan>,
+    right_child: &Arc<dyn ExecutionPlan>,
+) -> Result<(ProjectionExec, ProjectionExec)> {
+    let build = |cols: &[(Column, String)], child: &Arc<dyn ExecutionPlan>| {
+        ProjectionExec::try_new(
+            cols.iter().map(|(col, alias)| ProjectionExpr {
+                expr: Arc::new(Column::new(col.name(), col.index())) as _,
+                alias: alias.clone(),
+            }),
+            Arc::clone(child),
+        )
+    };
+
+    Ok((
+        build(left_proj, left_child)?,
+        build(right_proj, right_child)?,
+    ))
+}
+
 /// Checks three conditions for pushing a projection down through a join:
 /// - Projection must narrow the join output schema.
 /// - Columns coming from left/right tables must be collected at the left/right
@@ -958,14 +1080,10 @@ pub fn update_join_on(
         .map(|(left, right)| (left, right))
         .unzip();
 
-    let new_left_columns = new_columns_for_join_on(&left_idx, proj_left_exprs, 0);
-    let new_right_columns =
-        new_columns_for_join_on(&right_idx, proj_right_exprs, left_field_size);
-
-    match (new_left_columns, new_right_columns) {
-        (Some(left), Some(right)) => Some(left.into_iter().zip(right).collect()),
-        _ => None,
-    }
+    let new_left = new_columns_for_join_on(&left_idx, proj_left_exprs, 0)?;
+    let new_right =
+        new_columns_for_join_on(&right_idx, proj_right_exprs, left_field_size)?;
+    Some(new_left.into_iter().zip(new_right).collect())
 }
 
 /// Tries to update the column indices of a [`JoinFilter`] as if the input of
@@ -1014,55 +1132,69 @@ pub fn update_join_filter(
     })
 }
 
-/// Unifies `projection` with its input (which is also a [`ProjectionExec`]).
-fn try_unifying_projections(
-    projection: &ProjectionExec,
-    child: &ProjectionExec,
+/// Collapse a chain of consecutive [`ProjectionExec`]s into one. Returns
+/// `None` if nothing could be merged.
+fn try_collapse_projection_chain(
+    outer: &ProjectionExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    let mut projected_exprs = vec![];
+    let mut current_exprs: Vec<ProjectionExpr> = outer.expr().to_vec();
+    let mut current_input: Arc<dyn ExecutionPlan> = Arc::clone(outer.input());
     let mut column_ref_map: HashMap<Column, usize> = HashMap::new();
+    let mut collapsed_any = false;
 
-    // Collect the column references usage in the outer projection.
-    projection.expr().iter().for_each(|proj_expr| {
-        proj_expr
-            .expr
-            .apply(|expr| {
-                Ok({
-                    if let Some(column) = expr.downcast_ref::<Column>() {
-                        *column_ref_map.entry(column.clone()).or_default() += 1;
-                    }
-                    TreeNodeRecursion::Continue
-                })
-            })
-            .unwrap();
-    });
-    // Merging these projections is not beneficial, e.g
-    // If an expression is not trivial (KeepInPlace) and it is referred more than 1, unifies projections will be
-    // beneficial as caching mechanism for non-trivial computations.
-    // See discussion in: https://github.com/apache/datafusion/issues/8296
-    if column_ref_map.iter().any(|(column, count)| {
-        *count > 1
-            && !child.expr()[column.index()]
-                .expr
-                .placement()
-                .should_push_to_leaves()
-    }) {
+    'outer: while let Some(inner_proj) = current_input.downcast_ref::<ProjectionExec>() {
+        // Collect the column references usage in the outer projection.
+        column_ref_map.clear();
+        for proj_expr in &current_exprs {
+            proj_expr.expr.apply(|expr| {
+                if let Some(column) = expr.downcast_ref::<Column>() {
+                    *column_ref_map.entry(column.clone()).or_default() += 1;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+        let inner_exprs = inner_proj.expr();
+        // Merging these projections is not beneficial, e.g
+        // If an expression is not trivial (KeepInPlace) and it is referred more than 1, unifies projections will be
+        // beneficial as caching mechanism for non-trivial computations.
+        // See discussion in: https://github.com/apache/datafusion/issues/8296
+        let blocked = column_ref_map.iter().any(|(column, count)| {
+            *count > 1
+                && !inner_exprs[column.index()]
+                    .expr
+                    .placement()
+                    .should_push_to_leaves()
+        });
+        if blocked {
+            break;
+        }
+
+        let mut new_phys: Vec<Arc<dyn PhysicalExpr>> =
+            Vec::with_capacity(current_exprs.len());
+        for proj_expr in &current_exprs {
+            // If there is no match in the input projection, we cannot unify these
+            // projections. This case will arise if the projection expression contains
+            // a `PhysicalExpr` variant `update_expr` doesn't support.
+            let Some(expr) = update_expr(&proj_expr.expr, inner_exprs, true)? else {
+                break 'outer;
+            };
+            new_phys.push(expr);
+        }
+        for (proj_expr, expr) in current_exprs.iter_mut().zip(new_phys) {
+            proj_expr.expr = expr;
+        }
+        current_input = Arc::clone(inner_proj.input());
+        collapsed_any = true;
+    }
+
+    if !collapsed_any {
         return Ok(None);
     }
-    for proj_expr in projection.expr() {
-        // If there is no match in the input projection, we cannot unify these
-        // projections. This case will arise if the projection expression contains
-        // a `PhysicalExpr` variant `update_expr` doesn't support.
-        let Some(expr) = update_expr(&proj_expr.expr, child.expr(), true)? else {
-            return Ok(None);
-        };
-        projected_exprs.push(ProjectionExpr {
-            expr,
-            alias: proj_expr.alias.clone(),
-        });
-    }
-    ProjectionExec::try_new(projected_exprs, Arc::clone(child.input()))
-        .map(|e| Some(Arc::new(e) as _))
+
+    // To unify 3 or more sequential projections:
+    let unified: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(current_exprs, current_input)?);
+    remove_unnecessary_projections(unified).data().map(Some)
 }
 
 /// Collect all column indices from the given projection expressions.
@@ -1182,8 +1314,10 @@ mod tests {
     use super::*;
 
     use crate::common::collect;
+    use crate::empty::EmptyExec;
 
     use crate::filter_pushdown::PushedDown;
+    use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
@@ -1213,6 +1347,113 @@ mod tests {
         }]);
         // Tree traversal order: b@7 is visited before a@1
         assert_eq!(column_indices, vec![7, 1]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_pushdown_through_join_validates_column_indices() -> Result<()> {
+        let child_schema =
+            Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        let left: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&child_schema)));
+        let right: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(child_schema));
+        let join_schema = Arc::new(Schema::new(vec![
+            Field::new("left_i", DataType::Int32, false),
+            Field::new("right_i", DataType::Int32, false),
+        ]));
+        let join: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&join_schema)));
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: Arc::new(Column::new("left_i", 0)),
+                alias: "left_i".to_string(),
+            }],
+            join,
+        )?;
+
+        let Err(error) = try_pushdown_through_join_with_column_indices(
+            &projection,
+            &left,
+            &right,
+            &[],
+            &join_schema,
+            None,
+            &[],
+        ) else {
+            panic!("expected a mismatched mapping length to return an error");
+        };
+        assert!(
+            error.to_string().contains(
+                "Column index mapping has 0 entries but join schema has 2 fields"
+            )
+        );
+
+        let invalid_child_index = [
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ];
+        let Err(error) = try_pushdown_through_join_with_column_indices(
+            &projection,
+            &left,
+            &right,
+            &[],
+            &join_schema,
+            None,
+            &invalid_child_index,
+        ) else {
+            panic!("expected an invalid child index to return an error");
+        };
+        assert!(error.to_string().contains(
+            "Join output column 0 maps to left child column 1, but the child has 1 fields"
+        ));
+
+        let wider_join_schema = Arc::new(Schema::new(vec![
+            Field::new("left_i", DataType::Int32, false),
+            Field::new("right_i", DataType::Int32, false),
+            Field::new("extra", DataType::Int32, false),
+        ]));
+        let wider_join: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(wider_join_schema));
+        let out_of_mapping_projection = ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: Arc::new(Column::new("extra", 2)),
+                alias: "extra".to_string(),
+            }],
+            wider_join,
+        )?;
+        let valid_child_indices = [
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ];
+        let Err(error) = try_pushdown_through_join_with_column_indices(
+            &out_of_mapping_projection,
+            &left,
+            &right,
+            &[],
+            &join_schema,
+            None,
+            &valid_child_indices,
+        ) else {
+            panic!("expected an out-of-mapping projection to return an error");
+        };
+        assert!(
+            error.to_string().contains(
+                "Projection column 2 is outside the 2-entry column index mapping"
+            )
+        );
+
         Ok(())
     }
 
@@ -1374,7 +1615,9 @@ mod tests {
 
         let projection = ProjectionExec::try_new(exprs, input).unwrap();
 
-        let stats = projection.partition_statistics(None).unwrap();
+        let stats = StatisticsContext::new()
+            .compute(&projection, &StatisticsArgs::new())
+            .unwrap();
 
         assert_eq!(stats.num_rows, Precision::Exact(10));
         assert_eq!(

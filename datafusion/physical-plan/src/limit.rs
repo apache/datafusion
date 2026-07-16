@@ -27,6 +27,7 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::{Boundedness, CardinalityEffect};
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     check_if_same_properties,
@@ -34,11 +35,10 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 
-use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion_physical_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -109,17 +109,6 @@ impl GlobalLimitExec {
     pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
         self.required_ordering = required_ordering;
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for GlobalLimitExec {
@@ -163,7 +152,11 @@ impl ExecutionPlan for GlobalLimitExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![Distribution::SinglePartition])
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -172,20 +165,6 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to required ordering expressions if present
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = &self.required_ordering {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
     }
 
     fn with_new_children(
@@ -198,6 +177,17 @@ impl ExecutionPlan for GlobalLimitExec {
             self.skip,
             self.fetch,
         )))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -234,8 +224,16 @@ impl ExecutionPlan for GlobalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
         Ok(Arc::new(stats.with_fetch(self.fetch, self.skip, 1)?))
     }
 
@@ -306,17 +304,6 @@ impl LocalLimitExec {
     pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
         self.required_ordering = required_ordering;
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for LocalLimitExec {
@@ -358,20 +345,6 @@ impl ExecutionPlan for LocalLimitExec {
         vec![true]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to required ordering expressions if present
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = &self.required_ordering {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -384,6 +357,17 @@ impl ExecutionPlan for LocalLimitExec {
             ))),
             _ => internal_err!("LocalLimitExec wrong number of children"),
         }
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -411,8 +395,16 @@ impl ExecutionPlan for LocalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
         Ok(Arc::new(stats.with_fetch(Some(self.fetch), 0, 1)?))
     }
 
@@ -559,12 +551,14 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common::collect;
+    use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test;
 
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use arrow::array::RecordBatchOptions;
     use arrow::datatypes::Schema;
     use datafusion_common::stats::Precision;
+    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::col;
 
     #[tokio::test]
@@ -791,9 +785,12 @@ mod tests {
             row_number_inexact_statistics_for_global_limit(5, Some(10)).await?;
         assert_eq!(row_count, Precision::Inexact(10));
 
+        // Input was Inexact, so an `nr <= skip` outcome must remain Inexact:
+        // the inexact estimate could be wrong, so we cannot promote 0 to
+        // Exact.
         let row_count =
             row_number_inexact_statistics_for_global_limit(400, Some(10)).await?;
-        assert_eq!(row_count, Precision::Exact(0));
+        assert_eq!(row_count, Precision::Inexact(0));
 
         let row_count =
             row_number_inexact_statistics_for_global_limit(398, Some(10)).await?;
@@ -837,7 +834,9 @@ mod tests {
         let offset =
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
-        Ok(offset.partition_statistics(None)?.num_rows)
+        Ok(StatisticsContext::new()
+            .compute(&offset, &StatisticsArgs::new())?
+            .num_rows)
     }
 
     pub fn build_group_by(
@@ -877,7 +876,9 @@ mod tests {
             fetch,
         );
 
-        Ok(offset.partition_statistics(None)?.num_rows)
+        Ok(StatisticsContext::new()
+            .compute(&offset, &StatisticsArgs::new())?
+            .num_rows)
     }
 
     async fn row_number_statistics_for_local_limit(
@@ -890,7 +891,9 @@ mod tests {
 
         let offset = LocalLimitExec::new(csv, fetch);
 
-        Ok(offset.partition_statistics(None)?.num_rows)
+        Ok(StatisticsContext::new()
+            .compute(&offset, &StatisticsArgs::new())?
+            .num_rows)
     }
 
     /// Return a RecordBatch with a single array with row_count sz

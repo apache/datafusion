@@ -41,7 +41,7 @@ use arrow::datatypes::{
 
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
+    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err, exec_datafusion_err,
     internal_datafusion_err,
 };
 use datafusion_expr::function::StateFieldsArgs;
@@ -282,7 +282,12 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
-        self.all_values.reserve(values.len() - values.null_count());
+        let additional = values.len() - values.null_count();
+        self.all_values.try_reserve(additional).map_err(|e| {
+            exec_datafusion_err!(
+                "failed to reserve {additional} values for median accumulator: {e}"
+            )
+        })?;
         self.all_values.extend(values.iter().flatten());
         Ok(())
     }
@@ -388,8 +393,6 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        // Since aggregate filter should be applied in partial stage, in final stage there should be no filter
-        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");
@@ -540,10 +543,11 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
     fn size(&self) -> usize {
         self.group_values
             .iter()
-            .map(|values| values.capacity() * size_of::<T>())
+            .map(|values| values.capacity() * size_of::<T::Native>())
             .sum::<usize>()
-            // account for size of self.grou_values too
-            + self.group_values.capacity() * size_of::<Vec<T>>()
+            // account for size of self.group_values too
+            + self.group_values.capacity() * size_of::<Vec<T::Native>>()
+            + size_of::<Vec<Vec<T::Native>>>()
     }
 }
 

@@ -468,7 +468,24 @@ Utf8View
 query T
 SELECT arrow_typeof(upper(arrow_cast(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 'Dictionary(Int32, Utf8View)')))
 ----
-Utf8View
+Dictionary(Int32, Utf8View)
+
+statement ok
+CREATE TABLE upper_dictionary_test AS
+SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS c1 FROM (VALUES
+('foo'),
+(NULL),
+('Bar'));
+
+query TT
+SELECT upper(c1), arrow_typeof(upper(c1)) FROM upper_dictionary_test
+----
+FOO Dictionary(Int32, Utf8)
+NULL Dictionary(Int32, Utf8)
+BAR Dictionary(Int32, Utf8)
+
+statement ok
+DROP TABLE upper_dictionary_test
 
 query T
 SELECT btrim('   foo  ')
@@ -548,7 +565,24 @@ Utf8View
 query T
 SELECT arrow_typeof(lower(arrow_cast(arrow_cast('FOObar', 'Dictionary(Int32, Utf8)'), 'Dictionary(Int32, Utf8View)')))
 ----
-Utf8View
+Dictionary(Int32, Utf8View)
+
+statement ok
+CREATE TABLE lower_dictionary_test AS
+SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS c1 FROM (VALUES
+('FOO'),
+(NULL),
+('Bar'));
+
+query TT
+SELECT lower(c1), arrow_typeof(lower(c1)) FROM lower_dictionary_test
+----
+foo Dictionary(Int32, Utf8)
+NULL Dictionary(Int32, Utf8)
+bar Dictionary(Int32, Utf8)
+
+statement ok
+DROP TABLE lower_dictionary_test
 
 query T
 SELECT ltrim('   foo')
@@ -805,10 +839,10 @@ SELECT overlay('abc' placing 'X' from 5 for 1)
 abcX
 
 # Start positions must be positive.
-statement error negative substring length not allowed
+statement error overlay start position must be at least 1: 0
 SELECT overlay('abc' placing 'X' from 0 for 1)
 
-statement error negative substring length not allowed
+statement error overlay start position must be at least 1: -1
 SELECT overlay('abc' placing 'X' from -1 for 1)
 
 # Negative count keeps the suffix from before the start position.

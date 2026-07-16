@@ -272,8 +272,8 @@ logical_plan
 16)------------------EmptyRelation: rows=1
 physical_plan
 01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
-02)--SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[b@0 as b, max(d.a)@1 as max_a]
+02)--ProjectionExec: expr=[b@0 as b, max(d.a)@1 as max_a]
+03)----SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[max(d.a)]
 05)--------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[max(d.a)], ordering_mode=Sorted
@@ -1214,6 +1214,10 @@ NULL 3917
 -16974 -16974
 -1114 -1114
 15673 15673
+
+statement error Execution error: The second argument of nth_value must not be i64::MIN
+SELECT nth_value(x, -9223372036854775808) OVER (ORDER BY x)
+FROM (VALUES (1)) AS t(x);
 
 
 
@@ -2257,8 +2261,9 @@ physical_plan
 06)----------ProjectionExec: expr=[c2@1 as c2, c8@2 as c8, c9@3 as c9, c1_alias@4 as c1_alias, sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING@5 as sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING, sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@6 as sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING]
 07)------------BoundedWindowAggExec: wdw=[sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 08)--------------WindowAggExec: wdw=[sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-09)----------------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, c9@3 ASC NULLS LAST, c8@2 ASC NULLS LAST], preserve_partitioning=[false]
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c8, c9, c1@0 as c1_alias], file_type=csv, has_header=true
+09)----------------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c8@2 as c8, c9@3 as c9, c1@0 as c1_alias]
+10)------------------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, c9@3 ASC NULLS LAST, c8@2 ASC NULLS LAST], preserve_partitioning=[false]
+11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c8, c9], file_type=csv, has_header=true
 
 query IIIII
 SELECT c9,
@@ -2404,8 +2409,8 @@ logical_plan
 03)----WindowAggr: windowExpr=[[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: aggregate_test_100 projection=[c9]
 physical_plan
-01)SortExec: TopK(fetch=5), expr=[rn1@1 DESC], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[c9@0 as c9, row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn1]
+01)ProjectionExec: expr=[c9@0 as c9, row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn1]
+02)--SortExec: TopK(fetch=5), expr=[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 DESC], preserve_partitioning=[false]
 03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: expr=[c9@0 DESC], preserve_partitioning=[false]
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
@@ -5481,7 +5486,7 @@ order by c1, c2, rank;
 query TT
 explain select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5497,8 +5502,8 @@ logical_plan
 06)----------TableScan: t1 projection=[c1, c2]
 physical_plan
 01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank1@2 ASC NULLS LAST, rank2@3 ASC NULLS LAST]
-02)--SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank1@2 ASC NULLS LAST, rank2@3 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank1, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rank2]
+02)--ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank1, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rank2]
+03)----SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 ASC NULLS LAST, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 ASC NULLS LAST], preserve_partitioning=[true]
 04)------BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 05)--------SortExec: expr=[c2@1 ASC NULLS LAST, c1@0 ASC NULLS LAST], preserve_partitioning=[true]
 06)----------RepartitionExec: partitioning=Hash([c2@1, c1@0], 2), input_partitions=2
@@ -5512,7 +5517,7 @@ physical_plan
 query IIII
 select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5529,7 +5534,7 @@ order by c1, c2, rank1, rank2;
 query TT
 explain select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5545,8 +5550,8 @@ logical_plan
 06)----------TableScan: t1 projection=[c1, c2]
 physical_plan
 01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank1@2 ASC NULLS LAST, rank2@3 ASC NULLS LAST]
-02)--SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank1@2 ASC NULLS LAST, rank2@3 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank1, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rank2]
+02)--ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank1, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rank2]
+03)----SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 ASC NULLS LAST, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 ASC NULLS LAST], preserve_partitioning=[true]
 04)------BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 05)--------SortExec: expr=[c2@1 ASC NULLS LAST, c1@0 ASC NULLS LAST], preserve_partitioning=[true]
 06)----------RepartitionExec: partitioning=Hash([c2@1, c1@0], 2), input_partitions=2
@@ -5559,7 +5564,7 @@ physical_plan
 query IIII
 select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5955,6 +5960,63 @@ physical_plan
 07)------------DataSourceExec: partitions=2, partition_sizes=[5, 4]
 
 
+# SUM(DISTINCT) over sliding frames must skip NULLs and return NULL
+# for frames containing no non-null values.
+statement ok
+CREATE TABLE table_distinct_sum_nulls(ts INT, v BIGINT) AS VALUES
+  (1, NULL), (2, 3), (3, NULL), (4, NULL), (5, 5);
+
+query II
+SELECT
+  ts,
+  SUM(DISTINCT v) OVER (
+    ORDER BY ts
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ) AS s
+FROM table_distinct_sum_nulls;
+----
+1 NULL
+2 3
+3 3
+4 NULL
+5 5
+
+
+# SUM(DISTINCT) over sliding (bounded) window frames is only implemented
+# for Int64. Other SUM-supported input types must fail with a clear
+# capability error instead of an accumulator-internal one.
+statement ok
+CREATE TABLE table_distinct_sum_types(ts INT, f DOUBLE, d DECIMAL(10, 2)) AS VALUES
+  (1, 1.5, 1.50), (2, 2.5, 2.50), (3, 1.5, 1.50);
+
+query error DataFusion error: This feature is not implemented: SUM\(DISTINCT\) over sliding window frames is only supported for Int64, got Float64
+SELECT SUM(DISTINCT f) OVER (
+  ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+) FROM table_distinct_sum_types;
+
+query error DataFusion error: This feature is not implemented: SUM\(DISTINCT\) over sliding window frames is only supported for Int64, got Decimal128\(10, 2\)
+SELECT SUM(DISTINCT d) OVER (
+  ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+) FROM table_distinct_sum_types;
+
+query error DataFusion error: This feature is not implemented: SUM\(DISTINCT\) over sliding window frames is only supported for Int64, got UInt64
+SELECT SUM(DISTINCT arrow_cast(ts, 'UInt64')) OVER (
+  ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+) FROM table_distinct_sum_types;
+
+# Unbounded frames take the regular distinct-sum path and keep
+# supporting all SUM input types.
+query R
+SELECT SUM(DISTINCT f) OVER (ORDER BY ts) FROM table_distinct_sum_types;
+----
+1.5
+4
+4
+
+statement ok
+DROP TABLE table_distinct_sum_types;
+
+
 # FILTER clause with window functions
 
 # Verify FILTER clause with non-aggregate window functions fails with a clear message
@@ -6023,8 +6085,7 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[sum(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "count(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable List(Int64) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable List(Int64) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortPreservingMergeExec: [c1@2 ASC NULLS LAST, c2@3 ASC NULLS LAST], fetch=5
 05)--------SortExec: TopK(fetch=5), expr=[c1@2 ASC NULLS LAST, c2@3 ASC NULLS LAST], preserve_partitioning=[true]
-06)----------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-0.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-1.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-2.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-3.csv]]}, projection=[c2@1 >= 2 as __common_expr_1, c2@1 >= 2 AND c2@1 < 4 AND c1@0 > 0 as __common_expr_2, c1, c2], file_type=csv, has_header=false
-
+06)----------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-0.csv, WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-1.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-2.csv, WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-3.csv]]}, projection=[c2@1 >= 2 as __common_expr_1, c2@1 >= 2 AND c2@1 < 4 AND c1@0 > 0 as __common_expr_2, c1, c2], file_type=csv, has_header=false
 
 # FILTER filters out some rows
 query IIIII??
@@ -6600,6 +6661,142 @@ ORDER BY i;
 3 1
 4 NULL
 
+# Covariance/correlation sliding-window regression test. Verifies correct
+# results across row removals and a NULL-gap empty-frame transition.
+query IRRR
+SELECT
+  column1,
+  covar_pop(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  covar_samp(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  corr(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  )
+FROM (
+  VALUES
+    (1, 10.0, 5.0),
+    (2, NULL, NULL),
+    (3, NULL, NULL),
+    (4, 30.0, 10.0),
+    (5, 40.0, 20.0),
+    (6, 50.0, 10.0)
+);
+----
+1 0 NULL NULL
+2 0 NULL NULL
+3 NULL NULL NULL
+4 0 NULL NULL
+5 25 50 1
+6 -25 -50 -1
+
+# Multi-row covariance/correlation sliding-window regression test. Verifies
+# correct accumulation when valid rows enter the frame after a reset.
+query IRRR
+SELECT
+  column1,
+  covar_pop(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+  ),
+  covar_samp(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+  ),
+  corr(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+  )
+FROM (
+  VALUES
+    (1, 10.0, 5.0),
+    (2, NULL, NULL),
+    (3, NULL, NULL),
+    (4, 30.0, 10.0),
+    (5, 40.0, 20.0),
+    (6, 50.0, 10.0)
+);
+----
+1 0 NULL NULL
+2 0 NULL NULL
+3 0 NULL NULL
+4 0 NULL NULL
+5 25 50 1
+6 0 0 0
+
+# Covariance/correlation sliding-window regression test. Rows with NULL in
+# either input column must not contribute to the aggregate state.
+query IRRR
+SELECT
+  column1,
+  covar_pop(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 3 PRECEDING AND CURRENT ROW
+  ),
+  covar_samp(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 3 PRECEDING AND CURRENT ROW
+  ),
+  corr(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 3 PRECEDING AND CURRENT ROW
+  )
+FROM (
+  VALUES
+    (1, 10.0, 5.0),
+    (2, 20.0, NULL),
+    (3, NULL, 15.0),
+    (4, 30.0, 10.0),
+    (5, 40.0, 20.0)
+);
+----
+1 0 NULL NULL
+2 0 NULL NULL
+3 0 NULL NULL
+4 25 50 1
+5 25 50 1
+
+# Variance/stddev sliding-window regression test. Verifies that retracting
+# the last valid row resets the aggregate state.
+query IRRRR
+SELECT
+  column1,
+  var_pop(column2) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  var_samp(column2) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  stddev_pop(column2) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  stddev_samp(column2) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  )
+FROM (
+  VALUES
+    (1, 10.0),
+    (2, NULL),
+    (3, NULL),
+    (4, 30.0),
+    (5, 40.0)
+);
+----
+1 0 NULL 0 NULL
+2 0 NULL 0 NULL
+3 NULL NULL NULL NULL
+4 0 NULL 0 NULL
+5 25 50 5 7.071067811865
+
 # Decimal variant — the integer-division path would otherwise panic on an
 # empty frame.
 query IR
@@ -6619,7 +6816,7 @@ ORDER BY i;
 statement ok
 reset datafusion.execution.batch_size;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

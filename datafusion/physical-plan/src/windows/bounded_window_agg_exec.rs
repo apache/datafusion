@@ -28,6 +28,7 @@ use std::task::{Context, Poll};
 
 use super::utils::create_schema;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::EmptyRecordBatchStream;
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -35,8 +36,9 @@ use crate::windows::{
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, InputOrderMode, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, WindowExpr, check_if_same_properties,
+    ExecutionPlanProperties, InputDistributionRequirements, InputOrderMode,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
+    check_if_same_properties,
 };
 
 use arrow::compute::take_record_batch;
@@ -48,7 +50,6 @@ use arrow::{
 };
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
@@ -250,17 +251,6 @@ impl BoundedWindowAggExec {
             total_byte_size: Precision::Absent,
         })
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for BoundedWindowAggExec {
@@ -321,19 +311,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
         vec![&self.input]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for window_expr in &self.window_expr {
-            for expr in window_expr.expressions() {
-                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
-    }
-
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
@@ -345,11 +322,18 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         if self.partition_keys().is_empty() {
             debug!("No partition defined for BoundedWindowAggExec!!!");
-            vec![Distribution::SinglePartition]
+            InputDistributionRequirements::new(vec![Distribution::SinglePartition])
         } else {
-            vec![Distribution::HashPartitioned(self.partition_keys().clone())]
+            InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(
+                self.partition_keys(),
+            )])
+            .allow_range_satisfaction_for_key_partitioning()
         }
     }
 
@@ -368,6 +352,17 @@ impl ExecutionPlan for BoundedWindowAggExec {
             self.input_order_mode.clone(),
             self.can_repartition,
         )?))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -391,9 +386,16 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let input_stat =
-            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let input_stat = input_stats[0].as_ref().clone();
         Ok(Arc::new(self.statistics_helper(input_stat)?))
     }
 

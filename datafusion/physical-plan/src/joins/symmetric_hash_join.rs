@@ -44,16 +44,16 @@ use crate::joins::utils::{
     BatchSplitter, BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn,
     JoinOnRef, NoopBatchTransformer, StatefulStreamResult, apply_join_filter_to_indices,
     build_batch_from_indices, build_join_schema, check_join_is_valid, equal_rows_arr,
-    symmetric_join_output_partitioning, update_hash,
+    matchable_join_keys, symmetric_join_output_partitioning, update_hash,
 };
 use crate::projection::{
-    ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
-    physical_to_column_exprs, update_join_filter, update_join_on,
+    JoinData, ProjectionExec, try_pushdown_through_join_with_column_indices,
 };
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    InputDistributionRequirements, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
@@ -66,7 +66,6 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::bisect;
 use datafusion_common::{
     HashSet, JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err,
@@ -361,20 +360,6 @@ impl SymmetricHashJoinExec {
         }
         Ok(false)
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        let left = children.swap_remove(0);
-        let right = children.swap_remove(0);
-        Self {
-            left,
-            right,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for SymmetricHashJoinExec {
@@ -427,6 +412,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         match self.mode {
             StreamJoinPartitionMode::Partitioned => {
                 let (left_expr, right_expr) = self
@@ -434,13 +423,17 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                     .iter()
                     .map(|(l, r)| (Arc::clone(l) as _, Arc::clone(r) as _))
                     .unzip();
-                vec![
-                    Distribution::HashPartitioned(left_expr),
-                    Distribution::HashPartitioned(right_expr),
-                ]
+                InputDistributionRequirements::co_partitioned(vec![
+                    Distribution::KeyPartitioned(left_expr),
+                    Distribution::KeyPartitioned(right_expr),
+                ])
+                .allow_range_satisfaction_for_key_partitioning()
             }
             StreamJoinPartitionMode::SinglePartition => {
-                vec![Distribution::SinglePartition, Distribution::SinglePartition]
+                InputDistributionRequirements::new(vec![
+                    Distribution::SinglePartition,
+                    Distribution::SinglePartition,
+                ])
             }
         }
     }
@@ -460,23 +453,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         vec![&self.left, &self.right]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to join keys from both sides
-        let mut tnr = TreeNodeRecursion::Continue;
-        for (left, right) in &self.on {
-            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
-            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
-        }
-        // Apply to join filter expressions if present
-        if let Some(filter) = &self.filter {
-            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
-        }
-        Ok(tnr)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -493,6 +469,20 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             self.right_sort_exprs.clone(),
             self.mode,
         )?))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+        Ok(Arc::new(Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -607,69 +597,36 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // Convert projected PhysicalExpr's to columns. If not possible, we cannot proceed.
-        let Some(projection_as_columns) = physical_to_column_exprs(projection.expr())
-        else {
-            return Ok(None);
-        };
-
-        let (far_right_left_col_ind, far_left_right_col_ind) = join_table_borders(
-            self.left().schema().fields().len(),
-            &projection_as_columns,
-        );
-
-        if !join_allows_pushdown(
-            &projection_as_columns,
-            &self.schema(),
-            far_right_left_col_ind,
-            far_left_right_col_ind,
-        ) {
-            return Ok(None);
-        }
-
-        let Some(new_on) = update_join_on(
-            &projection_as_columns[0..=far_right_left_col_ind as _],
-            &projection_as_columns[far_left_right_col_ind as _..],
-            self.on(),
-            self.left().schema().fields().len(),
-        ) else {
-            return Ok(None);
-        };
-
-        let new_filter = if let Some(filter) = self.filter() {
-            match update_join_filter(
-                &projection_as_columns[0..=far_right_left_col_ind as _],
-                &projection_as_columns[far_left_right_col_ind as _..],
-                filter,
-                self.left().schema().fields().len(),
-            ) {
-                Some(updated_filter) => Some(updated_filter),
-                None => return Ok(None),
-            }
-        } else {
-            None
-        };
-
-        let (new_left, new_right) = new_join_children(
-            &projection_as_columns,
-            far_right_left_col_ind,
-            far_left_right_col_ind,
+        let schema = self.schema();
+        if let Some(JoinData {
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            join_on,
+        }) = try_pushdown_through_join_with_column_indices(
+            projection,
             self.left(),
             self.right(),
-        )?;
-
-        SymmetricHashJoinExec::try_new(
-            Arc::new(new_left),
-            Arc::new(new_right),
-            new_on,
-            new_filter,
-            self.join_type(),
-            self.null_equality(),
-            self.right().output_ordering().cloned(),
-            self.left().output_ordering().cloned(),
-            self.partition_mode(),
-        )
-        .map(|e| Some(Arc::new(e) as _))
+            self.on(),
+            &schema,
+            self.filter(),
+            self.column_indices.as_slice(),
+        )? {
+            SymmetricHashJoinExec::try_new(
+                Arc::new(projected_left_child),
+                Arc::new(projected_right_child),
+                join_on,
+                join_filter,
+                self.join_type(),
+                self.null_equality(),
+                self.right().output_ordering().cloned(),
+                self.left().output_ordering().cloned(),
+                self.partition_mode(),
+            )
+            .map(|e| Some(Arc::new(e) as _))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -1131,8 +1088,20 @@ fn lookup_join_hashmap(
     //     (5,1)
     //
     // With this approach, the lexicographic order on both the probe side and the build side is preserved.
+    //
+    // Probe rows whose key contains a NULL cannot match any build row and are
+    // skipped without a map lookup.
+    let valid_keys = matchable_join_keys(&keys_values, null_equality);
     let (mut matched_probe, mut matched_build) = build_hashmap.get_matched_indices(
-        Box::new(hash_values.iter().enumerate().rev()),
+        Box::new(
+            hash_values
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| {
+                    valid_keys.as_ref().is_none_or(|valid| valid.is_valid(*i))
+                })
+                .rev(),
+        ),
         deleted_offset,
     );
 
@@ -1209,6 +1178,7 @@ impl OneSideHashJoiner {
     ///
     /// * `batch` - The incoming [RecordBatch] to be merged with the internal input buffer
     /// * `random_state` - The random state used to hash values
+    /// * `null_equality` - Null semantics to use
     ///
     /// # Returns
     ///
@@ -1217,6 +1187,7 @@ impl OneSideHashJoiner {
         &mut self,
         batch: &RecordBatch,
         random_state: &RandomState,
+        null_equality: NullEquality,
     ) -> Result<()> {
         // Merge the incoming batch with the existing input buffer:
         self.input_buffer = concat_batches(&batch.schema(), [&self.input_buffer, batch])?;
@@ -1233,6 +1204,7 @@ impl OneSideHashJoiner {
             &mut self.hashes_buffer,
             self.deleted_offset,
             false,
+            null_equality,
         )?;
         Ok(())
     }
@@ -1706,7 +1678,11 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
         probe_side_metrics.input_batches.add(1);
         probe_side_metrics.input_rows.add(probe_batch.num_rows());
         // Update the internal state of the hash joiner for the build side:
-        probe_hash_joiner.update_internal_state(probe_batch, &self.random_state)?;
+        probe_hash_joiner.update_internal_state(
+            probe_batch,
+            &self.random_state,
+            self.null_equality,
+        )?;
         // Join the two sides:
         let equal_result = join_with_probe_batch(
             build_hash_joiner,

@@ -23,9 +23,8 @@ use crate::{
     check_if_same_properties,
 };
 use arrow::array::RecordBatch;
-use arrow_schema::{Fields, Schema, SchemaRef};
-use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use arrow_schema::{FieldRef, Fields, Schema, SchemaRef};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::ScalarFunctionExpr;
@@ -62,8 +61,8 @@ impl AsyncFuncExec {
     ) -> Result<Self> {
         let async_fields = async_exprs
             .iter()
-            .map(|async_expr| async_expr.field(input.schema().as_ref()))
-            .collect::<Result<Vec<_>>>()?;
+            .map(|async_expr| async_expr.return_field(input.schema().as_ref()))
+            .collect::<Result<Vec<FieldRef>>>()?;
 
         // compute the output schema: input schema then async expressions
         let fields: Fields = input
@@ -71,7 +70,7 @@ impl AsyncFuncExec {
             .fields()
             .iter()
             .cloned()
-            .chain(async_fields.into_iter().map(Arc::new))
+            .chain(async_fields)
             .collect();
 
         let schema = Arc::new(Schema::new(fields));
@@ -114,17 +113,6 @@ impl AsyncFuncExec {
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for AsyncFuncExec {
@@ -165,13 +153,6 @@ impl ExecutionPlan for AsyncFuncExec {
         vec![&self.input]
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -186,6 +167,17 @@ impl ExecutionPlan for AsyncFuncExec {
             self.async_exprs.clone(),
             children.swap_remove(0),
         )?))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -216,7 +208,7 @@ impl ExecutionPlan for AsyncFuncExec {
             input_stream,
             batch_coalescer: LimitedBatchCoalescer::new(
                 Arc::clone(&self.input.schema()),
-                config_options_ref.execution.batch_size,
+                config_options_ref.execution.batch_size.get(),
                 None,
             ),
         };

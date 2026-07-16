@@ -1046,17 +1046,17 @@ SELECT log(10, arrow_cast(1 , 'Decimal32(5, 1)'))
 query RT
 SELECT power(2::decimal(38, 0), 4), arrow_typeof(power(2::decimal(38, 0), 4));
 ----
-16 Decimal128(38, 0)
+16 Float64
 
 query RT
 SELECT power(10000000000::decimal(38, 0), 2), arrow_typeof(power(10000000000::decimal(38, 0), 2));
 ----
-100000000000000000000 Decimal128(38, 0)
+100000000000000000000 Float64
 
 query R
 SELECT power(2.5, 4)
 ----
-39
+39.0625
 
 query R
 SELECT power(2.5, 1)
@@ -1093,75 +1093,106 @@ SELECT power(2, 100000000000)
 ----
 Infinity
 
-# Negative exponent now works (fallback to f64)
+# Negative exponent returns Float64 so fractional results are representable
 query RT
 SELECT power(2::decimal(38, 0), -5), arrow_typeof(power(2::decimal(38, 0), -5));
 ----
-0 Decimal128(38, 0)
+0.03125 Float64
 
-# Negative exponent with scale preserves decimal places
+query RT
+SELECT power(CAST(2 AS DECIMAL(10, 0)), -3), arrow_typeof(power(CAST(2 AS DECIMAL(10, 0)), -3));
+----
+0.125 Float64
+
 query RT
 SELECT power(4::decimal(38, 5), -1), arrow_typeof(power(4::decimal(38, 5), -1));
 ----
-0.25 Decimal128(38, 5)
+0.25 Float64
 
-# Expected to have `16 Decimal128(38, 0)`
-# Due to type coericion, it becomes Float -> Float -> Float
+query IRT
+SELECT exponent, power(2::decimal(10, 0), exponent), arrow_typeof(power(2::decimal(10, 0), exponent))
+FROM (VALUES (-3), (3)) AS t(exponent)
+ORDER BY exponent;
+----
+-3 0.125 Float64
+3 8 Float64
+
 query RT
 SELECT power(2::decimal(38, 0), 4), arrow_typeof(power(2::decimal(38, 0), 4));
 ----
-16 Decimal128(38, 0)
+16 Float64
 
-# Arbitrary scale
 query RT
 SELECT power(2.5::decimal(38, 3), 4), arrow_typeof(power(2.5::decimal(38, 3), 4));
 ----
-39.062 Decimal128(38, 3)
+39.0625 Float64
+
+# https://github.com/apache/datafusion/issues/22480
+query RT
+SELECT power(2.5::decimal(20, 4), 10), arrow_typeof(power(2.5::decimal(20, 4), 10));
+----
+9536.7431640625 Float64
 
 query RT
 SELECT power(2.5, 4.0), arrow_typeof(power(2.5, 4.0));
 ----
-39 Decimal128(2, 1)
+39.0625 Float64
 
-# Non-integer exponent now works (fallback to f64)
 query RT
 SELECT power(2.5, 4.2), arrow_typeof(power(2.5, 4.2));
 ----
-46.9 Decimal128(2, 1)
+46.9189232024 Float64
 
-query error Compute error: Cannot use non-finite exp: NaN
-SELECT power(2::decimal(38, 0), arrow_cast('NaN','Float64'))
+query RT
+SELECT power(2::decimal(38, 0), arrow_cast('NaN','Float64')),
+       arrow_typeof(power(2::decimal(38, 0), arrow_cast('NaN','Float64')));
+----
+NaN Float64
 
-query error Compute error: Cannot use non-finite exp: inf
-SELECT power(2::decimal(38, 0), arrow_cast('INF','Float64'))
+query RT
+SELECT power(2::decimal(38, 0), arrow_cast('INF','Float64')),
+       arrow_typeof(power(2::decimal(38, 0), arrow_cast('INF','Float64')));
+----
+Infinity Float64
 
-# Floating above u32::max now works (fallback to f64, returns infinity which is an error)
-query error Arrow error: Arithmetic overflow: Result of 2\^5000000000.1 is not finite
-SELECT power(2::decimal(38, 0), 5000000000.1)
+# Result overflows finite Float64 range
+query RT
+SELECT power(2::decimal(38, 0), 5000000000.1),
+       arrow_typeof(power(2::decimal(38, 0), 5000000000.1));
+----
+Infinity Float64
 
-# Integer Above u32::max - still goes through integer path which fails
-query error Arrow error: Arithmetic overflow: Unsupported exp value
-SELECT power(2::decimal(38, 0), 5000000000)
+# Integer above u32::max uses the Float64 decimal/int path
+query RT
+SELECT power(2::decimal(38, 0), 5000000000),
+       arrow_typeof(power(2::decimal(38, 0), 5000000000));
+----
+Infinity Float64
 
-query ?T
+query RT
 SELECT power(arrow_cast(2, 'Decimal32(5, 0)'), 4), arrow_typeof(power(arrow_cast(2, 'Decimal32(5, 0)'), 4));
 ----
-16 Decimal32(5, 0)
+16 Float64
 
-query ?T
+query RT
 SELECT power(arrow_cast(2, 'Decimal64(5, 0)'), 4), arrow_typeof(power(arrow_cast(2, 'Decimal64(5, 0)'), 4));
 ----
-16 Decimal64(5, 0)
+16 Float64
 
 query RT
 SELECT power(2::decimal(76, 0), 4), arrow_typeof(power(2::decimal(76, 0), 4));
 ----
-16 Decimal256(76, 0)
+16 Float64
 
 query R
 SELECT power(2.0, null)
 ----
 NULL
+
+query RT
+SELECT power(2::decimal(38, 0), null), arrow_typeof(power(2::decimal(38, 0), null));
+----
+NULL Float64
 
 # Array variants of power function
 query RR rowsort
@@ -1206,7 +1237,7 @@ select log(100000000000000000000000000000000000::decimal(38,0))
 ----
 35
 
-# Result is decimal since argument is decimal regardless decimals-as-floats parsing
+# Decimal x Int64 returns Float64 regardless of decimals-as-floats parsing
 query R
 SELECT power(10000000000::decimal(38, 0), 2);
 ----
@@ -1216,7 +1247,7 @@ query RT
 SELECT power(10000000000::decimal(38, 0), 2),
        arrow_typeof(power(10000000000::decimal(38, 0), 2));
 ----
-100000000000000000000 Decimal128(38, 0)
+100000000000000000000 Float64
 
 query R
 SELECT power(2.5, 4.0)
@@ -1260,3 +1291,52 @@ ORDER BY c1;
 
 statement ok
 DROP TABLE decimal_div_mismatch;
+
+# Regression tests: `avg` of a decimal column must accumulate its intermediate
+# sum in a type wide enough not to overflow the input's native type. Each row
+# count below is chosen so that the sum just exceeds the input's native maximum
+# and would silently wrap if accumulated unwidened.
+
+# 21476 * 99999 = 2,147,578,524 > i32::MAX
+query RT
+select avg(d), arrow_typeof(avg(d))
+from (
+    select arrow_cast(99999.0, 'Decimal32(5, 0)') as d
+    from generate_series(1, 21476)
+) t;
+----
+99999 Decimal32(9, 4)
+
+# 92235 * 99999999999999 ~= 9.22e18 > i64::MAX
+query RT
+select avg(d), arrow_typeof(avg(d))
+from (
+    select arrow_cast('99999999999999', 'Decimal64(14, 0)') as d
+    from generate_series(1, 92235)
+) t;
+----
+99999999999999 Decimal64(18, 4)
+
+# 21476 * (10^34 - 1) ~= 2.15e38 > i128::MAX
+query RT
+select avg(d), arrow_typeof(avg(d))
+from (
+    select arrow_cast('9999999999999999999999999999999999', 'Decimal128(34, 0)') as d
+    from generate_series(1, 21476)
+) t;
+----
+9999999999999999999999999999999999 Decimal128(38, 4)
+
+# Regression: `avg(DISTINCT ...)` must widen its intermediate sum the same way.
+# The second distinct aggregate keeps `single_distinct_to_group_by` from
+# rewriting the plan, so the distinct accumulator is the code under test.
+
+# sum(1..65536) = 2,147,516,416 > i32::MAX, avg = 32768.5
+query RTR
+select avg(distinct d), arrow_typeof(avg(distinct d)), avg(distinct v)
+from (
+    select arrow_cast(v, 'Decimal32(9, 0)') as d, v
+    from generate_series(1, 65536) t(v)
+) t;
+----
+32768.5 Decimal32(9, 4) 32768.5

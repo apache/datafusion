@@ -64,7 +64,7 @@ impl MemoryPool for UnboundedMemoryPool {
 impl Display for UnboundedMemoryPool {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let used = self.used.load(Ordering::Relaxed);
-        write!(f, "{}(used: {})", &self.name(), human_readable_size(used))
+        write!(f, "{}(used: {})", self.name(), human_readable_size(used))
     }
 }
 
@@ -135,7 +135,7 @@ impl Display for GreedyMemoryPool {
         write!(
             f,
             "{}(used: {}, pool_size: {})",
-            &self.name(),
+            self.name(),
             human_readable_size(used),
             human_readable_size(self.pool_size)
         )
@@ -290,7 +290,7 @@ impl Display for FairSpillPool {
         write!(
             f,
             "{}(pool_size: {})",
-            &self.name(),
+            self.name(),
             human_readable_size(self.pool_size),
         )
     }
@@ -416,9 +416,9 @@ impl<I: MemoryPool> Display for TrackConsumersPool<I> {
         write!(
             f,
             "{}(inner_pool: {}, num_of_top_consumers: {})",
-            &self.name(),
-            &self.inner,
-            &self.top,
+            self.name(),
+            self.inner,
+            self.top,
         )
     }
 }
@@ -500,7 +500,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
                 )
             })
             .collect::<Vec<_>>();
-        consumers.sort_by(|a, b| b.1.cmp(&a.1)); // inverse ordering
+        consumers.sort_by_key(|consumer| std::cmp::Reverse(consumer.1));
 
         consumers[0..std::cmp::min(top, consumers.len())]
             .iter()

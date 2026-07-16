@@ -27,14 +27,13 @@
 use std::fmt;
 use std::sync::Arc;
 
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, ScalarValue, Statistics, exec_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
-use datafusion_physical_expr::PhysicalExpr;
 
 use crate::execution_plan::{CardinalityEffect, ExecutionPlan, PlanProperties};
 use crate::joins::utils::{OnceAsync, OnceFut};
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
 
@@ -225,13 +224,6 @@ impl ExecutionPlan for ScalarSubqueryExec {
         )))
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         // Only the main input (first child); subquery children don't contribute
         // to ordering.
@@ -244,8 +236,19 @@ impl ExecutionPlan for ScalarSubqueryExec {
         vec![false; self.subqueries.len() + 1]
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(partition)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        // Only `self.input` (child 0) is used; the subqueries are skipped.
+        let mut requests = vec![ChildStats::Skip; 1 + self.subqueries.len()];
+        requests[0] = ChildStats::At(partition);
+        requests
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -386,13 +389,6 @@ mod tests {
                 children.remove(0),
                 Arc::clone(&self.execute_calls),
             )))
-        }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(

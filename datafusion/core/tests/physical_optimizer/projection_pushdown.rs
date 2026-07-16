@@ -25,7 +25,7 @@ use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, ScalarValue};
-use datafusion_datasource::TableSchema;
+use datafusion_datasource::TableSchemaBuilder;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -225,7 +225,7 @@ fn test_update_matching_exprs() -> Result<()> {
         .iter()
         .map(|(expr, alias)| ProjectionExpr::new(expr.clone(), alias.clone()))
         .collect();
-    for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs.into_iter()) {
+    for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs) {
         assert!(
             update_expr(&expr, &child_exprs, true)?
                 .unwrap()
@@ -366,7 +366,7 @@ fn test_update_projected_exprs() -> Result<()> {
         .iter()
         .map(|(expr, alias)| ProjectionExpr::new(expr.clone(), alias.clone()))
         .collect();
-    for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs.into_iter()) {
+    for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs) {
         assert!(
             update_expr(&expr, &proj_exprs, false)?
                 .unwrap()
@@ -579,8 +579,7 @@ fn test_streaming_table_after_projection() -> Result<()> {
                 options: SortOptions::default(),
             }]
             .into(),
-        ]
-        .into_iter(),
+        ],
         true,
         None,
     )?;
@@ -725,7 +724,7 @@ fn test_output_req_after_projection() -> Result<()> {
             ]
             .into(),
         )),
-        Distribution::HashPartitioned(vec![
+        Distribution::KeyPartitioned(vec![
             Arc::new(Column::new("a", 0)),
             Arc::new(Column::new("b", 1)),
         ]),
@@ -747,7 +746,7 @@ fn test_output_req_after_projection() -> Result<()> {
         actual,
         @r"
     ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-      OutputRequirementExec: order_by=[(b@1, asc), (c@2 + a@0, asc)], dist_by=HashPartitioned[[a@0, b@1]])
+      OutputRequirementExec: order_by=[(b@1, asc), (c@2 + a@0, asc)], dist_by=KeyPartitioned[[a@0, b@1]])
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
     "
     );
@@ -763,7 +762,7 @@ fn test_output_req_after_projection() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    OutputRequirementExec: order_by=[(b@2, asc), (c@0 + new_a@1, asc)], dist_by=HashPartitioned[[new_a@1, b@2]])
+    OutputRequirementExec: order_by=[(b@2, asc), (c@0 + new_a@1, asc)], dist_by=KeyPartitioned[[new_a@1, b@2]])
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
     "
     );
@@ -798,10 +797,12 @@ fn test_output_req_after_projection() -> Result<()> {
         Arc::new(Column::new("new_a", 1)),
         Arc::new(Column::new("b", 2)),
     ];
-    if let Distribution::HashPartitioned(vec) = after_optimize
+    if let Distribution::KeyPartitioned(vec) = after_optimize
         .downcast_ref::<OutputRequirementExec>()
         .unwrap()
-        .required_input_distribution()[0]
+        .input_distribution_requirements()
+        .child_distribution(0)
+        .unwrap()
         .clone()
     {
         assert!(
@@ -810,7 +811,7 @@ fn test_output_req_after_projection() -> Result<()> {
                 .all(|(actual, expected)| actual.eq(&expected))
         );
     } else {
-        panic!("Expected HashPartitioned distribution!");
+        panic!("Expected KeyPartitioned distribution!");
     };
 
     Ok(())
@@ -1575,10 +1576,13 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
         quote: b'"',
         ..Default::default()
     };
-    let table_schema = TableSchema::new(
-        Arc::clone(&file_schema),
-        vec![Arc::new(Field::new("partition_col", DataType::Utf8, true))],
-    );
+    let table_schema = TableSchemaBuilder::from(&file_schema)
+        .with_table_partition_cols(vec![Arc::new(Field::new(
+            "partition_col",
+            DataType::Utf8,
+            true,
+        ))])
+        .build();
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         Arc::new(CsvSource::new(table_schema).with_csv_options(options)),

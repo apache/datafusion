@@ -23,9 +23,23 @@ select date_bin(interval '1637426858 months', to_timestamp_millis(1040292460), t
 ----
 NULL
 
-# Negative timestamp with month interval - should return NULL instead of panicking  
+# Issue #22528: negative sub-second source with month interval.
 query P
 select date_bin(interval '1 month', to_timestamp_millis(-1040292460), timestamp '1984-01-07 00:00:00');
+----
+1969-12-07T00:00:00
+
+# Array path should match the scalar path above.
+query P
+select date_bin(interval '1 month', c, timestamp '1984-01-07 00:00:00')
+from values (to_timestamp_millis(-1040292460)) t(c);
+----
+1969-12-07T00:00:00
+
+# Array path should return NULL for per-row overflow.
+query P
+select date_bin(interval '1637426858 months', c, timestamp '1984-01-07 00:00:00')
+from values (to_timestamp_millis(1040292460)) t(c);
 ----
 NULL
 
@@ -56,5 +70,48 @@ select date_bin(
   to_timestamp_millis(-2208988800000),
   timestamp '1984-01-07 00:00:00'
 ) as b;
+----
+NULL
+
+# Extreme timestamp overflow: source - origin overflows i64 (should return NULL, not panic)
+query P
+select date_bin(
+  interval '1 nanosecond',
+  arrow_cast(9223372036854775807, 'Timestamp(Nanosecond, None)'),
+  arrow_cast(-9223372036854775808, 'Timestamp(Nanosecond, None)')
+);
+----
+NULL
+
+# compute_distance overflow: source at i64::MIN nanoseconds previously panicked
+# inside compute_distance; it must return NULL through the SQL execution path
+query P
+select date_bin(
+  interval '3 nanoseconds',
+  arrow_cast(-9223372036854775808, 'Timestamp(Nanosecond, None)')
+);
+----
+NULL
+
+# Source timestamp scaling to nanoseconds overflows: should return NULL, not panic
+query P
+select date_bin(
+  interval '1 nanosecond',
+  arrow_cast(9223372036854775807, 'Timestamp(Second, None)'),
+  timestamp '1970-01-01 00:00:00'
+);
+----
+NULL
+
+# Source timestamp scaling to nanoseconds overflows in array path: should return NULL, not panic
+query P
+select date_bin(
+  interval '1 nanosecond',
+  ts,
+  timestamp '1970-01-01 00:00:00'
+)
+from (
+  values (arrow_cast(9223372036854775807, 'Timestamp(Second, None)'))
+) as t(ts);
 ----
 NULL

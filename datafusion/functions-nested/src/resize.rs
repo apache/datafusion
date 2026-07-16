@@ -203,7 +203,7 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     let mut max_extra: usize = 0;
     let mut output_values_len: usize = 0;
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
-        if array.is_null(row_index) {
+        if array.is_null(row_index) || count_array.is_null(row_index) {
             continue;
         }
         let target_count = count_array.value(row_index).to_usize().ok_or_else(|| {
@@ -217,6 +217,14 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
         if target_count > current_len {
             max_extra = max_extra.max(target_count - current_len);
         }
+    }
+
+    if output_values_len > max_resize_values(&data_type)
+        || O::from_usize(output_values_len).is_none()
+    {
+        return exec_err!(
+            "array_resize: resulting array of {output_values_len} elements exceeds the maximum array size"
+        );
     }
 
     // The fast path is valid when at least one row grows and every row would
@@ -256,7 +264,7 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
             &original_data,
             &default_value_data,
             output_values_len,
-            |mutable, _, extra_count| mutable.extend(1, 0, extra_count),
+            |mutable, _, extra_count| Ok(mutable.try_extend(1, 0, extra_count)?),
         )
     } else {
         // Slow path: rows may need different fill values, so append from the
@@ -278,8 +286,9 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
             output_values_len,
             |mutable, row_index, extra_count| {
                 for _ in 0..extra_count {
-                    mutable.extend(1, row_index, row_index + 1);
+                    mutable.try_extend(1, row_index, row_index + 1)?;
                 }
+                Ok(())
             },
         )
     }
@@ -296,7 +305,7 @@ fn build_resized_list<O, F>(
 ) -> Result<ArrayRef>
 where
     O: OffsetSizeTrait + TryInto<i64>,
-    F: FnMut(&mut MutableArrayData, usize, usize),
+    F: FnMut(&mut MutableArrayData, usize, usize) -> Result<()>,
 {
     let capacity = Capacities::Array(output_values_len);
     let mut offsets = vec![O::usize_as(0)];
@@ -308,7 +317,7 @@ where
     let mut null_builder = NullBufferBuilder::new(array.len());
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
-        if array.is_null(row_index) {
+        if array.is_null(row_index) || count_array.is_null(row_index) {
             null_builder.append_null();
             offsets.push(offsets[row_index]);
             continue;
@@ -323,11 +332,11 @@ where
         if start + count > offset_window[1] {
             let extra_count = (start + count - offset_window[1]).to_usize().unwrap();
             let end = offset_window[1];
-            mutable.extend(0, start.to_usize().unwrap(), end.to_usize().unwrap());
-            append_fill_values(&mut mutable, row_index, extra_count);
+            mutable.try_extend(0, start.to_usize().unwrap(), end.to_usize().unwrap())?;
+            append_fill_values(&mut mutable, row_index, extra_count)?;
         } else {
             let end = start + count;
-            mutable.extend(0, start.to_usize().unwrap(), end.to_usize().unwrap());
+            mutable.try_extend(0, start.to_usize().unwrap(), end.to_usize().unwrap())?;
         };
         offsets.push(offsets[row_index] + count);
     }
@@ -340,4 +349,120 @@ where
         arrow::array::make_array(data),
         null_builder.finish(),
     )?))
+}
+
+/// Largest element count whose eager value buffer stays within `isize::MAX`
+/// bytes, so `array_resize` rejects oversized results instead of panicking.
+/// Only primitive and `FixedSizeBinary` leaves are byte-exact.
+fn max_resize_values(value_type: &DataType) -> usize {
+    let element_width = match value_type {
+        DataType::FixedSizeBinary(size) if *size > 0 => *size as usize,
+        _ => value_type.primitive_width().unwrap_or(size_of::<u128>()),
+    };
+
+    (isize::MAX as usize) / element_width.max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::array_resize_inner;
+    use arrow::array::{
+        ArrayRef, AsArray, FixedSizeBinaryArray, Int64Array, LargeListArray, ListArray,
+    };
+    use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+    use arrow::datatypes::{DataType, Field, Int32Type, Int64Type};
+    use datafusion_common::Result;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_array_resize_null_size_returns_null() -> Result<()> {
+        let array: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                Some(vec![Some(4), Some(5)]),
+            ]));
+        let size: ArrayRef = Arc::new(Int64Array::new(
+            ScalarBuffer::from(vec![2, 1]),
+            Some(NullBuffer::from(vec![true, false])),
+        ));
+
+        let result = array_resize_inner(&[array, size])?;
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+        ]);
+
+        assert_eq!(result.as_list::<i32>(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_resize_large_size_errors_without_panicking() {
+        let array: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                Some(vec![Some(1)]),
+            ]));
+        let size: ArrayRef = Arc::new(Int64Array::from(vec![i64::MAX]));
+        let fill: ArrayRef = Arc::new(Int64Array::from(vec![0]));
+
+        let err = array_resize_inner(&[array, size, fill]).unwrap_err();
+        assert!(
+            err.to_string().contains("exceeds the maximum array size"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_array_resize_fixed_size_binary_large_size_errors_without_panicking() {
+        let values =
+            FixedSizeBinaryArray::try_from_iter(vec![vec![0u8; 32]].into_iter()).unwrap();
+        let elem_field =
+            Arc::new(Field::new_list_field(DataType::FixedSizeBinary(32), true));
+        let offsets = OffsetBuffer::<i64>::new(vec![0i64, 1].into());
+        let array: ArrayRef = Arc::new(LargeListArray::new(
+            elem_field,
+            offsets,
+            Arc::new(values) as ArrayRef,
+            None,
+        ));
+        // Passes the width-16 bound (isize::MAX / 16) but overflows at width 32.
+        let size: ArrayRef = Arc::new(Int64Array::from(vec![400_000_000_000_000_000i64]));
+
+        let err = array_resize_inner(&[array, size]).unwrap_err();
+        assert!(
+            err.to_string().contains("exceeds the maximum array size"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_array_resize_accumulates_values_across_rows() {
+        // Each row's target (6e17) is individually under the width-8 cap
+        // (isize::MAX / 8), but their sum (1.2e18) exceeds it, so the guard
+        // must reject based on the accumulated total rather than per row.
+        let values = Int64Array::from(vec![1, 2]);
+        let offsets = OffsetBuffer::<i64>::new(vec![0i64, 1, 2].into());
+        let elem_field = Arc::new(Field::new_list_field(DataType::Int64, true));
+        let array: ArrayRef = Arc::new(LargeListArray::new(
+            elem_field,
+            offsets,
+            Arc::new(values) as ArrayRef,
+            None,
+        ));
+        let size: ArrayRef = Arc::new(Int64Array::from(vec![
+            600_000_000_000_000_000i64,
+            600_000_000_000_000_000i64,
+        ]));
+
+        let err = array_resize_inner(&[array, size]).unwrap_err();
+        assert!(
+            err.to_string().contains("1200000000000000000"),
+            "expected accumulated total in error: {err}"
+        );
+        assert!(
+            err.to_string().contains("exceeds the maximum array size"),
+            "unexpected error: {err}"
+        );
+    }
 }

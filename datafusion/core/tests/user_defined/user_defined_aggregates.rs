@@ -872,10 +872,25 @@ impl GroupsAccumulator for TestGroupsAccumulator {
         &mut self,
         _values: &[ArrayRef],
         _group_indices: &[usize],
-        _opt_filter: Option<&arrow::array::BooleanArray>,
         _total_num_groups: usize,
     ) -> Result<()> {
         Ok(())
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        _opt_filter: Option<&arrow::array::BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let len = values.first().map_or(0, |value| value.len());
+        Ok(vec![
+            Arc::new(PrimitiveArray::<UInt64Type>::from_value(self.result, len))
+                as ArrayRef,
+        ])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {
