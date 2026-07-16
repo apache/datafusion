@@ -502,6 +502,7 @@ mod tests {
             let n = rows.len();
             for haystack in [
                 Arc::new(StringArray::from(rows.clone())) as ArrayRef,
+                Arc::new(LargeStringArray::from(rows.clone())) as ArrayRef,
                 Arc::new(StringViewArray::from(rows.clone())) as ArrayRef,
             ] {
                 // scalar `from`/`to` -> new fast path
