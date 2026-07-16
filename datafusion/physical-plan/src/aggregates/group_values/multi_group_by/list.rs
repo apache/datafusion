@@ -90,19 +90,16 @@ impl<O: OffsetSizeTrait> ListGroupValueBuilder<O> {
         self.offsets.push(next_o);
         Ok(())
     }
-}
 
-impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
-    fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
+    fn equal_to_typed(&self, lhs_row: usize, array: &GenericListArray<O>, rhs_row: usize) -> bool {
         let lhs_null = self.outer_nulls.is_null(lhs_row);
         let rhs_null = array.is_null(rhs_row);
         if let Some(result) = nulls_equal_to(lhs_null, rhs_null) {
             return result;
         }
 
-        let l = Self::list_array(array);
         // sliced child covering exactly the rhs row's elements
-        let rhs_sublist: ArrayRef = l.value(rhs_row);
+        let rhs_sublist: ArrayRef = array.value(rhs_row);
         let lhs_start = self.offsets[lhs_row].as_usize();
         let lhs_end = self.offsets[lhs_row + 1].as_usize();
         let lhs_len = lhs_end - lhs_start;
@@ -117,9 +114,8 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
         true
     }
 
-    fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
-        let l = Self::list_array(array);
-        if l.is_null(row) {
+    fn append_val_typed(&mut self, array: &GenericListArray<O>, row: usize) -> Result<()> {
+        if array.is_null(row) {
             self.outer_nulls.append(true);
             // Zero-length range for null outer rows: do not push any child
             // elements, and the offset for the next row stays the same.
@@ -127,7 +123,7 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
             self.offsets.push(end);
         } else {
             self.outer_nulls.append(false);
-            let sublist: ArrayRef = l.value(row);
+            let sublist: ArrayRef = array.value(row);
             let n = sublist.len();
             for j in 0..n {
                 self.child.append_val(&sublist, j)?;
@@ -137,6 +133,16 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
         self.outer_len += 1;
         Ok(())
     }
+}
+
+impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
+    fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
+        self.equal_to_typed(lhs_row, Self::list_array(array), rhs_row)
+    }
+
+    fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
+        self.append_val_typed(Self::list_array(array), row)
+    }
 
     fn vectorized_equal_to(
         &self,
@@ -145,21 +151,23 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
         rhs_rows: &[usize],
         equal_to_results: &mut BooleanBufferBuilder,
     ) {
+        let l = Self::list_array(array);
         for (idx, (&lhs_row, &rhs_row)) in
             lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
         {
             if !equal_to_results.get_bit(idx) {
                 continue;
             }
-            if !self.equal_to(lhs_row, array, rhs_row) {
+            if !self.equal_to_typed(lhs_row, l, rhs_row) {
                 equal_to_results.set_bit(idx, false);
             }
         }
     }
 
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
+        let l = Self::list_array(array);
         for &row in rows {
-            self.append_val(array, row)?;
+            self.append_val_typed(l, row)?;
         }
         Ok(())
     }
