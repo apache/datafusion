@@ -5940,6 +5940,31 @@ SELECT id, MAX(value) FROM fixed_size_binary_views GROUP BY id ORDER BY id;
 3 000101
 4 NULL
 
+# Group by a FixedSizeBinary column
+# (exercises the FixedSizeBinary `GroupColumn` in `GroupValuesColumn`)
+query ?I
+SELECT value, COUNT(*) FROM fixed_size_binary_views GROUP BY value ORDER BY value;
+----
+000101 2
+000102 1
+000103 3
+000104 2
+000109 1
+NULL 2
+
+# Multi-column group by including a FixedSizeBinary column
+query ?II
+SELECT value, id, COUNT(*) FROM fixed_size_binary_views GROUP BY value, id ORDER BY value, id;
+----
+000101 2 1
+000101 3 1
+000102 1 1
+000103 1 3
+000104 1 2
+000109 2 1
+NULL 1 1
+NULL 4 1
+
 statement ok
 DROP VIEW fixed_size_binary_views;
 
