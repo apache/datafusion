@@ -306,16 +306,22 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Install llvm-tools-preview
+        run: rustup component add llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6  # v2.82.6
+        with:
+          tool: cargo-llvm-cov
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-         save-if: ${{ github.ref_name == 'main' }}
-         shared-key: "amd-ci"
+          save-if: ${{ github.ref_name == 'main' }}
+          shared-key: "amd-ci"
       - name: Run tests (excluding doctests and datafusion-cli)
         env:
           RUST_BACKTRACE: 1
         run: |
-          cargo test \
+          cargo llvm-cov \
             --profile ci \
             --exclude datafusion-examples \
             --exclude ffi_example_table_provider \
@@ -324,7 +330,9 @@ jobs:
             --lib \
             --tests \
             --bins \
-            --features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait
+            --features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
+            --codecov \
+            --output-path target/codecov.json
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code
@@ -337,6 +345,12 @@ jobs:
                 echo "$STATUS"
                 exit 1
               fi
+      - name: Upload coverage to codecov.io
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5
+        with:
+          files: target/codecov.json
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   # datafusion-cli tests
   linux-test-datafusion-cli:
@@ -639,50 +653,6 @@ jobs:
       - name: Check workflow tool installs
         run: ci/scripts/check_no_cargo_install_in_workflows.sh
 
-  # Coverage job disabled due to
-  # https://github.com/apache/datafusion/issues/3678
-
-  # coverage:
-  #   name: coverage
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         submodules: true
-  #     - name: Install protobuf compiler
-  #       shell: bash
-  #       run: |
-  #         mkdir -p $HOME/d/protoc
-  #         cd $HOME/d/protoc
-  #         export PROTO_ZIP="protoc-21.4-linux-x86_64.zip"
-  #         curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-  #         unzip $PROTO_ZIP
-  #         export PATH=$PATH:$HOME/d/protoc/bin
-  #         protoc --version
-  #     - name: Setup Rust toolchain
-  #       run: |
-  #         rustup toolchain install stable
-  #         rustup default stable
-  #         rustup component add rustfmt clippy
-  #     - name: Cache Cargo
-  #       uses: actions/cache@v4
-  #       with:
-  #         path: /home/runner/.cargo
-  #         # this key is not equal because the user is different than on a container (runner vs github)
-  #         key: cargo-coverage-cache3-
-  #     - name: Install cargo-tarpaulin
-  #       uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853  # v2.83.2
-  #       with:
-  #         tool: cargo-tarpaulin@0.20.1
-  #     - name: Run coverage
-  #       run: |
-  #         export PATH=$PATH:$HOME/d/protoc/bin
-  #         rustup toolchain install stable
-  #         rustup default stable
-  #         cargo tarpaulin --all --out Xml
-  #     - name: Report coverage
-  #       continue-on-error: true
-  #       run: bash <(curl -s https://codecov.io/bash)
 
   clippy:
     name: clippy
