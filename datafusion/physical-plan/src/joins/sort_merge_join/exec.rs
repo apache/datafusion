@@ -38,10 +38,11 @@ use crate::projection::{
     physical_to_column_exprs, update_join_on,
 };
 use crate::spill::spill_manager::SpillManager;
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, SendableRecordBatchStream, Statistics, check_if_same_properties,
+    InputDistributionRequirements, PlanProperties, SendableRecordBatchStream, Statistics,
+    check_if_same_properties,
 };
 
 use arrow::compute::SortOptions;
@@ -413,16 +414,17 @@ impl ExecutionPlan for SortMergeJoinExec {
         self.input_distribution_requirements().into_per_child()
     }
 
-    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         let (left_expr, right_expr) = self
             .on
             .iter()
             .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
             .unzip();
-        crate::InputDistributionRequirements::new(vec![
+        InputDistributionRequirements::co_partitioned(vec![
             Distribution::KeyPartitioned(left_expr),
             Distribution::KeyPartitioned(right_expr),
         ])
+        .allow_range_satisfaction_for_key_partitioning()
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -568,7 +570,15 @@ impl ExecutionPlan for SortMergeJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition), ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
         // SortMergeJoinExec uses symmetric hash partitioning where both left and right
         // inputs are hash-partitioned on the join keys. This means partition `i` of the
         // left input is joined with partition `i` of the right input.
@@ -576,12 +586,8 @@ impl ExecutionPlan for SortMergeJoinExec {
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        let left_stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(&self.left, args.partition())?,
-        );
-        let right_stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(&self.right, args.partition())?,
-        );
+        let left_stats = input_stats[0].as_ref().clone();
+        let right_stats = input_stats[1].as_ref().clone();
         Ok(Arc::new(estimate_join_statistics(
             left_stats,
             right_stats,

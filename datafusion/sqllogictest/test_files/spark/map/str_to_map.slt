@@ -159,5 +159,9 @@ statement ok
 set datafusion.spark.map_key_dedup_policy = 'EXCEPTION';
 
 # Invalid policy values are rejected at SET time with a clear message.
-statement error DataFusion error: Invalid or Unsupported Configuration: Invalid MapKeyDedupPolicy: BOGUS\. Expected one of: EXCEPTION, LAST_WIN
+statement error
 set datafusion.spark.map_key_dedup_policy = 'BOGUS';
+----
+DataFusion error: Error setting config datafusion.spark.map_key_dedup_policy
+caused by
+Invalid or Unsupported Configuration: Invalid MapKeyDedupPolicy: BOGUS. Expected one of: EXCEPTION, LAST_WIN
