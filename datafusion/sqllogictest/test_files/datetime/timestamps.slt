@@ -539,6 +539,14 @@ ORDER BY id
 1 2020-09-08T00:00:00
 2 NULL
 
+# to_unixtime uses the same formatted string parsing path
+query II
+SELECT
+  to_unixtime(NULL::VARCHAR, '%Y-%m-%d'),
+  to_unixtime('2020-09-08', NULL::VARCHAR, NULL::VARCHAR)
+----
+NULL NULL
+
 # to_timestamp float inputs
 
 query PPP
