@@ -55,8 +55,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, transpose};
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, HashMap, ScalarValue, SplitPoint,
-    assert_or_internal_err, internal_err,
+    ColumnStatistics, DataFusionError, HashMap, HashSet, ScalarValue, SplitPoint,
+    assert_or_internal_err, internal_datafusion_err, internal_err,
 };
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -184,12 +184,16 @@ impl PartitionSpillWriters {
     ///
     /// In `PerInput` mode this moves the dedicated writer out (it must only be requested once per
     /// input); in `Shared` mode it clones the shared writer.
-    fn take_for_input(&mut self, input: usize) -> SpillPoolWriter {
+    fn take_for_input(&mut self, input: usize) -> Result<SpillPoolWriter> {
         match self {
-            PartitionSpillWriters::PerInput(writers) => writers[input]
-                .take()
-                .expect("spill writer for input partition requested more than once"),
-            PartitionSpillWriters::Shared(writer) => writer.new_writer(),
+            PartitionSpillWriters::PerInput(writers) => {
+                writers[input].take().ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "spill writer for input partition requested more than once"
+                    )
+                })
+            }
+            PartitionSpillWriters::Shared(writer) => Ok(writer.new_writer()),
         }
     }
 }
@@ -551,15 +555,15 @@ impl RepartitionExecState {
                     // writer. See [`PartitionSpillWriters::take_for_input`].
                     (
                         *partition,
-                        OutputChannel {
+                        Ok(OutputChannel {
                             sender: channels.tx[i].clone(),
                             reservation: Arc::clone(&channels.reservation),
-                            spill_writer: channels.spill_writers.take_for_input(i),
+                            spill_writer: channels.spill_writers.take_for_input(i)?,
                             shared_coalescer: channels.shared_coalescer.clone(),
-                        },
+                        }),
                     )
                 })
-                .collect();
+                .collect::<Result<HashMap<_, _>>>()?;
 
             // Extract senders for wait_for_task before moving txs
             let senders: HashMap<_, _> = txs
