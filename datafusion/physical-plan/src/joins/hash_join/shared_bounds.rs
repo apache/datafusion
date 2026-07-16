@@ -813,6 +813,7 @@ mod tests {
             on_right,
             repartition_random_state: SeededRandomState::with_seed(1),
             probe_schema: test_probe_schema(),
+            null_aware: false,
         }
     }
 
