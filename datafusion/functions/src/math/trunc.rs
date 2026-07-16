@@ -25,8 +25,8 @@ use arrow::datatypes::DataType::{
     Decimal32, Decimal64, Decimal128, Decimal256, Float32, Float64,
 };
 use arrow::datatypes::{
-    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType,
-    Float32Type, Float64Type, Int64Type,
+    ArrowPrimitiveType, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
+    Decimal256Type, DecimalType, Float32Type, Float64Type, Int64Type,
 };
 use datafusion_common::ScalarValue::Int64;
 use datafusion_common::types::{
@@ -40,7 +40,7 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignature, TypeSignatureClass};
 use datafusion_macros::user_doc;
-use num_traits::{One, Zero, pow};
+use num_traits::{Float, NumCast, One, Zero, pow};
 
 #[user_doc(
     doc_section(label = "Math Functions"),
@@ -158,6 +158,12 @@ impl ScalarUDFImpl for TruncFunc {
             }
         };
 
+        // Whether an explicit precision argument was supplied. The array fast
+        // paths below must only apply to the two-argument form: single-argument
+        // `trunc(x)` uses a different zero handling (mapping `-0.0` to `0.0`)
+        // that must be preserved.
+        let has_precision_arg = args.args.len() == 2;
+
         // Scalar fast path using tuple matching for (value, precision)
         match (&args.args[0], precision) {
             // Null cases
@@ -230,6 +236,25 @@ impl ScalarUDFImpl for TruncFunc {
                 *lprecision,
                 *lscale,
             ))),
+
+            // Array value with a constant (scalar) precision: hoist the power
+            // of ten out of the per-element loop instead of broadcasting the
+            // scalar into a full precision array and recomputing `10^p` for
+            // every element (see `truncate_float_array`).
+            (ColumnarValue::Array(arr), Some(p))
+                if has_precision_arg && arr.data_type() == &Float64 =>
+            {
+                Ok(ColumnarValue::Array(truncate_float_array::<Float64Type>(
+                    arr, p,
+                )))
+            }
+            (ColumnarValue::Array(arr), Some(p))
+                if has_precision_arg && arr.data_type() == &Float32 =>
+            {
+                Ok(ColumnarValue::Array(truncate_float_array::<Float32Type>(
+                    arr, p,
+                )))
+            }
 
             // Array path for everything else
             _ => make_scalar_function(trunc, vec![])(&args.args),
@@ -375,14 +400,35 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn compute_truncate32(x: f32, y: i64) -> f32 {
-    let factor = 10.0_f32.powi(y as i32);
+/// Truncates `x` using a pre-computed `factor` of `10^precision`. Taking the
+/// factor as an argument lets callers hoist `10^precision` out of a per-element
+/// loop when the precision is constant.
+fn truncate_with_factor<F: Float>(x: F, factor: F) -> F {
     (x * factor).trunc() / factor
 }
 
+/// Truncates every element of a float array to `precision` decimal places,
+/// computing the `10^precision` factor once and reusing it for every element.
+fn truncate_float_array<T>(arr: &ArrayRef, precision: i64) -> ArrayRef
+where
+    T: ArrowPrimitiveType,
+    T::Native: Float,
+{
+    let factor = <T::Native as NumCast>::from(10.0_f64)
+        .unwrap()
+        .powi(precision as i32);
+    Arc::new(
+        arr.as_primitive::<T>()
+            .unary::<_, T>(|x| truncate_with_factor(x, factor)),
+    )
+}
+
+fn compute_truncate32(x: f32, y: i64) -> f32 {
+    truncate_with_factor(x, 10.0_f32.powi(y as i32))
+}
+
 fn compute_truncate64(x: f64, y: i64) -> f64 {
-    let factor = 10.0_f64.powi(y as i32);
-    (x * factor).trunc() / factor
+    truncate_with_factor(x, 10.0_f64.powi(y as i32))
 }
 
 /// Truncates a decimal value to `truncate_precision` fractional digits.

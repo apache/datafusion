@@ -727,6 +727,15 @@ SET datafusion.execution.batch_size = 0
 statement error DataFusion error: Invalid or Unsupported Configuration: value must be greater than 0
 SET datafusion.execution.minimum_parallel_output_files = 0
 
+statement error DataFusion error: Invalid or Unsupported Configuration: value must be greater than 0
+SET datafusion.execution.soft_max_rows_per_output_file = 0
+
+statement error DataFusion error: Invalid or Unsupported Configuration: value must be greater than 0
+SET datafusion.execution.max_spill_file_size_bytes = 0
+
+statement error DataFusion error: Invalid or Unsupported Configuration: value must be greater than 0
+SET datafusion.sql_parser.recursion_limit = 0
+
 # Config reset
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema

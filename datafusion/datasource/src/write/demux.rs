@@ -153,7 +153,7 @@ async fn row_count_demuxer(
 ) -> Result<()> {
     let exec_options = &context.session_config().options().execution;
 
-    let max_rows_per_file = exec_options.soft_max_rows_per_output_file;
+    let max_rows_per_file = exec_options.soft_max_rows_per_output_file.get();
     let max_buffered_batches = exec_options.max_buffered_batches_per_output_file;
     let minimum_parallel_files = exec_options.minimum_parallel_output_files.get();
     let mut part_idx = 0;
