@@ -569,8 +569,10 @@ unchanged.</p>
 <section id="coercion-supports-dictionary-encoding-preservation">
 <h3><code class="docutils literal notranslate"><span class="pre">Coercion</span></code> supports dictionary encoding preservation<a class="headerlink" href="#coercion-supports-dictionary-encoding-preservation" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_expr_common::signature::Coercion</span></code> now supports optional dictionary
-encoding preservation. When enabled for <code class="docutils literal notranslate"><span class="pre">TypeSignatureClass::Native(...)</span></code>
-coercions, DataFusion coerces dictionary inputs to
+encoding preservation. Typed coercions materialize dictionary inputs by
+default, including both <code class="docutils literal notranslate"><span class="pre">TypeSignatureClass::Native(...)</span></code> and broader classes
+such as <code class="docutils literal notranslate"><span class="pre">Integer</span></code>, <code class="docutils literal notranslate"><span class="pre">Numeric</span></code>, and <code class="docutils literal notranslate"><span class="pre">Binary</span></code>. When preservation is enabled,
+DataFusion instead coerces dictionary inputs to
 <code class="docutils literal notranslate"><span class="pre">Dictionary(original_key_type,</span> <span class="pre">coerced_value_type)</span></code> instead of materializing them
 to the coerced value type.</p>
 <p>User-defined functions can opt in by setting dictionary encoding preservation on
@@ -583,6 +585,10 @@ the relevant coercion:</p>
 derives its return type from that coerced argument type, code that checks exact
 result types may need to update its expectations or add an explicit cast to
 materialize the result.</p>
+<p>This changes the previous behavior of typed non-native classes such as
+<code class="docutils literal notranslate"><span class="pre">Integer</span></code> and <code class="docutils literal notranslate"><span class="pre">Binary</span></code>, which retained the physical dictionary type by default.
+UDFs relying on that behavior must now explicitly enable dictionary
+preservation. <code class="docutils literal notranslate"><span class="pre">TypeSignatureClass::Any</span></code> is unaffected.</p>
 </section>
 <section id="groupsaccumulator-merge-batch-no-longer-takes-opt-filter">
 <h3><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::merge_batch</span></code> no longer takes <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code><a class="headerlink" href="#groupsaccumulator-merge-batch-no-longer-takes-opt-filter" title="Link to this heading">#</a></h3>
