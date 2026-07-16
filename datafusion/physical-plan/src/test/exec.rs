@@ -18,9 +18,9 @@
 //! Simple iterator over batches for use in testing
 
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics, common,
-    execution_plan::Boundedness, statistics::StatisticsArgs,
+    DisplayAs, DisplayFormatType, ExecutionPlan, InputDistributionRequirements,
+    Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    Statistics, common, execution_plan::Boundedness, statistics::StatisticsArgs,
 };
 use crate::{
     execution_plan::EmissionType,
@@ -37,7 +37,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 
 use futures::Stream;
 use tokio::sync::Barrier;
@@ -273,6 +273,85 @@ impl ExecutionPlan for MockExec {
             &self.schema,
             None,
         )))
+    }
+}
+
+/// A test [`ExecutionPlan`] that requires key partitioning from its input and
+/// opts into compatible Range partitioning satisfying that requirement.
+#[derive(Debug)]
+pub struct KeyPartitioningRequirementExec {
+    input: Arc<dyn ExecutionPlan>,
+    partition_keys: Vec<Arc<dyn PhysicalExpr>>,
+    cache: Arc<PlanProperties>,
+}
+
+impl KeyPartitioningRequirementExec {
+    /// Create a new key-partitioning requirement for `input`.
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        partition_keys: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Self {
+        let cache = Arc::clone(input.properties());
+        Self {
+            input,
+            partition_keys,
+            cache,
+        }
+    }
+}
+
+impl DisplayAs for KeyPartitioningRequirementExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "KeyPartitioningRequirementExec")
+            }
+            DisplayFormatType::TreeRender => write!(f, ""),
+        }
+    }
+}
+
+impl ExecutionPlan for KeyPartitioningRequirementExec {
+    fn name(&self) -> &'static str {
+        "KeyPartitioningRequirementExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(
+            self.partition_keys.clone(),
+        )])
+        .allow_range_satisfaction_for_key_partitioning()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_eq!(children.len(), 1);
+        Ok(Arc::new(Self::new(
+            children.swap_remove(0),
+            self.partition_keys.clone(),
+        )))
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        unreachable!("test exec does not support execution")
     }
 }
 
