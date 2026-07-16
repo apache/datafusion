@@ -782,8 +782,8 @@ reset datafusion.optimizer.preserve_file_partitions;
 
 ##########
 # TEST 22: Union of Range Partitioned Inputs
-# Each input exposes Range partitioning on range_key. These changes do not add a
-# cross-child Range relationship for UNION ALL.
+# Each input exposes the same Range partitioning on range_key, so the optimizer
+# converts UnionExec to InterleaveExec to avoid redundant repartitioning.
 ##########
 
 query TT
@@ -792,7 +792,7 @@ UNION ALL
 SELECT range_key, value FROM range_partitioned;
 ----
 physical_plan
-01)UnionExec
+01)InterleaveExec
 02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 03)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
@@ -1203,3 +1203,140 @@ reset datafusion.explain.physical_plan_only;
 
 statement ok
 reset datafusion.optimizer.enable_window_topn;
+
+##########
+# TEST 34: Subset of Inputs Compatible Does Not Trigger InterleaveExec
+# In a three-way union, two inputs share the same Range split points [10,20,30]
+# while the third has a partially-overlapping but different set [15,20,30].
+# can_interleave requires ALL inputs to match, so UnionExec is kept.
+##########
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned_shifted;
+----
+physical_plan
+01)UnionExec
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+03)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned_shifted
+ORDER BY range_key, value;
+----
+1 10
+1 10
+1 10
+5 50
+5 50
+5 50
+10 100
+10 100
+10 100
+15 150
+15 150
+15 150
+20 200
+20 200
+20 200
+25 250
+25 250
+25 250
+30 300
+30 300
+30 300
+35 350
+35 350
+35 350
+
+##########
+# TEST 35: Incompatible Range Split Points Falls Back to UnionExec
+# Two range-partitioned inputs with different split points cannot be interleaved,
+# so the optimizer keeps UnionExec instead of converting to InterleaveExec.
+##########
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned_shifted;
+----
+physical_plan
+01)UnionExec
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+03)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned_shifted
+ORDER BY range_key, value;
+----
+1 10
+1 10
+5 50
+5 50
+10 100
+10 100
+15 150
+15 150
+20 200
+20 200
+25 250
+25 250
+30 300
+30 300
+35 350
+35 350
+
+##########
+# TEST 36: InterleaveExec Propagates Range Partitioning to Aggregate
+# InterleaveExec outputs the same Range partitioning as its compatible inputs,
+# allowing a downstream aggregate on range_key to run SinglePartitioned without
+# a Hash repartition.
+##########
+
+query TT
+EXPLAIN SELECT range_key, SUM(value) FROM (
+  SELECT range_key, value FROM range_partitioned
+  UNION ALL
+  SELECT range_key, value FROM range_partitioned
+) GROUP BY range_key;
+----
+physical_plan
+01)AggregateExec: mode=SinglePartitioned, gby=[range_key@0 as range_key], aggr=[sum(value)]
+02)--InterleaveExec
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT range_key, SUM(value) FROM (
+  SELECT range_key, value FROM range_partitioned
+  UNION ALL
+  SELECT range_key, value FROM range_partitioned
+) GROUP BY range_key ORDER BY range_key;
+----
+1 20
+5 100
+10 200
+15 300
+20 400
+25 500
+30 600
+35 700
+
+statement ok
+reset datafusion.explain.physical_plan_only;
