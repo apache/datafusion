@@ -31,7 +31,6 @@ use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_expr::WindowFrame;
-use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr::{HigherOrderFunctionExpr, ScalarFunctionExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -328,17 +327,6 @@ pub fn serialize_physical_expr_with_converter(
                     name: expr.name().to_string(),
                     args: serialize_physical_exprs(expr.args(), codec, proto_converter)?,
                     fun_definition: (!buf.is_empty()).then_some(buf),
-                },
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<ScalarSubqueryExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarSubquery(
-                protobuf::PhysicalScalarSubqueryExprNode {
-                    data_type: Some(expr.data_type().try_into()?),
-                    nullable: expr.nullable(),
-                    index: expr.index().as_usize() as u32,
                 },
             )),
         })
