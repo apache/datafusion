@@ -68,15 +68,20 @@ pub trait GroupColumn: Send + Sync {
     /// Appends the row at `row` in `array` to this builder
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()>;
 
-    /// The vectorized version equal to
+    /// The vectorized version of `equal_to`.
     ///
-    /// When found nth row stored in this builder at `lhs_row`
-    /// is equal to the row in `array` at `rhs_row`,
-    /// it will record the `true` result at the corresponding
-    /// position in `equal_to_results`.
+    /// This method is called with all elements of `equal_to_results`
+    /// set to true.
     ///
-    /// And if found nth result in `equal_to_results` is already
-    /// `false`, the check for nth row will be skipped.
+    /// When found that, for an index `n`, the row stored in this builder at
+    /// `lhs_rows[n]` is not equal to the row in `array` at `rhs_rows[n]`,
+    /// it will record the `false` result at the `n`th position in
+    /// `equal_to_results`.
+    ///
+    /// Note that the comparison results in `true` if both elements are NULL.
+    ///
+    /// As an optimization, the implementation can check if `equal_to_results`
+    /// is already `false` for the nth row, the check for that row will be skipped.
     fn vectorized_equal_to(
         &self,
         lhs_rows: &[usize],
