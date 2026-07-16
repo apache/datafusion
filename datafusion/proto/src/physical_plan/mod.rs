@@ -85,7 +85,7 @@ use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
 use datafusion_physical_plan::metrics::MetricCategory;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::proto::{
     ExecutionPlanDecode, ExecutionPlanDecodeCtx, ExecutionPlanEncode,
     ExecutionPlanEncodeCtx,
@@ -1176,6 +1176,40 @@ pub trait PhysicalPlanNodeExt: Sized {
                 .collect(),
             explain.verbose,
         )))
+    }
+
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ProjectionExec` deserializes itself via `ProjectionExec::try_from_proto`"
+    )]
+    fn try_into_projection_physical_plan(
+        &self,
+        projection: &protobuf::ProjectionExecNode,
+        ctx: &PhysicalPlanDecodeContext<'_>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input: Arc<dyn ExecutionPlan> =
+            into_physical_plan(&projection.input, ctx, proto_converter)?;
+        let exprs = projection
+            .expr
+            .iter()
+            .zip(projection.expr_name.iter())
+            .map(|(expr, name)| {
+                Ok((
+                    proto_converter.proto_to_physical_expr(
+                        expr,
+                        input.schema().as_ref(),
+                        ctx,
+                    )?,
+                    name.to_string(),
+                ))
+            })
+            .collect::<Result<Vec<(Arc<dyn PhysicalExpr>, String)>>>()?;
+        let proj_exprs: Vec<ProjectionExpr> = exprs
+            .into_iter()
+            .map(|(expr, alias)| ProjectionExpr { expr, alias })
+            .collect();
+        Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
     }
 
     fn try_into_filter_physical_plan(
@@ -2844,6 +2878,43 @@ pub trait PhysicalPlanNodeExt: Sized {
                     verbose: exec.verbose(),
                 },
             )),
+        })
+    }
+
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ProjectionExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
+    fn try_from_projection_exec(
+        exec: &ProjectionExec,
+        codec: &dyn PhysicalExtensionCodec,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<protobuf::PhysicalPlanNode> {
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
+            exec.input().to_owned(),
+            codec,
+            proto_converter,
+        )?;
+        let expr = exec
+            .expr()
+            .iter()
+            .map(|proj_expr| {
+                proto_converter.physical_expr_to_proto(&proj_expr.expr, codec)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let expr_name = exec
+            .expr()
+            .iter()
+            .map(|proj_expr| proj_expr.alias.clone())
+            .collect();
+        Ok(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Projection(Box::new(
+                protobuf::ProjectionExecNode {
+                    input: Some(Box::new(input)),
+                    expr,
+                    expr_name,
+                },
+            ))),
         })
     }
 
