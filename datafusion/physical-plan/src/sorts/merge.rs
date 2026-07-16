@@ -241,17 +241,16 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
             assert_eq!(uninitiated_partitions.len(), 0);
 
+
+            let elapsed_compute = self.metrics.elapsed_compute().clone();
+            let mut timer = elapsed_compute.timer();
+
             // If there are no more uninitiated partitions, set up the loser tree and continue
             // to the next phase.
 
             // Claim the memory for the uninitiated partitions
             drop(uninitiated_partitions);
             self.init_loser_tree();
-
-            // NB timer records time taken on drop, so there are no
-            // calls to `timer.done()` below.
-            let elapsed_compute = self.metrics.elapsed_compute().clone();
-            let mut timer = elapsed_compute.timer();
 
             // Continue while we have more than 1 stream left
             while self.number_of_exhausted_streams + 1 < self.streams.partitions() {
