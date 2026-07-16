@@ -32,11 +32,9 @@ use datafusion_functions::regex::regexpinstr::regexp_instr_func;
 use datafusion_functions::regex::regexplike::{RegexpLikeFunc, regexp_like};
 use datafusion_functions::regex::regexpmatch::regexp_match;
 use datafusion_functions::regex::regexpreplace::regexp_replace;
-use rand::Rng;
 use rand::distr::Alphanumeric;
-use rand::prelude::IndexedRandom;
-use rand::rngs::ThreadRng;
-fn data(rng: &mut ThreadRng) -> StringArray {
+use rand::prelude::*;
+fn data(rng: &mut StdRng) -> StringArray {
     let mut data: Vec<String> = vec![];
     for _ in 0..1000 {
         data.push(
@@ -50,7 +48,7 @@ fn data(rng: &mut ThreadRng) -> StringArray {
     StringArray::from(data)
 }
 
-fn regex(rng: &mut ThreadRng) -> StringArray {
+fn regex(rng: &mut StdRng) -> StringArray {
     let samples = [
         ".*([A-Z]{1}).*".to_string(),
         "^(A).*".to_string(),
@@ -66,7 +64,7 @@ fn regex(rng: &mut ThreadRng) -> StringArray {
     StringArray::from(data)
 }
 
-fn start(rng: &mut ThreadRng) -> Int64Array {
+fn start(rng: &mut StdRng) -> Int64Array {
     let mut data: Vec<i64> = vec![];
     for _ in 0..1000 {
         data.push(rng.random_range(1..5));
@@ -75,7 +73,7 @@ fn start(rng: &mut ThreadRng) -> Int64Array {
     Int64Array::from(data)
 }
 
-fn n(rng: &mut ThreadRng) -> Int64Array {
+fn n(rng: &mut StdRng) -> Int64Array {
     let mut data: Vec<i64> = vec![];
     for _ in 0..1000 {
         data.push(rng.random_range(1..5));
@@ -84,7 +82,7 @@ fn n(rng: &mut ThreadRng) -> Int64Array {
     Int64Array::from(data)
 }
 
-fn flags(rng: &mut ThreadRng) -> StringArray {
+fn flags(rng: &mut StdRng) -> StringArray {
     let samples = [Some("i".to_string()), Some("im".to_string()), None];
     let mut sb = StringBuilder::new();
     for _ in 0..1000 {
@@ -99,7 +97,7 @@ fn flags(rng: &mut ThreadRng) -> StringArray {
     sb.finish()
 }
 
-fn subexp(rng: &mut ThreadRng) -> Int64Array {
+fn subexp(rng: &mut StdRng) -> Int64Array {
     let mut data: Vec<i64> = vec![];
     for _ in 0..1000 {
         data.push(rng.random_range(1..5));
@@ -112,7 +110,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let regexp_like_func = RegexpLikeFunc::new();
     let config_options = Arc::new(ConfigOptions::default());
     c.bench_function("regexp_count_1000 string", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data = Arc::new(data(&mut rng)) as ArrayRef;
         let regex = Arc::new(regex(&mut rng)) as ArrayRef;
         let start = Arc::new(start(&mut rng)) as ArrayRef;
@@ -132,7 +130,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_count_1000 utf8view", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
         let start = Arc::new(start(&mut rng)) as ArrayRef;
@@ -152,7 +150,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_instr_1000 string", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data = Arc::new(data(&mut rng)) as ArrayRef;
         let regex = Arc::new(regex(&mut rng)) as ArrayRef;
         let start = Arc::new(start(&mut rng)) as ArrayRef;
@@ -176,7 +174,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_instr_1000 utf8view", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
         let start = Arc::new(start(&mut rng)) as ArrayRef;
@@ -198,7 +196,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_like_1000", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data = Arc::new(data(&mut rng)) as ArrayRef;
         let regex = Arc::new(regex(&mut rng)) as ArrayRef;
         let flags = Arc::new(flags(&mut rng)) as ArrayRef;
@@ -212,7 +210,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_like_1000 utf8view", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
         let flags = cast(&flags(&mut rng), &DataType::Utf8View).unwrap();
@@ -252,7 +250,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_match_1000", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data = Arc::new(data(&mut rng)) as ArrayRef;
         let regex = Arc::new(regex(&mut rng)) as ArrayRef;
         let flags = Arc::new(flags(&mut rng)) as ArrayRef;
@@ -270,7 +268,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_match_1000 utf8view", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
         let flags = cast(&flags(&mut rng), &DataType::Utf8View).unwrap();
@@ -288,7 +286,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_replace_1000", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data = Arc::new(data(&mut rng)) as ArrayRef;
         let regex = Arc::new(regex(&mut rng)) as ArrayRef;
         let flags = Arc::new(flags(&mut rng)) as ArrayRef;
@@ -310,7 +308,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_replace_1000 utf8view", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
         let flags = cast(&flags(&mut rng), &DataType::Utf8View).unwrap();

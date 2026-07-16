@@ -24,10 +24,9 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_time;
-use rand::Rng;
-use rand::rngs::ThreadRng;
+use rand::prelude::*;
 
-fn random_time_string(rng: &mut ThreadRng) -> String {
+fn random_time_string(rng: &mut StdRng) -> String {
     format!(
         "{:02}:{:02}:{:02}.{:06}",
         rng.random_range(0..24u32),
@@ -37,12 +36,12 @@ fn random_time_string(rng: &mut ThreadRng) -> String {
     )
 }
 
-fn time_strings(rng: &mut ThreadRng) -> StringArray {
+fn time_strings(rng: &mut StdRng) -> StringArray {
     let strings: Vec<String> = (0..100_000).map(|_| random_time_string(rng)).collect();
     StringArray::from(strings)
 }
 
-fn time_strings_with_nulls(rng: &mut ThreadRng) -> StringArray {
+fn time_strings_with_nulls(rng: &mut StdRng) -> StringArray {
     let values: Vec<Option<String>> = (0..100_000)
         .map(|_| {
             if rng.random_range(0..10u32) == 0 {
@@ -81,7 +80,7 @@ fn bench_to_time(c: &mut Criterion, name: &str, array: ArrayRef) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let mut rng = rand::rng();
+    let mut rng = StdRng::seed_from_u64(0);
     bench_to_time(c, "to_time_no_nulls_100k", Arc::new(time_strings(&mut rng)));
     bench_to_time(
         c,

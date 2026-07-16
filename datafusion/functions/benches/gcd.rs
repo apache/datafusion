@@ -25,12 +25,12 @@ use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::gcd;
-use rand::Rng;
+use rand::prelude::*;
 use std::hint::black_box;
 use std::sync::Arc;
 
 fn generate_i64_array(n_rows: usize) -> ArrayRef {
-    let mut rng = rand::rng();
+    let mut rng = StdRng::seed_from_u64(0);
     let values = (0..n_rows)
         .map(|_| rng.random_range(0..1000))
         .collect::<Vec<_>>();
