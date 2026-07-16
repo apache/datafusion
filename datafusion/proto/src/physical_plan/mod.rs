@@ -177,6 +177,429 @@ mod tests {
             (display.as_str(), None)
         );
     }
+
+    /// Unit tests for the bytes-only function serde exposed on
+    /// [`ExecutionPlanEncodeCtx`] / [`ExecutionPlanDecodeCtx`] and backed by
+    /// [`ConverterPlanEncoder`] / [`ConverterPlanDecoder`]. Function-carrying
+    /// plans migrate in follow-up PRs, so these paths have no in-tree plan
+    /// caller yet; the tests pin the payload semantics (`None` == encode by
+    /// name) and the decode lookup order (payload → codec; else registry →
+    /// codec fallback with an empty buffer) that those migrations rely on.
+    mod function_serde {
+        use super::*;
+        use arrow::datatypes::{DataType, Field, FieldRef};
+        use datafusion_common::plan_err;
+        use datafusion_execution::config::SessionConfig;
+        use datafusion_execution::runtime_env::RuntimeEnv;
+        use datafusion_expr::function::AccumulatorArgs;
+        use datafusion_expr::{
+            Accumulator, AggregateUDFImpl, ColumnarValue, PartitionEvaluator,
+            ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility, WindowUDFImpl,
+        };
+        use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+        use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestUdf {
+            signature: Signature,
+        }
+
+        impl TestUdf {
+            fn new() -> Self {
+                Self {
+                    signature: Signature::exact(
+                        vec![DataType::Int64],
+                        Volatility::Immutable,
+                    ),
+                }
+            }
+        }
+
+        impl ScalarUDFImpl for TestUdf {
+            fn name(&self) -> &str {
+                "test_udf"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Int64)
+            }
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                plan_err!("test only")
+            }
+        }
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestUdaf {
+            signature: Signature,
+        }
+
+        impl TestUdaf {
+            fn new() -> Self {
+                Self {
+                    signature: Signature::exact(
+                        vec![DataType::Int64],
+                        Volatility::Immutable,
+                    ),
+                }
+            }
+        }
+
+        impl AggregateUDFImpl for TestUdaf {
+            fn name(&self) -> &str {
+                "test_udaf"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Int64)
+            }
+            fn accumulator(
+                &self,
+                _acc_args: AccumulatorArgs,
+            ) -> Result<Box<dyn Accumulator>> {
+                plan_err!("test only")
+            }
+        }
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestUdwf {
+            signature: Signature,
+        }
+
+        impl TestUdwf {
+            fn new() -> Self {
+                Self {
+                    signature: Signature::exact(
+                        vec![DataType::Int64],
+                        Volatility::Immutable,
+                    ),
+                }
+            }
+        }
+
+        impl WindowUDFImpl for TestUdwf {
+            fn name(&self) -> &str {
+                "test_udwf"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn partition_evaluator(
+                &self,
+                _partition_evaluator_args: PartitionEvaluatorArgs,
+            ) -> Result<Box<dyn PartitionEvaluator>> {
+                plan_err!("test only")
+            }
+            fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+                Ok(Field::new(field_args.name(), DataType::Int64, true).into())
+            }
+        }
+
+        /// Codec that encodes every function as its name bytes and decodes by
+        /// checking the payload it receives, so tests can observe exactly what
+        /// crosses the bytes-only boundary.
+        #[derive(Debug)]
+        struct PayloadCodec;
+
+        impl PhysicalExtensionCodec for PayloadCodec {
+            fn try_decode(
+                &self,
+                _buf: &[u8],
+                _inputs: &[Arc<dyn ExecutionPlan>],
+                _ctx: &TaskContext,
+                _proto_converter: &dyn PhysicalProtoConverterExtension,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                internal_err!("not needed for these tests")
+            }
+
+            fn try_encode(
+                &self,
+                _node: Arc<dyn ExecutionPlan>,
+                _buf: &mut Vec<u8>,
+                _proto_converter: &dyn PhysicalProtoConverterExtension,
+            ) -> Result<()> {
+                internal_err!("not needed for these tests")
+            }
+
+            fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+                buf.extend_from_slice(node.name().as_bytes());
+                Ok(())
+            }
+
+            fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+                assert_eq!(name, "test_udf");
+                assert_eq!(buf, name.as_bytes());
+                Ok(Arc::new(ScalarUDF::from(TestUdf::new())))
+            }
+
+            fn try_encode_udaf(
+                &self,
+                node: &AggregateUDF,
+                buf: &mut Vec<u8>,
+            ) -> Result<()> {
+                buf.extend_from_slice(node.name().as_bytes());
+                Ok(())
+            }
+
+            fn try_decode_udaf(
+                &self,
+                name: &str,
+                buf: &[u8],
+            ) -> Result<Arc<AggregateUDF>> {
+                assert_eq!(name, "test_udaf");
+                assert_eq!(buf, name.as_bytes());
+                Ok(Arc::new(AggregateUDF::from(TestUdaf::new())))
+            }
+
+            fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
+                buf.extend_from_slice(node.name().as_bytes());
+                Ok(())
+            }
+
+            fn try_decode_udwf(&self, name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
+                assert_eq!(name, "test_udwf");
+                assert_eq!(buf, name.as_bytes());
+                Ok(Arc::new(WindowUDF::from(TestUdwf::new())))
+            }
+        }
+
+        /// Codec whose decode hooks only accept an empty payload, to pin the
+        /// by-name decode fallback (registry miss → codec with `&[]`).
+        #[derive(Debug)]
+        struct EmptyPayloadOnlyCodec;
+
+        impl PhysicalExtensionCodec for EmptyPayloadOnlyCodec {
+            fn try_decode(
+                &self,
+                _buf: &[u8],
+                _inputs: &[Arc<dyn ExecutionPlan>],
+                _ctx: &TaskContext,
+                _proto_converter: &dyn PhysicalProtoConverterExtension,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                internal_err!("not needed for these tests")
+            }
+
+            fn try_encode(
+                &self,
+                _node: Arc<dyn ExecutionPlan>,
+                _buf: &mut Vec<u8>,
+                _proto_converter: &dyn PhysicalProtoConverterExtension,
+            ) -> Result<()> {
+                internal_err!("not needed for these tests")
+            }
+
+            fn try_decode_udf(&self, _name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+                assert!(buf.is_empty());
+                Ok(Arc::new(ScalarUDF::from(TestUdf::new())))
+            }
+
+            fn try_decode_udaf(
+                &self,
+                _name: &str,
+                buf: &[u8],
+            ) -> Result<Arc<AggregateUDF>> {
+                assert!(buf.is_empty());
+                Ok(Arc::new(AggregateUDF::from(TestUdaf::new())))
+            }
+
+            fn try_decode_udwf(&self, _name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
+                assert!(buf.is_empty());
+                Ok(Arc::new(WindowUDF::from(TestUdwf::new())))
+            }
+        }
+
+        fn encode_ctx_over<'a>(
+            codec: &'a dyn PhysicalExtensionCodec,
+            proto_converter: &'a dyn PhysicalProtoConverterExtension,
+        ) -> ConverterPlanEncoder<'a> {
+            ConverterPlanEncoder {
+                codec,
+                proto_converter,
+            }
+        }
+
+        #[test]
+        fn encode_by_name_functions_produce_no_payload() -> Result<()> {
+            let codec = DefaultPhysicalExtensionCodec {};
+            let converter = DefaultPhysicalProtoConverter {};
+            let encoder = encode_ctx_over(&codec, &converter);
+            let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+            assert!(ctx.encode_udf(&ScalarUDF::from(TestUdf::new()))?.is_none());
+            assert!(
+                ctx.encode_udaf(&AggregateUDF::from(TestUdaf::new()))?
+                    .is_none()
+            );
+            assert!(
+                ctx.encode_udwf(&WindowUDF::from(TestUdwf::new()))?
+                    .is_none()
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn encode_functions_surface_codec_payload() -> Result<()> {
+            let codec = PayloadCodec;
+            let converter = DefaultPhysicalProtoConverter {};
+            let encoder = encode_ctx_over(&codec, &converter);
+            let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+            assert_eq!(
+                ctx.encode_udf(&ScalarUDF::from(TestUdf::new()))?.as_deref(),
+                Some(b"test_udf".as_slice())
+            );
+            assert_eq!(
+                ctx.encode_udaf(&AggregateUDF::from(TestUdaf::new()))?
+                    .as_deref(),
+                Some(b"test_udaf".as_slice())
+            );
+            assert_eq!(
+                ctx.encode_udwf(&WindowUDF::from(TestUdwf::new()))?
+                    .as_deref(),
+                Some(b"test_udwf".as_slice())
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn decode_functions_prefer_explicit_payload() -> Result<()> {
+            let task_ctx = TaskContext::default();
+            let codec = PayloadCodec;
+            let decode_context = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+            let converter = DefaultPhysicalProtoConverter {};
+            let decoder = ConverterPlanDecoder {
+                ctx: &decode_context,
+                proto_converter: &converter,
+            };
+            let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+            assert_eq!(
+                ctx.decode_udf("test_udf", Some(b"test_udf"))?.name(),
+                "test_udf"
+            );
+            assert_eq!(
+                ctx.decode_udaf("test_udaf", Some(b"test_udaf"))?.name(),
+                "test_udaf"
+            );
+            assert_eq!(
+                ctx.decode_udwf("test_udwf", Some(b"test_udwf"))?.name(),
+                "test_udwf"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn decode_functions_by_name_resolve_from_registry() -> Result<()> {
+            let udf = Arc::new(ScalarUDF::from(TestUdf::new()));
+            let udaf = Arc::new(AggregateUDF::from(TestUdaf::new()));
+            let udwf = Arc::new(WindowUDF::from(TestUdwf::new()));
+            let task_ctx = TaskContext::new(
+                None,
+                "test".to_string(),
+                SessionConfig::new(),
+                HashMap::from([("test_udf".to_string(), Arc::clone(&udf))]),
+                HashMap::new(),
+                HashMap::from([("test_udaf".to_string(), Arc::clone(&udaf))]),
+                HashMap::from([("test_udwf".to_string(), Arc::clone(&udwf))]),
+                Arc::new(RuntimeEnv::default()),
+            );
+            // The default codec fails any decode, so a success proves the
+            // registry satisfied the lookup without a codec fallback.
+            let codec = DefaultPhysicalExtensionCodec {};
+            let decode_context = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+            let converter = DefaultPhysicalProtoConverter {};
+            let decoder = ConverterPlanDecoder {
+                ctx: &decode_context,
+                proto_converter: &converter,
+            };
+            let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+            assert!(Arc::ptr_eq(&ctx.decode_udf("test_udf", None)?, &udf));
+            assert!(Arc::ptr_eq(&ctx.decode_udaf("test_udaf", None)?, &udaf));
+            assert!(Arc::ptr_eq(&ctx.decode_udwf("test_udwf", None)?, &udwf));
+            assert_eq!(ctx.task_ctx().session_id(), "test");
+            Ok(())
+        }
+
+        #[test]
+        fn decode_functions_by_name_fall_back_to_codec_on_registry_miss() -> Result<()> {
+            let task_ctx = TaskContext::default();
+            let codec = EmptyPayloadOnlyCodec;
+            let decode_context = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+            let converter = DefaultPhysicalProtoConverter {};
+            let decoder = ConverterPlanDecoder {
+                ctx: &decode_context,
+                proto_converter: &converter,
+            };
+            let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+            assert_eq!(ctx.decode_udf("test_udf", None)?.name(), "test_udf");
+            assert_eq!(ctx.decode_udaf("test_udaf", None)?.name(), "test_udaf");
+            assert_eq!(ctx.decode_udwf("test_udwf", None)?.name(), "test_udwf");
+            Ok(())
+        }
+
+        #[test]
+        fn decode_required_helpers_error_on_missing_fields() {
+            let task_ctx = TaskContext::default();
+            let codec = DefaultPhysicalExtensionCodec {};
+            let decode_context = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+            let converter = DefaultPhysicalProtoConverter {};
+            let decoder = ConverterPlanDecoder {
+                ctx: &decode_context,
+                proto_converter: &converter,
+            };
+            let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+            let err = ctx
+                .decode_required_child(None, "FooExec", "input")
+                .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("FooExec is missing required field 'input'"),
+                "unexpected error: {err}"
+            );
+
+            let schema = Schema::empty();
+            let err = ctx
+                .decode_required_expr(None, &schema, "FooExec", "predicate")
+                .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("FooExec is missing required field 'predicate'"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn try_from_proto_rejects_wrong_plan_variant() {
+            let task_ctx = TaskContext::default();
+            let codec = DefaultPhysicalExtensionCodec {};
+            let decode_context = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+            let converter = DefaultPhysicalProtoConverter {};
+            let decoder = ConverterPlanDecoder {
+                ctx: &decode_context,
+                proto_converter: &converter,
+            };
+            let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+            let node = protobuf::PhysicalPlanNode {
+                physical_plan_type: None,
+            };
+            let err = ProjectionExec::try_from_proto(&node, &ctx).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("PhysicalPlanNode is not a ProjectionExec"),
+                "unexpected error: {err}"
+            );
+        }
+    }
 }
 
 /// Context threaded through physical-plan deserialization.
