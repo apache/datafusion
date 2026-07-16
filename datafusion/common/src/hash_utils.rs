@@ -190,6 +190,9 @@ where
 
 /// Creates hashes for the given arrays using a thread-local buffer and a custom
 /// hash builder, then calls the provided callback with the computed hashes.
+///
+/// Hash compatibility with [`with_hashes`] follows the rules documented on
+/// [`create_hashes_with_hasher`].
 pub fn with_hashes_with_hasher<I, T, F, R, S>(
     arrays: I,
     hash_builder: &S,
@@ -208,9 +211,9 @@ where
 fn hash_null<S: HashState>(
     random_state: &S,
     hashes_buffer: &'_ mut [u64],
-    mul_col: bool,
+    multi_col: bool,
 ) {
-    if mul_col {
+    if multi_col {
         hashes_buffer.iter_mut().for_each(|hash| {
             // stable hash for null value
             *hash = combine_hashes(random_state.hash_one(1), *hash);
@@ -1254,6 +1257,15 @@ where
 ///
 /// The number of rows to hash is determined by `hashes_buffer.len()`.
 /// `hashes_buffer` should be pre-sized appropriately.
+///
+/// # Hash compatibility
+///
+/// Hash values are not guaranteed to be bit-for-bit identical to those from
+/// [`create_hashes`], even when `hash_builder` also implements [`HashState`].
+/// The optimized [`HashState`] path seeds the hasher from the previous hash
+/// when rehashing some primitive and byte-view values, whereas this function
+/// combines independently computed hashes. Use one API consistently if hashes
+/// are persisted or exchanged.
 pub fn create_hashes_with_hasher<'a, I, T, S>(
     arrays: I,
     hash_builder: &S,
@@ -1585,6 +1597,127 @@ mod tests {
             .unwrap();
 
         assert_eq!(string_hashes, dict_hashes);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_create_hashes_struct_with_custom_hasher() {
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("int", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![1, 2, 1, 3])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("string", DataType::Utf8, false)),
+                Arc::new(StringArray::from(vec!["alpha", "beta", "alpha", "alpha"]))
+                    as ArrayRef,
+            ),
+        ]);
+        let hash_builder = BuildHasherDefault::<TestHasher>::default();
+
+        let mut child_hashes = vec![0; struct_array.len()];
+        create_hashes_with_hasher(
+            struct_array.columns(),
+            &hash_builder,
+            &mut child_hashes,
+        )
+        .unwrap();
+        let expected_hashes = child_hashes
+            .into_iter()
+            .map(|hash| combine_hashes(0, hash))
+            .collect::<Vec<_>>();
+
+        let array: ArrayRef = Arc::new(struct_array);
+        let mut actual_hashes = vec![0; array.len()];
+        create_hashes_with_hasher([&array], &hash_builder, &mut actual_hashes).unwrap();
+
+        assert_eq!(actual_hashes, expected_hashes);
+        assert_eq!(actual_hashes[0], actual_hashes[2]);
+        assert_ne!(actual_hashes[0], actual_hashes[3]);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_create_hashes_long_utf8_view_with_custom_hasher() {
+        let values = vec![
+            Some("this string is longer than twelve bytes"),
+            None,
+            Some("another string longer than twelve bytes"),
+            Some("this string is longer than twelve bytes"),
+        ];
+        let view_array = StringViewArray::from(values.clone());
+        assert!(!view_array.data_buffers().is_empty());
+        let view_array: ArrayRef = Arc::new(view_array);
+        let hash_builder = BuildHasherDefault::<TestHasher>::default();
+
+        let mut view_hashes = vec![0; view_array.len()];
+        create_hashes_with_hasher([&view_array], &hash_builder, &mut view_hashes)
+            .unwrap();
+        let expected_hashes = values
+            .iter()
+            .map(|value| {
+                value
+                    .map(|value| hash_builder.hash_one(value.as_bytes()))
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(view_hashes, expected_hashes);
+
+        let prefix_array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 1]));
+        let mut expected_hashes = vec![0; prefix_array.len()];
+        create_hashes_with_hasher([&prefix_array], &hash_builder, &mut expected_hashes)
+            .unwrap();
+        for (hash, value) in expected_hashes.iter_mut().zip(&values) {
+            if let Some(value) = value {
+                *hash = combine_hashes(hash_builder.hash_one(value.as_bytes()), *hash);
+            }
+        }
+
+        let mut view_hashes = vec![0; view_array.len()];
+        create_hashes_with_hasher(
+            [&prefix_array, &view_array],
+            &hash_builder,
+            &mut view_hashes,
+        )
+        .unwrap();
+        assert_eq!(view_hashes, expected_hashes);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_single_column_leaf_hashes_match_with_same_hasher() {
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(-1)])),
+            Arc::new(Float64Array::from(vec![Some(0.0), Some(-0.0), None])),
+            Arc::new(StringArray::from(vec![Some("foo"), None, Some("bar")])),
+            Arc::new(BinaryArray::from(vec![
+                Some(&b"short"[..]),
+                None,
+                Some(&b"longer than twelve bytes"[..]),
+            ])),
+            Arc::new(StringViewArray::from(vec![
+                Some("short"),
+                None,
+                Some("longer than twelve bytes"),
+            ])),
+        ];
+        let random_state = RandomState::with_seed(0);
+
+        for array in arrays {
+            let mut default_hashes = vec![0; array.len()];
+            create_hashes([&array], &random_state, &mut default_hashes).unwrap();
+
+            let mut custom_hashes = vec![0; array.len()];
+            create_hashes_with_hasher([&array], &random_state, &mut custom_hashes)
+                .unwrap();
+
+            assert_eq!(
+                custom_hashes,
+                default_hashes,
+                "single-column parity failed for {}",
+                array.data_type()
+            );
+        }
     }
 
     #[test]

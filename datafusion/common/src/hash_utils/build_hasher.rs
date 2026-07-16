@@ -183,9 +183,9 @@ build_hasher_hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
 fn hash_null_with_hasher<S: BuildHasher>(
     hash_builder: &S,
     hashes_buffer: &mut [u64],
-    mul_col: bool,
+    multi_col: bool,
 ) {
-    if mul_col {
+    if multi_col {
         hashes_buffer.iter_mut().for_each(|hash| {
             *hash = combine_hashes(hash_builder.hash_one(1), *hash);
         })
