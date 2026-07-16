@@ -23,10 +23,10 @@ use arrow::array::{RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 use datafusion::assert_batches_eq;
+use datafusion::common::config::ParquetPushdownFilterMode;
 use datafusion::common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion::common::config::ParquetPushdownFilterMode;
 use datafusion::common::{Result, assert_contains, exec_datafusion_err};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,

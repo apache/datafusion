@@ -854,7 +854,6 @@ impl FileSource for ParquetSource {
         //
         // [#22883]: https://github.com/apache/datafusion/issues/22883
         const PUSHDOWN_MIN_NON_FILTER_COLS: usize = 3;
-        let mut narrow_projection_gate_declined = false;
         // Never gate a scan whose predicate already contains a dynamic
         // filter — either in the incoming `filters` parameter, or already
         // installed on `self.predicate` by an earlier optimizer rule (this
@@ -899,7 +898,6 @@ impl FileSource for ParquetSource {
                 .len();
             if non_filter_projected < PUSHDOWN_MIN_NON_FILTER_COLS {
                 pushdown_filters = false;
-                narrow_projection_gate_declined = true;
             }
         }
 
@@ -938,18 +936,27 @@ impl FileSource for ParquetSource {
             None => conjunction(allowed_filters),
         };
         source.predicate = Some(predicate);
-        // Only persist the pushdown_filters bit on the source when this is
-        // a "real" config-driven decision. When the gate declined, we
-        // deliberately do NOT flip the source's pushdown flag to false —
-        // a later `try_pushdown_filters` call (e.g. from TopK's dynamic
-        // filter injection) needs the source to still be pushdown-eligible
-        // so that dynamic filter can install its RowFilter and drive the
-        // runtime RG-prune cascade. The current call still returns
-        // `PushedDown::No` for its incoming filters, so the FilterExec
-        // above the scan stays and correctness is preserved.
-        if !narrow_projection_gate_declined {
-            source = source.with_pushdown_filters(pushdown_filters);
-        }
+        // Always persist the effective pushdown decision on the source.
+        // When the gate declined, `pushdown_filters` is already `false`
+        // here (set above by the gate), so `source.pushdown_filters`
+        // becomes `false` and the scan will NOT install a RowFilter —
+        // avoiding a "double filter" (FilterExec above the scan + RowFilter
+        // inside the scan running the same conjuncts on every batch).
+        //
+        // A later `try_pushdown_filters` call (e.g. from TopK's dynamic
+        // filter injection) re-computes `pushdown_filters` from scratch:
+        //
+        //     let pushdown_filters =
+        //         table_pushdown_enabled || config_pushdown_enabled;
+        //
+        // Because the config default is `true`, `||` restores `true` even
+        // if a previous call flipped the source-level flag to `false`.
+        // The gate in the next call then re-decides based on the new
+        // filter shape (`has_dynamic_filter` is true for TopK's injected
+        // filter, so the gate skips the decline path and pushdown is
+        // re-enabled). So flipping the flag to `false` here does not
+        // permanently disable pushdown for future calls.
+        source = source.with_pushdown_filters(pushdown_filters);
         let source = Arc::new(source);
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
         // even if we updated the predicate to include the filters (they will only be used for stats pruning).
@@ -1981,6 +1988,210 @@ mod tests {
             matches!(prop.filters[3], PushedDown::No),
             "file_row_index() rewrites to a virtual column and must not be \
              pushed down"
+        );
+    }
+
+    /// Regression test for the "double filter" bug on the narrow-projection
+    /// gate.
+    ///
+    /// Before the fix: when the gate decided to decline pushdown for a
+    /// narrow projection, the code deliberately skipped calling
+    /// `source.with_pushdown_filters(false)`. That left the source-level
+    /// `pushdown_filters` flag at whatever it was (which is `true` by
+    /// default now that the config default has been flipped), so the
+    /// scan still installed a `RowFilter` at read time even though the
+    /// parent `FilterExec` was told to keep the predicate. The result was
+    /// that the same conjuncts ran twice per batch — once inside the
+    /// scan's row filter and once in the surviving `FilterExec` above.
+    ///
+    /// This test locks in the fix: when the gate declines, the returned
+    /// source has `pushdown_filters == false`, guaranteeing the scan
+    /// will not install a RowFilter and no double filtering occurs.
+    #[test]
+    fn test_narrow_projection_gate_disables_source_pushdown_flag() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_datasource::TableSchema;
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::planner::logical2physical;
+        use datafusion_physical_plan::filter_pushdown::PushedDown;
+
+        // Two-column file schema. Projection covers only column `a`.
+        // Filter references column `a`. So:
+        //   projection = {a}       (1 col)
+        //   filter     = {a}
+        //   non_filter_projected = {a} - {a} = 0
+        //   0 < PUSHDOWN_MIN_NON_FILTER_COLS (=3)
+        // → gate declines pushdown.
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let table_schema = TableSchema::from(file_schema);
+        let full_schema: arrow::datatypes::SchemaRef =
+            Arc::clone(table_schema.table_schema());
+
+        // Narrow projection: only column `a` (index 0).
+        let projection = ProjectionExprs::from_indices(&[0usize], &full_schema);
+        let mut source = ParquetSource::new(table_schema).with_pushdown_filters(true);
+        source.projection = projection;
+
+        let filter = logical2physical(&col("a").eq(logical_lit(1i64)), &full_schema);
+        // Default config keeps `pushdown_filter_mode = Auto`, so the gate
+        // is active.
+        let config = ConfigOptions::default();
+        assert!(config.execution.parquet.pushdown_filters);
+
+        let prop = source
+            .try_pushdown_filters(vec![filter], &config)
+            .expect("try_pushdown_filters must not error");
+
+        // The gate declined: parent must retain the filter.
+        assert_eq!(prop.filters.len(), 1);
+        assert!(
+            matches!(prop.filters[0], PushedDown::No),
+            "gate should report PushedDown::No so the FilterExec above the \
+             scan keeps the predicate"
+        );
+
+        // Key assertion: the updated source's `pushdown_filters` flag must
+        // be `false`. If it were `true`, the scan would install a RowFilter
+        // and the same predicate would run twice.
+        let updated = prop
+            .updated_node
+            .as_ref()
+            .expect("gate declined path must attach an updated source");
+        let parquet_src = updated
+            .downcast_ref::<ParquetSource>()
+            .expect("updated node must be a ParquetSource");
+        assert!(
+            !parquet_src.pushdown_filters(),
+            "narrow-projection gate must flip source.pushdown_filters to false, \
+             otherwise the scan double-filters (RowFilter inside + FilterExec above)"
+        );
+    }
+
+    /// A wide projection must NOT trip the gate: pushdown stays enabled
+    /// end-to-end (both the return marker and the source-level flag).
+    #[test]
+    fn test_wide_projection_keeps_pushdown_enabled() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_datasource::TableSchema;
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::planner::logical2physical;
+        use datafusion_physical_plan::filter_pushdown::PushedDown;
+
+        // Five-column file schema. Projection covers b, c, d, e (4 cols
+        // not in the filter set), filter references a only.
+        //   non_filter_projected = 4 >= PUSHDOWN_MIN_NON_FILTER_COLS
+        // → gate does NOT decline.
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("c", DataType::Int64, false),
+            Field::new("d", DataType::Int64, false),
+            Field::new("e", DataType::Int64, false),
+        ]));
+        let table_schema = TableSchema::from(file_schema);
+        let full_schema: arrow::datatypes::SchemaRef =
+            Arc::clone(table_schema.table_schema());
+        let projection = ProjectionExprs::from_indices(&[1usize, 2, 3, 4], &full_schema);
+        let mut source = ParquetSource::new(table_schema).with_pushdown_filters(true);
+        source.projection = projection;
+
+        let filter = logical2physical(&col("a").eq(logical_lit(1i64)), &full_schema);
+        let config = ConfigOptions::default();
+
+        let prop = source
+            .try_pushdown_filters(vec![filter], &config)
+            .expect("try_pushdown_filters must not error");
+
+        assert_eq!(prop.filters.len(), 1);
+        assert!(
+            matches!(prop.filters[0], PushedDown::Yes),
+            "wide projection should push down"
+        );
+        let updated = prop
+            .updated_node
+            .as_ref()
+            .expect("wide projection must attach an updated source too");
+        let parquet_src = updated
+            .downcast_ref::<ParquetSource>()
+            .expect("updated node must be a ParquetSource");
+        assert!(
+            parquet_src.pushdown_filters(),
+            "wide projection: source.pushdown_filters must stay true so the \
+             scan installs the RowFilter"
+        );
+    }
+
+    /// After the narrow-projection gate declines a first pushdown call,
+    /// a subsequent call (e.g. TopK injecting a dynamic filter) must be
+    /// able to re-enable pushdown. This locks in that the `||` recovery
+    /// against the config default keeps the flag reachable for later
+    /// callers, so flipping the source flag to `false` in the gate path
+    /// is safe.
+    #[test]
+    fn test_gate_declined_does_not_permanently_disable_pushdown() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_datasource::TableSchema;
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+        use datafusion_physical_expr::planner::logical2physical;
+
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let table_schema = TableSchema::from(file_schema);
+        let full_schema: arrow::datatypes::SchemaRef =
+            Arc::clone(table_schema.table_schema());
+        let projection = ProjectionExprs::from_indices(&[0usize], &full_schema);
+        let mut source = ParquetSource::new(table_schema).with_pushdown_filters(true);
+        source.projection = projection;
+
+        let filter = logical2physical(&col("a").eq(logical_lit(1i64)), &full_schema);
+        let config = ConfigOptions::default();
+        let prop = source
+            .try_pushdown_filters(vec![filter], &config)
+            .expect("first pushdown call must not error");
+        let after_gate = prop
+            .updated_node
+            .as_ref()
+            .expect("gate declined path must attach an updated source")
+            .downcast_ref::<ParquetSource>()
+            .expect("updated node must be a ParquetSource")
+            .clone();
+        assert!(
+            !after_gate.pushdown_filters(),
+            "first call: gate should have flipped source flag to false",
+        );
+
+        // Simulate TopK injecting a dynamic filter on the source it just
+        // received back from the gate-declined call.
+        let dyn_col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![dyn_col],
+            lit(true) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let prop2 = after_gate
+            .try_pushdown_filters(vec![dynamic_filter], &config)
+            .expect("second pushdown call must not error");
+        let after_dynamic = prop2
+            .updated_node
+            .as_ref()
+            .expect("dynamic-filter path must attach an updated source")
+            .downcast_ref::<ParquetSource>()
+            .expect("updated node must be a ParquetSource");
+        assert!(
+            after_dynamic.pushdown_filters(),
+            "second call with a dynamic filter must re-enable pushdown so the \
+             RG-prune / RowFilter cascade can drive the dynamic threshold — \
+             the `||` recovery against the config default is what makes this \
+             safe after the first call flipped the flag to false"
         );
     }
 }
