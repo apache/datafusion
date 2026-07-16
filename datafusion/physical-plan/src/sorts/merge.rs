@@ -289,15 +289,11 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
                     let new_winner = self.loser_tree[0];
 
-                    // Fast path: skip comparing full batch if the last batch value is still the winner
+                    // Fast path: skip comparing if the new winner batch
                     // we do this if:
-                    // 1. the winner did not change - so we can skip the full new batch rather than other partial batch
-                    // 2. The new winner have more than 1 value
-                    // 3. the last row in the new batch beat all other streams
-                    if winner == new_winner
-                        && self.cursors[new_winner]
-                            .as_ref()
-                            .is_some_and(|c| c.len() > 1)
+                    // 1. The new winner have more than 1 value (so we won't do a needless job of comparing the entire tree if not enough values)
+                    // 2. the last row in the new winner beat all other streams
+                    if self.cursors[new_winner].as_ref().is_some_and(|c| c.len() > 1)
                         && self.winner_batch_beats_all(new_winner)
                     {
                         let cursor = self.cursors[new_winner]
