@@ -495,7 +495,9 @@ impl RepartitionExecState {
                 .session_config()
                 .options()
                 .execution
-                .max_spill_file_size_bytes;
+                .max_spill_file_size_bytes
+                .get();
+
             let (spill_writers, spill_readers) = if preserve_order {
                 // preserve_order: one dedicated single-producer FIFO pool per input partition.
                 // Each writer is moved into exactly one input task (never cloned), so the ordering
@@ -3433,7 +3435,7 @@ mod test {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::assert_batches_eq;
-
+    use datafusion_common::config::ConfigNonZeroUsize;
     use super::*;
     use crate::test::TestMemoryExec;
     use crate::union::UnionExec;
@@ -3653,7 +3655,7 @@ mod test {
         session_config
             .options_mut()
             .execution
-            .max_spill_file_size_bytes = 1;
+            .max_spill_file_size_bytes = ConfigNonZeroUsize::try_new(1).unwrap();
         // Same tight limit as `test_preserve_order_with_spilling`: forces spilling while leaving
         // the merge enough non-spillable headroom to complete.
         let runtime = RuntimeEnvBuilder::default()
