@@ -176,27 +176,22 @@ fn regexp_match_scalar_pattern(args: &[ColumnarValue]) -> Result<Option<ArrayRef
     else {
         return Ok(None);
     };
-    let flags = match flags {
-        None => None,
-        Some(ColumnarValue::Scalar(flags)) => Some(flags),
-        // An array of flags has to be zipped with the values row by row.
-        Some(ColumnarValue::Array(_)) => return Ok(None),
-    };
+let flags = match flags {
+    Some(ColumnarValue::Array(_)) => return Ok(None),
+    Some(ColumnarValue::Scalar(flags)) => Some(flags),
+    None => None,
+};
 
-    if !matches!(pattern.try_as_str(), Some(Some(_)))
-        || flags.is_some_and(|flags| flags.try_as_str() == Some(Some("g")))
-    {
-        return Ok(None);
-    }
+let value_type = values.data_type();
 
-    // The kernel requires the values, the pattern and the flags to share one
-    // string type.
-    let value_type = values.data_type();
-    if &pattern.data_type() != value_type
-        || flags.is_some_and(|flags| &flags.data_type() != value_type)
-    {
-        return Ok(None);
-    }
+if !matches!(pattern.try_as_str(), Some(Some(_)))
+    || &pattern.data_type() != value_type
+    || flags.is_some_and(|flags| {
+        flags.try_as_str() == Some(Some("g")) || &flags.data_type() != value_type
+    })
+{
+    return Ok(None);
+}
 
     let pattern = pattern.to_scalar()?;
     let flags = flags.map(ScalarValue::to_scalar).transpose()?;
