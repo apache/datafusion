@@ -301,7 +301,7 @@ config_namespace! {
         pub collect_spans: bool, default = false
 
         /// Specifies the recursion depth limit when parsing complex SQL Queries
-        pub recursion_limit: usize, default = 50
+        pub recursion_limit: ConfigNonZeroUsize, default = non_zero_usize_default(50)
 
         /// Specifies the default null ordering for query results. There are 4 options:
         /// - `nulls_max`: Nulls appear last in ascending order.
@@ -858,7 +858,7 @@ config_namespace! {
         /// may create spill files larger than the limit.
         ///
         /// Default: 128 MB
-        pub max_spill_file_size_bytes: usize, default = 128 * 1024 * 1024
+        pub max_spill_file_size_bytes: ConfigNonZeroUsize, default = non_zero_usize_default(128 * 1024 * 1024)
 
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: usize, default = 32
@@ -873,7 +873,7 @@ config_namespace! {
         /// This is a soft max, so it can be exceeded slightly. There also
         /// will be one file smaller than the limit if the total
         /// number of rows written is not roughly divisible by the soft max
-        pub soft_max_rows_per_output_file: usize, default = 50000000
+        pub soft_max_rows_per_output_file: ConfigNonZeroUsize, default = non_zero_usize_default(50000000)
 
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially

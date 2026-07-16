@@ -24,7 +24,10 @@ use async_trait::async_trait;
 use datafusion_common::{DFSchema, Result, plan_err};
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::equivalence::project_ordering;
-use datafusion_physical_expr::{LexOrdering, create_physical_sort_exprs};
+use datafusion_physical_expr::projection::ProjectionMapping;
+use datafusion_physical_expr::{
+    EquivalenceProperties, LexOrdering, Partitioning, create_physical_sort_exprs,
+};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use log::debug;
@@ -38,6 +41,7 @@ pub struct StreamingTable {
     partitions: Vec<Arc<dyn PartitionStream>>,
     infinite: bool,
     sort_order: Vec<SortExpr>,
+    output_partitioning: Option<Partitioning>,
 }
 
 impl StreamingTable {
@@ -62,6 +66,7 @@ impl StreamingTable {
             partitions,
             infinite: false,
             sort_order: vec![],
+            output_partitioning: None,
         })
     }
 
@@ -75,6 +80,33 @@ impl StreamingTable {
     pub fn with_sort_order(mut self, sort_order: Vec<SortExpr>) -> Self {
         self.sort_order = sort_order;
         self
+    }
+
+    /// Declares the output partitioning of this streaming table.
+    ///
+    /// The partitioning expressions refer to the table schema before scan
+    /// projection. If a scan projection removes a partitioning expression, the
+    /// physical plan reports unknown partitioning.
+    pub fn with_output_partitioning(mut self, output_partitioning: Partitioning) -> Self {
+        self.output_partitioning = Some(output_partitioning);
+        self
+    }
+
+    fn output_partitioning(
+        &self,
+        projection: Option<&Vec<usize>>,
+    ) -> Result<Partitioning> {
+        let Some(output_partitioning) = &self.output_partitioning else {
+            return Ok(Partitioning::UnknownPartitioning(self.partitions.len()));
+        };
+        let Some(projection) = projection else {
+            return Ok(output_partitioning.clone());
+        };
+
+        let projection_mapping =
+            ProjectionMapping::from_indices(projection, &self.schema)?;
+        let eq_properties = EquivalenceProperties::new(Arc::clone(&self.schema));
+        Ok(output_partitioning.project(&projection_mapping, &eq_properties))
     }
 }
 
@@ -119,13 +151,16 @@ impl TableProvider for StreamingTable {
             vec![]
         };
 
-        Ok(Arc::new(StreamingTableExec::try_new(
+        let exec = StreamingTableExec::try_new(
             Arc::clone(&self.schema),
             self.partitions.clone(),
             projection,
             LexOrdering::new(physical_sort),
             self.infinite,
             limit,
-        )?))
+        )?
+        .with_output_partitioning(self.output_partitioning(projection)?)?;
+
+        Ok(Arc::new(exec))
     }
 }
