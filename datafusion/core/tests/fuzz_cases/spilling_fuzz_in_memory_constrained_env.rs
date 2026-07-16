@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::fuzz_cases::aggregate_fuzz::assert_spill_count_metric;
 use crate::fuzz_cases::once_exec::OnceExec;
 use arrow::array::UInt64Array;
+use arrow::row::{RowConverter, SortField};
 use arrow::{array::StringArray, compute::SortOptions, record_batch::RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::common::Result;
@@ -45,6 +46,7 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::metrics::MetricValue;
+use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use futures::StreamExt;
 
@@ -303,13 +305,25 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch() -> Result<()
 #[tokio::test]
 async fn test_sort_preserving_merge_peak_memory_with_spilled_input_round_robin()
 -> Result<()> {
-    run_sort_preserving_merge_peak_memory_with_spilled_input(true).await
+    run_sort_preserving_merge_peak_memory_with_spilled_input(true, false).await
 }
 
 #[tokio::test]
 async fn test_sort_preserving_merge_peak_memory_with_spilled_input_no_round_robin()
 -> Result<()> {
-    run_sort_preserving_merge_peak_memory_with_spilled_input(false).await
+    run_sort_preserving_merge_peak_memory_with_spilled_input(false, false).await
+}
+
+#[tokio::test]
+async fn test_sort_preserving_merge_peak_memory_with_spilled_input_round_robin_multi_column()
+-> Result<()> {
+    run_sort_preserving_merge_peak_memory_with_spilled_input(true, true).await
+}
+
+#[tokio::test]
+async fn test_sort_preserving_merge_peak_memory_with_spilled_input_no_round_robin_multi_column()
+-> Result<()> {
+    run_sort_preserving_merge_peak_memory_with_spilled_input(false, true).await
 }
 
 /// Intended to measure the maximum number of record batches held in memory by
@@ -328,6 +342,7 @@ async fn test_sort_preserving_merge_peak_memory_with_spilled_input_no_round_robi
 /// living during the merging phase
 async fn run_sort_preserving_merge_peak_memory_with_spilled_input(
     round_robin: bool,
+    multi_column_sort: bool,
 ) -> Result<()> {
     let num_batches = 10usize;
     let num_rows_per_batch = 100usize;
@@ -388,22 +403,67 @@ async fn run_sort_preserving_merge_peak_memory_with_spilled_input(
         partition_batches.push(ipc_batches);
     }
 
-    use datafusion_physical_plan::spill::get_record_batch_memory_size;
     let ipc_batch_size = get_record_batch_memory_size(&partition_batches[0][0]);
 
     // Build a 2-partition plan from the IPC-recovered batches.
     let input =
         MemorySourceConfig::try_new_exec(&partition_batches, Arc::clone(&schema), None)?;
 
-    let sort_expr = PhysicalSortExpr {
+    let sort_key_expr = PhysicalSortExpr {
         expr: col("sort_key", &schema)?,
         options: SortOptions {
             descending: false,
             nulls_first: true,
         },
     };
+    // `payload` has the same value in every row, so adding it as a secondary
+    // sort key doesn't change the resulting order — it only forces the merge
+    // onto the row-oriented (`RowValues`/`RowCursorStream`) comparison path
+    // used whenever more than one sort expression is present.
+    let mut sort_exprs = vec![sort_key_expr];
+    if multi_column_sort {
+        sort_exprs.push(PhysicalSortExpr {
+            expr: col("payload", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        });
+    }
+
+    // When sorting by more than one column, the merge switches to the
+    // row-oriented `RowValues`/`RowCursorStream` path
+    //
+    // `RowCursorStream` also tracks one *shared* (not per-partition)
+    // reservation sized to `converter.size()` (`stream.rs`:
+    // `self.reservation.try_resize(self.converter.size())`) — the
+    // `RowConverter`'s own fixed internal state, separate from the `Rows`
+    // it produces per batch.
+    let (row_batch_size, converter_size) = if multi_column_sort {
+        let sort_fields = sort_exprs
+            .iter()
+            .map(|s| {
+                let data_type = s.expr.data_type(&schema)?;
+                Ok(SortField::new_with_options(data_type, s.options))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let converter = RowConverter::new(sort_fields)?;
+        let cols = sort_exprs
+            .iter()
+            .map(|s| {
+                s.expr
+                    .evaluate(&partition_batches[0][0])?
+                    .into_array(partition_batches[0][0].num_rows())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let rows = converter.convert_columns(&cols)?;
+        (rows.size(), converter.size())
+    } else {
+        (0, 0)
+    };
+
     let merge = Arc::new(
-        SortPreservingMergeExec::new(LexOrdering::new(vec![sort_expr]).unwrap(), input)
+        SortPreservingMergeExec::new(LexOrdering::new(sort_exprs).unwrap(), input)
             .with_round_robin_repartition(round_robin),
     );
 
@@ -433,20 +493,30 @@ async fn run_sort_preserving_merge_peak_memory_with_spilled_input(
     metrics.sort_by_key(|m| std::cmp::Reverse(m.peak));
     let peak_bytes: usize = metrics.iter().map(|m| m.peak).sum();
 
-    // with round robin enabled, 2 extra record batches live in memory
-    // see https://github.com/apache/datafusion/issues/23604
-    // 5 comes from:
+    // in the single column case, the cursor takes up an ipc_batch_size worth of memory due to the
+    // IPC roundtrip issue
+    // for the multi-column case, we've calculated row_batch_size above
+    let cursor_unit = if multi_column_sort {
+        row_batch_size
+    } else {
+        ipc_batch_size
+    };
+
     // BatchBuilder needs to hold 3 Record batches simultaneously to merge two
     // streams (because a stream can cross a record batch boundary)
-    // the `cursors` also need 1 record batch worth of memory each (because of
-    // the IPC issue)
-    let max_batches = if round_robin { 7 } else { 5 };
-    let max_peak = max_batches * ipc_batch_size;
+    // there is also one cursor needed per stream
+    let mut max_peak = 3 * ipc_batch_size + 2 * cursor_unit + converter_size;
+
+    // with round robin enabled, 2 extra cursors live in memory
+    // see https://github.com/apache/datafusion/issues/23604
+    if round_robin {
+        max_peak += 2 * cursor_unit;
+    };
 
     assert!(
         peak_bytes <= max_peak,
-        "peak reservation {peak_bytes} bytes exceeds {max_batches}x IPC batch size \
-         ({max_peak} bytes); round_robin={round_robin}",
+        "peak reservation {peak_bytes} bytes exceeds max_peak ({max_peak} bytes); \
+         round_robin={round_robin}, multi_column_sort={multi_column_sort}",
     );
 
     Ok(())
