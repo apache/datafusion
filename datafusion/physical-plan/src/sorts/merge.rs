@@ -252,6 +252,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             drop(uninitiated_partitions);
             self.init_loser_tree();
 
+            // TODO - on first batch that is larger than the rest add to in progress
+
             // Continue while we have more than 1 stream left
             while self.number_of_exhausted_streams + 1 < self.streams.partitions() {
                 let stream_idx = self.loser_tree[0];
@@ -350,48 +352,79 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         let elapsed_compute = self.metrics.elapsed_compute().clone();
         let mut timer = elapsed_compute.timer();
 
-        while let Some(batch) = self.emit_in_progress_batch()? {
-            drop(timer);
-            emitter.emit(batch).await;
-            timer = elapsed_compute.timer();
+        let last_stream = self.streams.take_partition(last_stream_index);
+
+        let mut last_batch = None;
+
+        // Continue while we still have rows in the in progress builder and not reached fetch limit
+        while !self.in_progress.is_empty()
+          && self.fetch.is_none_or(|fetch| fetch > self.produced)
+        {
+            // If still not empty and we have last_batch this mean that we were unable to emit a batch with the existing indices
+            // and we fall back to emitting smaller one
+            // in that case we emit that without coalescing so we won't have error coalescing
+            if let Some(last_batch) = last_batch.take() {
+                drop(timer);
+                emitter.emit(last_batch).await;
+                timer = elapsed_compute.timer();
+            }
+
+            // When `build_record_batch()` hits an i32 offset overflow (e.g.
+            // combined string offsets exceed 2 GB), it emits a partial batch
+            // and keeps the remaining rows in `self.in_progress.indices`.
+            // Drain those leftover rows before terminating the stream,
+            // otherwise they would be silently dropped.
+            // Repeated overflows are fine — each poll emits another partial
+            // batch until `in_progress` is fully drained.
+            last_batch = self.emit_in_progress_batch()?;
         }
 
-        let mut last_stream = self.streams.take_partition(last_stream_index);
+        // we
+        
+        // If the stream is done, we stop since nothing to emit anymore
+        // or if the stream is not done but we reached the limit, we stop as well (we reached the limit with the last batch)
+        if last_stream.is_done() || self.fetch.is_some_and(|fetch| fetch <= self.produced)
+        {
+            if let Some(last_batch) = last_batch.take() {
+                drop(timer);
+                emitter.emit(last_batch).await;
 
-        if self.fetch_reached() {
+                // Not creating a timer since we are returning right away
+            }
+
             return Ok(());
-        }
-        drop(timer);
-
-        if let Some(fetch) = self.fetch {
-            let mut remaining = fetch - self.produced;
-            while remaining > 0 {
-                let Some(batch) = last_stream.next().await else {
-                    break;
-                };
-
-                let batch = batch?;
-
-                if batch.num_rows() == 0 {
-                    continue;
-                }
-
-                let batch = if remaining >= batch.num_rows() {
-                    batch
-                } else {
-                    batch.slice(0, remaining)
-                };
-
-                remaining -= batch.num_rows();
-                self.produced += batch.num_rows();
-                emitter.emit(batch).await;
-            }
         } else {
-            while let Some(batch) = last_stream.next().await {
-                let batch = batch?;
-                self.produced += batch.num_rows();
-                emitter.emit(batch).await;
-            }
+            // Undo the added produced batch since we did not emit it yes, so it will mess with coalesce limit
+            // TODO - this is ugly
+            self.produced -= last_batch.as_ref().map(|x| x.num_rows()).unwrap_or(0);
+        }
+
+        let last_stream = last_stream.into_inner();
+
+        let last_stream = if let Some(last_batch) = last_batch {
+            let schema = last_stream.schema();
+            let stream = futures::stream::iter(vec![Ok(last_batch)]);
+
+            Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                stream.chain(last_stream).boxed(),
+            )) as SendableRecordBatchStream
+        } else {
+            last_stream
+        };
+
+        let mut coalescer = CoalesceBatchesStream::new(
+            last_stream,
+            self.batch_size,
+            self.fetch.map(|x| x - self.produced),
+            self.metrics.intermediate(),
+        )
+          // Don't allow for passthrough of batches with sizes other than the provided batch size
+          .with_biggest_coalesce_batch_size(None);
+
+        drop(timer);
+        while let Some(batch) = coalescer.next().await {
+            emitter.emit(batch?).await;
         }
 
         Ok(())
