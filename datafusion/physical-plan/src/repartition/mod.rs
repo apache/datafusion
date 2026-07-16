@@ -553,15 +553,15 @@ impl RepartitionExecState {
                     // Hand this input task its spill writer: in preserve_order mode this moves
                     // the input's dedicated FIFO writer out; otherwise it clones the shared
                     // writer. See [`PartitionSpillWriters::take_for_input`].
-                    (
+                    Ok((
                         *partition,
-                        Ok(OutputChannel {
+                        OutputChannel {
                             sender: channels.tx[i].clone(),
                             reservation: Arc::clone(&channels.reservation),
                             spill_writer: channels.spill_writers.take_for_input(i)?,
                             shared_coalescer: channels.shared_coalescer.clone(),
-                        }),
-                    )
+                        },
+                    ))
                 })
                 .collect::<Result<HashMap<_, _>>>()?;
 
