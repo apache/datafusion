@@ -54,6 +54,9 @@ use crate::cast::{
 use crate::error::{_exec_err, _internal_err, _not_impl_err, DataFusionError, Result};
 use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
+use crate::scalar::consts::{
+    DECIMAL32_ONES, DECIMAL64_ONES, DECIMAL128_ONES, DECIMAL256_ONES,
+};
 use crate::utils::SingleRowListArrayBuilder;
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
 use arrow::array::{
@@ -1814,12 +1817,8 @@ impl ScalarValue {
                     *scale,
                     *precision
                 );
-                match 10_i32.checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal32(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                let one = DECIMAL32_ONES[*scale as usize];
+                ScalarValue::Decimal32(Some(one), *precision, *scale)
             }
             DataType::Decimal64(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal64Type>(
@@ -1832,12 +1831,8 @@ impl ScalarValue {
                     *scale,
                     *precision
                 );
-                match i64::from(10).checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal64(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                let one = DECIMAL64_ONES[*scale as usize];
+                ScalarValue::Decimal64(Some(one), *precision, *scale)
             }
             DataType::Decimal128(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal128Type>(
@@ -1850,12 +1845,8 @@ impl ScalarValue {
                     *scale,
                     *precision
                 );
-                match i128::from(10).checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal128(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                let one = DECIMAL128_ONES[*scale as usize];
+                ScalarValue::Decimal128(Some(one), *precision, *scale)
             }
             DataType::Decimal256(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal256Type>(
@@ -1868,12 +1859,8 @@ impl ScalarValue {
                     *scale,
                     *precision
                 );
-                match i256::from(10).checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal256(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                let one = DECIMAL256_ONES[*scale as usize];
+                ScalarValue::Decimal256(Some(one), *precision, *scale)
             }
             _ => {
                 return _not_impl_err!(
@@ -1904,12 +1891,8 @@ impl ScalarValue {
                     *scale,
                     *precision
                 );
-                match 10_i32.checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal32(Some(-value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                let one = DECIMAL32_ONES[*scale as usize];
+                ScalarValue::Decimal32(Some(-one), *precision, *scale)
             }
             DataType::Decimal64(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal64Type>(
@@ -1922,12 +1905,8 @@ impl ScalarValue {
                     *scale,
                     *precision
                 );
-                match i64::from(10).checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal64(Some(-value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                let one = DECIMAL64_ONES[*scale as usize];
+                ScalarValue::Decimal64(Some(-one), *precision, *scale)
             }
             DataType::Decimal128(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal128Type>(
@@ -1940,12 +1919,8 @@ impl ScalarValue {
                     *scale,
                     *precision
                 );
-                match i128::from(10).checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal128(Some(-value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                let one = DECIMAL128_ONES[*scale as usize];
+                ScalarValue::Decimal128(Some(-one), *precision, *scale)
             }
             DataType::Decimal256(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal256Type>(
@@ -1958,12 +1933,8 @@ impl ScalarValue {
                     *scale,
                     *precision
                 );
-                match i256::from(10).checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal256(Some(-value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                let one = DECIMAL256_ONES[*scale as usize];
+                ScalarValue::Decimal256(Some(-one), *precision, *scale)
             }
             _ => {
                 return _not_impl_err!(
@@ -1997,12 +1968,10 @@ impl ScalarValue {
                     *scale,
                     *precision
                 );
-                match 10_i32.checked_pow((*scale + 1) as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal32(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                // +1 safe since we validate above that scale must be less than
+                // the max possible scale
+                let ten = DECIMAL32_ONES[*scale as usize + 1];
+                ScalarValue::Decimal32(Some(ten), *precision, *scale)
             }
             DataType::Decimal64(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal64Type>(
@@ -2015,12 +1984,10 @@ impl ScalarValue {
                     *scale,
                     *precision
                 );
-                match i64::from(10).checked_pow((*scale + 1) as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal64(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                // +1 safe since we validate above that scale must be less than
+                // the max possible scale
+                let ten = DECIMAL64_ONES[*scale as usize + 1];
+                ScalarValue::Decimal64(Some(ten), *precision, *scale)
             }
             DataType::Decimal128(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal128Type>(
@@ -2033,12 +2000,10 @@ impl ScalarValue {
                     *scale,
                     *precision
                 );
-                match i128::from(10).checked_pow((*scale + 1) as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal128(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                // +1 safe since we validate above that scale must be less than
+                // the max possible scale
+                let ten = DECIMAL128_ONES[*scale as usize + 1];
+                ScalarValue::Decimal128(Some(ten), *precision, *scale)
             }
             DataType::Decimal256(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal256Type>(
@@ -2051,12 +2016,10 @@ impl ScalarValue {
                     *scale,
                     *precision
                 );
-                match i256::from(10).checked_pow((*scale + 1) as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal256(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                // +1 safe since we validate above that scale must be less than
+                // the max possible scale
+                let ten = DECIMAL256_ONES[*scale as usize + 1];
+                ScalarValue::Decimal256(Some(ten), *precision, *scale)
             }
             _ => {
                 return _not_impl_err!(
