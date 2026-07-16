@@ -31,6 +31,7 @@ use datafusion::common::{ScalarValue, ToDFSchema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::logical_expr::execution_props::ExecutionProps;
+use datafusion::logical_expr::execution_props::SubqueryContext;
 use datafusion::logical_expr::expr::BinaryExpr;
 use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::logical_expr::simplify::SimplifyContext;
@@ -541,8 +542,12 @@ fn type_coercion_demo() -> Result<()> {
 
     // Evaluation with an expression that has not been type coerced cannot succeed.
     let props = ExecutionProps::default();
-    let physical_expr =
-        datafusion::physical_expr::create_physical_expr(&expr, &df_schema, &props)?;
+    let physical_expr = datafusion::physical_expr::create_physical_expr(
+        &expr,
+        &df_schema,
+        &props,
+        &SubqueryContext::default(),
+    )?;
     let e = physical_expr.evaluate(&batch).unwrap_err();
     assert!(
         e.find_root()
@@ -566,6 +571,7 @@ fn type_coercion_demo() -> Result<()> {
         &coerced_expr,
         &df_schema,
         &props,
+        &SubqueryContext::default(),
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
@@ -578,6 +584,7 @@ fn type_coercion_demo() -> Result<()> {
         &coerced_expr,
         &df_schema,
         &props,
+        &SubqueryContext::default(),
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
@@ -606,6 +613,7 @@ fn type_coercion_demo() -> Result<()> {
         &coerced_expr,
         &df_schema,
         &props,
+        &SubqueryContext::default(),
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 

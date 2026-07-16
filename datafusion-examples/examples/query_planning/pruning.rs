@@ -26,6 +26,7 @@ use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::{DFSchema, ScalarValue};
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionProps;
+use datafusion::logical_expr::execution_props::SubqueryContext;
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::prelude::*;
@@ -194,7 +195,9 @@ impl PruningStatistics for MyCatalog {
 fn create_pruning_predicate(expr: Expr, schema: &SchemaRef) -> PruningPredicate {
     let df_schema = DFSchema::try_from(Arc::clone(schema)).unwrap();
     let props = ExecutionProps::new();
-    let physical_expr = create_physical_expr(&expr, &df_schema, &props).unwrap();
+    let physical_expr =
+        create_physical_expr(&expr, &df_schema, &props, &SubqueryContext::default())
+            .unwrap();
     PruningPredicate::try_new(physical_expr, Arc::clone(schema)).unwrap()
 }
 

@@ -22,6 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, Result, plan_err};
+use datafusion_expr::execution_props::SubqueryContext;
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::equivalence::project_ordering;
 use datafusion_physical_expr::projection::ProjectionMapping;
@@ -131,8 +132,12 @@ impl TableProvider for StreamingTable {
             let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
             let eqp = state.execution_props();
 
-            let original_sort_exprs =
-                create_physical_sort_exprs(&self.sort_order, &df_schema, eqp)?;
+            let original_sort_exprs = create_physical_sort_exprs(
+                &self.sort_order,
+                &df_schema,
+                eqp,
+                &SubqueryContext::default(),
+            )?;
 
             if let Some(p) = projection {
                 // When performing a projection, the output columns will not match

@@ -137,7 +137,7 @@ pub(crate) mod test_utils {
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
         Expr, HigherOrderUDF, col,
-        execution_props::ExecutionProps,
+        execution_props::{ExecutionProps, SubqueryContext},
         expr::{HigherOrderFunction, LambdaVariable},
         lambda,
     };
@@ -174,6 +174,7 @@ pub(crate) mod test_utils {
             )),
             &schema,
             &ExecutionProps::new(),
+            &SubqueryContext::default(),
         )?
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),

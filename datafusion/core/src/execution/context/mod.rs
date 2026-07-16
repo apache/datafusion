@@ -2383,6 +2383,7 @@ mod tests {
     use arrow_schema::FieldRef;
     use datafusion_common::DataFusionError;
     use datafusion_common::datatype::DataTypeExt;
+    use datafusion_expr::execution_props::SubqueryContext;
     use std::error::Error;
     use std::path::PathBuf;
 
@@ -2851,6 +2852,7 @@ mod tests {
             _expr: &Expr,
             _input_dfschema: &DFSchema,
             _session_state: &SessionState,
+            _subquery_ctx: &SubqueryContext,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             unimplemented!()
         }

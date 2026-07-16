@@ -349,7 +349,10 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{DFSchema, ScalarValue, assert_contains, stats::Precision};
     use datafusion_expr::{
-        Expr, col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit,
+        Expr, col,
+        execution_props::{ExecutionProps, SubqueryContext},
+        interval_arithmetic::Interval,
+        lit,
     };
 
     use crate::{AnalysisContext, create_physical_expr, expressions::Column};
@@ -412,8 +415,13 @@ mod tests {
         for (expr, lower, upper) in test_cases {
             let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
             let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
-            let physical_expr =
-                create_physical_expr(&expr, &df_schema, &ExecutionProps::new()).unwrap();
+            let physical_expr = create_physical_expr(
+                &expr,
+                &df_schema,
+                &ExecutionProps::new(),
+                &SubqueryContext::default(),
+            )
+            .unwrap();
             let analysis_result = analyze(
                 &physical_expr,
                 AnalysisContext::new(boundaries),
@@ -453,8 +461,13 @@ mod tests {
         for expr in test_cases {
             let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
             let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
-            let physical_expr =
-                create_physical_expr(&expr, &df_schema, &ExecutionProps::new()).unwrap();
+            let physical_expr = create_physical_expr(
+                &expr,
+                &df_schema,
+                &ExecutionProps::new(),
+                &SubqueryContext::default(),
+            )
+            .unwrap();
             let analysis_result = analyze(
                 &physical_expr,
                 AnalysisContext::new(boundaries),
@@ -475,8 +488,13 @@ mod tests {
         let expected_error = "OR operator cannot yet propagate true intervals";
         let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
         let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
-        let physical_expr =
-            create_physical_expr(&expr, &df_schema, &ExecutionProps::new()).unwrap();
+        let physical_expr = create_physical_expr(
+            &expr,
+            &df_schema,
+            &ExecutionProps::new(),
+            &SubqueryContext::default(),
+        )
+        .unwrap();
         let analysis_error = analyze(
             &physical_expr,
             AnalysisContext::new(boundaries),

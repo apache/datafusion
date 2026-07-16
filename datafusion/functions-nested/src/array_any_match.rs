@@ -273,7 +273,7 @@ mod tests {
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
         Expr, HigherOrderReturnFieldArgs, HigherOrderUDFImpl, ValueOrLambda, col,
-        execution_props::ExecutionProps,
+        execution_props::{ExecutionProps, SubqueryContext},
         expr::{HigherOrderFunction, LambdaVariable},
         lambda, lit,
     };
@@ -311,6 +311,7 @@ mod tests {
             )),
             &schema,
             &ExecutionProps::new(),
+            &SubqueryContext::default(),
         )?
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),
@@ -344,6 +345,7 @@ mod tests {
             )),
             &schema,
             &ExecutionProps::new(),
+            &SubqueryContext::default(),
         )?
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),

@@ -25,7 +25,7 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{DFSchema, HashMap, ScalarValue, SplitPoint};
 use datafusion_common::{Result, plan_err};
-use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::execution_props::{ExecutionProps, SubqueryContext};
 use datafusion_expr::{Expr, Partitioning as LogicalPartitioning, SortExpr};
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 
@@ -190,47 +190,68 @@ pub fn create_lex_ordering(
             exprs,
             &df_schema,
             execution_props,
+            &SubqueryContext::default(),
         )?));
     }
     Ok(all_sort_orders)
 }
 
 /// Create a physical sort expression from a logical expression
+///
+/// See [`create_physical_expr`] for details on the `subquery_ctx` argument.
 pub fn create_physical_sort_expr(
     e: &SortExpr,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
+    subquery_ctx: &SubqueryContext,
 ) -> Result<PhysicalSortExpr> {
-    create_physical_expr(&e.expr, input_dfschema, execution_props).map(|expr| {
-        let options = SortOptions::new(!e.asc, e.nulls_first);
-        PhysicalSortExpr::new(expr, options)
-    })
+    create_physical_expr(&e.expr, input_dfschema, execution_props, subquery_ctx).map(
+        |expr| {
+            let options = SortOptions::new(!e.asc, e.nulls_first);
+            PhysicalSortExpr::new(expr, options)
+        },
+    )
 }
 
 /// Create vector of physical sort expression from a vector of logical expression
+///
+/// See [`create_physical_expr`] for details on the `subquery_ctx` argument.
 pub fn create_physical_sort_exprs(
     exprs: &[SortExpr],
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
+    subquery_ctx: &SubqueryContext,
 ) -> Result<Vec<PhysicalSortExpr>> {
     exprs
         .iter()
-        .map(|e| create_physical_sort_expr(e, input_dfschema, execution_props))
+        .map(|e| {
+            create_physical_sort_expr(e, input_dfschema, execution_props, subquery_ctx)
+        })
         .collect()
 }
 
 /// Create physical partitioning from logical partitioning.
+///
+/// See [`create_physical_expr`] for details on the `subquery_ctx` argument.
 pub fn create_physical_partitioning(
     partitioning: &LogicalPartitioning,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
+    subquery_ctx: &SubqueryContext,
 ) -> Result<Partitioning> {
     match partitioning {
         LogicalPartitioning::RoundRobinBatch(n) => Ok(Partitioning::RoundRobinBatch(*n)),
         LogicalPartitioning::Hash(exprs, partition_count) => {
             let exprs = exprs
                 .iter()
-                .map(|expr| create_physical_expr(expr, input_dfschema, execution_props))
+                .map(|expr| {
+                    create_physical_expr(
+                        expr,
+                        input_dfschema,
+                        execution_props,
+                        subquery_ctx,
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?;
             Ok(Partitioning::Hash(exprs, *partition_count))
         }
@@ -239,6 +260,7 @@ pub fn create_physical_partitioning(
                 range.ordering(),
                 input_dfschema,
                 execution_props,
+                subquery_ctx,
             )?;
             let Some(ordering) = LexOrdering::new(ordering) else {
                 return plan_err!("Range partitioning requires non-empty ordering");

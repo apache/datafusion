@@ -27,6 +27,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::execution_props::SubqueryContext;
 use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::{ColumnarValue, Expr, logical_plan::LogicalPlan};
@@ -233,8 +234,13 @@ fn evaluate_expr_with_null_column<'a>(
 
     let replaced_predicate = replace_col(predicate, &join_cols_to_replace)?;
     let coerced_predicate = coerce(replaced_predicate, &input_schema)?;
-    create_physical_expr(&coerced_predicate, &input_schema, &execution_props)?
-        .evaluate(&input_batch)
+    create_physical_expr(
+        &coerced_predicate,
+        &input_schema,
+        &execution_props,
+        &SubqueryContext::default(),
+    )?
+    .evaluate(&input_batch)
 }
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {

@@ -53,7 +53,7 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 #[cfg(feature = "sql")]
 use datafusion_expr::TableSource;
-use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::execution_props::{ExecutionProps, SubqueryContext};
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
 #[cfg(feature = "sql")]
@@ -798,7 +798,12 @@ impl SessionState {
                 .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
                 .data;
         }
-        create_physical_expr(&expr, df_schema, self.execution_props())
+        create_physical_expr(
+            &expr,
+            df_schema,
+            self.execution_props(),
+            &SubqueryContext::default(),
+        )
     }
 
     /// Return the session ID
