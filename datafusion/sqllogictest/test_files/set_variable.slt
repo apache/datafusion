@@ -725,6 +725,9 @@ statement error DataFusion error: Invalid or Unsupported Configuration: value mu
 SET datafusion.execution.batch_size = 0
 
 statement error DataFusion error: Invalid or Unsupported Configuration: value must be greater than 0
+SET datafusion.execution.soft_max_rows_per_output_file = 0
+
+statement error DataFusion error: Invalid or Unsupported Configuration: value must be greater than 0
 SET datafusion.execution.max_spill_file_size_bytes = 0
 
 statement error DataFusion error: Invalid or Unsupported Configuration: value must be greater than 0
