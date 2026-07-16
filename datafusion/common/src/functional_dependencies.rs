@@ -151,8 +151,10 @@ pub struct FunctionalDependence {
 /// Describes functional dependency mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dependency {
-    Single, // A determinant key may occur only once.
-    Multi,  // A determinant key may occur multiple times (in multiple rows).
+    /// A determinant key may occur only once.
+    Single,
+    /// A determinant key may occur multiple times (in multiple rows).
+    Multi,
 }
 
 impl FunctionalDependence {
