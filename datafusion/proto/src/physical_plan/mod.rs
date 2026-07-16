@@ -1710,7 +1710,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(convert_required!(empty.schema)?);
-        Ok(Arc::new(EmptyExec::new(schema)))
+        // A zero (absent) partition count comes from a plan encoded before the
+        // field existed, which always meant a single partition.
+        let partitions = empty.partitions.max(1) as usize;
+        Ok(Arc::new(EmptyExec::new(schema).with_partitions(partitions)))
     }
 
     fn try_into_placeholder_row_physical_plan(
@@ -1719,7 +1722,12 @@ pub trait PhysicalPlanNodeExt: Sized {
         _ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(convert_required!(placeholder.schema)?);
-        Ok(Arc::new(PlaceholderRowExec::new(schema)))
+        // A zero (absent) partition count comes from a plan encoded before the
+        // field existed, which always meant a single partition.
+        let partitions = placeholder.partitions.max(1) as usize;
+        Ok(Arc::new(
+            PlaceholderRowExec::new(schema).with_partitions(partitions),
+        ))
     }
 
     fn try_into_sort_physical_plan(
@@ -3015,6 +3023,8 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Empty(protobuf::EmptyExecNode {
                 schema: Some(schema),
+                partitions: empty.properties().output_partitioning().partition_count()
+                    as u32,
             })),
         })
     }
@@ -3028,6 +3038,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             physical_plan_type: Some(PhysicalPlanType::PlaceholderRow(
                 protobuf::PlaceholderRowExecNode {
                     schema: Some(schema),
+                    partitions: empty.properties().output_partitioning().partition_count()
+                        as u32,
                 },
             )),
         })
