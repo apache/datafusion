@@ -2607,6 +2607,10 @@ impl DefaultPhysicalPlanner {
         let explain_format = &e.explain_format;
         // Statement-level override wins over session config for show_statistics.
         let show_statistics = e.show_statistics.unwrap_or(config.show_statistics);
+        let statistics_registry = session_state
+            .statistics_registry()
+            .cloned()
+            .unwrap_or_default();
 
         if !e.logical_optimization_succeeded {
             return Ok(Arc::new(ExplainExec::new(
@@ -2680,6 +2684,7 @@ impl DefaultPhysicalPlanner {
                         InitialPhysicalPlan,
                         displayable(input.as_ref())
                             .set_show_statistics(show_statistics)
+                            .set_statistics_registry(statistics_registry.clone())
                             .set_show_schema(config.show_schema)
                             .indent(e.verbose)
                             .to_string(),
@@ -2693,6 +2698,7 @@ impl DefaultPhysicalPlanner {
                                 InitialPhysicalPlanWithStats,
                                 displayable(input.as_ref())
                                     .set_show_statistics(true)
+                                    .set_statistics_registry(statistics_registry.clone())
                                     .indent(e.verbose)
                                     .to_string(),
                             ));
@@ -2718,6 +2724,7 @@ impl DefaultPhysicalPlanner {
                                 plan_type,
                                 displayable(plan)
                                     .set_show_statistics(show_statistics)
+                                    .set_statistics_registry(statistics_registry.clone())
                                     .set_show_schema(config.show_schema)
                                     .indent(e.verbose)
                                     .to_string(),
@@ -2731,6 +2738,7 @@ impl DefaultPhysicalPlanner {
                                 FinalPhysicalPlan,
                                 displayable(input.as_ref())
                                     .set_show_statistics(show_statistics)
+                                    .set_statistics_registry(statistics_registry.clone())
                                     .set_show_schema(config.show_schema)
                                     .indent(e.verbose)
                                     .to_string(),
@@ -2744,6 +2752,9 @@ impl DefaultPhysicalPlanner {
                                         FinalPhysicalPlanWithStats,
                                         displayable(input.as_ref())
                                             .set_show_statistics(true)
+                                            .set_statistics_registry(
+                                                statistics_registry.clone(),
+                                            )
                                             .indent(e.verbose)
                                             .to_string(),
                                     ));
@@ -2809,11 +2820,16 @@ impl DefaultPhysicalPlanner {
             ExplainAnalyzeCategories::All => None,
             ExplainAnalyzeCategories::Only(cats) => Some(cats),
         };
+        let statistics_registry = session_state
+            .statistics_registry()
+            .cloned()
+            .unwrap_or_default();
         Ok(Arc::new(
             AnalyzeExec::builder(a.verbose, show_statistics, input, schema)
                 .with_metric_types(metric_types)
                 .with_metric_categories(metric_categories)
                 .with_format(a.format.clone())
+                .with_statistics_registry(statistics_registry)
                 .build(),
         ))
     }
