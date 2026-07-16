@@ -39,7 +39,7 @@ use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
-use crate::spill::spill_pool::{self, SharedSpillPoolWriter, SpillPoolWriter};
+use crate::spill::spill_pool::{self, SpillPoolSink, SpillPoolWriter};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
@@ -55,7 +55,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, transpose};
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, HashMap, HashSet, ScalarValue, SplitPoint,
+    ColumnStatistics, DataFusionError, HashMap, ScalarValue, SplitPoint,
     assert_or_internal_err, internal_datafusion_err, internal_err,
 };
 use datafusion_common::{Result, not_impl_err};
@@ -164,7 +164,7 @@ type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeB
 struct OutputChannel {
     sender: DistributionSender<MaybeBatch>,
     reservation: SharedMemoryReservation,
-    spill_writer: SpillPoolWriter,
+    spill_writer: SpillPoolSink,
     shared_coalescer: Option<SharedCoalescer>,
 }
 
@@ -174,9 +174,9 @@ struct OutputChannel {
 enum PartitionSpillWriters {
     /// `preserve_order`: one single-producer FIFO writer per input partition. Each is `take`n
     /// exactly once (moved into the matching input task), so the pool always has one writer.
-    PerInput(Vec<Option<SpillPoolWriter>>),
+    PerInput(Vec<Option<SpillPoolSink>>),
     /// Non-preserve-order: one shared writer, cloned into every input task.
-    Shared(SharedSpillPoolWriter),
+    Shared(SpillPoolWriter),
 }
 
 impl PartitionSpillWriters {
@@ -184,7 +184,7 @@ impl PartitionSpillWriters {
     ///
     /// In `PerInput` mode this moves the dedicated writer out (it must only be requested once per
     /// input); in `Shared` mode it clones the shared writer.
-    fn take_for_input(&mut self, input: usize) -> Result<SpillPoolWriter> {
+    fn take_for_input(&mut self, input: usize) -> Result<SpillPoolSink> {
         match self {
             PartitionSpillWriters::PerInput(writers) => {
                 writers[input].take().ok_or_else(|| {
@@ -193,7 +193,7 @@ impl PartitionSpillWriters {
                     )
                 })
             }
-            PartitionSpillWriters::Shared(writer) => Ok(writer.new_writer()),
+            PartitionSpillWriters::Shared(writer) => Ok(writer.new_sink()),
         }
     }
 }
@@ -323,7 +323,7 @@ impl SharedCoalescer {
 ///
 /// See [`RepartitionExec`] for the overall N×M architecture.
 ///
-/// [`spill_pool::channel`]: crate::spill::spill_pool::channel
+/// [`spill_pool::channel`]: crate::spill::spill_pool::spsc_channel
 struct PartitionChannels {
     /// Senders for each input partition to send data to this output partition
     tx: InputPartitionsToCurrentPartitionSender,
@@ -503,8 +503,10 @@ impl RepartitionExecState {
                 let mut writers = Vec::with_capacity(num_input_partitions);
                 let mut readers = Vec::with_capacity(num_input_partitions);
                 for _ in 0..num_input_partitions {
-                    let (writer, reader) =
-                        spill_pool::channel(max_file_size, Arc::clone(&spill_manager));
+                    let (writer, reader) = spill_pool::spsc_channel(
+                        max_file_size,
+                        Arc::clone(&spill_manager),
+                    );
                     writers.push(Some(writer));
                     readers.push(reader);
                 }
@@ -513,7 +515,7 @@ impl RepartitionExecState {
                 // non-preserve-order: one shared multi-producer pool per output partition, since
                 // all inputs share the same receiver and the output is an unordered multiset.
                 let (writer, reader) =
-                    spill_pool::shared_channel(max_file_size, Arc::clone(&spill_manager));
+                    spill_pool::mpsc_channel(max_file_size, Arc::clone(&spill_manager));
                 (PartitionSpillWriters::Shared(writer), vec![reader])
             };
 
@@ -3616,7 +3618,7 @@ mod test {
     /// Regression test for order preservation across spill *file rotation*.
     ///
     /// A `preserve_order` repartition relies on each per-(input, output) spill pool delivering
-    /// batches in strict FIFO order (see [`spill_pool::channel`] / [`SpillPoolWriter`]). This uses
+    /// batches in strict FIFO order (see [`spill_pool::spsc_channel`] / [`SpillPoolSink`]). This uses
     /// the same memory profile as [`Self::test_preserve_order_with_spilling`] — which is tuned to
     /// force spilling while still completing — but additionally sets `max_spill_file_size_bytes`
     /// to 1 so every spilled batch lands in its own file. That exercises the FIFO-across-rotation

@@ -93,47 +93,47 @@ impl SpillPoolShared {
 
 /// Writer for a spill pool that can be cloned to produce additional writers.
 ///
-/// Created by [`shared_channel`]. See that function for architecture diagrams and usage
+/// Created by [`mspc_channel`]. See that function for architecture diagrams and usage
 /// examples.
 ///
 /// This writer is `Clone`, allowing multiple producers to coordinate on the same pool.
-pub struct SharedSpillPoolWriter {
+pub struct SpillPoolWriter {
     /// The underlying shared writer. Kept private and never cloned, so this pool always has
     /// exactly one writer.
-    inner: SpillPoolWriter,
+    inner: SpillPoolSink,
 }
 
-impl SharedSpillPoolWriter {
+impl SpillPoolWriter {
     /// Spills a batch to the pool, rotating files when necessary.
     ///
-    /// See [`SharedSpillPoolWriter::push_batch`] for the rotation semantics.
+    /// See [`SpillPoolWriter::push_batch`] for the rotation semantics.
     pub fn push_batch(&self, batch: &RecordBatch) -> Result<()> {
         self.inner.push_batch(batch)
     }
 }
 
-impl SharedSpillPoolWriter {
-    /// Returns a new shared writer that can be used to spill batches to the pool.
-    pub fn new_writer(&self) -> SpillPoolWriter {
+impl SpillPoolWriter {
+    /// Returns a new sink that can be used to spill batches to the pool.
+    pub fn new_sink(&self) -> SpillPoolSink {
         // Increment `remaining_writer_count`. The corresponding decrement is done in the `Drop`
         // implementation of `SpillPoolWriter`.
         self.inner.shared.lock().remaining_writer_count += 1;
-        SpillPoolWriter {
+        SpillPoolSink {
             max_file_size_bytes: self.inner.max_file_size_bytes,
             shared: Arc::clone(&self.inner.shared),
         }
     }
 }
 
-impl Clone for SharedSpillPoolWriter {
+impl Clone for SpillPoolWriter {
     fn clone(&self) -> Self {
         Self {
-            inner: self.new_writer(),
+            inner: self.new_sink(),
         }
     }
 }
 
-impl Drop for SpillPoolWriter {
+impl Drop for SpillPoolSink {
     fn drop(&mut self) {
         let mut shared = self.shared.lock();
 
@@ -176,10 +176,10 @@ impl Drop for SpillPoolWriter {
     }
 }
 
-/// Single writer for a spill pool that cannot be cloned further.
+/// Single writer for a spill pool that cannot be cloned.
 ///
-/// Created by [`channel`] and [`SharedSpillPoolWriter::new_writer`].
-pub struct SpillPoolWriter {
+/// Created by [`spsc_channel`] and [`SpillPoolWriter::new_sink`].
+pub struct SpillPoolSink {
     /// Maximum size in bytes before rotating to a new file.
     /// Typically set from configuration `datafusion.execution.max_spill_file_size_bytes`.
     max_file_size_bytes: usize,
@@ -187,10 +187,10 @@ pub struct SpillPoolWriter {
     shared: Arc<Mutex<SpillPoolShared>>,
 }
 
-impl SpillPoolWriter {
+impl SpillPoolSink {
     /// Spills a batch to the pool, rotating files when necessary.
     ///
-    /// See [`channel`] for overall architecture and examples.
+    /// See [`spsc_channel`] for overall architecture and examples.
     ///
     /// # Errors
     ///
@@ -284,7 +284,7 @@ impl SpillPoolWriter {
 /// Creates a paired writer and reader for a spill pool with SPSC (single-producer,
 /// single-consumer) semantics and strict FIFO ordering.
 ///
-/// If you need a spill pool that supports several producers, use [`shared_channel`] instead.
+/// If you need a spill pool that supports several producers, use [`mspc_channel`] instead.
 ///
 /// The reader can start reading immediately after the writer appends a batch
 /// to the spill file, without waiting for the file to be sealed, while the writer continues to
@@ -403,7 +403,7 @@ impl SpillPoolWriter {
 /// # let spill_manager = Arc::new(SpillManager::new(env, metrics, schema.clone()));
 /// #
 /// // Create channel with 1MB file size limit
-/// let (writer, mut reader) = spill_pool::channel(1024 * 1024, spill_manager);
+/// let (writer, mut reader) = spill_pool::spsc_channel(1024 * 1024, spill_manager);
 ///
 /// // Spawn writer and reader concurrently; writer wakes reader via wakers
 /// let writer_task = tokio::spawn(async move {
@@ -452,14 +452,14 @@ impl SpillPoolWriter {
 /// If instead we use file rotation, and as long as the readers can keep up with the writer,
 /// then we can ensure that once a file is fully read by all readers it can be deleted,
 /// thus bounding the maximum disk usage to roughly `max_file_size_bytes`.
-pub fn channel(
+pub fn spsc_channel(
     max_file_size_bytes: usize,
     spill_manager: Arc<SpillManager>,
-) -> (SpillPoolWriter, SendableRecordBatchStream) {
+) -> (SpillPoolSink, SendableRecordBatchStream) {
     let schema = Arc::clone(spill_manager.schema());
     let shared = Arc::new(Mutex::new(SpillPoolShared::new(spill_manager)));
 
-    let writer = SpillPoolWriter {
+    let writer = SpillPoolSink {
         max_file_size_bytes,
         shared: Arc::clone(&shared),
     };
@@ -469,21 +469,30 @@ pub fn channel(
     (writer, Box::pin(reader))
 }
 
+/// Alias for [`mpsc_channel`].
+#[deprecated(note = "Use mpsc_channel instead")]
+pub fn channel(
+    max_file_size_bytes: usize,
+    spill_manager: Arc<SpillManager>,
+) -> (SpillPoolWriter, SendableRecordBatchStream) {
+    mpsc_channel(max_file_size_bytes, spill_manager)
+}
+
 /// Creates a paired writer and reader for a spill pool with MPSC (multi-producer,
-/// single-consumer) semantics. See [`channel`] for the general architecture description
+/// single-consumer) semantics. See [`spsc_channel`] for the general architecture description
 /// of the spill pool.
 ///
-/// Additional writers can be created by cloning the returned [`SharedSpillPoolWriter`].
+/// Additional writers can be created by cloning the returned [`SpillPoolWriter`].
 ///
-/// In contrast to [`channel`], this implementation provides no guarantees regarding
+/// In contrast to [`spsc_channel`], this implementation provides no guarantees regarding
 /// the read order of the returned [`SendableRecordBatchStream`].
 ///
 /// If you need strict end-to-end FIFO (a single writer whose batches are read back in exact
-/// write order), use [`channel`] instead.
+/// write order), use [`spsc_channel`] instead.
 ///
 /// # File Management
 ///
-/// The shared channel uses the same size-based rotation trigger as the [single producer channel](channel).
+/// The shared channel uses the same size-based rotation trigger as the [single producer channel](spsc_channel).
 /// All writers share the same pool of write files and coordinate file rotation. The number of open
 /// files is kept as small as possible. When more writes occur concurrently than there are open write
 /// files an additional file will be opened to write to. This prevents multiple writers from blocking
@@ -497,12 +506,12 @@ pub fn channel(
 /// A tuple of `(SharedSpillPoolWriter, SendableRecordBatchStream)` that share the same
 /// underlying pool. The reader is returned as a stream for immediate use with
 /// async stream combinators. The writer can be cloned to create additional writers.
-pub fn shared_channel(
+pub fn mpsc_channel(
     max_file_size_bytes: usize,
     spill_manager: Arc<SpillManager>,
-) -> (SharedSpillPoolWriter, SendableRecordBatchStream) {
-    let (inner, reader) = channel(max_file_size_bytes, spill_manager);
-    (SharedSpillPoolWriter { inner }, reader)
+) -> (SpillPoolWriter, SendableRecordBatchStream) {
+    let (inner, reader) = spsc_channel(max_file_size_bytes, spill_manager);
+    (SpillPoolWriter { inner }, reader)
 }
 
 /// Shared state between writer and readers for an active spill file.
@@ -639,7 +648,7 @@ impl Stream for SpillPoolFile {
 
 /// A stream that reads from a SpillPool. The reader guarantees FIFO order if a single writer is used.
 ///
-/// Created by [`channel`]. See that function for architecture diagrams and usage examples.
+/// Created by [`spsc_channel`]. See that function for architecture diagrams and usage examples.
 ///
 /// The stream automatically handles file rotation and reads from completed files.
 /// When no data is available, it returns `Poll::Pending` and registers a waker to
@@ -793,35 +802,35 @@ mod tests {
 
     fn create_spill_channel(
         max_file_size: usize,
+    ) -> (SpillPoolSink, SendableRecordBatchStream) {
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let schema = create_test_schema();
+        let spill_manager = Arc::new(SpillManager::new(env, metrics, schema));
+
+        spsc_channel(max_file_size, spill_manager)
+    }
+
+    fn create_shared_spill_channel(
+        max_file_size: usize,
     ) -> (SpillPoolWriter, SendableRecordBatchStream) {
         let env = Arc::new(RuntimeEnv::default());
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let schema = create_test_schema();
         let spill_manager = Arc::new(SpillManager::new(env, metrics, schema));
 
-        channel(max_file_size, spill_manager)
-    }
-
-    fn create_shared_spill_channel(
-        max_file_size: usize,
-    ) -> (SharedSpillPoolWriter, SendableRecordBatchStream) {
-        let env = Arc::new(RuntimeEnv::default());
-        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-        let schema = create_test_schema();
-        let spill_manager = Arc::new(SpillManager::new(env, metrics, schema));
-
-        shared_channel(max_file_size, spill_manager)
+        mpsc_channel(max_file_size, spill_manager)
     }
 
     fn create_spill_channel_with_metrics(
         max_file_size: usize,
-    ) -> (SpillPoolWriter, SendableRecordBatchStream, SpillMetrics) {
+    ) -> (SpillPoolSink, SendableRecordBatchStream, SpillMetrics) {
         let env = Arc::new(RuntimeEnv::default());
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let schema = create_test_schema();
         let spill_manager = Arc::new(SpillManager::new(env, metrics.clone(), schema));
 
-        let (writer, reader) = channel(max_file_size, spill_manager);
+        let (writer, reader) = spsc_channel(max_file_size, spill_manager);
         (writer, reader, metrics)
     }
 
@@ -1414,7 +1423,7 @@ mod tests {
         let spill_manager =
             Arc::new(SpillManager::new(Arc::clone(&env), metrics.clone(), schema));
 
-        let (writer, mut reader) = channel(1024 * 1024, spill_manager);
+        let (writer, mut reader) = spsc_channel(1024 * 1024, spill_manager);
 
         // Write some batches
         for i in 0..5 {
@@ -1555,7 +1564,7 @@ mod tests {
         let schema = create_test_schema();
         let spill_manager = Arc::new(SpillManager::new(runtime, metrics.clone(), schema));
 
-        let (writer, mut reader) = channel(batch_size - 1, spill_manager);
+        let (writer, mut reader) = spsc_channel(batch_size - 1, spill_manager);
 
         // Step 3: Write NUM_BATCHES batches to create approximately NUM_BATCHES files
         for i in 0..NUM_BATCHES {
