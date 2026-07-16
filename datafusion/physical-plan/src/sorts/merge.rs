@@ -126,8 +126,9 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Current reset count
     current_reset_epoch: usize,
 
-    /// Stores the previous value of each partitions for tracking the poll counts on the same value.
-    prev_cursors: Vec<Option<Cursor<C>>>,
+    /// Stores the previous value of each partitions for tracking the poll counts on the same value
+    /// when round_robin_tie_breaker is enabled
+    prev_cursors: Option<Vec<Option<Cursor<C>>>>,
 
     /// Optional number of rows to fetch
     fetch: Option<usize>,
@@ -153,7 +154,11 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             streams,
             metrics,
             cursors: (0..stream_count).map(|_| None).collect(),
-            prev_cursors: (0..stream_count).map(|_| None).collect(),
+            prev_cursors: if enable_round_robin_tie_breaker {
+                Some((0..stream_count).map(|_| None).collect())
+            } else {
+                None
+            },
             round_robin_tie_breaker_mode: false,
             num_of_polled_with_same_value: vec![0; stream_count],
             current_reset_epoch: 0,
@@ -351,7 +356,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         if let Some(c) = cursor.as_mut() {
             // Compare with the last row in the previous batch
-            let prev_cursor = &self.prev_cursors[partition_idx];
+            let prev_cursor = self
+                .prev_cursors
+                .as_ref()
+                .map(|v| &v[partition_idx])
+                .expect(
+                    "prev_cursor should be set when round robin tie breaker is enabled",
+                );
             if c.is_eq_to_prev_one(prev_cursor.as_ref()) {
                 self.num_of_polled_with_same_value[partition_idx] += 1;
             } else {
@@ -377,7 +388,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 // Take the current cursor, leaving `None` in its place
                 let taken = self.cursors[stream_idx].take();
                 if self.enable_round_robin_tie_breaker {
-                    self.prev_cursors[stream_idx] = taken;
+                    self.prev_cursors.as_mut().expect("prev_cursor should be set when round robin tie breaker is enabled")[stream_idx] = taken;
                 }
             }
             true
