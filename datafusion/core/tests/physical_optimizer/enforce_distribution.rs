@@ -20,8 +20,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    check_integrity, coalesce_partitions_exec, parquet_exec_with_sort,
-    parquet_exec_with_stats, repartition_exec, schema, sort_exec,
+    bounded_window_exec_with_can_repartition, check_integrity, coalesce_partitions_exec,
+    parquet_exec_with_sort, parquet_exec_with_stats, repartition_exec, schema, sort_exec,
     sort_exec_with_preserve_partitioning, sort_merge_join_exec,
     sort_preserving_merge_exec, union_exec,
 };
@@ -865,6 +865,69 @@ fn range_inner_hash_join_rehashes_incompatible_range_partitioning() -> Result<()
         ProjectionExec: expr=[a@0 as a1, b@1 as b1]
           DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (30), (40)], 4), file_type=parquet
     "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_window_reuses_range_partitioning() -> Result<()> {
+    let input = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let window = bounded_window_exec_with_can_repartition(
+        "a",
+        vec![],
+        &[col("a", &schema())?],
+        input,
+        true,
+    );
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(window, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r#"
+    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+    "#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_window_rehashes_incompatible_range_partitioning() -> Result<()> {
+    let input = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let window = bounded_window_exec_with_can_repartition(
+        "b",
+        vec![],
+        &[col("b", &schema())?],
+        input,
+        true,
+    );
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(window, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r#"
+    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[true]
+        RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=4
+          DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+    "#
     );
 
     Ok(())
