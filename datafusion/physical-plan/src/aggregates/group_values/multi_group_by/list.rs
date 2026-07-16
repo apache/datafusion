@@ -91,7 +91,12 @@ impl<O: OffsetSizeTrait> ListGroupValueBuilder<O> {
         Ok(())
     }
 
-    fn equal_to_typed(&self, lhs_row: usize, array: &GenericListArray<O>, rhs_row: usize) -> bool {
+    fn equal_to_typed(
+        &self,
+        lhs_row: usize,
+        array: &GenericListArray<O>,
+        rhs_row: usize,
+    ) -> bool {
         let lhs_null = self.outer_nulls.is_null(lhs_row);
         let rhs_null = array.is_null(rhs_row);
         if let Some(result) = nulls_equal_to(lhs_null, rhs_null) {
@@ -114,7 +119,11 @@ impl<O: OffsetSizeTrait> ListGroupValueBuilder<O> {
         true
     }
 
-    fn append_val_typed(&mut self, array: &GenericListArray<O>, row: usize) -> Result<()> {
+    fn append_val_typed(
+        &mut self,
+        array: &GenericListArray<O>,
+        row: usize,
+    ) -> Result<()> {
         if array.is_null(row) {
             self.outer_nulls.append(true);
             // Zero-length range for null outer rows: do not push any child
