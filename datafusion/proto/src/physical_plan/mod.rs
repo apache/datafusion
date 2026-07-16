@@ -3023,7 +3023,8 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Empty(protobuf::EmptyExecNode {
                 schema: Some(schema),
-                partitions: empty.partitions() as u32,
+                partitions: empty.properties().output_partitioning().partition_count()
+                    as u32,
             })),
         })
     }
@@ -3037,7 +3038,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             physical_plan_type: Some(PhysicalPlanType::PlaceholderRow(
                 protobuf::PlaceholderRowExecNode {
                     schema: Some(schema),
-                    partitions: empty.partitions() as u32,
+                    partitions: empty.properties().output_partitioning().partition_count()
+                        as u32,
                 },
             )),
         })
