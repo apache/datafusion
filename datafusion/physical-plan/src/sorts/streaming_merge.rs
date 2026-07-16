@@ -428,7 +428,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multi_level_merge_sort_should_be_stable_when_round_robin_tie_breaker_is_disabled()
+    async fn multi_level_merge_sort_should_be_stable_and_have_multiple_rounds_when_round_robin_tie_breaker_is_disabled()
      {
         let input_batch_size = 10;
         let num_rows = input_batch_size * 6;
