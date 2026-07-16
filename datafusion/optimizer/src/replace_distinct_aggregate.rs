@@ -99,17 +99,28 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     })));
                 }
 
-                let field_count = input.schema().fields().len();
-                for dep in input.schema().functional_dependencies().iter() {
+                let schema = input.schema();
+                let field_count = schema.fields().len();
+                for dep in schema.functional_dependencies().iter() {
                     // If the input is already unique on all of its columns (e.g.
                     // it is a GROUP BY over exactly these columns), the DISTINCT
                     // is a no-op and we can simply remove it. The dependency mode
                     // must be `Single`: a `Multi` dependence (e.g. a former key
                     // downgraded by a join) means equal rows may occur multiple
                     // times, so the DISTINCT still has work to do.
-                    if dep.mode == Dependency::Single
-                        && dep.source_indices.len() >= field_count
-                        && dep.source_indices[..field_count]
+                    //
+                    // The determinant key must also not contain NULLs: a nullable
+                    // UNIQUE constraint permits multiple NULL keys, but DISTINCT
+                    // treats NULLs as equal and must still collapse them.
+                    let source_indices = &dep.source_indices;
+                    let any_source_field_nullable = source_indices
+                        .iter()
+                        .any(|&idx| schema.field(idx).is_nullable());
+                    let nullable = dep.nullable && any_source_field_nullable;
+                    if !nullable
+                        && dep.mode == Dependency::Single
+                        && source_indices.len() >= field_count
+                        && source_indices[..field_count]
                             .iter()
                             .enumerate()
                             .all(|(idx, f_idx)| idx == *f_idx)

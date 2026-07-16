@@ -5694,3 +5694,44 @@ drop table users_with_pk;
 
 statement ok
 drop table user_orders;
+
+# DISTINCT must not be removed based on a nullable UNIQUE constraint: SQL
+# UNIQUE permits multiple NULL keys, but DISTINCT treats NULLs as equal and
+# must still collapse them.
+statement ok
+CREATE TABLE t_nullable_unique (x INT UNIQUE) AS VALUES (NULL), (NULL), (1);
+
+query I
+SELECT DISTINCT x FROM t_nullable_unique ORDER BY x NULLS LAST;
+----
+1
+NULL
+
+query TT
+EXPLAIN SELECT DISTINCT x FROM t_nullable_unique;
+----
+logical_plan
+01)Aggregate: groupBy=[[t_nullable_unique.x]], aggr=[[]]
+02)--TableScan: t_nullable_unique projection=[x]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[x@0 as x], aggr=[]
+02)--RepartitionExec: partitioning=Hash([x@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[x@0 as x], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table t_nullable_unique;
+
+# A non-nullable key (PRIMARY KEY) guarantees unique rows, so the DISTINCT
+# can still be removed: no Aggregate appears in the plan.
+statement ok
+CREATE TABLE t_pk (x INT, PRIMARY KEY (x)) AS VALUES (1), (2);
+
+query TT
+EXPLAIN SELECT DISTINCT x FROM t_pk;
+----
+logical_plan TableScan: t_pk projection=[x]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table t_pk;
