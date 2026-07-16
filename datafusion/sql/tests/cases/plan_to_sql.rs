@@ -313,6 +313,12 @@ macro_rules! roundtrip_statement_with_dialect_helper {
         let state = MockSessionState::default()
             .with_aggregate_function(max_udaf())
             .with_aggregate_function(min_udaf())
+            .with_aggregate_function(
+                datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf(),
+            )
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
             .with_expr_planner(Arc::new(FieldAccessPlanner));
@@ -2736,6 +2742,116 @@ fn test_unparse_inner_join_with_table_scan_projection() -> Result<()> {
     Ok(())
 }
 
+/// Build the three base table scans (`left_table`, `mid_table`, `right_table`)
+/// shared by the nested passthrough-projection join unparsing tests.
+fn nested_passthrough_join_tables() -> Result<(LogicalPlan, LogicalPlan, LogicalPlan)> {
+    let left_schema = Schema::new(vec![
+        Field::new("left_id", DataType::Int32, false),
+        Field::new("mid_id", DataType::Int32, false),
+    ]);
+    let mid_schema = Schema::new(vec![
+        Field::new("mid_id", DataType::Int32, false),
+        Field::new("right_id", DataType::Int32, false),
+    ]);
+    let right_schema = Schema::new(vec![
+        Field::new("right_id", DataType::Int32, false),
+        Field::new("value", DataType::Int32, false),
+    ]);
+
+    let left = table_scan(Some("left_table"), &left_schema, None)?.build()?;
+    let mid = table_scan(Some("mid_table"), &mid_schema, None)?.build()?;
+    let right = table_scan(Some("right_table"), &right_schema, None)?.build()?;
+    Ok((left, mid, right))
+}
+
+#[test]
+fn test_unparse_projected_join_unwraps_right_nested_passthrough_projection() -> Result<()>
+{
+    let (left, mid, right) = nested_passthrough_join_tables()?;
+
+    let nested_right = LogicalPlanBuilder::from(mid)
+        .join(
+            right,
+            datafusion_expr::JoinType::Inner,
+            (vec!["mid_table.right_id"], vec!["right_table.right_id"]),
+            None,
+        )?
+        .project(vec![
+            col("mid_table.mid_id"),
+            col("mid_table.right_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+
+    let plan = LogicalPlanBuilder::from(left)
+        .join(
+            nested_right,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left_table.mid_id"], vec!["mid_table.mid_id"]),
+            None,
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+
+    let sql = plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table INNER JOIN (mid_table INNER JOIN right_table ON mid_table.right_id = right_table.right_id) ON left_table.mid_id = mid_table.mid_id"#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_projected_join_unwraps_left_nested_passthrough_projection() -> Result<()>
+{
+    let (left, mid, right) = nested_passthrough_join_tables()?;
+
+    // Left join input is a qualified passthrough `Projection(Join)`, and the
+    // outer join condition (`mid_table.right_id`) references an alias from
+    // inside it. The unparser must not wrap this in a derived table that would
+    // hide `mid_table.right_id` from the outer condition.
+    let nested_left = LogicalPlanBuilder::from(left)
+        .join(
+            mid,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left_table.mid_id"], vec!["mid_table.mid_id"]),
+            None,
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("mid_table.right_id"),
+        ])?
+        .build()?;
+
+    let plan = LogicalPlanBuilder::from(nested_left)
+        .join(
+            right,
+            datafusion_expr::JoinType::Inner,
+            (vec!["mid_table.right_id"], vec!["right_table.right_id"]),
+            None,
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+
+    let sql = plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table INNER JOIN mid_table ON left_table.mid_id = mid_table.mid_id INNER JOIN right_table ON mid_table.right_id = right_table.right_id"#
+    );
+
+    Ok(())
+}
+
 #[test]
 fn test_unparse_left_semi_join_with_table_scan_projection() -> Result<()> {
     let schema = Schema::new(vec![
@@ -4231,6 +4347,40 @@ fn snowflake_flatten_cross_join_unnest_table_column() -> Result<(), DataFusionEr
         parser_dialect: GenericDialect {},
         unparser_dialect: snowflake,
         expected: @r#"SELECT "multi_array_table"."column_a", "multi_array_table"."column_b", "a"."VALUE" FROM "multi_array_table" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_a") AS "a""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_approx_percentile_cont_within_group() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY salary) FROM person",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY person.salary ASC NULLS LAST) FROM person",
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_percentile_cont_within_group() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY salary) FROM person",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY person.salary ASC NULLS LAST) FROM person",
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_approx_percentile_cont_within_group_with_centroids()
+-> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT approx_percentile_cont(0.9, 200) WITHIN GROUP (ORDER BY salary * 2 DESC) FROM person",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT approx_percentile_cont(0.9, 200) WITHIN GROUP (ORDER BY (person.salary * 2) DESC NULLS FIRST) FROM person",
     );
     Ok(())
 }

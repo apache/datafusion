@@ -24,9 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
-use arrow::compute::kernels::concat_elements::{
-    concat_element_binary, concat_elements_utf8,
-};
+use arrow::compute::kernels::concat_elements::concat_elements_dyn;
 use arrow::compute::{SlicesIterator, cast, filter_record_batch};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
@@ -50,8 +48,7 @@ use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
-    concat_elements_binary_view_array, concat_elements_utf8view, regex_match_dyn,
-    regex_match_dyn_scalar,
+    regex_match_dyn, regex_match_dyn_scalar,
 };
 
 /// Binary expression
@@ -842,7 +839,7 @@ impl BinaryExpr {
             BitwiseXor => bitwise_xor_dyn(left, right),
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
-            StringConcat => concat_elements(&left, &right),
+            StringConcat => concat_elements_dyn(&left, &right).map_err(|e| e.into()),
             AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
             | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
             | IntegerDivide | Colon => {
@@ -1065,40 +1062,6 @@ fn pre_selection_scatter(
     let boolean_result = result_array_builder.finish();
 
     Ok(ColumnarValue::Array(Arc::new(boolean_result)))
-}
-
-fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
-    Ok(match left.data_type() {
-        DataType::Utf8 => Arc::new(concat_elements_utf8(
-            left.as_string::<i32>(),
-            right.as_string::<i32>(),
-        )?),
-        DataType::LargeUtf8 => Arc::new(concat_elements_utf8(
-            left.as_string::<i64>(),
-            right.as_string::<i64>(),
-        )?),
-        DataType::Utf8View => Arc::new(concat_elements_utf8view(
-            left.as_string_view(),
-            right.as_string_view(),
-        )?),
-        DataType::Binary => Arc::new(concat_element_binary::<i32>(
-            left.as_binary(),
-            right.as_binary(),
-        )?),
-        DataType::LargeBinary => Arc::new(concat_element_binary::<i64>(
-            left.as_binary(),
-            right.as_binary(),
-        )?),
-        DataType::BinaryView => Arc::new(concat_elements_binary_view_array(
-            left.as_binary_view(),
-            right.as_binary_view(),
-        )?),
-        other => {
-            return internal_err!(
-                "Data type {other:?} not supported for binary operation 'concat_elements' on string arrays"
-            );
-        }
-    })
 }
 
 /// Create a binary expression whose arguments are correctly coerced.

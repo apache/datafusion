@@ -21,29 +21,6 @@ use datafusion_common::{DataFusionError, Result};
 
 use crate::tests::ForeignLibraryModule;
 
-/// Compute the path to the built cdylib. Checks debug, release, and ci profile dirs.
-fn compute_library_dir(target_path: &Path) -> PathBuf {
-    let debug_dir = target_path.join("debug");
-    let release_dir = target_path.join("release");
-    let ci_dir = target_path.join("ci");
-
-    let all_dirs = vec![debug_dir.clone(), release_dir, ci_dir];
-
-    all_dirs
-        .into_iter()
-        .filter(|dir| dir.join("deps").exists())
-        .filter_map(|dir| {
-            dir.join("deps")
-                .metadata()
-                .and_then(|m| m.modified())
-                .ok()
-                .map(|date| (dir, date))
-        })
-        .max_by_key(|(_, date)| *date)
-        .map(|(dir, _)| dir)
-        .unwrap_or(debug_dir)
-}
-
 /// Find the cdylib file for datafusion_ffi in the given directory.
 fn find_cdylib(deps_dir: &Path) -> Result<PathBuf> {
     let lib_prefix = if cfg!(target_os = "windows") {
@@ -71,19 +48,24 @@ fn find_cdylib(deps_dir: &Path) -> Result<PathBuf> {
     ))
 }
 
+/// Locate the built `datafusion_ffi` cdylib.
+///
+/// The cdylib sits next to the running test binary, so this follows Cargo's
+/// actual output directory and is robust to the active profile and a custom
+/// `--target-dir` (e.g. `cargo llvm-cov`).
+fn find_library() -> Result<PathBuf> {
+    let exe =
+        std::env::current_exe().map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let deps_dir = exe.parent().ok_or_else(|| {
+        DataFusionError::External("Failed to find test binary directory".into())
+    })?;
+    find_cdylib(deps_dir)
+}
+
 pub fn get_module() -> Result<ForeignLibraryModule> {
     let expected_version = crate::version();
 
-    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let target_dir = crate_root
-        .parent()
-        .expect("Failed to find crate parent")
-        .parent()
-        .expect("Failed to find workspace root")
-        .join("target");
-
-    let library_dir = compute_library_dir(target_dir.as_path());
-    let lib_path = find_cdylib(&library_dir.join("deps"))?;
+    let lib_path = find_library()?;
 
     // Load the library using libloading
     let lib = unsafe {

@@ -1989,7 +1989,7 @@ where join_t1.t1_id + 12 not in
     (select join_t2.t2_id + 1 from join_t2 where join_t1.t1_int > 0)
 ----
 logical_plan
-01)LeftAnti Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.join_t2.t2_id + Int64(1) Filter: join_t1.t1_int > UInt32(0)
+01)LeftAnti Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.join_t2.t2_id + Int64(1) Filter: join_t1.t1_int > UInt32(0) null_aware
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
@@ -5185,7 +5185,7 @@ LEFT ANTI JOIN (
 ) t2 ON t1.k = t2.k;
 ----
 Plan with Metrics
-01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k@0, k@0)], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, array_map_created_count=0, build_input_batches=0, build_input_rows=0, input_batches=1, input_rows=2, build_mem_used=<slt:ignore>, build_time=<slt:ignore>, join_time=<slt:ignore>, avg_fanout=N/A (0/0), probe_hit_rate=0% (0/2)]     
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k@0, k@0)], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, build_mem_used=<slt:ignore>, array_map_created_count=0, build_input_batches=0, build_input_rows=0, input_batches=1, input_rows=2, build_time=<slt:ignore>, join_time=<slt:ignore>, avg_fanout=N/A (0/0), probe_hit_rate=0% (0/2)]
 02)--ProjectionExec: expr=[column1@0 as k], metrics=[output_rows=0, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=0, expr_0_eval_time=<slt:ignore>]
 03)----FilterExec: column1@0 != 1, metrics=[output_rows=0, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=0, selectivity=0% (0/1)]
 04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
@@ -5402,10 +5402,10 @@ LEFT JOIN issue_19067_right r ON l.join_key = r.join_key
 ORDER BY l.id;
 ----
 physical_plan
-01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[id@2 as id, join_key@3 as left_key, join_key@0 as right_key, value@1 as value]
-03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(join_key@0, join_key@1)]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[id@2 as id, join_key@3 as left_key, join_key@0 as right_key, value@1 as value]
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(join_key@0, join_key@1)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement count 0
@@ -5543,7 +5543,7 @@ statement count 0
 DROP TABLE t2;
 
 statement ok
-CREATE TABLE t1(a INT, b INT) AS VALUES 
+CREATE TABLE t1(a INT, b INT) AS VALUES
   (NULL, 1), (NULL, 2), (NULL, 3), (NULL, 4), (NULL, 5);
 
 statement ok
@@ -5555,7 +5555,7 @@ CREATE TABLE t2(c INT) AS VALUES (1), (2);
 query II
 SELECT sub.a, sub.b FROM (
   SELECT * FROM t1 ORDER BY b LIMIT 1
-) sub 
+) sub
 JOIN t2 ON sub.a = t2.c;
 ----
 

@@ -25,6 +25,7 @@ on:
   push:
     branches-ignore:
       - 'gh-readonly-queue/**'
+      - 'dependabot/**'
   pull_request:
   merge_group:
   # manual trigger
@@ -41,7 +42,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -50,9 +51,9 @@ jobs:
         with:
           rust-version: stable
       - name: Check dependencies
+        working-directory: dev/depcheck
         run: |
-          cd dev/depcheck
-          cargo run
+          cargo run --locked
 
   detect-unused-dependencies:
     name: Detect Unused Dependencies
@@ -60,8 +61,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Install cargo-machete
-        run: cargo install cargo-machete --version ^0.9 --locked
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853  # v2.83.2
+        with:
+          tool: cargo-machete@0.9
       - name: Detect unused dependencies
         run: cargo machete --with-metadata
