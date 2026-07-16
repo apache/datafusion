@@ -136,12 +136,21 @@ pub struct FunctionalDependence {
     pub source_indices: Vec<usize>,
     // Column indices of dependent column(s):
     pub target_indices: Vec<usize>,
-    /// Flag indicating whether one of the `source_indices` can receive NULL values.
-    /// For a data source, if the constraint in question is `Constraint::Unique`,
-    /// this flag is `true`. If the constraint in question is `Constraint::PrimaryKey`,
-    /// this flag is `false`.
+    /// Whether rows with NULLs in the determinant key are exempt from this
+    /// dependence's guarantees.
+    ///
+    /// If `true`, multiple rows may share the same NULL-containing key,
+    /// similarly to a SQL `UNIQUE` constraint where NULLs compare distinct.
+    ///
+    /// If `false`, every key value, including NULL, obeys the dependence,
+    /// similarly to a `PRIMARY KEY` or a `GROUP BY` output key (grouping treats
+    /// NULLs as equal, so a NULL key still occurs in at most one row).
+    ///
+    /// For a data source with `Constraint::Unique` this flag is `true`,
+    /// and for `Constraint::PrimaryKey` this flag is `false`.
+    ///
     /// Note that as the schema changes between different stages in a plan,
-    /// such as after LEFT JOIN or RIGHT JOIN operations, this property may
+    /// such as after `LEFT JOIN` or `RIGHT JOIN` operations, this property may
     /// change.
     pub nullable: bool,
     // The functional dependency mode:
@@ -151,8 +160,16 @@ pub struct FunctionalDependence {
 /// Describes functional dependency mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dependency {
-    Single, // A determinant key may occur only once.
-    Multi,  // A determinant key may occur multiple times (in multiple rows).
+    /// A determinant key may occur only once.
+    ///
+    /// Note: If the dependence is `nullable`, NULL keys are exempt and may
+    /// repeat.
+    Single,
+    /// A determinant key may occur multiple times (in multiple rows).
+    ///
+    /// Note that the functional dependence itself still holds: rows with equal
+    /// keys agree on the dependent columns.
+    Multi,
 }
 
 impl FunctionalDependence {
