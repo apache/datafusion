@@ -2157,8 +2157,11 @@ mod tests {
         // Keep a `Weak` handle to each batch's payload array. After we drop
         // the local `Arc`s, `strong_count == 0` means nothing in the
         // accumulator is still holding a reference to that batch.
-        let mut weak_payloads: Vec<std::sync::Weak<dyn Array>> =
-            Vec::with_capacity(BATCHES);
+        // Record the raw pointer of each source batch's Int32 value-data
+        // buffer. If `compact()` did its job, the accumulator's final
+        // output must not share any of these pointers — every winner
+        // value should have been copied into an owned buffer.
+        let mut source_value_ptrs: Vec<*const u8> = Vec::with_capacity(BATCHES);
 
         // Track the running-max ord we have fed to each group so the test's
         // "expected winner" oracle matches the accumulator's choice.
@@ -2191,15 +2194,16 @@ mod tests {
                 if ord > expected_ord[g] {
                     expected_ord[g] = ord;
                     expected_val_repeat[g] = batch as i32;
-                    if (0..GROUPS).all(|gg| expected_ord[gg] >= 0) {
-                        // small optimization; not required for correctness
-                    }
                 }
             }
 
+            // Capture the raw pointer of this batch's Int32 value-data
+            // buffer *before* handing ownership to the accumulator. Int32
+            // arrays have a single value buffer at index 0.
+            source_value_ptrs.push(values.values().to_data().buffers()[0].as_ptr());
+
             let values_arc: Arc<dyn Array> = Arc::new(values);
             let orderings_arc: Arc<dyn Array> = Arc::new(orderings);
-            weak_payloads.push(Arc::downgrade(&values_arc));
 
             group_acc.update_batch(
                 &[values_arc, orderings_arc],
@@ -2208,22 +2212,10 @@ mod tests {
                 GROUPS,
             )?;
 
-            // Drop happens implicitly at end of scope. If the accumulator
-            // held an `Arc` slice into `values_arc`, `strong_count` would
-            // stay >= 1 after this line.
+            // Drop happens implicitly at end of scope.
         }
 
-        // (2) No source batch is pinned by the accumulator.
-        for (i, w) in weak_payloads.iter().enumerate() {
-            assert_eq!(
-                w.strong_count(),
-                0,
-                "batch {i} is still pinned by the accumulator; \
-                 GenericValueState did not compact its stored winner"
-            );
-        }
-
-        // (3) Size is bounded by #groups. The exact number is
+        // (2) Size is bounded by #groups. The exact number is
         // implementation-dependent but should be orders of magnitude below
         // `BATCHES * ROWS_PER_BATCH * per-list-cost` (the amount that would
         // be retained under the old Arc-slice pinning bug).
@@ -2236,10 +2228,10 @@ mod tests {
 
         // (1) Winners are still readable and match the oracle.
         let result = group_acc.evaluate(EmitTo::All)?;
-        let result = result.as_list::<i32>();
-        assert_eq!(result.len(), GROUPS);
+        let result_list = result.as_list::<i32>();
+        assert_eq!(result_list.len(), GROUPS);
         for (g, expected_repeat) in expected_val_repeat.iter().enumerate().take(GROUPS) {
-            let winner = result.value(g);
+            let winner = result_list.value(g);
             let winner = winner.as_primitive::<Int32Type>();
             assert_eq!(winner.len(), g + 1, "winner list length for group {g}");
             for i in 0..winner.len() {
@@ -2249,6 +2241,21 @@ mod tests {
                     "winner payload mismatch for group {g}"
                 );
             }
+        }
+
+        // (3) The critical byte-level check: the emitted output's Int32
+        // value-data buffer must NOT share a raw pointer with any of the
+        // source batches. If `compact()` were omitted, `list_array.value(i)`
+        // would yield a slice whose backing buffer points into the source
+        // batch — the accumulator would then either pin the batch or emit
+        // an output that shares its buffer.
+        let result_values_ptr = result_list.values().to_data().buffers()[0].as_ptr();
+        for (i, src_ptr) in source_value_ptrs.iter().enumerate() {
+            assert_ne!(
+                *src_ptr, result_values_ptr,
+                "emitted result's Int32 value buffer aliases source batch \
+                 {i}'s buffer; compact() is not making an owned copy"
+            );
         }
         Ok(())
     }

@@ -832,30 +832,54 @@ mod tests {
     #[test]
     fn test_generic_value_state_compact_releases_parent_batch() -> Result<()> {
         // Regression test for the memory-pinning bug: without compact(),
-        // `ScalarValue::try_from_array` on a List column returns an Arc
-        // slice that keeps the whole parent batch alive. compact() must
-        // copy the referenced bytes into an owned buffer so the parent
-        // array can be dropped.
+        // `ScalarValue::try_from_array` on a List column produces a
+        // ScalarValue whose child values array is an Arrow slice pointing
+        // into the *source* batch's underlying byte buffer. That means the
+        // source batch's memory stays alive until every extracted winner
+        // is dropped, even if the outer ListArray is released. `compact()`
+        // must copy the referenced bytes into a fresh owned buffer.
+        //
+        // Correctly detecting this requires comparing the raw buffer
+        // pointer of the source `Utf8` value-data buffer against the raw
+        // buffer pointer of the stored winner's value-data buffer. Checking
+        // `Arc::strong_count` on the outer `ArrayRef` is not sufficient,
+        // because `list_array.value(idx)` returns a sliced child that keeps
+        // its own Arc chain independent of the outer ListArray.
         let list_utf8 =
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
         let mut state = GenericValueState::new(list_utf8);
         state.resize(1);
 
         let array: ArrayRef = make_list_utf8_array();
-        let weak_before = Arc::downgrade(&array);
-        assert_eq!(weak_before.strong_count(), 1);
+
+        // Capture the raw pointer of the *source* Utf8 value-data buffer.
+        // Utf8Array has two buffers: offsets (buffer 0) and value bytes
+        // (buffer 1). Comparing buffer 1 is the direct check for byte
+        // pinning.
+        let source_values_ptr =
+            array.as_list::<i32>().values().to_data().buffers()[1].as_ptr();
 
         state.update(0, &array, 0)?;
         drop(array);
 
-        // If compact() did its job, dropping the source array must release
-        // the only strong reference. If the stored ScalarValue kept a slice
-        // of the parent, strong_count would stay >= 1 and the batch would
-        // remain pinned.
-        assert_eq!(
-            weak_before.strong_count(),
-            0,
-            "compact() failed to break the Arc reference to the source batch"
+        // Directly probe the stored ScalarValue's underlying values buffer.
+        let stored_values_ptr = match state
+            .vals
+            .first()
+            .and_then(|opt| opt.as_ref())
+            .expect("group 0 should have a stored value")
+        {
+            ScalarValue::List(list_arr) => {
+                list_arr.values().to_data().buffers()[1].as_ptr()
+            }
+            other => panic!("expected ScalarValue::List, got {other:?}"),
+        };
+
+        assert_ne!(
+            source_values_ptr, stored_values_ptr,
+            "compact() failed: stored ScalarValue still shares the source \
+             batch's Utf8 value-data buffer, meaning the batch is pinned in \
+             memory even after the outer ArrayRef is dropped"
         );
 
         // Data must still be readable from the stored copy.
