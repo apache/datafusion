@@ -161,18 +161,18 @@ impl ExecutionProps {
     }
 }
 
-/// Per-plan context used by the physical planner to lower
-/// [`Expr::ScalarSubquery`] expressions into physical expressions that
-/// read from a shared [`ScalarSubqueryResults`] container.
+/// Per-plan context used by the physical planner when creating physical
+/// expressions for [`Expr::ScalarSubquery`] nodes that read from a shared
+/// [`ScalarSubqueryResults`] container.
 ///
 /// The physical planner builds this from the set of uncorrelated scalar
-/// subqueries it has scheduled for execution. It is then passed
-/// explicitly through `create_physical_expr_with_subquery_context` so
-/// the lowering can find the slot index for each [`Subquery`].
+/// subqueries it has scheduled for execution. It is then passed explicitly
+/// through `create_physical_expr` so that function can find the slot index for
+/// each [`Subquery`].
 ///
 /// An empty [`SubqueryContext`] (the [`Default`]) is what every
-/// non-physical-planner caller passes; if such a caller encounters a
-/// scalar subquery the lowering returns a `not_impl_err`.
+/// non-physical-planner caller passes; if such a caller encounters a scalar
+/// subquery, `create_physical_expr` returns a `not_impl_err`.
 ///
 /// [`Expr::ScalarSubquery`]: crate::Expr::ScalarSubquery
 /// [`Subquery`]: crate::logical_plan::Subquery

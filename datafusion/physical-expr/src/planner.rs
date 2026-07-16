@@ -120,9 +120,10 @@ use datafusion_expr::{
 /// * `subquery_ctx` - The [`SubqueryContext`] used to resolve
 ///   `Expr::ScalarSubquery` nodes. The physical planner threads the subquery
 ///   index map and shared results container from its `ScalarSubqueryExec`
-///   construction down into expression lowering. Callers lowering expressions
-///   outside of physical planning should pass `&SubqueryContext::default()`;
-///   scalar subqueries then fail to lower with a planning error.
+///   construction into calls to `create_physical_expr`. Callers creating
+///   physical expressions outside of physical planning should pass
+///   `&SubqueryContext::default()`; converting a scalar subquery then returns a
+///   planning error.
 #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 pub fn create_physical_expr(
     e: &Expr,

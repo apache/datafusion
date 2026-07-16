@@ -140,10 +140,10 @@ pub trait PhysicalPlanner: Send + Sync {
     ///
     /// `subquery_ctx`: the [`SubqueryContext`] used to resolve
     /// `Expr::ScalarSubquery` nodes. During physical planning the planner
-    /// threads the context of the plan currently being lowered (for example
-    /// into [`ExtensionPlanner::plan_extension`], which should forward it
-    /// here). Callers lowering expressions outside of a plan should pass
-    /// `&SubqueryContext::default()`.
+    /// threads the context of the plan currently being converted to a physical
+    /// plan (for example into [`ExtensionPlanner::plan_extension`], which
+    /// should forward it here). Callers creating physical expressions outside
+    /// of a plan should pass `&SubqueryContext::default()`.
     fn create_physical_expr(
         &self,
         expr: &Expr,
@@ -168,9 +168,10 @@ pub trait ExtensionPlanner {
     /// [`ExtensionPlanner`].
     ///
     /// `subquery_ctx` is the [`SubqueryContext`] of the plan currently being
-    /// lowered. Forward it to [`PhysicalPlanner::create_physical_expr`] when
-    /// lowering this node's expressions so that scalar subqueries resolve
-    /// against the same subquery state as the rest of the plan.
+    /// converted to a physical plan. Forward it to
+    /// [`PhysicalPlanner::create_physical_expr`] when creating this node's
+    /// physical expressions so that scalar subqueries resolve against the same
+    /// subquery state as the rest of the plan.
     async fn plan_extension(
         &self,
         planner: &dyn PhysicalPlanner,
@@ -492,9 +493,9 @@ impl DefaultPhysicalPlanner {
             }
 
             // Build a `SubqueryContext` that carries the index map and shared
-            // results container into expression lowering. The context is
-            // threaded explicitly through physical planning rather than being
-            // stashed in `ExecutionProps`, so that the planner does not need
+            // results container into calls that create physical expressions.
+            // The context is threaded explicitly through physical planning
+            // rather than being stashed in `ExecutionProps`, so that the planner does not need
             // a mutable `SessionState` and external callers of
             // `create_physical_expr` are unaffected.
             let results = ScalarSubqueryResults::new(links.len());

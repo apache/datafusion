@@ -431,11 +431,11 @@ impl<'a> LoweredAggregateBuilder<'a> {
     ///
     /// `logical_input_schema` is used to resolve logical expressions such as
     /// columns, while `physical_input_schema` is the input schema used by the
-    /// physical aggregate expression. `subquery_ctx` is used to lower
-    /// expressions that reference uncorrelated scalar subqueries; callers
-    /// lowering aggregates outside of physical planning should pass
-    /// `&SubqueryContext::default()`, in which case scalar-subquery
-    /// expressions fail to lower with a planning error.
+    /// physical aggregate expression. `subquery_ctx` is used when creating
+    /// physical expressions that reference uncorrelated scalar subqueries.
+    /// Callers creating physical aggregates outside of physical planning should
+    /// pass `&SubqueryContext::default()`, in which case converting a
+    /// scalar-subquery expression returns a planning error.
     pub fn new(
         expr: &'a Expr,
         logical_input_schema: &'a DFSchema,
