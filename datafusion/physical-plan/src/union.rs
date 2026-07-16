@@ -1386,6 +1386,14 @@ mod tests {
             },
             // incompatible
             Case {
+                label: "subset range partition",
+                expected: false,
+                inputs: vec![
+                    make_range_exec(&schema, vec![10, 20], ascending)?,
+                    make_range_exec(&schema, vec![10, 15], ascending)?,
+                ],
+            },
+            Case {
                 label: "hash different columns",
                 expected: false,
                 inputs: vec![
