@@ -205,11 +205,16 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
         let first_n_offsets: Vec<O> = self.offsets[..=n].to_vec();
 
         // Remaining offsets shifted so that what was offsets[n] becomes 0.
-        let remaining = self.offsets[n..]
-            .iter()
-            .map(|&o| o - cut_offset)
-            .collect::<Vec<O>>();
-        self.offsets = remaining;
+        // Overwrite the array in place.
+        // SAFETY: the write range is at most as large as offsets.len().
+        // Values in the possible overlap are read before being overwritten.
+        unsafe {
+            let dst = self.offsets.as_mut_ptr();
+            for (i, &off) in self.offsets[n..].iter().enumerate() {
+                *dst.add(i) = off - cut_offset;
+            }
+        }
+        self.offsets.truncate(self.offsets.len() - n);
 
         let first_n_outer_nulls = self.outer_nulls.take_n(n);
         let first_n_child = self.child.take_n(cut);
