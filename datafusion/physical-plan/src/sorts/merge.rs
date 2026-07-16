@@ -288,74 +288,18 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                     // Adjusting the loser tree if necessary
                     self.update_loser_tree();
 
-                    // Fast path: while the fresh winner's *entire* batch sorts
-                    // before every other stream, flush the pending rows and then
-                    // emit that batch as-is (zero-copy) instead of interleaving
-                    // it row-by-row through the builder.
-                    //
-                    // Only when there is no fetch limit: slicing/limiting a
-                    // directly-emitted batch is handled by the buffered path
-                    // below instead.
-                    if self.fetch.is_none() {
-                        while self.cursors[self.loser_tree[0]]
-                            .as_ref()
-                            .is_some_and(|c| c.len() > 1)
-                            && self.winner_batch_beats_all(self.loser_tree[0])
-                        {
-                            let new_winner = self.loser_tree[0];
-                            // self.stats.number_of_times_skipped_full_batches += 1;
+                    let new_winner = self.loser_tree[0];
 
-                            // Rows already consumed from this batch were emitted
-                            // earlier; only its *remaining* rows are pending.
-                            let remaining = self.cursors[new_winner]
-                                .as_ref()
-                                .expect("already validated that has cursor")
-                                .len();
-
-                            drop(timer);
-
-                            // The pending in-progress rows all sort before this
-                            // batch, so drain them first to keep output ordered.
-                            while let Some(batch) = self.emit_in_progress_batch()? {
-                                emitter.emit(batch).await;
-                            }
-
-                            // The remaining rows are all consumed at once; take
-                            // the batch out and emit those rows directly.
-                            self.prev_cursors[new_winner] =
-                                self.cursors[new_winner].take();
-                            let batch = self.in_progress.take_batch(new_winner);
-                            let start = batch.num_rows() - remaining;
-                            let batch = if start == 0 {
-                                batch
-                            } else {
-                                batch.slice(start, remaining)
-                            };
-                            self.produced += batch.num_rows();
-                            emitter.emit(batch).await;
-
-                            // Refill the winner and re-evaluate.
-                            poll_fn(|cx| self.maybe_poll_stream(cx, new_winner))
-                                .await?;
-                            timer = elapsed_compute.timer();
-                            self.update_loser_tree();
-                        }
-                    } else {
-                        let new_winner = self.loser_tree[0];
-
-                        // Fast path: skip comparing if the new winner batch
-                        // we do this if:
-                        // 1. The new winner have more than 1 value (so we won't do a needless job of comparing the entire tree if not enough values)
-                        // 2. the last row in the new winner beat all other streams
-                        if self.cursors[new_winner]
-                            .as_ref()
-                            .is_some_and(|c| c.len() > 1)
-                            && self.winner_batch_beats_all(new_winner)
-                        {
-                            let cursor = self.cursors[new_winner]
-                                .as_mut()
-                                .expect("already validated that has cursor");
-                            self.stats.number_of_times_skipped_full_batches += 1;
+                    // Fast path: skip comparing if the new winner batch
+                    // we do this if:
+                    // 1. The new winner have more than 1 value (so we won't do a needless job of comparing the entire tree if not enough values)
+                    // 2. the last row in the new winner beat all other streams
+                    if self.cursors[new_winner].as_ref().is_some_and(|c| c.len() > 1)
+                        && self.winner_batch_beats_all(new_winner)
+                    {
+                        let cursor = self.cursors[new_winner]
+                            .as_mut()
+                            .expect("already validated that has cursor");
 
                         // TODO - avoid pushing n rows where we are above the limit or something
                         // Skip less than the entire number of rows so we can keep the same code flow
@@ -408,48 +352,79 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         let elapsed_compute = self.metrics.elapsed_compute().clone();
         let mut timer = elapsed_compute.timer();
 
-        while let Some(batch) = self.emit_in_progress_batch()? {
-            drop(timer);
-            emitter.emit(batch).await;
-            timer = elapsed_compute.timer();
+        let last_stream = self.streams.take_partition(last_stream_index);
+
+        let mut last_batch = None;
+
+        // Continue while we still have rows in the in progress builder and not reached fetch limit
+        while !self.in_progress.is_empty()
+          && self.fetch.is_none_or(|fetch| fetch > self.produced)
+        {
+            // If still not empty and we have last_batch this mean that we were unable to emit a batch with the existing indices
+            // and we fall back to emitting smaller one
+            // in that case we emit that without coalescing so we won't have error coalescing
+            if let Some(last_batch) = last_batch.take() {
+                drop(timer);
+                emitter.emit(last_batch).await;
+                timer = elapsed_compute.timer();
+            }
+
+            // When `build_record_batch()` hits an i32 offset overflow (e.g.
+            // combined string offsets exceed 2 GB), it emits a partial batch
+            // and keeps the remaining rows in `self.in_progress.indices`.
+            // Drain those leftover rows before terminating the stream,
+            // otherwise they would be silently dropped.
+            // Repeated overflows are fine — each poll emits another partial
+            // batch until `in_progress` is fully drained.
+            last_batch = self.emit_in_progress_batch()?;
         }
 
-        let mut last_stream = self.streams.take_partition(last_stream_index);
+        // we
+        
+        // If the stream is done, we stop since nothing to emit anymore
+        // or if the stream is not done but we reached the limit, we stop as well (we reached the limit with the last batch)
+        if last_stream.is_done() || self.fetch.is_some_and(|fetch| fetch <= self.produced)
+        {
+            if let Some(last_batch) = last_batch.take() {
+                drop(timer);
+                emitter.emit(last_batch).await;
 
-        if self.fetch_reached() {
+                // Not creating a timer since we are returning right away
+            }
+
             return Ok(());
-        }
-        drop(timer);
-
-        if let Some(fetch) = self.fetch {
-            let mut remaining = fetch - self.produced;
-            while remaining > 0 {
-                let Some(batch) = last_stream.next().await else {
-                    break;
-                };
-
-                let batch = batch?;
-
-                if batch.num_rows() == 0 {
-                    continue;
-                }
-
-                let batch = if remaining >= batch.num_rows() {
-                    batch
-                } else {
-                    batch.slice(0, remaining)
-                };
-
-                remaining -= batch.num_rows();
-                self.produced += batch.num_rows();
-                emitter.emit(batch).await;
-            }
         } else {
-            while let Some(batch) = last_stream.next().await {
-                let batch = batch?;
-                self.produced += batch.num_rows();
-                emitter.emit(batch).await;
-            }
+            // Undo the added produced batch since we did not emit it yes, so it will mess with coalesce limit
+            // TODO - this is ugly
+            self.produced -= last_batch.as_ref().map(|x| x.num_rows()).unwrap_or(0);
+        }
+
+        let last_stream = last_stream.into_inner();
+
+        let last_stream = if let Some(last_batch) = last_batch {
+            let schema = last_stream.schema();
+            let stream = futures::stream::iter(vec![Ok(last_batch)]);
+
+            Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                stream.chain(last_stream).boxed(),
+            )) as SendableRecordBatchStream
+        } else {
+            last_stream
+        };
+
+        let mut coalescer = CoalesceBatchesStream::new(
+            last_stream,
+            self.batch_size,
+            self.fetch.map(|x| x - self.produced),
+            self.metrics.intermediate(),
+        )
+          // Don't allow for passthrough of batches with sizes other than the provided batch size
+          .with_biggest_coalesce_batch_size(None);
+
+        drop(timer);
+        while let Some(batch) = coalescer.next().await {
+            emitter.emit(batch?).await;
         }
 
         Ok(())
