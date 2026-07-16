@@ -861,7 +861,7 @@ config_namespace! {
         pub max_spill_file_size_bytes: ConfigNonZeroUsize, default = non_zero_usize_default(128 * 1024 * 1024)
 
         /// Number of files to read in parallel when inferring schema and statistics
-        pub meta_fetch_concurrency: usize, default = 32
+        pub meta_fetch_concurrency: ConfigNonZeroUsize, default = non_zero_usize_default(32)
 
         /// Guarantees a minimum level of output files running in parallel.
         /// RecordBatches will be distributed in round robin fashion to each
@@ -1932,7 +1932,8 @@ impl ConfigOptions {
                 }
                 return Ok(());
             }
-            return ConfigField::set(self, inner_key, value);
+            return ConfigField::set(self, inner_key, value)
+                .map_err(|e| e.context(format!("Error setting config {key}")));
         }
 
         if !self.extensions.0.contains_key(prefix)
@@ -3771,6 +3772,7 @@ impl Display for OutputFormat {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "parquet")]
+    use crate::assert_contains;
     use crate::config::TableParquetOptions;
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
@@ -4331,7 +4333,7 @@ mod tests {
         let err = config
             .set("datafusion.execution.parquet.writer_version", "3.0")
             .unwrap_err();
-        assert_eq!(
+        assert_contains!(
             err.to_string(),
             "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
         );

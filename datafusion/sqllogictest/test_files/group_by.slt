@@ -5641,3 +5641,56 @@ set datafusion.execution.target_partitions = 4;
 
 statement count 0
 drop table t;
+
+# DISTINCT must not be removed when a unique key is downgraded to a
+# non-unique functional dependency by a join: `u.id` is a primary key, but
+# after the LEFT JOIN each `u` row can occur once per matching order.
+statement ok
+CREATE TABLE users_with_pk (id INT, name VARCHAR, primary key(id)) AS VALUES
+  (1, 'alice'),
+  (2, 'bob');
+
+statement ok
+CREATE TABLE user_orders (user_id INT, amount INT) AS VALUES
+  (1, 10),
+  (1, 20),
+  (2, 30);
+
+query I
+SELECT DISTINCT u.id
+  FROM users_with_pk u
+  LEFT JOIN user_orders o ON u.id = o.user_id
+  ORDER BY u.id;
+----
+1
+2
+
+# The DISTINCT must be planned as an Aggregate; it cannot be removed based
+# on the (join-downgraded) primary key of `users_with_pk`.
+query TT
+EXPLAIN SELECT DISTINCT u.id
+  FROM users_with_pk u
+  LEFT JOIN user_orders o ON u.id = o.user_id;
+----
+logical_plan
+01)Aggregate: groupBy=[[u.id]], aggr=[[]]
+02)--Projection: u.id
+03)----Left Join: u.id = o.user_id
+04)------SubqueryAlias: u
+05)--------TableScan: users_with_pk projection=[id]
+06)------SubqueryAlias: o
+07)--------TableScan: user_orders projection=[user_id]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
+02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, user_id@0)], projection=[id@0]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table users_with_pk;
+
+statement ok
+drop table user_orders;
