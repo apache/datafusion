@@ -124,6 +124,40 @@ impl BatchBuilder {
             .extend((0..n).map(|i| (cursor.batch_idx, row_idx + i)));
     }
 
+    /// Remove and return the whole current batch for `stream_idx`, bypassing
+    /// the row-by-row interleave.
+    ///
+    /// The builder must have no pending in-progress rows (drain them via
+    /// [`Self::build_record_batch`] first), so no accumulated index references
+    /// the batch being removed.
+    pub fn take_batch(&mut self, stream_idx: usize) -> RecordBatch {
+        assert!(
+            self.is_empty(),
+            "in-progress rows must be drained before taking a whole batch"
+        );
+
+        let batch_idx = self.cursors[stream_idx].batch_idx;
+        let (_, batch) = self.batches.remove(batch_idx);
+        self.batches_mem_used -= get_record_batch_memory_size(&batch);
+
+        // `Vec::remove` shifted every later batch down one slot; keep the other
+        // streams' cursors pointing at their batch.
+        for cursor in &mut self.cursors {
+            if cursor.batch_idx > batch_idx {
+                cursor.batch_idx -= 1;
+            }
+        }
+
+        // Release the batch's memory, never shrinking below the initial
+        // reservation (anti-starvation guarantee).
+        let target = self.batches_mem_used.max(self.initial_reservation);
+        if self.reservation.size() > target {
+            self.reservation.shrink(self.reservation.size() - target);
+        }
+
+        batch
+    }
+
     /// Returns the number of in-progress rows in this [`BatchBuilder`]
     pub fn len(&self) -> usize {
         self.indices.len()
