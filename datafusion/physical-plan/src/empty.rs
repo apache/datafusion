@@ -67,6 +67,11 @@ impl EmptyExec {
         self
     }
 
+    /// Number of partitions this plan produces
+    pub fn partitions(&self) -> usize {
+        self.partitions
+    }
+
     fn data(&self) -> Result<Vec<RecordBatch>> {
         Ok(vec![])
     }
