@@ -62,6 +62,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    target-branch: main
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
