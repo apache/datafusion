@@ -83,10 +83,14 @@ use arrow::datatypes::{
     Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, Field,
     FieldRef, Float32Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTime,
     IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, RunEndIndexType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type,
-    UInt16Type, UInt32Type, UInt64Type, UnionFields, UnionMode, i256,
-    validate_decimal_precision_and_scale,
+    IntervalYearMonthType, MAX_DECIMAL32_FOR_EACH_PRECISION,
+    MAX_DECIMAL64_FOR_EACH_PRECISION, MAX_DECIMAL128_FOR_EACH_PRECISION,
+    MAX_DECIMAL256_FOR_EACH_PRECISION, MIN_DECIMAL32_FOR_EACH_PRECISION,
+    MIN_DECIMAL64_FOR_EACH_PRECISION, MIN_DECIMAL128_FOR_EACH_PRECISION,
+    MIN_DECIMAL256_FOR_EACH_PRECISION, RunEndIndexType, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type, UnionFields,
+    UnionMode, i256, validate_decimal_precision_and_scale,
 };
 use arrow::util::display::{ArrayFormatter, FormatOptions, array_value_to_string};
 use cache::{get_or_create_cached_key_array, get_or_create_cached_null_array};
@@ -5053,28 +5057,21 @@ impl ScalarValue {
             DataType::Float16 => Some(ScalarValue::Float16(Some(f16::NEG_INFINITY))),
             DataType::Float32 => Some(ScalarValue::Float32(Some(f32::NEG_INFINITY))),
             DataType::Float64 => Some(ScalarValue::Float64(Some(f64::NEG_INFINITY))),
+            DataType::Decimal32(precision, scale) => {
+                let min = MIN_DECIMAL32_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal32(Some(min), *precision, *scale))
+            }
+            DataType::Decimal64(precision, scale) => {
+                let min = MIN_DECIMAL64_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal64(Some(min), *precision, *scale))
+            }
             DataType::Decimal128(precision, scale) => {
-                // For decimal, min is -10^(precision-scale) + 10^(-scale)
-                // But for simplicity, we use the minimum i128 value that fits the precision
-                let max_digits = 10_i128.pow(*precision as u32) - 1;
-                Some(ScalarValue::Decimal128(
-                    Some(-max_digits),
-                    *precision,
-                    *scale,
-                ))
+                let min = MIN_DECIMAL128_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal128(Some(min), *precision, *scale))
             }
             DataType::Decimal256(precision, scale) => {
-                // Similar to Decimal128 but with i256
-                // For now, use a large negative value
-                let max_digits = i256::from_i128(10_i128)
-                    .checked_pow(*precision as u32)
-                    .and_then(|v| v.checked_sub(i256::from_i128(1)))
-                    .unwrap_or(i256::MAX);
-                Some(ScalarValue::Decimal256(
-                    Some(max_digits.neg_wrapping()),
-                    *precision,
-                    *scale,
-                ))
+                let min = MIN_DECIMAL256_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal256(Some(min), *precision, *scale))
             }
             DataType::Date32 => Some(ScalarValue::Date32(Some(i32::MIN))),
             DataType::Date64 => Some(ScalarValue::Date64(Some(i64::MIN))),
@@ -5149,27 +5146,21 @@ impl ScalarValue {
             DataType::Float16 => Some(ScalarValue::Float16(Some(f16::INFINITY))),
             DataType::Float32 => Some(ScalarValue::Float32(Some(f32::INFINITY))),
             DataType::Float64 => Some(ScalarValue::Float64(Some(f64::INFINITY))),
+            DataType::Decimal32(precision, scale) => {
+                let max = MAX_DECIMAL32_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal32(Some(max), *precision, *scale))
+            }
+            DataType::Decimal64(precision, scale) => {
+                let max = MAX_DECIMAL64_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal64(Some(max), *precision, *scale))
+            }
             DataType::Decimal128(precision, scale) => {
-                // For decimal, max is 10^(precision-scale) - 10^(-scale)
-                // But for simplicity, we use the maximum i128 value that fits the precision
-                let max_digits = 10_i128.pow(*precision as u32) - 1;
-                Some(ScalarValue::Decimal128(
-                    Some(max_digits),
-                    *precision,
-                    *scale,
-                ))
+                let max = MAX_DECIMAL128_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal128(Some(max), *precision, *scale))
             }
             DataType::Decimal256(precision, scale) => {
-                // Similar to Decimal128 but with i256
-                let max_digits = i256::from_i128(10_i128)
-                    .checked_pow(*precision as u32)
-                    .and_then(|v| v.checked_sub(i256::from_i128(1)))
-                    .unwrap_or(i256::MAX);
-                Some(ScalarValue::Decimal256(
-                    Some(max_digits),
-                    *precision,
-                    *scale,
-                ))
+                let max = MAX_DECIMAL256_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal256(Some(max), *precision, *scale))
             }
             DataType::Date32 => Some(ScalarValue::Date32(Some(i32::MAX))),
             DataType::Date64 => Some(ScalarValue::Date64(Some(i64::MAX))),
