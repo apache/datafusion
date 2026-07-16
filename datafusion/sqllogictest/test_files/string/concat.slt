@@ -1,0 +1,138 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#
+# tests for concat and concat_ws
+#
+
+# Test two Utf8View inputs: value and return type
+query TT
+SELECT concat(arrow_cast('Foo', 'Utf8View'), arrow_cast('Bar', 'Utf8View')), arrow_typeof(concat(arrow_cast('Foo', 'Utf8View'), arrow_cast('Bar', 'Utf8View')));
+----
+FooBar Utf8View
+
+query T
+SELECT concat('Foo', 'Bar', NULL);
+----
+FooBar
+
+query T
+SELECT concat('', '1', '', '2');
+----
+12
+
+query error does not support zero arguments
+SELECT concat();
+
+query T
+SELECT concat('');
+----
+(empty)
+
+query T
+SELECT concat(a, b, c) from (select 'a' a, 'b' b, 'c' c union all select null a, 'b', 'c') order by 1 nulls last;
+----
+abc
+bc
+
+# Test mixed types: Utf8View + Utf8
+query TT
+SELECT concat(arrow_cast('hello', 'Utf8View'), ' world'), arrow_typeof(concat(arrow_cast('hello', 'Utf8View'), ' world'));
+----
+hello world Utf8View
+
+# Test mixed string types
+query TT
+SELECT concat('a', arrow_cast('b', 'LargeUtf8')), arrow_typeof(concat('a', arrow_cast('b', 'LargeUtf8')));
+----
+ab LargeUtf8
+
+# Test types mixed together
+query TT
+SELECT concat('a', arrow_cast('b', 'LargeUtf8'), arrow_cast('c', 'Utf8View')), arrow_typeof(concat('a', arrow_cast('b', 'LargeUtf8'), arrow_cast('c', 'Utf8View')));
+----
+abc Utf8View
+
+# Mixed Utf8 + Binary is allowed; binary is coerced to the widest string type
+query TT
+SELECT concat(arrow_cast('hello', 'Utf8'), arrow_cast(' world', 'Binary')), arrow_typeof(concat(arrow_cast('hello', 'Utf8'), arrow_cast(' world', 'Binary')));
+----
+hello world Utf8
+
+# binary separator is allowed for string arguments
+query TT
+SELECT concat_ws(x'7c', 'hello', 'world'), arrow_typeof(concat_ws(x'7c', 'hello', 'world'));
+----
+hello|world Utf8
+
+# null separator
+query T
+SELECT concat_ws(NULL, 'hello', 'world');
+----
+NULL
+
+# Test Binary + Binary scalar concat
+query ?T
+SELECT concat(arrow_cast('hello', 'Binary'), arrow_cast(' world', 'Binary')), arrow_typeof(concat(arrow_cast('hello', 'Binary'), arrow_cast(' world', 'Binary')));
+----
+68656c6c6f20776f726c64 Binary
+
+# Test all binary types together: widened to BinaryView
+query ?T
+SELECT concat(arrow_cast('hello', 'Binary'), arrow_cast('there', 'BinaryView'), arrow_cast('world', 'LargeBinary')), arrow_typeof(concat(arrow_cast('hello', 'Binary'), arrow_cast('there', 'BinaryView'), arrow_cast('world', 'LargeBinary')));
+----
+68656c6c6f7468657265776f726c64 BinaryView
+
+# Test all binary types together with concat_ws: widened to BinaryView
+query ?T
+SELECT concat_ws(x'7c', arrow_cast('hello', 'Binary'), arrow_cast(' there', 'BinaryView'), arrow_cast(' world', 'LargeBinary')), arrow_typeof(concat_ws(x'7c', arrow_cast('hello', 'Binary'), arrow_cast(' there', 'BinaryView'), arrow_cast(' world', 'LargeBinary')));
+----
+68656c6c6f7c2074686572657c20776f726c64 BinaryView
+
+query TT
+SELECT concat_ws('|', arrow_cast('hello', 'Utf8View'), 'world'), arrow_typeof(concat_ws('|', arrow_cast('hello', 'Utf8View'), ' world'));
+----
+hello|world Utf8View
+
+query TT
+SELECT concat_ws('|', arrow_cast('hello', 'Utf8View'), arrow_cast('there', 'LargeUtf8'), arrow_cast('world', 'Utf8')), arrow_typeof(concat_ws('|', arrow_cast('hello', 'Utf8View'), arrow_cast('there', 'LargeUtf8'), arrow_cast('world', 'Utf8')));
+----
+hello|there|world Utf8View
+
+# Test Binary + Binary scalar concat
+query ?T
+SELECT concat_ws(x'7c', arrow_cast('hello', 'Binary'), arrow_cast('world', 'Binary')), arrow_typeof(concat_ws(x'7c', arrow_cast('hello', 'Binary'), arrow_cast('world', 'Binary')));
+----
+68656c6c6f7c776f726c64 Binary
+
+statement ok
+create table t as values (x'636166c3a9', x'68656c6c6f');
+
+# Test binary + binary array concat
+query ?
+SELECT concat(column1, column2) from t;
+----
+636166c3a968656c6c6f
+
+# Test binary + binary array concat_ws
+query ?
+SELECT concat_ws(x'7c', column1, column2) from t;
+----
+636166c3a97c68656c6c6f
+
+statement ok
+drop table t

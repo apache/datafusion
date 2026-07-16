@@ -22,7 +22,7 @@ use std::hash::Hash;
 use std::mem::align_of_val;
 use std::sync::Arc;
 
-use arrow::array::Float64Array;
+use arrow::array::{BooleanArray, Float64Array};
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
@@ -318,7 +318,7 @@ impl GroupsAccumulator for StddevGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&arrow::array::BooleanArray>,
+        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         self.variance
@@ -343,6 +343,18 @@ impl GroupsAccumulator for StddevGroupsAccumulator {
 
     fn state(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<Vec<ArrayRef>> {
         self.variance.state(emit_to)
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        self.variance.convert_to_state(values, opt_filter)
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {

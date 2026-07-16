@@ -19,9 +19,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccess};
-// Re-exported so the existing `crate::row_group_filter::BloomFilterStatistics`
-// path keeps resolving for in-crate callers (e.g. `opener`).
-pub(crate) use crate::bloom_filter::BloomFilterStatistics;
+use crate::bloom_filter::BloomFilterStatistics;
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::datatypes::Schema;
 use datafusion_common::pruning::PruningStatistics;
@@ -420,7 +418,7 @@ impl RowGroupAccessPlanFilter {
     ///
     /// # Panics
     /// if `row_group_bloom_filters` does not have the same number of row groups as this set
-    pub(crate) fn prune_by_bloom_filters(
+    pub fn prune_by_bloom_filters(
         &mut self,
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
@@ -457,12 +455,16 @@ impl RowGroupAccessPlanFilter {
     }
 }
 
-/// Wraps a slice of [`RowGroupMetaData`] in a way that implements [`PruningStatistics`]
-struct RowGroupPruningStatistics<'a> {
-    parquet_schema: &'a SchemaDescriptor,
-    row_group_metadatas: Vec<&'a RowGroupMetaData>,
-    arrow_schema: &'a Schema,
-    missing_null_counts_as_zero: bool,
+/// Wraps a slice of [`RowGroupMetaData`] in a way that implements [`PruningStatistics`].
+///
+/// Visible to sibling modules so runtime row-group pruners (e.g. the dynamic
+/// TopK pruner in `push_decoder.rs`) can reuse this adapter without
+/// duplicating the statistics-to-`PruningStatistics` plumbing.
+pub(crate) struct RowGroupPruningStatistics<'a> {
+    pub(crate) parquet_schema: &'a SchemaDescriptor,
+    pub(crate) row_group_metadatas: Vec<&'a RowGroupMetaData>,
+    pub(crate) arrow_schema: &'a Schema,
+    pub(crate) missing_null_counts_as_zero: bool,
 }
 
 impl<'a> RowGroupPruningStatistics<'a> {

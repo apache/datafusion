@@ -21,7 +21,7 @@ use arrow_ipc::CompressionType;
 
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
-use crate::error::_config_err;
+use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::DFParquetWriterVersion;
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
@@ -33,6 +33,7 @@ use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 #[cfg(feature = "parquet_encryption")]
 use std::sync::Arc;
@@ -300,7 +301,7 @@ config_namespace! {
         pub collect_spans: bool, default = false
 
         /// Specifies the recursion depth limit when parsing complex SQL Queries
-        pub recursion_limit: usize, default = 50
+        pub recursion_limit: ConfigNonZeroUsize, default = non_zero_usize_default(50)
 
         /// Specifies the default null ordering for query results. There are 4 options:
         /// - `nulls_max`: Nulls appear last in ascending order.
@@ -582,6 +583,86 @@ impl Display for SpillCompression {
     }
 }
 
+/// A `usize` configuration value that rejects zero when set from strings.
+///
+/// Use this for options where zero is never a meaningful runtime value.
+/// Invalid values return a configuration error through [`ConfigField`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConfigNonZeroUsize(NonZeroUsize);
+
+/// Private helper for hard-coded defaults in `config_namespace!`, which cannot
+/// use `?`. All external construction should use [`ConfigNonZeroUsize::try_new`].
+const fn non_zero_usize_default(value: usize) -> ConfigNonZeroUsize {
+    match NonZeroUsize::new(value) {
+        Some(value) => ConfigNonZeroUsize(value),
+        None => panic!("value must be greater than 0"),
+    }
+}
+
+impl ConfigNonZeroUsize {
+    /// Creates a [`ConfigNonZeroUsize`], returning a configuration error if
+    /// `value` is zero.
+    pub fn try_new(value: usize) -> Result<Self> {
+        NonZeroUsize::new(value)
+            .map(Self)
+            .ok_or_else(|| _config_datafusion_err!("value must be greater than 0"))
+    }
+
+    /// Returns the wrapped `usize`.
+    pub const fn get(self) -> usize {
+        self.0.get()
+    }
+}
+
+impl From<ConfigNonZeroUsize> for usize {
+    fn from(value: ConfigNonZeroUsize) -> Self {
+        value.get()
+    }
+}
+
+impl FromStr for ConfigNonZeroUsize {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_new(default_config_transform(s)?)
+    }
+}
+
+impl ConfigField for ConfigNonZeroUsize {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field batch_size is a scalar ConfigNonZeroUsize and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = ConfigNonZeroUsize::from_str(value)?;
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field batch_size is a scalar ConfigNonZeroUsize and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
+impl Display for ConfigNonZeroUsize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get())
+    }
+}
+
 /// Policy for handling duplicate keys in Spark-compatible map-construction
 /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
 /// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
@@ -649,7 +730,7 @@ config_namespace! {
         /// Default batch size while creating new batches, it's especially useful for
         /// buffer-in-memory batches since creating tiny batches would result in too much
         /// metadata memory consumption
-        pub batch_size: usize, default = 8192
+        pub batch_size: ConfigNonZeroUsize, default = non_zero_usize_default(8192)
 
         /// A perfect hash join (see `HashJoinExec` for more details) will be considered
         /// if the range of keys (max - min) on the build side is < this threshold.
@@ -777,22 +858,22 @@ config_namespace! {
         /// may create spill files larger than the limit.
         ///
         /// Default: 128 MB
-        pub max_spill_file_size_bytes: usize, default = 128 * 1024 * 1024
+        pub max_spill_file_size_bytes: ConfigNonZeroUsize, default = non_zero_usize_default(128 * 1024 * 1024)
 
         /// Number of files to read in parallel when inferring schema and statistics
-        pub meta_fetch_concurrency: usize, default = 32
+        pub meta_fetch_concurrency: ConfigNonZeroUsize, default = non_zero_usize_default(32)
 
         /// Guarantees a minimum level of output files running in parallel.
         /// RecordBatches will be distributed in round robin fashion to each
         /// parallel writer. Each writer is closed and a new file opened once
         /// soft_max_rows_per_output_file is reached.
-        pub minimum_parallel_output_files: usize, default = 4
+        pub minimum_parallel_output_files: ConfigNonZeroUsize, default = non_zero_usize_default(4)
 
         /// Target number of rows in output files when writing multiple.
         /// This is a soft max, so it can be exceeded slightly. There also
         /// will be one file smaller than the limit if the total
         /// number of rows written is not roughly divisible by the soft max
-        pub soft_max_rows_per_output_file: usize, default = 50000000
+        pub soft_max_rows_per_output_file: ConfigNonZeroUsize, default = non_zero_usize_default(50000000)
 
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially
@@ -821,6 +902,19 @@ config_namespace! {
 
         /// Should DataFusion keep the columns used for partition_by in the output RecordBatches
         pub keep_partition_by_columns: bool, default = false
+
+        /// When `true` (the default), DataFusion's built-in file scans
+        /// dynamically rebalance files across partitions at query execution
+        /// time: a partition that goes idle reads files (or byte-range morsels)
+        /// originally assigned to a sibling partition, which keeps all
+        /// partitions busy in a single process.
+        ///
+        /// Executors that depend on the plan-time partition assignment — such as
+        /// Ballista and datafusion-distributed, which run each partition as an
+        /// isolated task and never poll the siblings — should set this to
+        /// `false` so each partition reads only its own file group and no
+        /// runtime reassignment occurs.
+        pub enable_file_stream_work_stealing: bool, default = true
 
         /// Aggregation ratio (number of distinct groups / number of input rows)
         /// threshold for skipping partial aggregation. If the value is greater
@@ -1386,7 +1480,7 @@ config_namespace! {
         pub repartition_file_scans: bool, default = true
 
         /// Minimum number of distinct partition values required to group files by their
-        /// Hive partition column values (enabling Hash partitioning declaration).
+        /// Hive partition column values (enabling output partitioning declaration).
         ///
         /// How the option is used:
         ///     - preserve_file_partitions=0: Disable it.
@@ -1838,7 +1932,8 @@ impl ConfigOptions {
                 }
                 return Ok(());
             }
-            return ConfigField::set(self, inner_key, value);
+            return ConfigField::set(self, inner_key, value)
+                .map_err(|e| e.context(format!("Error setting config {key}")));
         }
 
         if !self.extensions.0.contains_key(prefix)
@@ -3677,6 +3772,7 @@ impl Display for OutputFormat {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "parquet")]
+    use crate::assert_contains;
     use crate::config::TableParquetOptions;
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
@@ -4237,7 +4333,7 @@ mod tests {
         let err = config
             .set("datafusion.execution.parquet.writer_version", "3.0")
             .unwrap_err();
-        assert_eq!(
+        assert_contains!(
             err.to_string(),
             "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
         );
