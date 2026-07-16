@@ -353,21 +353,22 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                             && self.winner_batch_beats_all(new_winner)
                         {
                             let cursor = self.cursors[new_winner]
-                                .as_mut()
-                                .expect("already validated that has cursor");
-                            self.stats.number_of_times_skipped_full_batches += 1;
+                              .as_mut()
+                              .expect("already validated that has cursor");
+                            // self.stats.number_of_times_skipped_full_batches += 1;
 
-                        // TODO - avoid pushing n rows where we are above the limit or something
-                        // Skip less than the entire number of rows so we can keep the same code flow
-                        let number_of_rows_to_skip = cursor.len() - 1;
-                        // If so, add the indices and
-                        self.in_progress
-                            .push_n_rows(new_winner, number_of_rows_to_skip);
+                            // TODO - avoid pushing n rows where we are above the limit or something
+                            // Skip less than the entire number of rows so we can keep the same code flow
+                            let number_of_rows_to_skip = cursor.len() - 1;
+                            // If so, add the indices and
+                            self.in_progress
+                              .push_n_rows(new_winner, number_of_rows_to_skip);
 
-                        // Move the cursor to the end
-                        cursor.advance_n(number_of_rows_to_skip);
+                            // Move the cursor to the end
+                            cursor.advance_n(number_of_rows_to_skip);
+                        }
                     }
-                } else {
+                }else {
                     // Adjusting the loser tree if necessary
                     self.update_loser_tree();
                 }
