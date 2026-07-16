@@ -1295,63 +1295,154 @@ mod tests {
         );
     }
 
+    fn make_hash_exec(
+        schema: &SchemaRef,
+        hash_cols: Vec<&str>,
+        buckets: usize,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let exprs = hash_cols
+            .iter()
+            .map(|c| col(c, schema))
+            .collect::<Result<Vec<_>>>()?;
+        let base = Arc::new(TestMemoryExec::try_new(&[], Arc::clone(schema), None)?);
+        Ok(Arc::new(RepartitionExec::try_new(
+            base,
+            Partitioning::Hash(exprs, buckets),
+        )?))
+    }
+
     fn make_range_exec(
         schema: &SchemaRef,
         split_values: Vec<i32>,
-        descending: bool,
+        sort_options: SortOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let sort_expr = PhysicalSortExpr::new(
-            col("a", schema)?,
-            SortOptions {
-                descending,
-                nulls_first: false,
-            },
-        );
+        let sort_expr =
+            PhysicalSortExpr::new(col(schema.field(0).name(), schema)?, sort_options);
         let ordering = LexOrdering::new(vec![sort_expr]).unwrap();
         let split_points = split_values
             .into_iter()
             .map(|v| SplitPoint::new(vec![ScalarValue::Int32(Some(v))]))
             .collect();
-        let partitioning =
-            Partitioning::Range(RangePartitioning::try_new(ordering, split_points)?);
         let base = Arc::new(TestMemoryExec::try_new(&[], Arc::clone(schema), None)?);
-        Ok(Arc::new(RepartitionExec::try_new(base, partitioning)?))
+        Ok(Arc::new(RepartitionExec::try_new(
+            base,
+            Partitioning::Range(RangePartitioning::try_new(ordering, split_points)?),
+        )?))
     }
 
     #[test]
-    fn test_can_interleave_range_matching() -> Result<()> {
-        let schema = create_test_schema()?;
-        let range_partitioning_a = make_range_exec(&schema, vec![10, 20], false)?;
-        let range_partitioning_b = make_range_exec(&schema, vec![10, 20], false)?;
-        assert!(can_interleave(
-            [&range_partitioning_a, &range_partitioning_b].into_iter()
-        ));
-        Ok(())
-    }
+    fn test_can_interleave_matrix() -> Result<()> {
+        let name_column = "name";
+        let age_column = "age";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(name_column, DataType::Int32, true),
+            Field::new(age_column, DataType::Int32, true),
+        ]));
 
-    #[test]
-    fn test_can_interleave_range_mismatched_split_points() -> Result<()> {
-        let schema = create_test_schema()?;
-        let range_partitioning_a = make_range_exec(&schema, vec![10, 20], false)?;
-        let range_partitioning_b = make_range_exec(&schema, vec![10, 30], false)?;
-        assert!(!can_interleave(
-            [&range_partitioning_a, &range_partitioning_b].into_iter()
-        ));
-        Ok(())
-    }
+        let ascending = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let descending = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let ascending_nulls_first = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
 
-    #[test]
-    fn test_can_interleave_range_mixed_with_hash() -> Result<()> {
-        let schema = create_test_schema()?;
-        let range_partitioning = make_range_exec(&schema, vec![10, 20], false)?;
-        let hash_partitioning: Arc<dyn ExecutionPlan> =
-            Arc::new(RepartitionExec::try_new(
-                Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?),
-                Partitioning::Hash(vec![col("a", &schema)?], 3),
-            )?);
-        assert!(!can_interleave(
-            [&range_partitioning, &hash_partitioning].into_iter()
-        ));
+        struct Case {
+            inputs: Vec<Arc<dyn ExecutionPlan>>,
+            expected: bool,
+            label: &'static str,
+        }
+
+        let cases = vec![
+            // compatible
+            Case {
+                label: "matching hash on single column",
+                expected: true,
+                inputs: vec![
+                    make_hash_exec(&schema, vec![name_column], 3)?,
+                    make_hash_exec(&schema, vec![name_column], 3)?,
+                ],
+            },
+            Case {
+                label: "matching hash on multiple columns",
+                expected: true,
+                inputs: vec![
+                    make_hash_exec(&schema, vec![name_column, age_column], 3)?,
+                    make_hash_exec(&schema, vec![name_column, age_column], 3)?,
+                ],
+            },
+            Case {
+                label: "matching range same splits and order",
+                expected: true,
+                inputs: vec![
+                    make_range_exec(&schema, vec![10, 20], ascending)?,
+                    make_range_exec(&schema, vec![10, 20], ascending)?,
+                ],
+            },
+            // incompatible
+            Case {
+                label: "hash different columns",
+                expected: false,
+                inputs: vec![
+                    make_hash_exec(&schema, vec![name_column], 3)?,
+                    make_hash_exec(&schema, vec![age_column], 3)?,
+                ],
+            },
+            Case {
+                label: "hash same column different bucket count",
+                expected: false,
+                inputs: vec![
+                    make_hash_exec(&schema, vec![name_column], 3)?,
+                    make_hash_exec(&schema, vec![name_column], 4)?,
+                ],
+            },
+            Case {
+                label: "range different split points",
+                expected: false,
+                inputs: vec![
+                    make_range_exec(&schema, vec![10, 20], ascending)?,
+                    make_range_exec(&schema, vec![10, 30], ascending)?,
+                ],
+            },
+            Case {
+                label: "range ascending vs descending",
+                expected: false,
+                inputs: vec![
+                    make_range_exec(&schema, vec![10, 20], ascending)?,
+                    make_range_exec(&schema, vec![20, 10], descending)?,
+                ],
+            },
+            Case {
+                label: "range nulls_last vs nulls_first",
+                expected: false,
+                inputs: vec![
+                    make_range_exec(&schema, vec![10, 20], ascending)?,
+                    make_range_exec(&schema, vec![10, 20], ascending_nulls_first)?,
+                ],
+            },
+            Case {
+                label: "mixed range and hash",
+                expected: false,
+                inputs: vec![
+                    make_range_exec(&schema, vec![10, 20], ascending)?,
+                    make_hash_exec(&schema, vec![name_column], 3)?,
+                ],
+            },
+        ];
+
+        for case in cases {
+            assert_eq!(
+                can_interleave(case.inputs.iter()),
+                case.expected,
+                "{}",
+                case.label
+            );
+        }
         Ok(())
     }
 
