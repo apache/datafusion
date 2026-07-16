@@ -1580,10 +1580,10 @@ impl ExecutionPlan for RepartitionExec {
                     );
                 };
 
-                Partitioning::Range(RangePartitioning::new(
+                Partitioning::Range(RangePartitioning::try_new(
                     ordering,
                     range_partitioning.split_points().to_vec(),
-                ))
+                )?)
             }
             others => others.clone(),
         };
@@ -1620,12 +1620,6 @@ impl ExecutionPlan for RepartitionExec {
         // or if there's only one partition
         if !self.maintains_input_order()[0] {
             return Ok(SortOrderPushdownResult::Unsupported);
-        }
-        match self.partitioning() {
-            Partitioning::Range(_)
-            | Partitioning::RoundRobinBatch(_)
-            | Partitioning::Hash(_, _)
-            | Partitioning::UnknownPartitioning(_) => {}
         }
 
         // Delegate to the child and wrap with a new RepartitionExec
@@ -2576,39 +2570,13 @@ mod tests {
 
     #[test]
     fn range_repartition_swaps_with_projection_keeping_key() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::UInt32, false),
-            Field::new("region", DataType::Utf8, false),
-            Field::new("payload", DataType::UInt32, false),
-        ]));
-        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let partitioning = Partitioning::Range(RangePartitioning::try_new(
-            [PhysicalSortExpr::new(
-                col("id", &schema)?,
-                SortOptions::default(),
-            )]
-            .into(),
-            vec![
-                SplitPoint::new(vec![ScalarValue::UInt32(Some(10))]),
-                SplitPoint::new(vec![ScalarValue::UInt32(Some(20))]),
-            ],
-        )?);
-        let repartition = Arc::new(RepartitionExec::try_new(input, partitioning)?);
+        let schema = id_region_payload_schema();
+        let repartition =
+            range_repartition_on_columns(&schema, &["id"], vec![vec![10], vec![20]])?;
 
         // Narrow to [id, payload], keeping the range key.
-        let projection = ProjectionExec::try_new(
-            vec![
-                ProjectionExpr {
-                    expr: col("id", &repartition.schema())?,
-                    alias: "id".to_string(),
-                },
-                ProjectionExpr {
-                    expr: col("payload", &repartition.schema())?,
-                    alias: "payload".to_string(),
-                },
-            ],
-            Arc::clone(&repartition) as _,
-        )?;
+        let projection =
+            projection_columns(&(Arc::clone(&repartition) as _), &["id", "payload"])?;
 
         let swapped = repartition
             .try_swapping_with_projection(&projection)?
@@ -2646,36 +2614,12 @@ mod tests {
 
     #[test]
     fn range_repartition_swaps_with_projection_reorders_key() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::UInt32, false),
-            Field::new("region", DataType::Utf8, false),
-            Field::new("payload", DataType::UInt32, false),
-        ]));
-        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let partitioning = Partitioning::Range(RangePartitioning::try_new(
-            [PhysicalSortExpr::new(
-                col("id", &schema)?,
-                SortOptions::default(),
-            )]
-            .into(),
-            vec![SplitPoint::new(vec![ScalarValue::UInt32(Some(10))])],
-        )?);
-        let repartition = Arc::new(RepartitionExec::try_new(input, partitioning)?);
+        let schema = id_region_payload_schema();
+        let repartition = range_repartition_on_columns(&schema, &["id"], vec![vec![10]])?;
 
         // Reorder so the range key moves from @0 to @1.
-        let projection = ProjectionExec::try_new(
-            vec![
-                ProjectionExpr {
-                    expr: col("payload", &repartition.schema())?,
-                    alias: "payload".to_string(),
-                },
-                ProjectionExpr {
-                    expr: col("id", &repartition.schema())?,
-                    alias: "id".to_string(),
-                },
-            ],
-            Arc::clone(&repartition) as _,
-        )?;
+        let projection =
+            projection_columns(&(Arc::clone(&repartition) as _), &["payload", "id"])?;
 
         let swapped = repartition
             .try_swapping_with_projection(&projection)?
@@ -2696,36 +2640,12 @@ mod tests {
 
     #[test]
     fn range_repartition_does_not_swap_when_projection_drops_key() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::UInt32, false),
-            Field::new("region", DataType::Utf8, false),
-            Field::new("payload", DataType::UInt32, false),
-        ]));
-        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let partitioning = Partitioning::Range(RangePartitioning::try_new(
-            [PhysicalSortExpr::new(
-                col("id", &schema)?,
-                SortOptions::default(),
-            )]
-            .into(),
-            vec![SplitPoint::new(vec![ScalarValue::UInt32(Some(10))])],
-        )?);
-        let repartition = Arc::new(RepartitionExec::try_new(input, partitioning)?);
+        let schema = id_region_payload_schema();
+        let repartition = range_repartition_on_columns(&schema, &["id"], vec![vec![10]])?;
 
         // Drop the range key column.
-        let projection = ProjectionExec::try_new(
-            vec![
-                ProjectionExpr {
-                    expr: col("region", &repartition.schema())?,
-                    alias: "region".to_string(),
-                },
-                ProjectionExpr {
-                    expr: col("payload", &repartition.schema())?,
-                    alias: "payload".to_string(),
-                },
-            ],
-            Arc::clone(&repartition) as _,
-        )?;
+        let projection =
+            projection_columns(&(Arc::clone(&repartition) as _), &["region", "payload"])?;
 
         let result = repartition.try_swapping_with_projection(&projection)?;
         assert!(
@@ -2739,45 +2659,154 @@ mod tests {
     #[test]
     fn range_repartition_does_not_swap_when_projection_drops_compound_key_part()
     -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::UInt32, false),
-            Field::new("b", DataType::UInt32, false),
-            Field::new("c", DataType::UInt32, false),
-        ]));
-        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let partitioning = Partitioning::Range(RangePartitioning::try_new(
-            [
-                PhysicalSortExpr::new(col("a", &schema)?, SortOptions::default()),
-                PhysicalSortExpr::new(col("b", &schema)?, SortOptions::default()),
-            ]
-            .into(),
-            vec![SplitPoint::new(vec![
-                ScalarValue::UInt32(Some(10)),
-                ScalarValue::UInt32(Some(1)),
-            ])],
-        )?);
-        let repartition = Arc::new(RepartitionExec::try_new(input, partitioning)?);
+        let schema = u32_fields_schema(&["a", "b", "c"]);
+        let repartition =
+            range_repartition_on_columns(&schema, &["a", "b"], vec![vec![10, 1]])?;
 
         // Keep `a` and `c`, but drop `b` which is part of the range key.
-        let projection = ProjectionExec::try_new(
-            vec![
-                ProjectionExpr {
-                    expr: col("a", &repartition.schema())?,
-                    alias: "a".to_string(),
-                },
-                ProjectionExpr {
-                    expr: col("c", &repartition.schema())?,
-                    alias: "c".to_string(),
-                },
-            ],
-            Arc::clone(&repartition) as _,
-        )?;
+        let projection =
+            projection_columns(&(Arc::clone(&repartition) as _), &["a", "c"])?;
 
         let result = repartition.try_swapping_with_projection(&projection)?;
         assert!(
             result.is_none(),
             "swap should fail when projection drops any part of a compound range key"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn range_repartition_try_pushdown_sort_maintains_ordering() -> Result<()> {
+        let schema = u32_fields_schema(&["id"]);
+        let ordering = LexOrdering::new([PhysicalSortExpr::new(
+            col("id", &schema)?,
+            SortOptions::default(),
+        )])
+        .expect("ordering must not be empty");
+
+        // Multi-partition sorted source so Range repartition must use
+        // preserve_order to maintain input ordering.
+        let source = Arc::new(ExactSortPushdownExec::new(
+            Arc::clone(&schema),
+            2,
+            ordering.clone(),
+        ));
+        let partitioning = Partitioning::Range(RangePartitioning::try_new(
+            ordering.clone(),
+            vec![SplitPoint::new(vec![ScalarValue::UInt32(Some(10))])],
+        )?);
+        let repartition = Arc::new(
+            RepartitionExec::try_new(source, partitioning)?.with_preserve_order(),
+        );
+        assert!(
+            repartition.maintains_input_order()[0],
+            "test setup requires an order-maintaining range repartition"
+        );
+        assert_eq!(
+            repartition
+                .properties()
+                .output_ordering()
+                .map(|o| o.to_string()),
+            Some(ordering.to_string())
+        );
+
+        match repartition.try_pushdown_sort(ordering.as_ref())? {
+            SortOrderPushdownResult::Exact { inner } => {
+                let pushed = inner
+                    .downcast_ref::<RepartitionExec>()
+                    .expect("pushdown should keep a RepartitionExec wrapper");
+                assert!(
+                    pushed.maintains_input_order()[0],
+                    "pushed plan should still maintain input order"
+                );
+                assert!(pushed.preserve_order());
+                assert_eq!(
+                    pushed.properties().output_ordering().map(|o| o.to_string()),
+                    Some(ordering.to_string())
+                );
+                match pushed.partitioning() {
+                    Partitioning::Range(range) => {
+                        assert_eq!(range.ordering()[0].to_string(), "id@0 ASC");
+                    }
+                    other => panic!("expected Range partitioning, got {other:?}"),
+                }
+            }
+            other => panic!(
+                "expected Exact sort pushdown through range repartition, got {other:?}"
+            ),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn range_repartition_try_pushdown_sort_unsupported_without_order_maintenance()
+    -> Result<()> {
+        let schema = u32_fields_schema(&["id"]);
+        let ordering = LexOrdering::new([PhysicalSortExpr::new(
+            col("id", &schema)?,
+            SortOptions::default(),
+        )])
+        .expect("ordering must not be empty");
+
+        // Multi-partition source without preserve_order: Range does not maintain order.
+        let source = Arc::new(ExactSortPushdownExec::new(
+            Arc::clone(&schema),
+            2,
+            ordering.clone(),
+        ));
+        let partitioning = Partitioning::Range(RangePartitioning::try_new(
+            ordering.clone(),
+            vec![SplitPoint::new(vec![ScalarValue::UInt32(Some(10))])],
+        )?);
+        let repartition = Arc::new(RepartitionExec::try_new(source, partitioning)?);
+        assert!(!repartition.maintains_input_order()[0]);
+
+        assert!(matches!(
+            repartition.try_pushdown_sort(ordering.as_ref())?,
+            SortOrderPushdownResult::Unsupported
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn range_repartition_preserves_sortedness_within_partitions() -> Result<()> {
+        let schema = u32_fields_schema(&["id"]);
+        // Sorted single-partition input spans multiple range buckets.
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![1, 5, 10, 15, 20, 25]))],
+        )?;
+        let input = Arc::new(MockExec::new(vec![Ok(batch)], Arc::clone(&schema)));
+        let partitioning = Partitioning::Range(RangePartitioning::try_new(
+            [PhysicalSortExpr::new(
+                col("id", &schema)?,
+                SortOptions::default(),
+            )]
+            .into(),
+            vec![
+                SplitPoint::new(vec![ScalarValue::UInt32(Some(10))]),
+                SplitPoint::new(vec![ScalarValue::UInt32(Some(20))]),
+            ],
+        )?);
+        let exec = RepartitionExec::try_new(input, partitioning)?;
+        assert!(exec.maintains_input_order()[0]);
+
+        let task_ctx = Arc::new(TaskContext::default());
+        for partition in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(partition, Arc::clone(&task_ctx))?;
+            let mut values = Vec::new();
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                values.extend(as_uint32_array(batch.column(0))?.values().iter().copied());
+            }
+            assert!(
+                values.windows(2).all(|w| w[0] <= w[1]),
+                "partition {partition} lost ascending order: {values:?}"
+            );
+        }
 
         Ok(())
     }
@@ -2806,6 +2835,139 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    fn id_region_payload_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::UInt32, false),
+            Field::new("region", DataType::Utf8, false),
+            Field::new("payload", DataType::UInt32, false),
+        ]))
+    }
+
+    fn u32_fields_schema(names: &[&str]) -> SchemaRef {
+        Arc::new(Schema::new(
+            names
+                .iter()
+                .map(|name| Field::new(*name, DataType::UInt32, false))
+                .collect::<Vec<_>>(),
+        ))
+    }
+
+    fn range_repartition_on_columns(
+        schema: &SchemaRef,
+        key_columns: &[&str],
+        split_points: Vec<Vec<u32>>,
+    ) -> Result<Arc<RepartitionExec>> {
+        let ordering = LexOrdering::new(
+            key_columns
+                .iter()
+                .map(|name| {
+                    Ok(PhysicalSortExpr::new(
+                        col(name, schema)?,
+                        SortOptions::default(),
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )
+        .expect("range ordering must not be empty");
+        let partitioning = Partitioning::Range(RangePartitioning::try_new(
+            ordering,
+            split_points
+                .into_iter()
+                .map(|values| {
+                    SplitPoint::new(
+                        values
+                            .into_iter()
+                            .map(|value| ScalarValue::UInt32(Some(value)))
+                            .collect(),
+                    )
+                })
+                .collect(),
+        )?);
+        let input = Arc::new(EmptyExec::new(Arc::clone(schema)));
+        Ok(Arc::new(RepartitionExec::try_new(input, partitioning)?))
+    }
+
+    fn projection_columns(
+        input: &Arc<dyn ExecutionPlan>,
+        names: &[&str],
+    ) -> Result<ProjectionExec> {
+        let exprs = names
+            .iter()
+            .map(|name| {
+                Ok(ProjectionExpr {
+                    expr: col(name, &input.schema())?,
+                    alias: (*name).to_string(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ProjectionExec::try_new(exprs, Arc::clone(input))
+    }
+
+    /// Test source that claims Exact support for any sort pushdown request.
+    #[derive(Debug, Clone)]
+    struct ExactSortPushdownExec {
+        cache: Arc<PlanProperties>,
+    }
+
+    impl ExactSortPushdownExec {
+        fn new(schema: SchemaRef, num_partitions: usize, ordering: LexOrdering) -> Self {
+            use crate::execution_plan::{Boundedness, EmissionType};
+            let eq_properties =
+                EquivalenceProperties::new_with_orderings(schema, [ordering]);
+            let cache = Arc::new(PlanProperties::new(
+                eq_properties,
+                Partitioning::UnknownPartitioning(num_partitions),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            ));
+            Self { cache }
+        }
+    }
+
+    impl DisplayAs for ExactSortPushdownExec {
+        fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+            write!(f, "ExactSortPushdownExec")
+        }
+    }
+
+    impl ExecutionPlan for ExactSortPushdownExec {
+        fn name(&self) -> &str {
+            "ExactSortPushdownExec"
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            &self.cache
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            Ok(Box::pin(EmptyRecordBatchStream::new(self.schema())))
+        }
+
+        fn try_pushdown_sort(
+            &self,
+            _order: &[PhysicalSortExpr],
+        ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+            Ok(SortOrderPushdownResult::Exact {
+                inner: Arc::new(self.clone()),
+            })
+        }
     }
 
     fn test_schema(nullable: bool) -> Arc<Schema> {
