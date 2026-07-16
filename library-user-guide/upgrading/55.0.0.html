@@ -956,6 +956,34 @@ metadata and schema fingerprint match.</p>
 </ul>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23201">PR #23201</a> for details.</p>
 </section>
+<section id="emptyexecnode-and-placeholderrowexecnode-gained-a-partitions-field">
+<h3><code class="docutils literal notranslate"><span class="pre">EmptyExecNode</span></code> and <code class="docutils literal notranslate"><span class="pre">PlaceholderRowExecNode</span></code> gained a <code class="docutils literal notranslate"><span class="pre">partitions</span></code> field<a class="headerlink" href="#emptyexecnode-and-placeholderrowexecnode-gained-a-partitions-field" title="Link to this heading">#</a></h3>
+<p>The generated protobuf structs <code class="docutils literal notranslate"><span class="pre">EmptyExecNode</span></code> and <code class="docutils literal notranslate"><span class="pre">PlaceholderRowExecNode</span></code>
+encoded only a schema, so the partition count set by <code class="docutils literal notranslate"><span class="pre">EmptyExec::with_partitions</span></code>
+was silently dropped when a physical plan was serialized and deserialized: a plan
+that reported <code class="docutils literal notranslate"><span class="pre">n</span></code> partitions before encoding reported <code class="docutils literal notranslate"><span class="pre">1</span></code> after. Both messages now
+carry a <code class="docutils literal notranslate"><span class="pre">partitions</span></code> field that round-trips the count.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users constructing <code class="docutils literal notranslate"><span class="pre">EmptyExecNode</span></code> or <code class="docutils literal notranslate"><span class="pre">PlaceholderRowExecNode</span></code> with an
+exhaustive struct literal.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Set the new field, or fill it from <code class="docutils literal notranslate"><span class="pre">Default</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="n">EmptyExecNode</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">schema</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">schema</span><span class="p">)</span><span class="w"> </span><span class="p">}</span>
+
+<span class="c1">// After</span>
+<span class="n">EmptyExecNode</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">schema</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">schema</span><span class="p">),</span><span class="w"> </span><span class="n">partitions</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="w"> </span><span class="p">}</span>
+<span class="c1">// or</span>
+<span class="n">EmptyExecNode</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">schema</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">schema</span><span class="p">),</span><span class="w"> </span><span class="o">..</span><span class="nb">Default</span><span class="p">::</span><span class="n">default</span><span class="p">()</span><span class="w"> </span><span class="p">}</span>
+</pre></div>
+</div>
+<p>The wire format stays compatible in both directions. Plans encoded before this
+field existed decode as a single partition, the previous default, and plans
+encoded after it add a field that older readers ignore.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23643">PR #23643</a> for details.</p>
+</section>
 </section>
 </section>
 
@@ -1024,6 +1052,7 @@ metadata and schema fingerprint match.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spark-map-functions-now-reject-duplicate-keys-by-default">Spark map functions now reject duplicate keys by default</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unify-lru-memory-limiting-caches-into-one-generic-cache">Unify LRU memory-limiting caches into one generic cache</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cachedfilemetadata-now-validates-file-schema"><code class="docutils literal notranslate"><span class="pre">CachedFileMetadata</span></code> now validates file schema</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#emptyexecnode-and-placeholderrowexecnode-gained-a-partitions-field"><code class="docutils literal notranslate"><span class="pre">EmptyExecNode</span></code> and <code class="docutils literal notranslate"><span class="pre">PlaceholderRowExecNode</span></code> gained a <code class="docutils literal notranslate"><span class="pre">partitions</span></code> field</a></li>
 </ul>
 </li>
 </ul>
