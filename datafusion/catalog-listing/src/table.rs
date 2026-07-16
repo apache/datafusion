@@ -30,7 +30,9 @@ use datafusion_common::{
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::file_scan_config::{
+    FileScanConfig, FileScanConfigBuilder, output_partitioning_from_partition_fields,
+};
 use datafusion_datasource::file_sink_config::{FileOutputMode, FileSinkConfig};
 #[expect(deprecated)]
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
@@ -62,7 +64,7 @@ pub struct ListFilesResult {
     pub file_groups: Vec<FileGroup>,
     /// Aggregated statistics for all files.
     pub statistics: Statistics,
-    /// Whether files are grouped by partition values (enables Hash partitioning).
+    /// Whether files are grouped by partition values.
     pub grouped_by_partition: bool,
 }
 
@@ -623,6 +625,15 @@ impl TableProvider for ListingTable {
                 );
             }
             Some(output_partitioning)
+        } else if partitioned_by_file_group {
+            // Files are grouped by partition column values: declare output
+            // partitioning on those columns so the optimizer can skip
+            // repartitioning for aggregates and joins on the partition columns.
+            output_partitioning_from_partition_fields(
+                &self.table_schema,
+                &table_partition_cols.clone().into(),
+                partitioned_file_lists.len(),
+            )
         } else {
             None
         };
@@ -645,7 +656,6 @@ impl TableProvider for ListingTable {
             .with_output_ordering(output_ordering)
             .with_output_partitioning(output_partitioning)
             .with_expr_adapter(self.expr_adapter_factory.clone())
-            .with_partitioned_by_file_group(partitioned_by_file_group)
             .build();
 
         // create the execution plan
@@ -805,7 +815,7 @@ impl ListingTable {
         }))
         .await?;
         let meta_fetch_concurrency =
-            ctx.config_options().execution.meta_fetch_concurrency;
+            ctx.config_options().execution.meta_fetch_concurrency.get();
         let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
         // collect the statistics and ordering if required by the config
         let files = file_list
@@ -822,7 +832,9 @@ impl ListingTable {
                     .with_ordering(ordering))
             })
             .boxed()
-            .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
+            .buffer_unordered(
+                ctx.config_options().execution.meta_fetch_concurrency.get(),
+            );
 
         get_files_with_limit(files, file_limit, ctx.config().collect_statistics()).await
     }
@@ -856,8 +868,8 @@ impl ListingTable {
         // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
         //
         // When enabled, files are grouped by their Hive partition column values, allowing
-        // FileScanConfig to declare Hash partitioning. This enables the optimizer to skip
-        // hash repartitioning for aggregates and joins on partition columns.
+        // FileScanConfig to declare output partitioning. This enables the optimizer to
+        // skip repartitioning for aggregates and joins on partition columns.
         let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
         let (file_groups, grouped_by_partition) =

@@ -2071,9 +2071,75 @@ SELECT s, id FROM simple_struct WHERE s['value'] > 100 AND id < 4;
 {value: 200, label: beta} 2
 {value: 150, label: gamma} 3
 
+#####################
+# Section 9: Join key extraction with pruned outputs
+#####################
+
+statement ok
+CREATE TABLE issue_22895_rt2 AS SELECT * FROM (VALUES
+  (named_struct('msg','user auth failed','sid','a'), 1, 'svc1'),
+  (named_struct('msg','login token','sid','b'), 2, 'svc2')
+) v(attributes, id, name);
+
+query IT
+SELECT a.id, b.name
+FROM issue_22895_rt2 a JOIN issue_22895_rt2 b
+  ON a.attributes['sid'] = b.attributes['sid']
+WHERE a.attributes['msg'] LIKE '%auth%'
+ORDER BY a.id, b.name;
+----
+1 svc1
+
+statement ok
+CREATE TABLE issue_22895_rt AS SELECT * FROM (VALUES
+  (named_struct('uid','u1','t','t1'), TIMESTAMP '2026-06-08T10:00:00', 'a'),
+  (named_struct('uid','u2','t','t2'), TIMESTAMP '2026-06-08T11:00:00', 'b')
+) v(attributes, start_timestamp, span_name);
+
+query P
+SELECT r.start_timestamp
+FROM issue_22895_rt r
+JOIN (SELECT attributes['uid'] AS uid FROM issue_22895_rt) f
+  ON f.uid = r.attributes['uid']
+WHERE r.attributes['t'] IN (SELECT attributes['t'] FROM issue_22895_rt)
+ORDER BY r.start_timestamp;
+----
+2026-06-08T10:00:00
+2026-06-08T11:00:00
+
 # Config reset
 
 # The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 SET datafusion.execution.target_partitions = 4;
+
+#####################
+# Section: volatile expressions are not duplicated by projection pushdown
+#
+# Regression test for #23220: a volatile expression (e.g. `random()`) aliased
+# once in a subquery and referenced multiple times must be evaluated once and
+# reused. Projection pushdown must not merge the outer projection into the file
+# scan when doing so would inline and duplicate the volatile expression.
+# Reproduces only against a file scan (not an in-memory table); if the volatile
+# expression is duplicated, the two references diverge and `x = y` is false.
+#####################
+
+statement ok
+COPY (SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3)
+TO 'test_files/scratch/projection_pushdown/volatile.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE volatile_scan STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/volatile.parquet';
+
+# The two references to the aliased `random()` value must be equal on every
+# row: the expression is evaluated once and reused, not inlined twice.
+query B rowsort
+SELECT s.x = s.y
+FROM (SELECT r AS x, r AS y FROM (SELECT random() AS r FROM volatile_scan) AS t) AS s;
+----
+true
+true
+true
