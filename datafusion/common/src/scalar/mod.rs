@@ -2303,7 +2303,18 @@ impl ScalarValue {
             | ScalarValue::Int64(None)
             | ScalarValue::Float16(None)
             | ScalarValue::Float32(None)
-            | ScalarValue::Float64(None) => Ok(self.clone()),
+            | ScalarValue::Float64(None)
+            | ScalarValue::IntervalYearMonth(None)
+            | ScalarValue::IntervalDayTime(None)
+            | ScalarValue::IntervalMonthDayNano(None)
+            | ScalarValue::Decimal32(None, _, _)
+            | ScalarValue::Decimal64(None, _, _)
+            | ScalarValue::Decimal128(None, _, _)
+            | ScalarValue::Decimal256(None, _, _)
+            | ScalarValue::TimestampSecond(None, _)
+            | ScalarValue::TimestampMillisecond(None, _)
+            | ScalarValue::TimestampMicrosecond(None, _)
+            | ScalarValue::TimestampNanosecond(None, _) => Ok(self.clone()),
             ScalarValue::Float16(Some(v)) => Ok(ScalarValue::Float16(Some(-v))),
             ScalarValue::Float64(Some(v)) => Ok(ScalarValue::Float64(Some(-v))),
             ScalarValue::Float32(Some(v)) => Ok(ScalarValue::Float32(Some(-v))),
