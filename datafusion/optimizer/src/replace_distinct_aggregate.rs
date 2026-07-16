@@ -104,14 +104,17 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 for dep in schema.functional_dependencies().iter() {
                     // If the input is already unique on all of its columns (e.g.
                     // it is a GROUP BY over exactly these columns), the DISTINCT
-                    // is a no-op and we can simply remove it. The dependency mode
-                    // must be `Single`: a `Multi` dependence (e.g. a former key
-                    // downgraded by a join) means equal rows may occur multiple
-                    // times, so the DISTINCT still has work to do.
+                    // is a no-op and we can simply remove it.
                     //
-                    // The determinant key must also not contain NULLs: a nullable
-                    // UNIQUE constraint permits multiple NULL keys, but DISTINCT
-                    // treats NULLs as equal and must still collapse them.
+                    // The dependency mode must be `Single`: a `Multi`
+                    // dependence (e.g. a former key downgraded by a join) means
+                    // equal rows may occur multiple times, so the DISTINCT
+                    // still has work to do.
+                    //
+                    // The grouping columns must also not contain NULLs because
+                    // a nullable UNIQUE constraint permits multiple NULL keys,
+                    // but DISTINCT treats NULLs as equal and must still
+                    // collapse them.
                     let source_indices = &dep.source_indices;
                     let any_source_field_nullable = source_indices
                         .iter()
