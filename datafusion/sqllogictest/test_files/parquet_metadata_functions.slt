@@ -58,7 +58,7 @@ physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion
 statement ok
 SET datafusion.execution.parquet.pushdown_filters = false;
 
-query TII
+query TII rowsort
 SELECT input_file_name(), file_row_index(), column1
 FROM test_table
 WHERE file_row_index() = 2 AND input_file_name() LIKE '%parquet';
@@ -69,7 +69,7 @@ WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_metadata_funct
 statement ok
 SET datafusion.execution.parquet.pushdown_filters = true;
 
-query TII
+query TII rowsort
 SELECT input_file_name(), file_row_index(), column1
 FROM test_table
 WHERE file_row_index() = 2 AND input_file_name() LIKE '%parquet';
