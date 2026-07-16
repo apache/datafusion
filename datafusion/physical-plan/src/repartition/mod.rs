@@ -3431,14 +3431,14 @@ mod tests {
 
 #[cfg(test)]
 mod test {
+    use super::*;
+    use crate::test::TestMemoryExec;
+    use crate::union::UnionExec;
     use arrow::array::{UInt32Array, record_batch};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::assert_batches_eq;
     use datafusion_common::config::ConfigNonZeroUsize;
-    use super::*;
-    use crate::test::TestMemoryExec;
-    use crate::union::UnionExec;
 
     use datafusion_physical_expr::expressions::col;
 
