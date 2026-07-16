@@ -727,6 +727,38 @@ SET datafusion.execution.batch_size = 0
 statement error DataFusion error: Error setting config datafusion\.execution\.meta_fetch_concurrency\ncaused by\nInvalid or Unsupported Configuration: value must be greater than 0
 SET datafusion.execution.meta_fetch_concurrency = 0
 
+statement error
+SET datafusion.execution.minimum_parallel_output_files = 0
+----
+DataFusion error: Error setting config datafusion.execution.minimum_parallel_output_files
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
+
+
+statement error
+SET datafusion.execution.soft_max_rows_per_output_file = 0
+----
+DataFusion error: Error setting config datafusion.execution.soft_max_rows_per_output_file
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
+
+
+statement error
+SET datafusion.execution.max_spill_file_size_bytes = 0
+----
+DataFusion error: Error setting config datafusion.execution.max_spill_file_size_bytes
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
+
+
+statement error
+SET datafusion.sql_parser.recursion_limit = 0
+----
+DataFusion error: Error setting config datafusion.sql_parser.recursion_limit
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
+
+
 # Config reset
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema
