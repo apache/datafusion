@@ -41,8 +41,7 @@ use arrow::datatypes::TimeUnit;
 use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_datasource::TableSchema;
-use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file::{FileSource, FileSourceArgs};
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::projection::ProjectionExprs;
@@ -67,7 +66,6 @@ use log::warn;
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
-use object_store::ObjectStore;
 use parquet::arrow::RowNumber;
 #[cfg(feature = "parquet_encryption")]
 use parquet::encryption::decrypt::FileDecryptionProperties;
@@ -298,8 +296,6 @@ pub struct ParquetSource {
     pub(crate) predicate: Option<Arc<dyn PhysicalExpr>>,
     /// Optional user defined parquet file reader factory
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
-    /// Batch size configuration
-    pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
     /// Projection to apply to the output.
@@ -333,7 +329,6 @@ impl ParquetSource {
             metrics: ExecutionPlanMetricsSet::new(),
             predicate: None,
             parquet_file_reader_factory: None,
-            batch_size: None,
             metadata_size_hint: None,
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
@@ -550,8 +545,7 @@ impl From<ParquetSource> for Arc<dyn FileSource> {
 impl FileSource for ParquetSource {
     fn create_file_opener(
         &self,
-        _object_store: Arc<dyn ObjectStore>,
-        _base_config: &FileScanConfig,
+        _args: &FileSourceArgs,
         _partition: usize,
     ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
         datafusion_common::internal_err!(
@@ -561,18 +555,19 @@ impl FileSource for ParquetSource {
 
     fn create_morselizer(
         &self,
-        object_store: Arc<dyn ObjectStore>,
-        base_config: &FileScanConfig,
+        args: &FileSourceArgs,
         partition: usize,
     ) -> datafusion_common::Result<Box<dyn Morselizer>> {
-        let expr_adapter_factory = base_config
+        let expr_adapter_factory = args
             .expr_adapter_factory
             .clone()
             .unwrap_or_else(|| Arc::new(DefaultPhysicalExprAdapterFactory) as _);
 
         let parquet_file_reader_factory =
             self.parquet_file_reader_factory.clone().unwrap_or_else(|| {
-                Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
+                Arc::new(DefaultParquetFileReaderFactory::new(Arc::clone(
+                    &args.object_store,
+                ))) as _
             });
 
         #[cfg(feature = "parquet_encryption")]
@@ -623,11 +618,9 @@ impl FileSource for ParquetSource {
         Ok(Box::new(ParquetMorselizer {
             partition_index: partition,
             projection: self.projection.clone(),
-            batch_size: self
-                .batch_size
-                .expect("Batch size must set before creating ParquetMorselizer"),
-            limit: base_config.limit,
-            preserve_order: base_config.preserve_order,
+            batch_size: args.batch_size,
+            limit: args.limit,
+            preserve_order: args.preserve_order,
             predicate: self.predicate.clone(),
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
@@ -671,12 +664,6 @@ impl FileSource for ParquetSource {
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         self.predicate.clone()
-    }
-
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.batch_size = Some(batch_size);
-        Arc::new(conf)
     }
 
     fn try_pushdown_projection(

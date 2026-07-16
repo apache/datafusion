@@ -22,7 +22,7 @@ pub(crate) mod sort_pushdown;
 
 use crate::file_groups::FileGroup;
 use crate::{
-    PartitionedFile, display::FileGroupsDisplay, file::FileSource,
+    PartitionedFile, display::FileGroupsDisplay, file::FileSource, file::FileSourceArgs,
     file_compression_type::FileCompressionType, file_stream::FileStreamBuilder,
     file_stream::work_source::SharedWorkSource, source::DataSource,
     statistics::MinMaxStatistics,
@@ -79,12 +79,11 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema, SchemaRef};
-/// # use object_store::ObjectStore;
 /// # use datafusion_common::Result;
-/// # use datafusion_datasource::file::FileSource;
+/// # use datafusion_datasource::file::{FileSource, FileSourceArgs};
 /// # use datafusion_datasource::file_groups::FileGroup;
 /// # use datafusion_datasource::PartitionedFile;
-/// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+/// # use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 /// # use datafusion_datasource::file_stream::FileOpener;
 /// # use datafusion_datasource::source::DataSourceExec;
 /// # use datafusion_datasource::table_schema::TableSchema;
@@ -104,9 +103,8 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// #    table_schema: TableSchema,
 /// # };
 /// # impl FileSource for ParquetSource {
-/// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Result<Arc<dyn FileOpener>> { unimplemented!() }
+/// #  fn create_file_opener(&self, _: &FileSourceArgs, _: usize) -> Result<Arc<dyn FileOpener>> { unimplemented!() }
 /// #  fn table_schema(&self) -> &TableSchema { &self.table_schema }
-/// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
 /// #  fn file_type(&self) -> &str { "parquet" }
 /// #  // Note that this implementation drops the projection on the floor, it is not complete!
@@ -690,9 +688,15 @@ impl DataSource for FileScanConfig {
             .batch_size
             .unwrap_or_else(|| context.session_config().batch_size());
 
-        let source = self.file_source.with_batch_size(batch_size);
+        let source_args = FileSourceArgs::new(object_store, batch_size)
+            .with_limit(self.limit)
+            .with_preserve_order(self.preserve_order)
+            .with_file_compression_type(self.file_compression_type)
+            .with_expr_adapter_factory(self.expr_adapter_factory.clone());
 
-        let morselizer = source.create_morselizer(object_store, self, partition)?;
+        let morselizer = self
+            .file_source
+            .create_morselizer(&source_args, partition)?;
 
         // Extract the shared work source from the sibling state if it exists.
         // This allows multiple sibling streams to steal work from a single
@@ -706,7 +710,7 @@ impl DataSource for FileScanConfig {
             .with_partition(partition)
             .with_shared_work_source(shared_work_source)
             .with_morselizer(morselizer)
-            .with_metrics(source.metrics())
+            .with_metrics(self.file_source.metrics())
             .build()?;
         Ok(Box::pin(cooperative(stream)))
     }
@@ -1567,7 +1571,6 @@ mod tests {
     use futures::FutureExt as _;
     use futures::StreamExt as _;
     use futures::stream;
-    use object_store::ObjectStore;
     use std::fmt::Debug;
 
     #[derive(Clone)]
@@ -1588,8 +1591,7 @@ mod tests {
     impl FileSource for InexactSortPushdownSource {
         fn create_file_opener(
             &self,
-            _object_store: Arc<dyn ObjectStore>,
-            _base_config: &FileScanConfig,
+            _args: &FileSourceArgs,
             _partition: usize,
         ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
             unimplemented!()
@@ -1597,10 +1599,6 @@ mod tests {
 
         fn table_schema(&self) -> &TableSchema {
             &self.table_schema
-        }
-
-        fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-            Arc::new(self.clone())
         }
 
         fn metrics(&self) -> &ExecutionPlanMetricsSet {
@@ -2804,8 +2802,7 @@ mod tests {
     impl FileSource for ExactSortPushdownSource {
         fn create_file_opener(
             &self,
-            _object_store: Arc<dyn ObjectStore>,
-            _base_config: &FileScanConfig,
+            _args: &FileSourceArgs,
             _partition: usize,
         ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
             unimplemented!()
@@ -2813,10 +2810,6 @@ mod tests {
 
         fn table_schema(&self) -> &TableSchema {
             &self.table_schema
-        }
-
-        fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-            Arc::new(self.clone())
         }
 
         fn metrics(&self) -> &ExecutionPlanMetricsSet {

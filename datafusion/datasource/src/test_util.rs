@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::{
-    file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
+    file::{FileSource, FileSourceArgs},
+    file_stream::FileOpener,
 };
 
 use std::sync::Arc;
@@ -77,8 +78,7 @@ impl MockSource {
 impl FileSource for MockSource {
     fn create_file_opener(
         &self,
-        _object_store: Arc<dyn ObjectStore>,
-        _base_config: &FileScanConfig,
+        _args: &FileSourceArgs,
         _partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {
         self.file_opener.clone().ok_or_else(|| {
@@ -88,10 +88,6 @@ impl FileSource for MockSource {
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         self.filter.clone()
-    }
-
-    fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {

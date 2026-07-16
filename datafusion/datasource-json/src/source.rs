@@ -40,8 +40,7 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use arrow::array::RecordBatch;
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
-use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file::{FileSource, FileSourceArgs};
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
@@ -129,7 +128,6 @@ impl JsonOpener {
 #[derive(Clone)]
 pub struct JsonSource {
     table_schema: datafusion_datasource::TableSchema,
-    batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     projection: SplitProjection,
     /// When `true` (default), expects newline-delimited JSON (NDJSON).
@@ -144,7 +142,6 @@ impl JsonSource {
         Self {
             projection: SplitProjection::unprojected(&table_schema),
             table_schema,
-            batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
             newline_delimited: true,
         }
@@ -169,8 +166,7 @@ impl From<JsonSource> for Arc<dyn FileSource> {
 impl FileSource for JsonSource {
     fn create_file_opener(
         &self,
-        object_store: Arc<dyn ObjectStore>,
-        base_config: &FileScanConfig,
+        args: &FileSourceArgs,
         _partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {
         // Get the projected file schema for JsonOpener
@@ -179,12 +175,10 @@ impl FileSource for JsonSource {
             Arc::new(file_schema.project(&self.projection.file_indices)?);
 
         let mut opener = Arc::new(JsonOpener {
-            batch_size: self
-                .batch_size
-                .expect("Batch size must set before creating opener"),
+            batch_size: args.batch_size,
             projected_schema,
-            file_compression_type: base_config.file_compression_type,
-            object_store,
+            file_compression_type: args.file_compression_type,
+            object_store: Arc::clone(&args.object_store),
             newline_delimited: self.newline_delimited,
         }) as Arc<dyn FileOpener>;
 
@@ -200,12 +194,6 @@ impl FileSource for JsonSource {
 
     fn table_schema(&self) -> &datafusion_datasource::TableSchema {
         &self.table_schema
-    }
-
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.batch_size = Some(batch_size);
-        Arc::new(conf)
     }
 
     fn try_pushdown_projection(

@@ -35,8 +35,7 @@ use arrow::csv;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
 use datafusion_common_runtime::JoinSet;
-use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file::{FileSource, FileSourceArgs};
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use datafusion_physical_plan::{
@@ -85,7 +84,6 @@ use tokio::io::AsyncWriteExt;
 #[derive(Debug, Clone)]
 pub struct CsvSource {
     options: CsvOptions,
-    batch_size: Option<usize>,
     table_schema: TableSchema,
     projection: SplitProjection,
     metrics: ExecutionPlanMetricsSet,
@@ -99,7 +97,6 @@ impl CsvSource {
             options: CsvOptions::default(),
             projection: SplitProjection::unprojected(&table_schema),
             table_schema,
-            batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
@@ -179,18 +176,15 @@ impl CsvSource {
 }
 
 impl CsvSource {
-    fn open<R: Read>(&self, reader: R) -> Result<csv::Reader<R>> {
-        Ok(self.builder().build(reader)?)
+    fn open<R: Read>(&self, reader: R, batch_size: usize) -> Result<csv::Reader<R>> {
+        Ok(self.builder(batch_size).build(reader)?)
     }
 
-    fn builder(&self) -> csv::ReaderBuilder {
+    fn builder(&self, batch_size: usize) -> csv::ReaderBuilder {
         let mut builder =
             csv::ReaderBuilder::new(Arc::clone(self.table_schema.file_schema()))
                 .with_delimiter(self.delimiter())
-                .with_batch_size(
-                    self.batch_size
-                        .expect("Batch size must be set before initializing builder"),
-                )
+                .with_batch_size(batch_size)
                 .with_header(self.has_header())
                 .with_quote(self.quote())
                 .with_truncated_rows(self.truncate_rows());
@@ -214,6 +208,7 @@ pub struct CsvOpener {
     config: Arc<CsvSource>,
     file_compression_type: FileCompressionType,
     object_store: Arc<dyn ObjectStore>,
+    batch_size: usize,
     partition_index: usize,
 }
 
@@ -223,11 +218,13 @@ impl CsvOpener {
         config: Arc<CsvSource>,
         file_compression_type: FileCompressionType,
         object_store: Arc<dyn ObjectStore>,
+        batch_size: usize,
     ) -> Self {
         Self {
             config,
             file_compression_type,
             object_store,
+            batch_size,
             partition_index: 0,
         }
     }
@@ -242,14 +239,14 @@ impl From<CsvSource> for Arc<dyn FileSource> {
 impl FileSource for CsvSource {
     fn create_file_opener(
         &self,
-        object_store: Arc<dyn ObjectStore>,
-        base_config: &FileScanConfig,
+        args: &FileSourceArgs,
         partition_index: usize,
     ) -> Result<Arc<dyn FileOpener>> {
         let mut opener = Arc::new(CsvOpener {
             config: Arc::new(self.clone()),
-            file_compression_type: base_config.file_compression_type,
-            object_store,
+            file_compression_type: args.file_compression_type,
+            object_store: Arc::clone(&args.object_store),
+            batch_size: args.batch_size,
             partition_index,
         }) as Arc<dyn FileOpener>;
         opener = ProjectionOpener::try_new(
@@ -262,12 +259,6 @@ impl FileSource for CsvSource {
 
     fn table_schema(&self) -> &TableSchema {
         &self.table_schema
-    }
-
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.batch_size = Some(batch_size);
-        Arc::new(conf)
     }
 
     fn try_pushdown_projection(
@@ -359,6 +350,7 @@ impl FileOpener for CsvOpener {
         }
 
         let store = Arc::clone(&self.object_store);
+        let batch_size = self.batch_size;
         let terminator = self.config.terminator();
 
         let baseline_metrics =
@@ -394,7 +386,7 @@ impl FileOpener for CsvOpener {
                 .await?
                 .map_err(DataFusionError::from);
 
-                let decoder = config.builder().build_decoder();
+                let decoder = config.builder(batch_size).build_decoder();
                 let input = file_compression_type
                     .convert_stream(aligned_stream.boxed())?
                     .fuse();
@@ -413,7 +405,7 @@ impl FileOpener for CsvOpener {
                 #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(file, _) => {
                     let decoder = file_compression_type.convert_read(file)?;
-                    let mut reader = config.open(decoder)?;
+                    let mut reader = config.open(decoder, batch_size)?;
 
                     // Use std::iter::from_fn to wrap execution of iterator's next() method.
                     let iterator = std::iter::from_fn(move || {
@@ -428,7 +420,7 @@ impl FileOpener for CsvOpener {
                         .boxed())
                 }
                 GetResultPayload::Stream(s) => {
-                    let decoder = config.builder().build_decoder();
+                    let decoder = config.builder(batch_size).build_decoder();
                     let s = s.map_err(DataFusionError::from);
                     let input = file_compression_type.convert_stream(s.boxed())?.fuse();
 

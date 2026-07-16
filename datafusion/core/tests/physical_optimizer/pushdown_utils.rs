@@ -20,9 +20,12 @@ use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
 use datafusion_common::{Result, config::ConfigOptions, internal_err};
 use datafusion_datasource::{
-    PartitionedFile, file::FileSource, file_scan_config::FileScanConfig,
-    file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
-    file_stream::FileOpener, source::DataSourceExec,
+    PartitionedFile,
+    file::{FileSource, FileSourceArgs},
+    file_scan_config::FileScanConfigBuilder,
+    file_stream::FileOpenFuture,
+    file_stream::FileOpener,
+    source::DataSourceExec,
 };
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -40,7 +43,6 @@ use datafusion_physical_plan::{
 };
 use futures::StreamExt;
 use futures::{FutureExt, Stream};
-use object_store::ObjectStore;
 use std::{
     fmt::{Display, Formatter},
     pin::Pin,
@@ -102,7 +104,6 @@ impl FileOpener for TestOpener {
 pub struct TestSource {
     support: bool,
     predicate: Option<Arc<dyn PhysicalExpr>>,
-    batch_size: Option<usize>,
     batches: Vec<RecordBatch>,
     metrics: ExecutionPlanMetricsSet,
     projection: Option<ProjectionExprs>,
@@ -117,7 +118,6 @@ impl TestSource {
             metrics: ExecutionPlanMetricsSet::new(),
             batches,
             predicate: None,
-            batch_size: None,
             projection: None,
             table_schema,
         }
@@ -127,13 +127,12 @@ impl TestSource {
 impl FileSource for TestSource {
     fn create_file_opener(
         &self,
-        _object_store: Arc<dyn ObjectStore>,
-        _base_config: &FileScanConfig,
+        args: &FileSourceArgs,
         _partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {
         Ok(Arc::new(TestOpener {
             batches: self.batches.clone(),
-            batch_size: self.batch_size,
+            batch_size: Some(args.batch_size),
             projection: self.projection.clone(),
             predicate: self.predicate.clone(),
         }))
@@ -141,13 +140,6 @@ impl FileSource for TestSource {
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         self.predicate.clone()
-    }
-
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(TestSource {
-            batch_size: Some(batch_size),
-            ..self.clone()
-        })
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
