@@ -1777,7 +1777,7 @@ reset datafusion.sql_parser.dialect;
 # so the physical plan must keep "a" in its ordering; dropping it (leaving only
 # [b@1 ASC]) silently loses the global order under the sink.
 statement ok
-CREATE TABLE t2(b INT) AS VALUES (10);
+CREATE TABLE t2(b INT) AS VALUES (10), (20);
 
 query TT
 EXPLAIN COPY (
@@ -1805,6 +1805,36 @@ physical_plan
 07)------SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
 08)--------ProjectionExec: expr=[1 as a, b@0 as b]
 09)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Actually execute the COPY and verify the rows written to the file are in
+# global (a, b) order, interleaving the two union branches. If "a" were
+# dropped from the sort, the file would instead contain rows ordered only
+# by "b" within each branch.
+query I
+COPY (
+  SELECT 2 AS a, b FROM t2
+  UNION ALL
+  SELECT 1 AS a, b FROM t2
+  ORDER BY a, b
+) TO 'test_files/scratch/order/sort_key_sink.parquet';
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE sort_key_sink STORED AS PARQUET
+LOCATION 'test_files/scratch/order/sort_key_sink.parquet';
+
+# Note: no ORDER BY here, so this checks the order rows were written in
+query II
+SELECT * FROM sort_key_sink;
+----
+1 10
+1 20
+2 10
+2 20
+
+statement ok
+DROP TABLE sort_key_sink;
 
 statement ok
 DROP TABLE t2;
