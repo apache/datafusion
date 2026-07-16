@@ -70,6 +70,7 @@ use datafusion_physical_plan::joins::utils::JoinOn;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::test::exec::KeyPartitioningRequirementExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties, displayable,
@@ -745,6 +746,160 @@ impl TestConfig {
     ) -> Arc<dyn ExecutionPlan> {
         self.try_to_plan(plan, optimizers_to_run).unwrap()
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RangeKeyMatch {
+    Exact,
+    Subset,
+    Incompatible,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ThresholdState {
+    Met,
+    NotMet,
+}
+
+impl ThresholdState {
+    fn value(self, input_partitions: usize) -> usize {
+        match self {
+            Self::Met => input_partitions,
+            Self::NotMet => input_partitions + 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TargetPartitions {
+    Equal,
+    Greater,
+}
+
+impl TargetPartitions {
+    fn value(self, input_partitions: usize) -> usize {
+        match self {
+            Self::Equal => input_partitions,
+            Self::Greater => input_partitions + 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ExpectedPlan {
+    Reuse,
+    Hash,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RangeSatisfactionConfigCase {
+    subset_threshold: ThresholdState,
+    preserve_threshold: ThresholdState,
+    target_partitions: TargetPartitions,
+    // Expected plans for Exact, Subset, and Incompatible keys, respectively.
+    expected_plans: [ExpectedPlan; 3],
+}
+
+#[test]
+fn range_satisfaction_config_matrix() -> Result<()> {
+    const INPUT_PARTITIONS: usize = 4;
+    use ExpectedPlan::{Hash, Reuse};
+    use RangeKeyMatch::{Exact, Incompatible, Subset};
+    use TargetPartitions::{Equal, Greater};
+    use ThresholdState::{Met, NotMet};
+
+    let config_cases = [
+        // subset  preserve  target     exact  subset  incompatible
+        RangeSatisfactionConfigCase {
+            subset_threshold: NotMet,
+            preserve_threshold: NotMet,
+            target_partitions: Equal,
+            expected_plans: [Reuse, Hash, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_threshold: NotMet,
+            preserve_threshold: NotMet,
+            target_partitions: Greater,
+            expected_plans: [Hash, Hash, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_threshold: NotMet,
+            preserve_threshold: Met,
+            target_partitions: Equal,
+            expected_plans: [Reuse, Hash, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_threshold: NotMet,
+            preserve_threshold: Met,
+            target_partitions: Greater,
+            expected_plans: [Reuse, Reuse, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_threshold: Met,
+            preserve_threshold: NotMet,
+            target_partitions: Equal,
+            expected_plans: [Reuse, Reuse, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_threshold: Met,
+            preserve_threshold: NotMet,
+            target_partitions: Greater,
+            expected_plans: [Reuse, Reuse, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_threshold: Met,
+            preserve_threshold: Met,
+            target_partitions: Equal,
+            expected_plans: [Reuse, Reuse, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_threshold: Met,
+            preserve_threshold: Met,
+            target_partitions: Greater,
+            expected_plans: [Reuse, Reuse, Hash],
+        },
+    ];
+    for config_case in config_cases {
+        for (key_match, expected_plan) in [Exact, Subset, Incompatible]
+            .into_iter()
+            .zip(config_case.expected_plans)
+        {
+            let input = parquet_exec_with_output_partitioning(range_partitioning(
+                "a",
+                [10, 20, 30],
+                SortOptions::default(),
+            )?);
+            let partition_keys = match key_match {
+                Exact => vec![col("a", &schema())?],
+                Subset => vec![col("a", &schema())?, col("b", &schema())?],
+                Incompatible => vec![col("b", &schema())?],
+            };
+            let requirement =
+                Arc::new(KeyPartitioningRequirementExec::new(input, partition_keys));
+
+            let mut config = TestConfig::default().with_query_execution_partitions(
+                config_case.target_partitions.value(INPUT_PARTITIONS),
+            );
+            config.config.optimizer.subset_repartition_threshold =
+                config_case.subset_threshold.value(INPUT_PARTITIONS);
+            config.config.optimizer.preserve_file_partitions =
+                config_case.preserve_threshold.value(INPUT_PARTITIONS);
+
+            let plan = config.to_plan(requirement, &DISTRIB_DISTRIB_SORT);
+            let plan = displayable(plan.as_ref()).indent(true).to_string();
+            let has_hash_repartition =
+                plan.contains("RepartitionExec: partitioning=Hash");
+
+            assert_eq!(
+                has_hash_repartition,
+                matches!(expected_plan, Hash),
+                "unexpected optimized plan for key_match={key_match:?}, \
+                 config={config_case:?}:\n{plan}"
+            );
+        }
+    }
+
+    Ok(())
 }
 
 #[test]
