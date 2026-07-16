@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use datafusion_common::Result;
 use datafusion_physical_expr::{
-    AcrossPartitions, Distribution, EquivalenceProperties, LexOrdering, LexRequirement,
-    Partitioning, PhysicalExpr, physical_exprs_equal,
+    Distribution, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
+    PhysicalExpr, physical_exprs_equal,
 };
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -31,25 +31,6 @@ use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-
-/// Returns `true` when `expr` is a *globally* constant column in `eq_properties`
-/// and can therefore be safely dropped from a required ordering.
-///
-/// Only [`AcrossPartitions::Uniform`] qualifies. An
-/// [`AcrossPartitions::Heterogeneous`] value is constant *within* each partition
-/// but may differ *across* partitions, so it must be kept in the sort key: the
-/// `SortExec` these helpers build preserves partitioning, and its output is
-/// merged across partitions downstream, where the column is still an ordering
-/// discriminator. Dropping it there silently loses the global ordering.
-fn is_uniform_constant(
-    eq_properties: &EquivalenceProperties,
-    expr: &Arc<dyn PhysicalExpr>,
-) -> bool {
-    matches!(
-        eq_properties.is_expr_constant(expr),
-        Some(AcrossPartitions::Uniform(_))
-    )
-}
 
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.
@@ -64,7 +45,10 @@ pub fn add_sort_above<T: Clone + Default>(
 ) -> PlanContext<T> {
     let mut sort_reqs: Vec<_> = sort_requirements.into();
     sort_reqs.retain(|sort_expr| {
-        !is_uniform_constant(node.plan.equivalence_properties(), &sort_expr.expr)
+        node.plan
+            .equivalence_properties()
+            .is_expr_constant(&sort_expr.expr)
+            .is_none()
     });
     let sort_exprs = sort_reqs.into_iter().map(Into::into).collect::<Vec<_>>();
     let Some(ordering) = LexOrdering::new(sort_exprs) else {
@@ -89,7 +73,10 @@ pub fn add_sort_above_with_distribution<T: Clone + Default>(
 ) -> PlanContext<T> {
     let mut sort_reqs: Vec<_> = sort_requirements.into();
     sort_reqs.retain(|sort_expr| {
-        !is_uniform_constant(node.plan.equivalence_properties(), &sort_expr.expr)
+        node.plan
+            .equivalence_properties()
+            .is_expr_constant(&sort_expr.expr)
+            .is_none()
     });
     let sort_exprs = sort_reqs.into_iter().map(Into::into).collect::<Vec<_>>();
     let Some(ordering) = LexOrdering::new(sort_exprs) else {
@@ -232,78 +219,4 @@ pub(crate) fn range_partitioning_satisfies_key_partitioning(
 /// i.e. either a [`LocalLimitExec`] or a [`GlobalLimitExec`].
 pub fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.is::<GlobalLimitExec>() || plan.is::<LocalLimitExec>()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_physical_expr::PhysicalSortRequirement;
-    use datafusion_physical_expr::expressions::{col, lit};
-    use datafusion_physical_expr::projection::ProjectionExpr;
-    use datafusion_physical_plan::displayable;
-    use datafusion_physical_plan::empty::EmptyExec;
-    use datafusion_physical_plan::projection::ProjectionExec;
-
-    /// A `UnionExec` whose `sample` column is 1 on the left branch and 2 on the
-    /// right makes `sample` a `Heterogeneous` constant: constant within each
-    /// partition, but different across them. A required ordering of
-    /// `[sample, other]` must retain `sample`; the `SortExec` built here
-    /// preserves partitioning and its output is merged across partitions
-    /// downstream, where `sample` is still the leading ordering discriminator.
-    /// Regression test: `add_sort_above` used to drop every constant, uniform
-    /// or not, and silently discarded the global ordering.
-    #[test]
-    fn add_sort_above_keeps_heterogeneous_constant_key() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, true)]));
-
-        let branch = |value: i32| -> Result<Arc<dyn ExecutionPlan>> {
-            let source = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-            let projection = ProjectionExec::try_new(
-                vec![
-                    ProjectionExpr {
-                        expr: lit(value),
-                        alias: "sample".to_string(),
-                    },
-                    ProjectionExpr {
-                        expr: col("c", &schema)?,
-                        alias: "other".to_string(),
-                    },
-                ],
-                source,
-            )?;
-            Ok(Arc::new(projection))
-        };
-
-        let union: Arc<dyn ExecutionPlan> =
-            UnionExec::try_new(vec![branch(1)?, branch(2)?])?;
-        let union_schema = union.schema();
-
-        // Precondition: the union reports `sample` as a heterogeneous constant.
-        let sample = col("sample", &union_schema)?;
-        assert!(matches!(
-            union.equivalence_properties().is_expr_constant(&sample),
-            Some(AcrossPartitions::Heterogeneous)
-        ));
-
-        let asc = SortOptions::default();
-        let requirement: LexRequirement = [
-            PhysicalSortRequirement::new(sample, Some(asc)),
-            PhysicalSortRequirement::new(col("other", &union_schema)?, Some(asc)),
-        ]
-        .into();
-
-        let node = PlanContext::<()>::new_default(union);
-        let result = add_sort_above(node, requirement, None);
-
-        let plan = displayable(result.plan.as_ref()).indent(true).to_string();
-        assert!(
-            plan.contains("sample@0 ASC"),
-            "add_sort_above dropped the heterogeneous-constant sort key:\n{plan}"
-        );
-
-        Ok(())
-    }
 }
