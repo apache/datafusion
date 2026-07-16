@@ -20,6 +20,7 @@ use std::sync::Arc;
 use arrow_schema::DataType;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{
     AggregateUDF, ColumnarValue, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, Volatility, WindowUDF,
@@ -157,6 +158,55 @@ impl ScalarUDFImpl for PlacementUDF {
 pub(crate) extern "C" fn create_placement_func() -> FFI_ScalarUDF {
     let udf: Arc<ScalarUDF> = Arc::new(ScalarUDF::from(PlacementUDF {
         signature: Signature::uniform(1, vec![DataType::Int64], Volatility::Immutable),
+    }));
+
+    udf.into()
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct WithConfigUpdateUDF {
+    signature: Signature,
+    name: String,
+}
+
+impl ScalarUDFImpl for WithConfigUpdateUDF {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(
+        &self,
+        _arg_types: &[DataType],
+    ) -> datafusion_common::Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn invoke_with_args(
+        &self,
+        _args: ScalarFunctionArgs,
+    ) -> datafusion_common::Result<ColumnarValue> {
+        Ok(ColumnarValue::Scalar(ScalarValue::from(self.name.clone())))
+    }
+
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        // Specialize the name from the configured time zone so the consumer can
+        // confirm the producer override survived the FFI round trip.
+        let tz = config.execution.time_zone.clone().unwrap_or_default();
+        Some(ScalarUDF::from(WithConfigUpdateUDF {
+            signature: self.signature.clone(),
+            name: format!("with_config_{tz}"),
+        }))
+    }
+}
+
+pub(crate) extern "C" fn create_with_config_func() -> FFI_ScalarUDF {
+    let udf: Arc<ScalarUDF> = Arc::new(ScalarUDF::from(WithConfigUpdateUDF {
+        signature: Signature::uniform(1, vec![DataType::Utf8], Volatility::Stable),
+        name: "with_config_base".to_string(),
     }));
 
     udf.into()
