@@ -60,6 +60,7 @@ use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
 use log::info;
 use sqlparser::ast;
 use tempfile::TempDir;
@@ -128,6 +129,15 @@ impl TestContext {
         ) {
             state_builder =
                 state_builder.with_type_planner(Arc::new(SqlLogicTestTypePlanner));
+        }
+
+        if matches!(
+            relative_path.file_name().and_then(|name| name.to_str()),
+            Some("statistics_registry.slt")
+        ) {
+            state_builder = state_builder.with_statistics_registry(
+                StatisticsRegistry::default_with_builtin_providers(),
+            );
         }
 
         let state = state_builder.build();

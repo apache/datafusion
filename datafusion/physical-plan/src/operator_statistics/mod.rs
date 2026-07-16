@@ -23,9 +23,9 @@
 //!
 //! # Overview
 //!
-//! The default implementation delegates to each operator's built-in
-//! `partition_statistics`. Users can register custom [`StatisticsProvider`]
-//! implementations to:
+//! With no providers registered, statistics come from each operator's built-in
+//! [`ExecutionPlan::statistics_from_inputs`]. Users can register custom
+//! [`StatisticsProvider`] implementations to:
 //!
 //! 1. Provide statistics for custom [`ExecutionPlan`] implementations
 //! 2. Override default estimation with advanced approaches (e.g., histograms)
@@ -48,35 +48,23 @@
 //! 5. [`JoinStatisticsProvider`] - NDV-based join output estimation (hash, sort-merge, cross)
 //! 6. [`LimitStatisticsProvider`] - caps output at the fetch limit (local and global)
 //! 7. [`UnionStatisticsProvider`] - sums input row counts
-//! 8. [`DefaultStatisticsProvider`] - fallback to `partition_statistics(None)`
 //!
-//! # Relationship to [#20184](https://github.com/apache/datafusion/issues/20184)
+//! # Statistics walk
 //!
-//! This module performs its own bottom-up tree walk in [`StatisticsRegistry::compute`],
-//! separate from the walk optimizer rules do via `transform_up`. This means existing
-//! rules that call `partition_statistics` directly bypass the registry.
+//! Providers plug into the single [`StatisticsContext`] walk: at each node the
+//! chain is consulted before falling back to the operator's built-in
+//! [`ExecutionPlan::statistics_from_inputs`], with children already resolved by
+//! that same walk. The first provider that returns a computed result sets the
+//! node's statistics.
 //!
-//! [#20184](https://github.com/apache/datafusion/issues/20184) adds a `child_stats`
-//! parameter to `partition_statistics`. Once it lands, the registry can feed enriched
-//! **base** [`Statistics`] into operators' built-in `partition_statistics` calls,
-//! removing redundancy for the base-stats path (row counts, column stats). However,
-//! the separate registry walk is still required for [`ExtendedStatistics`] extension
-//! propagation: `partition_statistics` returns `Arc<Statistics>`, so extensions
-//! (histograms, sketches, etc.) are stripped at that boundary and can only flow
-//! through the registry walk.
-//!
-//! If [`Statistics`] itself were extended to carry a type-erased extension map
-//! (similar to [`ExtendedStatistics`]), the registry walk could be dropped entirely:
-//! extensions would flow naturally through `partition_statistics(child_stats)` and
-//! the registry would become a pure chain-of-responsibility on top of the existing
-//! traversal with no separate walk needed.
+//! [`StatisticsContext`]: crate::statistics::StatisticsContext
 //!
 //! # Example
 //!
 //! ```ignore
 //! use datafusion_physical_plan::operator_statistics::*;
 //!
-//! // Create registry with default provider
+//! // Create an empty registry
 //! let mut registry = StatisticsRegistry::new();
 //!
 //! // Register custom provider (higher priority)
@@ -239,7 +227,10 @@ pub enum StatisticsResult {
 /// }
 /// ```
 pub trait StatisticsProvider: Debug + Send + Sync {
-    /// Compute statistics for an [`ExecutionPlan`] node.
+    /// Compute *overall* (all-partitions) statistics for a node.
+    ///
+    /// The partition-agnostic entry point; per-partition requests go through
+    /// [`Self::compute_statistics_with_args`] (whose default delegates per partition).
     ///
     /// # Arguments
     /// * `plan` - The execution plan node to compute statistics for
@@ -253,21 +244,56 @@ pub trait StatisticsProvider: Debug + Send + Sync {
         &self,
         plan: &dyn ExecutionPlan,
         child_stats: &[ExtendedStatistics],
-    ) -> Result<StatisticsResult>;
+    ) -> Result<StatisticsResult> {
+        let _ = (plan, child_stats);
+        Ok(StatisticsResult::Delegate)
+    }
+
+    /// Compute statistics for `args.partition()` (or overall when `None`).
+    ///
+    /// The default is overall-only: forwards to [`Self::compute_statistics`] for
+    /// `None`, and returns `Delegate` for a specific partition so the operator's
+    /// own per-partition statistics are used. Override to provide per-partition stats.
+    fn compute_statistics_with_args(
+        &self,
+        plan: &dyn ExecutionPlan,
+        child_stats: &[ExtendedStatistics],
+        args: &StatisticsArgs,
+    ) -> Result<StatisticsResult> {
+        if args.partition().is_some() {
+            Ok(StatisticsResult::Delegate)
+        } else {
+            self.compute_statistics(plan, child_stats)
+        }
+    }
 }
 
-/// Default statistics provider that delegates to each operator's built-in
-/// `partition_statistics` implementation.
+/// Deprecated statistics provider that delegates to each operator's built-in
+/// [`ExecutionPlan::statistics_from_inputs`].
+///
+/// Redundant now that the statistics walk falls back to `statistics_from_inputs`
+/// natively when the provider chain delegates or is empty, so a terminal
+/// "default" provider is unnecessary. Kept for backward compatibility; do not
+/// add it to a provider chain.
+#[deprecated(
+    since = "55.0.0",
+    note = "redundant: the statistics walk falls back to `statistics_from_inputs` when the provider chain delegates or is empty; register no terminal provider"
+)]
 #[derive(Debug, Default)]
 pub struct DefaultStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for DefaultStatisticsProvider {
     fn compute_statistics(
         &self,
         plan: &dyn ExecutionPlan,
-        _child_stats: &[ExtendedStatistics],
+        child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        let base = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
+        let child_base: Vec<Arc<Statistics>> = child_stats
+            .iter()
+            .map(|c| Arc::clone(c.base_arc()))
+            .collect();
+        let base = plan.statistics_from_inputs(&child_base, &StatisticsArgs::new())?;
         Ok(StatisticsResult::Computed(ExtendedStatistics::new_arc(
             base,
         )))
@@ -299,7 +325,7 @@ impl StatisticsRegistry {
     /// Create a new empty registry.
     ///
     /// With no providers, `compute()` falls back to each plan node's
-    /// built-in `partition_statistics()`. Register providers to enhance
+    /// built-in `statistics_from_inputs()`. Register providers to enhance
     /// statistics (e.g., inject NDV, use histograms).
     pub fn new() -> Self {
         Self {
@@ -322,7 +348,6 @@ impl StatisticsRegistry {
     /// 5. [`JoinStatisticsProvider`]
     /// 6. [`LimitStatisticsProvider`]
     /// 7. [`UnionStatisticsProvider`]
-    /// 8. [`DefaultStatisticsProvider`]
     pub fn default_with_builtin_providers() -> Self {
         Self::with_providers(vec![
             Arc::new(FilterStatisticsProvider),
@@ -332,7 +357,6 @@ impl StatisticsRegistry {
             Arc::new(JoinStatisticsProvider),
             Arc::new(LimitStatisticsProvider),
             Arc::new(UnionStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
         ])
     }
 
@@ -346,44 +370,14 @@ impl StatisticsRegistry {
         &self.providers
     }
 
-    /// Compute extended statistics for a plan through the provider chain.
+    /// Compute extended statistics for `plan` through the provider chain.
     ///
-    /// Performs a bottom-up tree walk: child statistics are computed recursively
-    /// and passed to providers, mirroring how `partition_statistics` composes
-    /// operators. Once [#20184](https://github.com/apache/datafusion/issues/20184)
-    /// lands, the registry can feed enriched base stats directly into
-    /// `partition_statistics(child_stats)`, removing the need for a separate walk.
-    ///
-    /// If no providers are registered, falls back to the plan's built-in
-    /// `partition_statistics(None)` with no overhead.
+    /// Thin wrapper over the single [`StatisticsContext`] walk (the same path the
+    /// optimizer and EXPLAIN use), so there is one traversal implementation. The
+    /// walk carries base [`Statistics`] only; extensions are not propagated.
     pub fn compute(&self, plan: &dyn ExecutionPlan) -> Result<ExtendedStatistics> {
-        // Fast path: no providers registered, skip the walk entirely
-        if self.providers.is_empty() {
-            let base = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
-            return Ok(ExtendedStatistics::new_arc(base));
-        }
-
-        let children = plan.children();
-
-        // For leaf nodes, try providers with empty child stats.
-        // For non-leaf nodes, recursively compute enhanced child stats first.
-        let child_stats: Vec<ExtendedStatistics> = if children.is_empty() {
-            Vec::new()
-        } else {
-            children
-                .iter()
-                .map(|child| self.compute(child.as_ref()))
-                .collect::<Result<Vec<_>>>()?
-        };
-
-        for provider in &self.providers {
-            match provider.compute_statistics(plan, &child_stats)? {
-                StatisticsResult::Computed(stats) => return Ok(stats),
-                StatisticsResult::Delegate => continue,
-            }
-        }
-        // Fallback: use plan's built-in stats
-        let base = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
+        let base = StatisticsContext::new_with_registry(self.clone())
+            .compute(plan, &StatisticsArgs::new())?;
         Ok(ExtendedStatistics::new_arc(base))
     }
 
@@ -471,7 +465,7 @@ pub fn ndv_after_selectivity(
 /// Rescale `total_byte_size` proportionally after overriding `num_rows`.
 ///
 /// When a provider replaces `num_rows` but keeps the rest of the stats from
-/// `partition_statistics`, the original `total_byte_size` becomes inconsistent.
+/// `statistics_from_inputs`, the original `total_byte_size` becomes inconsistent.
 /// This function adjusts it by the ratio `new_rows / old_rows`, preserving the
 /// average bytes-per-row from the original estimate.
 fn rescale_byte_size(stats: &mut Statistics, new_num_rows: Precision<usize>) {
@@ -496,18 +490,20 @@ fn rescale_byte_size(stats: &mut Statistics, new_num_rows: Precision<usize>) {
     };
 }
 
-/// Fetches base statistics from the operator's built-in `partition_statistics`,
-/// overrides `num_rows` with the registry-computed estimate, and rescales
-/// `total_byte_size` proportionally.
-///
-/// Used by providers that compute a better row count but cannot yet propagate
-/// column-level stats (NDV, min/max) through the operator — pending #20184.
+/// Overrides the operator's built-in output statistics (computed from the
+/// pre-resolved `child_stats`) with `num_rows`, rescaling `total_byte_size`
+/// proportionally. Used by providers that refine only the row count.
 fn computed_with_row_count(
     plan: &dyn ExecutionPlan,
     num_rows: Precision<usize>,
+    child_stats: &[ExtendedStatistics],
 ) -> Result<StatisticsResult> {
+    let child_base: Vec<Arc<Statistics>> = child_stats
+        .iter()
+        .map(|c| Arc::clone(c.base_arc()))
+        .collect();
     let mut base = Arc::unwrap_or_clone(
-        StatisticsContext::new().compute(plan, &StatisticsArgs::new())?,
+        plan.statistics_from_inputs(&child_base, &StatisticsArgs::new())?,
     );
     rescale_byte_size(&mut base, num_rows);
     Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
@@ -516,7 +512,7 @@ fn computed_with_row_count(
 /// Statistics provider for [`FilterExec`](crate::filter::FilterExec) that uses
 /// pre-computed enhanced child statistics from the registry walk.
 ///
-/// Unlike the default provider (which calls `partition_statistics` and gets raw
+/// Unlike the built-in fallback (which calls `statistics_from_inputs` and gets raw
 /// child stats), this provider receives enhanced child stats that may include
 /// NDV overrides injected at the scan level. It applies the same selectivity
 /// estimation logic as `FilterExec::statistics_helper`, then additionally
@@ -612,7 +608,7 @@ impl StatisticsProvider for ProjectionStatisticsProvider {
 ///
 /// These operators (Sort, Repartition, CoalescePartitions, etc.) don't
 /// transform statistics, so we pass through the enhanced child stats directly.
-/// This avoids the fallback calling `partition_statistics(None)` which would
+/// This avoids the fallback calling `statistics_from_inputs` (overall) which would
 /// trigger a redundant internal recursion with raw (non-enhanced) stats.
 #[derive(Debug, Default)]
 pub struct PassthroughStatisticsProvider;
@@ -654,7 +650,7 @@ impl StatisticsProvider for PassthroughStatisticsProvider {
 /// produce overestimates.
 ///
 /// For GROUPING SETS / CUBE / ROLLUP, delegates to the built-in
-/// `partition_statistics`, which handles per-set NDV estimation correctly.
+/// `statistics_from_inputs`, which handles per-set NDV estimation correctly.
 ///
 /// Delegates when:
 /// - The plan is not an `AggregateExec`
@@ -732,7 +728,7 @@ impl StatisticsProvider for AggregateStatisticsProvider {
 
         let num_rows = Precision::Inexact(estimate);
 
-        computed_with_row_count(plan, num_rows)
+        computed_with_row_count(plan, num_rows, child_stats)
     }
 }
 
@@ -867,7 +863,7 @@ impl StatisticsProvider for JoinStatisticsProvider {
             Precision::Inexact(estimated)
         };
 
-        computed_with_row_count(plan, num_rows)
+        computed_with_row_count(plan, num_rows, child_stats)
     }
 }
 
@@ -917,7 +913,7 @@ impl StatisticsProvider for LimitStatisticsProvider {
             },
         };
 
-        computed_with_row_count(plan, num_rows)
+        computed_with_row_count(plan, num_rows, child_stats)
     }
 }
 
@@ -956,7 +952,7 @@ impl StatisticsProvider for UnionStatisticsProvider {
             },
         )?;
 
-        computed_with_row_count(plan, total)
+        computed_with_row_count(plan, total, child_stats)
     }
 }
 
@@ -1159,7 +1155,7 @@ mod tests {
         let custom_only =
             StatisticsRegistry::with_providers(vec![Arc::new(CustomStatisticsProvider)]);
         // CustomStatisticsProvider only handles CustomExec, delegates for others
-        // With no default provider, filter returns fallback statistics
+        // With no provider handling FilterExec, it returns the built-in fallback statistics
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(lit(true), Arc::clone(&source))?);
         let stats = custom_only.compute(filter.as_ref())?;
@@ -1204,6 +1200,13 @@ mod tests {
 
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![&self.input]
+        }
+
+        fn child_stats_requests(
+            &self,
+            partition: Option<usize>,
+        ) -> Vec<crate::statistics::ChildStats> {
+            vec![crate::statistics::ChildStats::At(partition)]
         }
 
         fn with_new_children(
@@ -1363,10 +1366,8 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, source)?);
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(FilterStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(FilterStatisticsProvider)]);
         let stats = registry.compute(filter.as_ref())?;
 
         let output_ndv_a = stats.base.column_statistics[0]
@@ -1553,10 +1554,9 @@ mod tests {
         )]);
         let agg = make_aggregate(source, group_by)?;
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(AggregateStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(
+            AggregateStatisticsProvider,
+        )]);
         let stats = registry.compute(agg.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(10));
         Ok(())
@@ -1571,10 +1571,9 @@ mod tests {
         ]);
         let agg = make_aggregate(source, group_by)?;
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(AggregateStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(
+            AggregateStatisticsProvider,
+        )]);
         let stats = registry.compute(agg.as_ref())?;
         // 10 * 5 = 50
         assert_eq!(stats.base.num_rows, Precision::Inexact(50));
@@ -1591,10 +1590,9 @@ mod tests {
         ]);
         let agg = make_aggregate(source, group_by)?;
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(AggregateStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(
+            AggregateStatisticsProvider,
+        )]);
         let stats = registry.compute(agg.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(500));
         Ok(())
@@ -1610,12 +1608,11 @@ mod tests {
         )]);
         let agg = make_aggregate(source, group_by)?;
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(AggregateStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(
+            AggregateStatisticsProvider,
+        )]);
         let stats = registry.compute(agg.as_ref())?;
-        // Delegates to DefaultStatisticsProvider, which calls partition_statistics
+        // Delegates, falling back to the operator's built-in statistics_from_inputs
         assert!(
             stats.base.num_rows.get_value().is_some()
                 || matches!(stats.base.num_rows, Precision::Absent)
@@ -1635,10 +1632,9 @@ mod tests {
         let group_by = PhysicalGroupBy::new_single(vec![(expr, "sum".to_string())]);
         let agg = make_aggregate(source, group_by)?;
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(AggregateStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(
+            AggregateStatisticsProvider,
+        )]);
         let stats = registry.compute(agg.as_ref())?;
         // Should delegate (expression is not a Column)
         assert!(
@@ -1676,13 +1672,12 @@ mod tests {
         );
         let agg = make_aggregate(source, group_by)?;
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(AggregateStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(
+            AggregateStatisticsProvider,
+        )]);
         let stats = registry.compute(agg.as_ref())?;
-        // Multiple grouping sets: provider delegates to DefaultStatisticsProvider,
-        // which calls the built-in partition_statistics for correct per-set
+        // Multiple grouping sets: provider delegates, so the operator's built-in
+        // statistics_from_inputs computes the correct per-set
         // NDV estimation. The exact value depends on the built-in implementation.
         assert!(
             stats.base.num_rows.get_value().is_some()
@@ -1709,12 +1704,11 @@ mod tests {
             source.schema(),
         )?);
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(AggregateStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(
+            AggregateStatisticsProvider,
+        )]);
         let stats = registry.compute(agg.as_ref())?;
-        // Should fall through to DefaultStatisticsProvider (partition_statistics).
+        // Should fall through to the operator's built-in statistics_from_inputs.
         // The exact value depends on the built-in implementation.
         assert!(
             stats.base.num_rows.get_value().is_some()
@@ -1782,10 +1776,8 @@ mod tests {
         let right = make_source_with_ndv_2col(500, Some(50));
         let join = make_hash_join(left, right)?;
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(JoinStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
         let stats = registry.compute(join.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(5000));
         Ok(())
@@ -1836,10 +1828,8 @@ mod tests {
             false,
         )?);
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(JoinStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
         let stats = registry.compute(join.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(10_000));
         Ok(())
@@ -1898,10 +1888,8 @@ mod tests {
             false,
         )?);
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(JoinStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
         let stats = registry.compute(join.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(250));
         Ok(())
@@ -1914,10 +1902,8 @@ mod tests {
         let right = make_source_with_ndv_2col(200, None);
         let join = make_hash_join(left, right)?;
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(JoinStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
         let stats = registry.compute(join.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(20_000));
         Ok(())
@@ -1939,12 +1925,10 @@ mod tests {
             None,
         )?);
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(JoinStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
         let stats = registry.compute(join.as_ref())?;
-        // Provider delegates; result comes from built-in partition_statistics.
+        // Provider delegates; result comes from built-in statistics_from_inputs.
         assert!(
             stats.base.num_rows.get_value().is_some()
                 || matches!(stats.base.num_rows, Precision::Absent)
@@ -1984,10 +1968,8 @@ mod tests {
         let left = make_source_with_ndv_2col(left_rows, left_ndv);
         let right = make_source_with_ndv_2col(right_rows, right_ndv);
         let join = make_hash_join_typed(left, right, join_type)?;
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(JoinStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
         Ok(registry.compute(join.as_ref())?.base.num_rows)
     }
 
@@ -2071,10 +2053,8 @@ mod tests {
         let right = make_source(200);
         let join: Arc<dyn ExecutionPlan> = Arc::new(CrossJoinExec::new(left, right));
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(JoinStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
         let stats = registry.compute(join.as_ref())?;
         // Both inputs have Exact row counts -> result is also Exact
         assert_eq!(stats.base.num_rows, Precision::Exact(20_000));
@@ -2093,10 +2073,8 @@ mod tests {
         let source = make_source(1000);
         let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(source, 100));
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(LimitStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(LimitStatisticsProvider)]);
         let stats = registry.compute(limit.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Exact(100));
         Ok(())
@@ -2108,10 +2086,8 @@ mod tests {
         let source = make_source(50);
         let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(source, 200));
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(LimitStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(LimitStatisticsProvider)]);
         let stats = registry.compute(limit.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Exact(50));
         Ok(())
@@ -2124,10 +2100,8 @@ mod tests {
         let limit: Arc<dyn ExecutionPlan> =
             Arc::new(GlobalLimitExec::new(source, 200, Some(100)));
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(LimitStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(LimitStatisticsProvider)]);
         let stats = registry.compute(limit.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Exact(100));
         Ok(())
@@ -2140,10 +2114,8 @@ mod tests {
         let limit: Arc<dyn ExecutionPlan> =
             Arc::new(GlobalLimitExec::new(source, 200, Some(50)));
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(LimitStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(LimitStatisticsProvider)]);
         let stats = registry.compute(limit.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Exact(0));
         Ok(())
@@ -2156,10 +2128,8 @@ mod tests {
         let source = make_source_with_precision(Precision::Inexact(1000));
         let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(source, 100));
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(LimitStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(LimitStatisticsProvider)]);
         let stats = registry.compute(limit.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(100));
         Ok(())
@@ -2179,10 +2149,8 @@ mod tests {
     fn test_union_provider_sums_rows() -> Result<()> {
         let union = UnionExec::try_new(vec![make_source(300), make_source(700)])?;
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(UnionStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(UnionStatisticsProvider)]);
         let stats = registry.compute(union.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Exact(1000));
         Ok(())
@@ -2196,10 +2164,8 @@ mod tests {
             make_source(300),
         ])?;
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(UnionStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(UnionStatisticsProvider)]);
         let stats = registry.compute(union.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Exact(600));
         Ok(())
@@ -2213,10 +2179,8 @@ mod tests {
             make_source_with_precision(Precision::Absent),
         ])?;
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(UnionStatisticsProvider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(UnionStatisticsProvider)]);
         let stats = registry.compute(union.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Absent);
         Ok(())
@@ -2243,10 +2207,7 @@ mod tests {
             }
         });
 
-        let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(provider),
-            Arc::new(DefaultStatisticsProvider),
-        ]);
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(provider)]);
 
         let source = make_source(1000);
         let filter: Arc<dyn ExecutionPlan> =
