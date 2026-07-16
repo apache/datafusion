@@ -2108,4 +2108,148 @@ mod tests {
         }
         Ok(())
     }
+
+    /// End-to-end memory-savings regression test.
+    ///
+    /// Streams many independent batches of wide `List<Int32>` payload through
+    /// the accumulator, dropping each source batch immediately after feeding
+    /// it in. The test then verifies three things:
+    ///
+    ///   1. The accumulator still emits the correct winners after every
+    ///      source batch has been dropped (proves that stored values are
+    ///      owned copies, not `Arc` slices into batches that no longer
+    ///      exist).
+    ///   2. No `Arc` reference to any past source batch is retained by the
+    ///      accumulator — every batch's `Weak` handle reports
+    ///      `strong_count == 0` once the local `Arc` is dropped.
+    ///   3. The accumulator's reported `size()` stays bounded by
+    ///      `#groups * per-group-cost`, independent of `#batches * #rows`.
+    ///
+    /// This is the regression test for the wide-payload pinning behaviour
+    /// that motivated this PR.
+    #[test]
+    fn test_first_group_acc_list_no_source_batch_pinning() -> Result<()> {
+        let value_type =
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("val", value_type.clone(), true),
+            Field::new("ord", DataType::Int64, true),
+        ]));
+        let sort_keys = [PhysicalSortExpr {
+            expr: col("ord", &schema)?,
+            options: SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        }];
+        let mut group_acc = FirstLastGroupsAccumulator::try_new(
+            GenericValueState::new(value_type),
+            sort_keys.into(),
+            false,
+            &[DataType::Int64],
+            true,
+        )?;
+
+        const GROUPS: usize = 4;
+        const BATCHES: usize = 50;
+        const ROWS_PER_BATCH: usize = 256;
+
+        // Keep a `Weak` handle to each batch's payload array. After we drop
+        // the local `Arc`s, `strong_count == 0` means nothing in the
+        // accumulator is still holding a reference to that batch.
+        let mut weak_payloads: Vec<std::sync::Weak<dyn Array>> =
+            Vec::with_capacity(BATCHES);
+
+        // Track the running-max ord we have fed to each group so the test's
+        // "expected winner" oracle matches the accumulator's choice.
+        let mut expected_ord = [i64::MIN; GROUPS];
+        let mut expected_val_repeat = [0_i32; GROUPS];
+
+        for batch in 0..BATCHES {
+            // Each batch's list values are `[batch as i32; group_idx + 1]`
+            // — a distinct payload per (batch, row) so we can verify the
+            // winner by content.
+            let values = ListArray::from_iter_primitive::<Int32Type, _, _>(
+                (0..ROWS_PER_BATCH).map(|i| {
+                    let g = i % GROUPS;
+                    Some(vec![Some(batch as i32); g + 1])
+                }),
+            );
+            let orderings = Int64Array::from(
+                (0..ROWS_PER_BATCH as i64)
+                    .map(|i| batch as i64 * ROWS_PER_BATCH as i64 + i)
+                    .collect::<Vec<_>>(),
+            );
+            let group_indices: Vec<usize> =
+                (0..ROWS_PER_BATCH).map(|i| i % GROUPS).collect();
+
+            // Update the oracle: the last row in this batch that hits each
+            // group has the largest ord for that group in this batch.
+            for i in (0..ROWS_PER_BATCH).rev() {
+                let g = i % GROUPS;
+                let ord = batch as i64 * ROWS_PER_BATCH as i64 + i as i64;
+                if ord > expected_ord[g] {
+                    expected_ord[g] = ord;
+                    expected_val_repeat[g] = batch as i32;
+                    if (0..GROUPS).all(|gg| expected_ord[gg] >= 0) {
+                        // small optimization; not required for correctness
+                    }
+                }
+            }
+
+            let values_arc: Arc<dyn Array> = Arc::new(values);
+            let orderings_arc: Arc<dyn Array> = Arc::new(orderings);
+            weak_payloads.push(Arc::downgrade(&values_arc));
+
+            group_acc.update_batch(
+                &[values_arc, orderings_arc],
+                &group_indices,
+                None,
+                GROUPS,
+            )?;
+
+            // Drop happens implicitly at end of scope. If the accumulator
+            // held an `Arc` slice into `values_arc`, `strong_count` would
+            // stay >= 1 after this line.
+        }
+
+        // (2) No source batch is pinned by the accumulator.
+        for (i, w) in weak_payloads.iter().enumerate() {
+            assert_eq!(
+                w.strong_count(),
+                0,
+                "batch {i} is still pinned by the accumulator; \
+                 GenericValueState did not compact its stored winner"
+            );
+        }
+
+        // (3) Size is bounded by #groups. The exact number is
+        // implementation-dependent but should be orders of magnitude below
+        // `BATCHES * ROWS_PER_BATCH * per-list-cost` (the amount that would
+        // be retained under the old Arc-slice pinning bug).
+        let size = group_acc.size();
+        assert!(
+            size < 10_000,
+            "accumulator size {size} bytes is not bounded by #groups \
+             (expected O({GROUPS}) not O({BATCHES} * {ROWS_PER_BATCH}))"
+        );
+
+        // (1) Winners are still readable and match the oracle.
+        let result = group_acc.evaluate(EmitTo::All)?;
+        let result = result.as_list::<i32>();
+        assert_eq!(result.len(), GROUPS);
+        for (g, expected_repeat) in expected_val_repeat.iter().enumerate().take(GROUPS) {
+            let winner = result.value(g);
+            let winner = winner.as_primitive::<Int32Type>();
+            assert_eq!(winner.len(), g + 1, "winner list length for group {g}");
+            for i in 0..winner.len() {
+                assert_eq!(
+                    winner.value(i),
+                    *expected_repeat,
+                    "winner payload mismatch for group {g}"
+                );
+            }
+        }
+        Ok(())
+    }
 }
