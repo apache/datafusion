@@ -518,6 +518,27 @@ SELECT COUNT(*) FROM ts_data_secs where ts > to_timestamp_seconds('2020-09-08 12
 ----
 2
 
+# NULL string scalar inputs and all-NULL scalar formats return NULL
+query PP
+SELECT
+  to_timestamp(NULL::VARCHAR, '%Y-%m-%d'),
+  to_timestamp('2020-09-08', NULL::VARCHAR, NULL::VARCHAR)
+----
+NULL NULL
+
+# NULL array formats are skipped for each row; rows with no usable format return NULL
+query IP
+SELECT id, to_timestamp(value, format1, format2)
+FROM (
+  VALUES
+    (1, '2020-09-08', NULL::VARCHAR, '%Y-%m-%d'),
+    (2, '2020-09-08', NULL::VARCHAR, NULL::VARCHAR)
+) AS t(id, value, format1, format2)
+ORDER BY id
+----
+1 2020-09-08T00:00:00
+2 NULL
+
 # to_timestamp float inputs
 
 query PPP
