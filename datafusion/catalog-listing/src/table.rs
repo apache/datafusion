@@ -815,7 +815,7 @@ impl ListingTable {
         }))
         .await?;
         let meta_fetch_concurrency =
-            ctx.config_options().execution.meta_fetch_concurrency;
+            ctx.config_options().execution.meta_fetch_concurrency.get();
         let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
         // collect the statistics and ordering if required by the config
         let files = file_list
@@ -832,7 +832,9 @@ impl ListingTable {
                     .with_ordering(ordering))
             })
             .boxed()
-            .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
+            .buffer_unordered(
+                ctx.config_options().execution.meta_fetch_concurrency.get(),
+            );
 
         get_files_with_limit(files, file_limit, ctx.config().collect_statistics()).await
     }

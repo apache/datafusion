@@ -542,7 +542,8 @@ mod tests {
             .state()
             .config_options()
             .execution
-            .meta_fetch_concurrency;
+            .meta_fetch_concurrency
+            .get();
         let expected_concurrency = files.len().min(meta_fetch_concurrency);
         let head_concurrency_store = ensure_head_concurrency(store, expected_concurrency);
 
