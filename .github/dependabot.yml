@@ -65,6 +65,7 @@ updates:
   - package-ecosystem: "rust-toolchain"
     directory: "/"
     schedule:
+      interval: "weekly"
       day: "friday"
     target-branch: main
   - package-ecosystem: "github-actions"
