@@ -429,7 +429,7 @@ impl DisplayAs for JsonSink {
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: json")?;
-                write!(f, "file={}", &self.config.original_url)
+                write!(f, "file={}", self.config.original_url)
             }
         }
     }
