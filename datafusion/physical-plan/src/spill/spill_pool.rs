@@ -95,8 +95,6 @@ impl SpillPoolShared {
 ///
 /// Created by [`mspc_channel`]. See that function for architecture diagrams and usage
 /// examples.
-///
-/// This writer is `Clone`, allowing multiple producers to coordinate on the same pool.
 pub struct SpillPoolWriter {
     /// The underlying shared writer. Kept private and never cloned, so this pool always has
     /// exactly one writer.
@@ -106,7 +104,11 @@ pub struct SpillPoolWriter {
 impl SpillPoolWriter {
     /// Spills a batch to the pool, rotating files when necessary.
     ///
-    /// See [`SpillPoolWriter::push_batch`] for the rotation semantics.
+    /// See [`mpsc_channel`] for the rotation semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if disk I/O fails or disk quota is exceeded.
     pub fn push_batch(&self, batch: &RecordBatch) -> Result<()> {
         self.inner.push_batch(batch)
     }
@@ -114,6 +116,10 @@ impl SpillPoolWriter {
 
 impl SpillPoolWriter {
     /// Returns a new sink that can be used to spill batches to the pool.
+    ///
+    /// As an alternative to this function, it is also possible to clone the writer. The benefit
+    /// of this method is that the output type matches the type used by [`spsc_channel`]. This
+    /// enables cost-free abstraction for producers over SPSC and MPSC channels.
     pub fn new_sink(&self) -> SpillPoolSink {
         // Increment `remaining_writer_count`. The corresponding decrement is done in the `Drop`
         // implementation of `SpillPoolWriter`.
@@ -675,7 +681,7 @@ pub struct SpillPoolReader {
 impl SpillPoolReader {
     /// Creates a new reader from shared pool state.
     ///
-    /// This is private - use the `channel()` function to create a reader/writer pair.
+    /// This is private - use the [`spsc_channel`] function to create a reader/writer pair.
     ///
     /// # Arguments
     ///
