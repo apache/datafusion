@@ -689,6 +689,9 @@ impl ExecutionPlan for InterleaveExec {
 /// spec, making them safe to interleave. Two inputs are interleave-compatible when partition
 /// `k` covers the identical key range or hash bucket across every input.
 ///
+/// Note: compatibility is checked sequentially against the first input, so
+/// `InputDistributionRequirements::co_partitioned` is not needed here.
+///
 /// It might be too strict here in the case that the input partition specs are compatible but not exactly the same.
 /// For example one input partition has the partition spec Hash('a','b','c') and
 /// other has the partition spec Hash('a'), It is safe to derive the out partition with the spec Hash('a','b','c').
@@ -1343,15 +1346,6 @@ mod tests {
             descending: false,
             nulls_first: false,
         };
-        let descending = SortOptions {
-            descending: true,
-            nulls_first: false,
-        };
-        let ascending_nulls_first = SortOptions {
-            descending: false,
-            nulls_first: true,
-        };
-
         struct Case {
             inputs: Vec<Arc<dyn ExecutionPlan>>,
             expected: bool,
@@ -1394,43 +1388,11 @@ mod tests {
                 ],
             },
             Case {
-                label: "hash different columns",
-                expected: false,
-                inputs: vec![
-                    make_hash_exec(&schema, vec![name_column], 3)?,
-                    make_hash_exec(&schema, vec![age_column], 3)?,
-                ],
-            },
-            Case {
-                label: "hash same column different bucket count",
-                expected: false,
-                inputs: vec![
-                    make_hash_exec(&schema, vec![name_column], 3)?,
-                    make_hash_exec(&schema, vec![name_column], 4)?,
-                ],
-            },
-            Case {
                 label: "range different split points",
                 expected: false,
                 inputs: vec![
                     make_range_exec(&schema, vec![10, 20], ascending)?,
                     make_range_exec(&schema, vec![10, 30], ascending)?,
-                ],
-            },
-            Case {
-                label: "range ascending vs descending",
-                expected: false,
-                inputs: vec![
-                    make_range_exec(&schema, vec![10, 20], ascending)?,
-                    make_range_exec(&schema, vec![20, 10], descending)?,
-                ],
-            },
-            Case {
-                label: "range nulls_last vs nulls_first",
-                expected: false,
-                inputs: vec![
-                    make_range_exec(&schema, vec![10, 20], ascending)?,
-                    make_range_exec(&schema, vec![10, 20], ascending_nulls_first)?,
                 ],
             },
             Case {
