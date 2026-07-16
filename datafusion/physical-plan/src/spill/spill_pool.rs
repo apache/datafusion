@@ -314,7 +314,7 @@ impl SpillPoolSink {
 /// │  Writer Side              Shared State              Reader Side         │
 /// │  ───────────              ────────────              ───────────         │
 /// │                                                                         │
-/// │  SpillPoolWriter    ┌────────────────────┐    SpillPoolReader           │
+/// │  SpillPoolSink      ┌────────────────────┐    RecordBatchStream         │
 /// │       │             │  VecDeque<File>    │          │                   │
 /// │       │             │  ┌────┐┌────┐      │          │                   │
 /// │  push_batch()       │  │ F1 ││ F2 │ ...  │      next().await            │
@@ -376,7 +376,7 @@ impl SpillPoolSink {
 ///
 /// # Returns
 ///
-/// A tuple of `(SpillPoolWriter, SendableRecordBatchStream)` that share the same
+/// A tuple of `(SpillPoolSink, SendableRecordBatchStream)` that share the same
 /// underlying pool. The reader is returned as a stream for immediate use with
 /// async stream combinators.
 ///
@@ -503,7 +503,7 @@ pub fn channel(
 ///
 /// # Returns
 ///
-/// A tuple of `(SharedSpillPoolWriter, SendableRecordBatchStream)` that share the same
+/// A tuple of `(SpillPoolWriter, SendableRecordBatchStream)` that share the same
 /// underlying pool. The reader is returned as a stream for immediate use with
 /// async stream combinators. The writer can be cloned to create additional writers.
 pub fn mpsc_channel(
@@ -1470,7 +1470,7 @@ mod tests {
 
     /// Verifies that the reader stays alive as long as any writer clone exists.
     ///
-    /// `SharedSpillPoolWriter` is `Clone`, and in non-preserve-order repartitioning
+    /// `SpillPoolWriter` is `Clone`, and in non-preserve-order repartitioning
     /// mode multiple input partition tasks share clones of the same writer.
     /// The reader must not see EOF until **all** clones have been dropped,
     /// even if the queue is temporarily empty between writes from different
