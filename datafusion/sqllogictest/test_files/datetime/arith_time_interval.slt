@@ -26,31 +26,65 @@ SELECT interval '3 hours' + '22:00'::time
 ----
 01:00:00
 
+# The result keeps the input time's unit, mirroring `timestamp + interval`, rather
+# than widening to Time64(ns).
 query D
 SELECT arrow_cast('22:00', 'Time32(Second)') + interval '3 hours'
 ----
 01:00:00
 
-# Regardless of the input time unit, the result is normalized to Time64(ns).
 query T
 SELECT arrow_typeof(arrow_cast('22:00', 'Time32(Second)') + interval '3 hours')
 ----
-Time64(ns)
+Time32(s)
 
 query D
 SELECT arrow_cast('22:00', 'Time32(Millisecond)') + interval '3 hours'
 ----
 01:00:00
 
+query T
+SELECT arrow_typeof(arrow_cast('22:00', 'Time32(Millisecond)') + interval '3 hours')
+----
+Time32(ms)
+
 query D
 SELECT arrow_cast('22:00', 'Time64(Microsecond)') + interval '3 hours'
 ----
 01:00:00
 
+query T
+SELECT arrow_typeof(arrow_cast('22:00', 'Time64(Microsecond)') + interval '3 hours')
+----
+Time64(µs)
+
 query D
 SELECT arrow_cast('22:00', 'Time64(Nanosecond)') + interval '3 hours'
 ----
 01:00:00
+
+query T
+SELECT arrow_typeof(arrow_cast('22:00', 'Time64(Nanosecond)') + interval '3 hours')
+----
+Time64(ns)
+
+# Interval precision finer than the time's unit is truncated, exactly as for
+# `timestamp(unit) + interval`: adding one nanosecond to a second-resolution time is a
+# no-op, while a finer-resolution time keeps it.
+query D
+SELECT arrow_cast('22:00', 'Time32(Second)') + interval '1 nanosecond'
+----
+22:00:00
+
+query D
+SELECT arrow_cast('12:00:00', 'Time32(Millisecond)') + interval '1 microsecond'
+----
+12:00:00
+
+query D
+SELECT arrow_cast('12:00:00', 'Time64(Microsecond)') + interval '1 microsecond'
+----
+12:00:00.000001
 
 # Whole days and months in the interval do not affect a time-of-day (PostgreSQL).
 query D

@@ -270,17 +270,25 @@ impl<'a> BinaryTypeCoercer<'a> {
         Plus | Minus if is_time_interval_arithmetic(lhs, rhs, self.op) => {
             // `time ± interval` yields a `time` wrapped within the 24-hour clock,
             // matching PostgreSQL and DuckDB (e.g. `time '23:30' + interval '2 hours'`
-            // is `01:30:00`). Both operands are normalized so the physical layer needs
-            // no casting: the time side to `Time64(Nanosecond)` and the interval side
-            // to `MonthDayNano`. The result is that wrapped `Time64(Nanosecond)`.
+            // is `01:30:00`). The interval is normalized to `MonthDayNano`; the time
+            // operand keeps its own unit and is also the result type -- mirroring
+            // `timestamp/date + interval`, which preserve their unit and apply the
+            // interval at that resolution. So, like `timestamp(s) + interval
+            // '1 nanosecond'`, `time(s) + interval '1 nanosecond'` is a no-op rather
+            // than widening the type.
+            let time = if let Interval(_) = lhs {
+                rhs.clone()
+            } else {
+                lhs.clone()
+            };
             let (lhs, rhs) = match (lhs, rhs) {
-                (Interval(_), _) => (Interval(MonthDayNano), Time64(Nanosecond)),
-                (_, _) => (Time64(Nanosecond), Interval(MonthDayNano)),
+                (Interval(_), _) => (Interval(MonthDayNano), time.clone()),
+                (_, _) => (time.clone(), Interval(MonthDayNano)),
             };
             return Ok(Signature {
                 lhs,
                 rhs,
-                ret: Time64(Nanosecond),
+                ret: time,
             });
         }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
