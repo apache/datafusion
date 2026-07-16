@@ -93,7 +93,7 @@ impl SpillPoolShared {
 
 /// Writer for a spill pool that can be cloned to produce additional writers.
 ///
-/// Created by [`mspc_channel`]. See that function for architecture diagrams and usage
+/// Created by [`mpsc_channel`]. See that function for architecture diagrams and usage
 /// examples.
 pub struct SpillPoolWriter {
     /// The underlying shared writer. Kept private and never cloned, so this pool always has
@@ -290,7 +290,7 @@ impl SpillPoolSink {
 /// Creates a paired writer and reader for a spill pool with SPSC (single-producer,
 /// single-consumer) semantics and strict FIFO ordering.
 ///
-/// If you need a spill pool that supports several producers, use [`mspc_channel`] instead.
+/// If you need a spill pool that supports several producers, use [`mpsc_channel`] instead.
 ///
 /// The reader can start reading immediately after the writer appends a batch
 /// to the spill file, without waiting for the file to be sealed, while the writer continues to
