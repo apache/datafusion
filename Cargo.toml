@@ -89,30 +89,30 @@ version = "54.0.0"
 #
 # See for more details: https://github.com/rust-lang/cargo/issues/11329
 apache-avro = { version = "0.21", default-features = false }
-arrow = { version = "59.0.0", features = [
+arrow = { version = "59.1.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-avro = { version = "59.0.0", default-features = false, features = [
+arrow-avro = { version = "59.1.0", default-features = false, features = [
     "deflate",
     "snappy",
     "zstd",
     "bzip2",
     "xz",
 ] }
-arrow-buffer = { version = "59.0.0", default-features = false }
-arrow-data = { version = "59.0.0", default-features = false }
-arrow-flight = { version = "59.0.0", features = [
+arrow-buffer = { version = "59.1.0", default-features = false }
+arrow-data = { version = "59.1.0", default-features = false }
+arrow-flight = { version = "59.1.0", features = [
     "flight-sql-experimental",
 ] }
 # Both codecs are required here to make sure that code paths like
 # file-spilling have access to all compression codecs.
-arrow-ipc = { version = "59.0.0", default-features = false, features = [
+arrow-ipc = { version = "59.1.0", default-features = false, features = [
     "lz4",
     "zstd",
 ] }
-arrow-ord = { version = "59.0.0", default-features = false }
-arrow-schema = { version = "59.0.0", default-features = false }
+arrow-ord = { version = "59.1.0", default-features = false }
+arrow-schema = { version = "59.1.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
@@ -151,7 +151,7 @@ datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", 
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "54.0.0", default-features = false }
 datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "54.0.0" }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "54.0.0" }
-datafusion-proto = { path = "datafusion/proto", version = "54.0.0" }
+datafusion-proto = { path = "datafusion/proto", version = "54.0.0", default-features = false }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "54.0.0" }
 datafusion-proto-models = { path = "datafusion/proto-models", version = "54.0.0" }
 datafusion-pruning = { path = "datafusion/pruning", version = "54.0.0" }
@@ -178,14 +178,16 @@ memchr = "2.8.1"
 num-traits = { version = "0.2" }
 object_store = { version = "0.13.2", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "59.0.0", default-features = false, features = [
+parquet = { version = "59.1.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
 ] }
 pbjson = { version = "0.9.0" }
 pbjson-types = "0.9"
+percent-encoding = "2.3"
 pin-project = "1"
+pin-project-lite = "^0.2.7"
 # Should match arrow-flight's version of prost.
 prost = "0.14.1"
 rand = "0.9"
@@ -224,8 +226,8 @@ assigning_clones = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(datafusion_coop, values("tokio", "tokio_fallback", "per_stream"))',
-    "cfg(tarpaulin)",
-    "cfg(tarpaulin_include)",
+    "cfg(coverage)",
+    "cfg(coverage_nightly)",
 ] }
 unused_qualifications = "deny"
 

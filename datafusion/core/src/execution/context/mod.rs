@@ -167,7 +167,7 @@ where
 /// * Create a [`DataFrame`] from a CSV or Parquet data source.
 /// * Register a CSV or Parquet data source as a table that can be referenced from a SQL query.
 /// * Register a custom data source that can be referenced from a SQL query.
-/// * Execution a SQL query
+/// * Execute a SQL query
 ///
 /// # Example: DataFrame API
 ///
@@ -2564,7 +2564,7 @@ mod tests {
         let ctx = SessionContext::new_with_state(session_state).enable_url_table();
         let result = plan_and_collect(
             &ctx,
-            format!("select c_name from '{}' limit 3;", &url).as_str(),
+            format!("select c_name from '{url}' limit 3;").as_str(),
         )
         .await?;
 

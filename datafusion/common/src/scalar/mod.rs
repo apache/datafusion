@@ -5265,7 +5265,8 @@ impl ScalarValue {
 /// as necessary.
 pub fn copy_array_data(src_data: &ArrayData) -> ArrayData {
     let mut copy = MutableArrayData::new(vec![&src_data], true, src_data.len());
-    copy.extend(0, 0, src_data.len());
+    copy.try_extend(0, 0, src_data.len())
+        .expect("copy_array_data failed due to offset overflow");
     copy.freeze()
 }
 
@@ -11458,5 +11459,15 @@ mod tests {
         let keys = arr.entries().column(0).as_string_view();
         assert_eq!(utf8view_buffer_bytes(keys), one_len);
         assert_eq!(keys.value(0), strings.value(0));
+    }
+
+    #[test]
+    fn test_zero_size_fsl() {
+        let s = ScalarValue::new_default(&DataType::FixedSizeList(
+            Field::new("a", DataType::Int32, true).into(),
+            0,
+        ))
+        .unwrap();
+        assert_eq!(s.to_string(), "[]");
     }
 }

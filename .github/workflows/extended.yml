@@ -63,7 +63,7 @@ jobs:
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -71,15 +71,16 @@ jobs:
           fetch-depth: 1
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source $HOME/.cargo/env
-          rustup toolchain install
-      - name: Install Protobuf Compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+      - parallel:
+          - name: Install Rust
+            run: |
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+              source $HOME/.cargo/env
+              rustup toolchain install
+          - name: Install Protobuf Compiler
+            run: |
+              sudo apt-get update
+              sudo apt-get install -y protobuf-compiler
       # For debugging, test binaries can be large.
       - name: Show available disk space
         run: |
@@ -98,10 +99,11 @@ jobs:
             --tests \
             --bins \
             --features avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption
-      - name: Verify Working Directory Clean
-        run: git diff --exit-code
-      - name: Cleanup
-        run: cargo clean
+      - parallel:
+          - name: Verify Working Directory Clean
+            run: git diff --exit-code
+          - name: Cleanup
+            run: cargo clean
 
   # Check answers are correct when hash values collide
   hash-collisions:
@@ -110,7 +112,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -132,16 +134,17 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-        with:
-          ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
-          submodules: true
-          fetch-depth: 1
-      # Don't use setup-builder to avoid configuring RUST_BACKTRACE which is expensive
-      - name: Install protobuf compiler
-        run: |
-          apt-get update && apt-get install -y protobuf-compiler
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - parallel:
+          - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+            with:
+              ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
+              submodules: true
+              fetch-depth: 1
+          # Don't use setup-builder to avoid configuring RUST_BACKTRACE which is expensive
+          - name: Install protobuf compiler
+            run: |
+              apt-get update && apt-get install -y protobuf-compiler
       - name: Run sqllogictest
         run: |
           cargo test --features backtrace,parquet_encryption --profile ci-optimized --test sqllogictests -- --include-sqlite

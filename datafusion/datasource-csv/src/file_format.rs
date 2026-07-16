@@ -393,7 +393,7 @@ impl FileFormat for CsvFormat {
                 .await
                 .map_err(|err| {
                     DataFusionError::Context(
-                        format!("Error when processing CSV file {}", &object.location),
+                        format!("Error when processing CSV file {}", object.location),
                         Box::new(err),
                     )
                 })?;
@@ -759,7 +759,7 @@ impl DisplayAs for CsvSink {
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: csv")?;
-                write!(f, "file={}", &self.config.original_url)
+                write!(f, "file={}", self.config.original_url)
             }
         }
     }

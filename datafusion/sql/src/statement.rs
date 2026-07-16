@@ -278,7 +278,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 statement,
                 analyze,
                 format,
-                describe_alias: _,
                 ..
             } => {
                 let format = format
