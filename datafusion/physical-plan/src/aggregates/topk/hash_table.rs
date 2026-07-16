@@ -145,8 +145,8 @@ where
 }
 
 impl StringHashTable {
-    pub fn new(limit: usize, data_type: DataType) -> Self {
-        let owned = StringArrayType::try_from(&data_type).expect("Unsupported data type");
+    pub fn new(limit: usize, data_type: &DataType) -> Self {
+        let owned = StringArrayType::try_from(data_type).expect("Unsupported data type");
         Self {
             owned,
             map: TopKHashTable::new(limit, limit * 10),
@@ -185,12 +185,12 @@ impl ArrowHashTable for StringHashTable {
         let id = self.owned.value(row_idx);
 
         // Compute hash and create equality closure for hash table lookup.
-        let hash = self.rnd.hash_one(id.as_deref());
-        let id_for_eq = id.clone();
-        let eq = move |mi: &Option<String>| id_for_eq.as_deref() == mi.as_deref();
+        let hash = self.rnd.hash_one(id);
+        let eq = move |mi: &Option<String>| id == mi.as_deref();
 
         // Use entry API to avoid double lookup
-        self.map.find_or_insert(hash, id.map(ToOwned::to_owned), replace_idx, eq)
+        self.map
+            .find_or_insert(hash, id.map(ToOwned::to_owned), replace_idx, eq)
     }
 }
 
@@ -408,9 +408,9 @@ pub fn new_hash_table(
 
     downcast_primitive! {
         kt => (downcast_helper, kt),
-        DataType::Utf8 => return Ok(Box::new(StringHashTable::new(limit, DataType::Utf8))),
-        DataType::LargeUtf8 => return Ok(Box::new(StringHashTable::new(limit, DataType::LargeUtf8))),
-        DataType::Utf8View => return Ok(Box::new(StringHashTable::new(limit, DataType::Utf8View))),
+        DataType::Utf8 => return Ok(Box::new(StringHashTable::new(limit, &DataType::Utf8))),
+        DataType::LargeUtf8 => return Ok(Box::new(StringHashTable::new(limit, &DataType::LargeUtf8))),
+        DataType::Utf8View => return Ok(Box::new(StringHashTable::new(limit, &DataType::Utf8View))),
         _ => {}
     }
 
