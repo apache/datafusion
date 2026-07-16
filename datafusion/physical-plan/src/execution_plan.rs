@@ -827,7 +827,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// Serialize this plan to its protobuf representation, if it knows how.
     ///
     /// This is the `ExecutionPlan` analog of
-    /// [`PhysicalExpr::try_to_proto`](datafusion_physical_expr_common::physical_expr::PhysicalExpr::try_to_proto).
+    /// [`PhysicalExpr::try_to_proto`].
     ///
     /// * `Ok(None)` (the default) — "I don't serialize myself"; the caller
     ///   (`datafusion-proto`) falls back to the central downcast chain. Every

@@ -303,6 +303,35 @@ fn serialize_uses_downcast_delegate() -> Result<()> {
     Ok(())
 }
 
+/// A wrapper delegating to a plan that serializes itself via the
+/// `try_to_proto` hook must serialize as its delegate: the wrapper's default
+/// hook returns `Ok(None)` and the delegate has no downcast-chain fallback.
+#[test]
+fn serialize_uses_downcast_delegate_for_self_serializing_plan() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
+    let inner: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: col("a", &schema)?,
+            alias: "a".to_string(),
+        }],
+        input,
+    )?);
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(DowncastDelegatingExec::new(inner));
+    let codec = DefaultPhysicalExtensionCodec {};
+
+    let proto = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+
+    assert!(matches!(
+        proto.physical_plan_type,
+        Some(protobuf::physical_plan_node::PhysicalPlanType::Projection(
+            _
+        ))
+    ));
+
+    Ok(())
+}
+
 #[test]
 fn roundtrip_date_time_interval() -> Result<()> {
     let schema = Schema::new(vec![

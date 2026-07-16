@@ -129,7 +129,8 @@ pub trait ExecutionPlanDecode {
     fn decode_udwf(&self, name: &str, payload: Option<&[u8]>) -> Result<Arc<WindowUDF>>;
 }
 
-/// Context handed to [`ExecutionPlan::try_to_proto`](crate::ExecutionPlan::try_to_proto).
+/// Context handed to [`ExecutionPlan::try_to_proto`].
+///
 ///
 /// Provides the primitives a plan needs to serialize its children and
 /// expressions without naming `datafusion-proto`.

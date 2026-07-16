@@ -454,7 +454,15 @@ pub trait PhysicalPlanNodeExt: Sized {
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
         let plan_clone = Arc::clone(&plan);
-        let plan = plan.as_ref();
+        let mut plan = plan.as_ref();
+        // Resolve the downcast identity first so wrapper plans serialize as
+        // their delegate, matching how the `downcast_ref` chain below sees
+        // them. Without this a wrapper around a migrated plan would hit the
+        // wrapper's default `try_to_proto` (`Ok(None)`) and find no fallback
+        // arm for the delegate.
+        while let Some(delegate) = plan.downcast_delegate() {
+            plan = delegate;
+        }
 
         // Self-serializing plans handle themselves via the `try_to_proto` hook
         // (#22419). `Ok(None)` means "not migrated" and falls through to the
