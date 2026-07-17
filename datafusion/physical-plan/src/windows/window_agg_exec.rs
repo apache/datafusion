@@ -361,6 +361,8 @@ impl ExecutionPlan for WindowAggExec {
 /// `Some` => `BoundedWindowAggExec`). This one associated function therefore
 /// owns the decode for *both* plans and the central dispatch routes the `Window`
 /// arm here.
+///
+/// [`BoundedWindowAggExec`]: crate::windows::BoundedWindowAggExec
 #[cfg(feature = "proto")]
 impl WindowAggExec {
     pub fn try_from_proto(
@@ -427,6 +429,8 @@ impl WindowAggExec {
 /// Shared by [`WindowAggExec`] and [`BoundedWindowAggExec`]. UD(A)Fs used as
 /// window functions are encoded to opaque bytes through the ctx
 /// (`encode_udaf`/`encode_udwf`); the extension codec never leaks here.
+///
+/// [`BoundedWindowAggExec`]: crate::windows::BoundedWindowAggExec
 #[cfg(feature = "proto")]
 pub(crate) fn encode_physical_window_expr(
     window_expr: &Arc<dyn WindowExpr>,

@@ -32,6 +32,9 @@
 //! (and the shared scan helpers). The sink's optional required-ordering *does*
 //! carry exprs, so [`parse_sink_sort_order`] rides the decode ctx (the encode
 //! side lives in `DataSinkExec::try_to_proto`).
+//!
+//! [`ExecutionPlanEncodeCtx`]: datafusion_physical_plan::proto::ExecutionPlanEncodeCtx
+//! [`ExecutionPlanDecodeCtx`]: datafusion_physical_plan::proto::ExecutionPlanDecodeCtx
 
 use std::sync::Arc;
 

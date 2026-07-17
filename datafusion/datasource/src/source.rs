@@ -269,11 +269,11 @@ pub trait DataSource: Any + Send + Sync + Debug {
     /// `DataSourceExec` wrapping this source), if it knows how.
     ///
     /// This is the `DataSource` analog of
-    /// [`ExecutionPlan::try_to_proto`](datafusion_physical_plan::ExecutionPlan::try_to_proto).
+    /// [`ExecutionPlan::try_to_proto`].
     /// [`DataSourceExec::try_to_proto`](crate::source::DataSourceExec) delegates
     /// to this hook, which for file scans forwards to
-    /// [`FileSource::try_to_proto`](crate::file::FileSource::try_to_proto)
-    /// through the shared [`FileScanConfig`](crate::file_scan_config::FileScanConfig)
+    /// [`FileSource::try_to_proto`]
+    /// through the shared [`FileScanConfig`]
     /// spine.
     ///
     /// * `Ok(None)` (the default) — "I don't serialize myself"; the caller falls
@@ -579,7 +579,7 @@ impl ExecutionPlan for DataSourceExec {
     }
 
     /// Delegates serialization to the wrapped [`DataSource`]. For file scans the
-    /// concrete [`FileSource`](crate::file::FileSource) emits the node via its
+    /// concrete [`FileSource`] emits the node via its
     /// own `try_to_proto` hook, keeping the format-specific wire logic in the
     /// format crate.
     #[cfg(feature = "proto")]

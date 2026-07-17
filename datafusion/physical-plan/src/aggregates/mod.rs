@@ -2391,6 +2391,8 @@ impl AggregateExec {
     /// (which owns the payload → codec / registry → codec lookup-order policy),
     /// then reassembled with [`AggregateExprBuilder`].
     ///
+    /// [`AggregateExprBuilder`]: datafusion_physical_expr::aggregate::AggregateExprBuilder
+    ///
     /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,

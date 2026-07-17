@@ -1175,7 +1175,7 @@ impl DataSource for FileScanConfig {
     }
 
     /// Serialize this file scan by delegating to the concrete
-    /// [`FileSource`](crate::file::FileSource)'s
+    /// [`FileSource`]'s
     /// [`try_to_proto`](crate::file::FileSource::try_to_proto) hook, passing
     /// `self` as the shared spine it needs to emit the base config.
     #[cfg(feature = "proto")]

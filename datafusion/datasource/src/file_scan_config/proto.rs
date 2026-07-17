@@ -31,6 +31,9 @@
 //! projection expressions) are (de)serialized through `ctx.encode_expr` /
 //! `ctx.decode_expr`; `Schema`, `Statistics`, `Constraints`, and `ScalarValue`
 //! go through `datafusion-proto-common`. Nothing here needs the raw codec.
+//!
+//! [`ExecutionPlanEncodeCtx`]: datafusion_physical_plan::proto::ExecutionPlanEncodeCtx
+//! [`ExecutionPlanDecodeCtx`]: datafusion_physical_plan::proto::ExecutionPlanDecodeCtx
 
 use std::sync::Arc;
 
@@ -60,7 +63,7 @@ impl FileScanConfig {
     /// Serialize the shared, format-agnostic part of a file scan into a
     /// [`protobuf::FileScanExecConf`].
     ///
-    /// Each concrete [`FileSource::try_to_proto`](crate::file::FileSource::try_to_proto)
+    /// Each concrete [`FileSource::try_to_proto`]
     /// wraps the returned value in its own `*ScanExecNode`. Byte-compatible with
     /// the former `serialize_file_scan_config` in `datafusion-proto`.
     pub fn to_proto_conf(
@@ -248,15 +251,14 @@ impl FileScanConfig {
             file_source
         };
 
-        let config_builder =
-            FileScanConfigBuilder::new(object_store_url, file_source)
-                .with_file_groups(file_groups)
-                .with_constraints(constraints)
-                .with_statistics(statistics)
-                .with_limit(conf.limit.as_ref().map(|sl| sl.limit as usize))
-                .with_output_ordering(output_ordering)
-                .with_output_partitioning(output_partitioning)
-                .with_batch_size(conf.batch_size.map(|s| s as usize));
+        let config_builder = FileScanConfigBuilder::new(object_store_url, file_source)
+            .with_file_groups(file_groups)
+            .with_constraints(constraints)
+            .with_statistics(statistics)
+            .with_limit(conf.limit.as_ref().map(|sl| sl.limit as usize))
+            .with_output_ordering(output_ordering)
+            .with_output_partitioning(output_partitioning)
+            .with_batch_size(conf.batch_size.map(|s| s as usize));
         Ok(config_builder.build())
     }
 
