@@ -358,7 +358,6 @@ required-features = ["regex_expressions"]
 [[bench]]
 harness = false
 name = "get_field"
-required-features = ["field_expressions"]
 
 [[bench]]
 harness = false
