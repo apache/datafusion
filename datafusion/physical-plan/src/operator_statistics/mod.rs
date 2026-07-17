@@ -55,7 +55,8 @@
 //! chain is consulted before falling back to the operator's built-in
 //! [`ExecutionPlan::statistics_from_inputs`], with children already resolved by
 //! that same walk. The first provider that returns a computed result sets the
-//! node's statistics.
+//! node's statistics. The walk carries [`ExtendedStatistics`]; see
+//! [`StatisticsContext`] for how a provider's extensions propagate.
 //!
 //! [`StatisticsContext`]: crate::statistics::StatisticsContext
 //!
@@ -71,7 +72,8 @@
 //! registry.register(Arc::new(MyHistogramProvider));
 //!
 //! // Compute statistics through the chain
-//! let stats = registry.compute(plan.as_ref())?;
+//! let stats = StatisticsContext::new_with_registry(registry)
+//!     .compute_extended(plan.as_ref(), &StatisticsArgs::new())?;
 //! ```
 
 use std::fmt::{self, Debug};
@@ -164,6 +166,19 @@ impl ExtendedStatistics {
     /// Merge extensions from another ExtendedStatistics (other's extensions take precedence).
     pub fn merge_extensions(&mut self, other: &ExtendedStatistics) {
         self.extensions.merge(&other.extensions);
+    }
+
+    /// Create from base statistics plus an existing extension map.
+    pub(crate) fn new_with_extensions(
+        base: Arc<Statistics>,
+        extensions: Extensions,
+    ) -> Self {
+        Self { base, extensions }
+    }
+
+    /// Returns the extension map.
+    pub(crate) fn extensions(&self) -> &Extensions {
+        &self.extensions
     }
 }
 
@@ -373,19 +388,36 @@ impl StatisticsRegistry {
     /// Compute extended statistics for `plan` through the provider chain.
     ///
     /// Thin wrapper over the single [`StatisticsContext`] walk (the same path the
-    /// optimizer and EXPLAIN use), so there is one traversal implementation. The
-    /// walk carries base [`Statistics`] only; extensions are not propagated.
+    /// optimizer and EXPLAIN use), so there is one traversal implementation.
+    /// Provider extensions are preserved; see [`StatisticsContext`] for how they
+    /// propagate up the tree.
+    ///
+    /// Children are resolved via [`ExecutionPlan::child_stats_requests`] (default
+    /// `Skip`), so a custom operator whose provider reads `child_stats` must
+    /// declare `At` for those children to receive their computed statistics.
+    #[deprecated(
+        since = "55.0.0",
+        note = "use `StatisticsContext::new_with_registry(registry).compute_extended(plan, &StatisticsArgs::new())`"
+    )]
     pub fn compute(&self, plan: &dyn ExecutionPlan) -> Result<ExtendedStatistics> {
-        let base = StatisticsContext::new_with_registry(self.clone())
-            .compute(plan, &StatisticsArgs::new())?;
-        Ok(ExtendedStatistics::new_arc(base))
+        Ok(StatisticsContext::new_with_registry(self.clone())
+            .compute_extended(plan, &StatisticsArgs::new())?
+            .as_ref()
+            .clone())
     }
 
     /// Compute statistics and return only the base Statistics (no extensions).
     ///
     /// Convenience method for callers that don't need extensions.
+    #[deprecated(
+        since = "55.0.0",
+        note = "use `StatisticsContext::new_with_registry(registry).compute(plan, &StatisticsArgs::new())`"
+    )]
     pub fn compute_base(&self, plan: &dyn ExecutionPlan) -> Result<Statistics> {
-        Ok(self.compute(plan)?.base().clone())
+        Ok(StatisticsContext::new_with_registry(self.clone())
+            .compute(plan, &StatisticsArgs::new())?
+            .as_ref()
+            .clone())
     }
 }
 
@@ -1022,7 +1054,7 @@ mod tests {
     use super::*;
     use crate::filter::FilterExec;
     use crate::projection::ProjectionExec;
-    use crate::statistics::StatisticsArgs;
+    use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::{DisplayAs, DisplayFormatType, PlanProperties};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::stats::Precision;
@@ -1034,6 +1066,17 @@ mod tests {
     use std::fmt;
 
     use crate::execution_plan::{Boundedness, EmissionType};
+
+    /// Compute statistics via [`StatisticsContext`] (replaces the deprecated
+    /// `compute`/`compute_base`).
+    fn compute(
+        registry: &StatisticsRegistry,
+        plan: &dyn ExecutionPlan,
+    ) -> Result<ExtendedStatistics> {
+        Ok((*StatisticsContext::new_with_registry(registry.clone())
+            .compute_extended(plan, &StatisticsArgs::new())?)
+        .clone())
+    }
 
     fn make_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![
@@ -1142,8 +1185,27 @@ mod tests {
         let engine = StatisticsRegistry::new();
         let source = make_source(1000);
 
-        let stats = engine.compute(source.as_ref())?;
+        let stats = compute(&engine, source.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Exact(1000)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_compute_preserves_provider_extensions() -> Result<()> {
+        #[derive(Debug, Clone, PartialEq)]
+        struct Sketch(u32);
+
+        let source = make_source(1000);
+        let provider = ClosureStatisticsProvider::new(|plan, _child_stats| {
+            let mut ext =
+                ExtendedStatistics::new(Statistics::new_unknown(&plan.schema()));
+            ext.set_extension(Sketch(42));
+            Ok(StatisticsResult::Computed(ext))
+        });
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(provider)]);
+
+        let stats = compute(&registry, source.as_ref())?;
+        assert_eq!(stats.get_extension::<Sketch>(), Some(&Sketch(42)));
         Ok(())
     }
 
@@ -1158,7 +1220,7 @@ mod tests {
         // With no provider handling FilterExec, it returns the built-in fallback statistics
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(lit(true), Arc::clone(&source))?);
-        let stats = custom_only.compute(filter.as_ref())?;
+        let stats = compute(&custom_only, filter.as_ref())?;
         // Falls back to plan.statistics() since no provider handles it
         assert!(stats.base.num_rows.get_value().is_some());
 
@@ -1169,7 +1231,7 @@ mod tests {
             })
                 as Arc<dyn StatisticsProvider>]);
         // OverrideFilterProvider handles filters, built-in fallback handles the rest
-        let stats = with_override.compute(filter.as_ref())?;
+        let stats = compute(&with_override, filter.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Inexact(250)));
 
         // Verify chain inspection
@@ -1256,7 +1318,7 @@ mod tests {
         let source = make_source(1000);
         let custom: Arc<dyn ExecutionPlan> = Arc::new(CustomExec { input: source });
 
-        let stats = engine.compute(custom.as_ref())?;
+        let stats = compute(&engine, custom.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Exact(1000)));
         Ok(())
     }
@@ -1305,7 +1367,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(lit(true), source)?);
 
-        let stats = engine.compute(filter.as_ref())?;
+        let stats = compute(&engine, filter.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Inexact(100)));
         Ok(())
     }
@@ -1318,7 +1380,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, source)?);
 
-        let stats = engine.compute(filter.as_ref())?;
+        let stats = compute(&engine, filter.as_ref())?;
         assert!(stats.base.num_rows.get_value().unwrap_or(&0) <= &1000);
         Ok(())
     }
@@ -1368,7 +1430,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(FilterStatisticsProvider)]);
-        let stats = registry.compute(filter.as_ref())?;
+        let stats = compute(&registry, filter.as_ref())?;
 
         let output_ndv_a = stats.base.column_statistics[0]
             .distinct_count
@@ -1406,7 +1468,7 @@ mod tests {
             source,
         )?);
 
-        let stats = engine.compute(proj.as_ref())?;
+        let stats = compute(&engine, proj.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Exact(1000)));
         Ok(())
     }
@@ -1420,7 +1482,7 @@ mod tests {
         let coalesce: Arc<dyn ExecutionPlan> =
             Arc::new(CoalescePartitionsExec::new(source));
 
-        let stats = engine.compute(coalesce.as_ref())?;
+        let stats = compute(&engine, coalesce.as_ref())?;
         // PassthroughStatisticsProvider should propagate child row count unchanged
         assert_eq!(stats.base.num_rows, Precision::Exact(1000));
         Ok(())
@@ -1440,13 +1502,13 @@ mod tests {
         let custom: Arc<dyn ExecutionPlan> = Arc::new(CustomExec {
             input: Arc::clone(&source),
         });
-        let stats = engine.compute(custom.as_ref())?;
+        let stats = compute(&engine, custom.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Exact(1000)));
 
         // FilterExec: CustomStatisticsProvider delegates, OverrideFilterProvider handles
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(lit(true), source)?);
-        let stats = engine.compute(filter.as_ref())?;
+        let stats = compute(&engine, filter.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Inexact(500)));
 
         Ok(())
@@ -1557,7 +1619,7 @@ mod tests {
         let registry = StatisticsRegistry::with_providers(vec![Arc::new(
             AggregateStatisticsProvider,
         )]);
-        let stats = registry.compute(agg.as_ref())?;
+        let stats = compute(&registry, agg.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(10));
         Ok(())
     }
@@ -1574,7 +1636,7 @@ mod tests {
         let registry = StatisticsRegistry::with_providers(vec![Arc::new(
             AggregateStatisticsProvider,
         )]);
-        let stats = registry.compute(agg.as_ref())?;
+        let stats = compute(&registry, agg.as_ref())?;
         // 10 * 5 = 50
         assert_eq!(stats.base.num_rows, Precision::Inexact(50));
         Ok(())
@@ -1593,7 +1655,7 @@ mod tests {
         let registry = StatisticsRegistry::with_providers(vec![Arc::new(
             AggregateStatisticsProvider,
         )]);
-        let stats = registry.compute(agg.as_ref())?;
+        let stats = compute(&registry, agg.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(500));
         Ok(())
     }
@@ -1611,7 +1673,7 @@ mod tests {
         let registry = StatisticsRegistry::with_providers(vec![Arc::new(
             AggregateStatisticsProvider,
         )]);
-        let stats = registry.compute(agg.as_ref())?;
+        let stats = compute(&registry, agg.as_ref())?;
         // Delegates, falling back to the operator's built-in statistics_from_inputs
         assert!(
             stats.base.num_rows.get_value().is_some()
@@ -1635,7 +1697,7 @@ mod tests {
         let registry = StatisticsRegistry::with_providers(vec![Arc::new(
             AggregateStatisticsProvider,
         )]);
-        let stats = registry.compute(agg.as_ref())?;
+        let stats = compute(&registry, agg.as_ref())?;
         // Should delegate (expression is not a Column)
         assert!(
             stats.base.num_rows.get_value().is_some()
@@ -1675,7 +1737,7 @@ mod tests {
         let registry = StatisticsRegistry::with_providers(vec![Arc::new(
             AggregateStatisticsProvider,
         )]);
-        let stats = registry.compute(agg.as_ref())?;
+        let stats = compute(&registry, agg.as_ref())?;
         // Multiple grouping sets: provider delegates, so the operator's built-in
         // statistics_from_inputs computes the correct per-set
         // NDV estimation. The exact value depends on the built-in implementation.
@@ -1707,7 +1769,7 @@ mod tests {
         let registry = StatisticsRegistry::with_providers(vec![Arc::new(
             AggregateStatisticsProvider,
         )]);
-        let stats = registry.compute(agg.as_ref())?;
+        let stats = compute(&registry, agg.as_ref())?;
         // Should fall through to the operator's built-in statistics_from_inputs.
         // The exact value depends on the built-in implementation.
         assert!(
@@ -1778,7 +1840,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
-        let stats = registry.compute(join.as_ref())?;
+        let stats = compute(&registry, join.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(5000));
         Ok(())
     }
@@ -1830,7 +1892,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
-        let stats = registry.compute(join.as_ref())?;
+        let stats = compute(&registry, join.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(10_000));
         Ok(())
     }
@@ -1890,7 +1952,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
-        let stats = registry.compute(join.as_ref())?;
+        let stats = compute(&registry, join.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(250));
         Ok(())
     }
@@ -1904,7 +1966,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
-        let stats = registry.compute(join.as_ref())?;
+        let stats = compute(&registry, join.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(20_000));
         Ok(())
     }
@@ -1927,7 +1989,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
-        let stats = registry.compute(join.as_ref())?;
+        let stats = compute(&registry, join.as_ref())?;
         // Provider delegates; result comes from built-in statistics_from_inputs.
         assert!(
             stats.base.num_rows.get_value().is_some()
@@ -1970,7 +2032,7 @@ mod tests {
         let join = make_hash_join_typed(left, right, join_type)?;
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
-        Ok(registry.compute(join.as_ref())?.base.num_rows)
+        Ok(compute(&registry, join.as_ref())?.base.num_rows)
     }
 
     #[test]
@@ -2055,7 +2117,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
-        let stats = registry.compute(join.as_ref())?;
+        let stats = compute(&registry, join.as_ref())?;
         // Both inputs have Exact row counts -> result is also Exact
         assert_eq!(stats.base.num_rows, Precision::Exact(20_000));
         Ok(())
@@ -2075,7 +2137,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(LimitStatisticsProvider)]);
-        let stats = registry.compute(limit.as_ref())?;
+        let stats = compute(&registry, limit.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Exact(100));
         Ok(())
     }
@@ -2088,7 +2150,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(LimitStatisticsProvider)]);
-        let stats = registry.compute(limit.as_ref())?;
+        let stats = compute(&registry, limit.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Exact(50));
         Ok(())
     }
@@ -2102,7 +2164,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(LimitStatisticsProvider)]);
-        let stats = registry.compute(limit.as_ref())?;
+        let stats = compute(&registry, limit.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Exact(100));
         Ok(())
     }
@@ -2116,7 +2178,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(LimitStatisticsProvider)]);
-        let stats = registry.compute(limit.as_ref())?;
+        let stats = compute(&registry, limit.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Exact(0));
         Ok(())
     }
@@ -2130,7 +2192,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(LimitStatisticsProvider)]);
-        let stats = registry.compute(limit.as_ref())?;
+        let stats = compute(&registry, limit.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(100));
         Ok(())
     }
@@ -2151,7 +2213,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(UnionStatisticsProvider)]);
-        let stats = registry.compute(union.as_ref())?;
+        let stats = compute(&registry, union.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Exact(1000));
         Ok(())
     }
@@ -2166,7 +2228,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(UnionStatisticsProvider)]);
-        let stats = registry.compute(union.as_ref())?;
+        let stats = compute(&registry, union.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Exact(600));
         Ok(())
     }
@@ -2181,7 +2243,7 @@ mod tests {
 
         let registry =
             StatisticsRegistry::with_providers(vec![Arc::new(UnionStatisticsProvider)]);
-        let stats = registry.compute(union.as_ref())?;
+        let stats = compute(&registry, union.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Absent);
         Ok(())
     }
@@ -2212,7 +2274,7 @@ mod tests {
         let source = make_source(1000);
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(lit(true), source)?);
-        let stats = registry.compute(filter.as_ref())?;
+        let stats = compute(&registry, filter.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(42));
         Ok(())
     }
@@ -2253,8 +2315,8 @@ mod tests {
         let filter_b: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(lit(true), make_source(200))?);
 
-        let stats_a = registry.compute(filter_a.as_ref())?;
-        let stats_b = registry.compute(filter_b.as_ref())?;
+        let stats_a = compute(&registry, filter_a.as_ref())?;
+        let stats_b = compute(&registry, filter_b.as_ref())?;
 
         assert_eq!(stats_a.base.num_rows, Precision::Inexact(100));
         assert_eq!(stats_b.base.num_rows, Precision::Inexact(50));

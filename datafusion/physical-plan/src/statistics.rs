@@ -24,6 +24,7 @@ use crate::ExecutionPlan;
 use crate::operator_statistics::{
     ExtendedStatistics, StatisticsRegistry, StatisticsResult,
 };
+use datafusion_common::extensions::Extensions;
 use datafusion_common::{
     Result, Statistics, assert_eq_or_internal_err, assert_or_internal_err,
 };
@@ -31,6 +32,15 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+
+type CacheKey = (usize, Option<usize>);
+
+fn cache_key(plan: &dyn ExecutionPlan, partition: Option<usize>) -> CacheKey {
+    (
+        plan as *const dyn ExecutionPlan as *const () as usize,
+        partition,
+    )
+}
 
 /// Per-call memoization cache for statistics computation.
 ///
@@ -40,34 +50,15 @@ use std::sync::Arc;
 /// The pointer-based key is safe within a single synchronous walk:
 /// all `Arc<dyn ExecutionPlan>` nodes are held by the plan tree for
 /// the duration of the walk, so addresses cannot be reused.
+///
+/// Core statistics and provider extensions are cached separately: the
+/// `statistics` map is the hot path (populated on every walk); the `extensions`
+/// map is populated only when a provider returns non-empty extensions, so a walk
+/// with no providers never touches it.
 #[derive(Debug, Default)]
-struct StatsCache(HashMap<(usize, Option<usize>), Arc<Statistics>>);
-
-impl StatsCache {
-    fn get(
-        &self,
-        plan: &dyn ExecutionPlan,
-        partition: Option<usize>,
-    ) -> Option<&Arc<Statistics>> {
-        let key = (
-            plan as *const dyn ExecutionPlan as *const () as usize,
-            partition,
-        );
-        self.0.get(&key)
-    }
-
-    fn insert(
-        &mut self,
-        plan: &dyn ExecutionPlan,
-        partition: Option<usize>,
-        stats: Arc<Statistics>,
-    ) {
-        let key = (
-            plan as *const dyn ExecutionPlan as *const () as usize,
-            partition,
-        );
-        self.0.insert(key, stats);
-    }
+struct StatsCache {
+    statistics: HashMap<CacheKey, Arc<Statistics>>,
+    extensions: HashMap<CacheKey, Extensions>,
 }
 
 /// Arguments passed to [`ExecutionPlan::statistics_from_inputs`] carrying
@@ -126,6 +117,14 @@ pub enum ChildStats {
 /// they are consulted before the operator's built-in
 /// [`ExecutionPlan::statistics_from_inputs`]. An empty registry is the built-in
 /// computation.
+///
+/// The walk carries [`ExtendedStatistics`]. A node has extensions only if a
+/// provider `Computed` them for it; a node that falls back to the built-in
+/// [`ExecutionPlan::statistics_from_inputs`] has none. So extensions propagate
+/// upward only through an unbroken chain of provider-handled nodes: a single
+/// built-in node yields no extensions and hides those of everything beneath it.
+/// [`Self::compute_extended`] observes extensions; [`Self::compute`] returns core
+/// [`Statistics`] only.
 pub struct StatisticsContext {
     cache: Rc<RefCell<StatsCache>>,
     registry: StatisticsRegistry,
@@ -143,8 +142,7 @@ impl StatisticsContext {
         Self::new_with_registry(StatisticsRegistry::new())
     }
 
-    /// Creates a context whose walk consults `registry`'s provider chain before
-    /// falling back to each operator's built-in statistics.
+    /// Creates a context whose walk consults `registry`'s provider chain.
     pub fn new_with_registry(registry: StatisticsRegistry) -> Self {
         Self {
             cache: Rc::new(RefCell::new(StatsCache::default())),
@@ -159,15 +157,49 @@ impl StatisticsContext {
     /// (which rewrite the plan) when reusing one context across them, so stale
     /// pointer keys cannot collide.
     pub fn reset_cache(&self) {
-        self.cache.borrow_mut().0.clear();
+        let mut cache = self.cache.borrow_mut();
+        cache.statistics.clear();
+        cache.extensions.clear();
     }
 
-    /// Computes statistics for `plan`, resolving children first and passing
-    /// the results to [`ExecutionPlan::statistics_from_inputs`].
+    /// Computes the core [`Statistics`] for `plan`, discarding any
+    /// provider-supplied extensions (see [`Self::compute_extended`]).
+    ///
+    /// With no providers registered this is the plain built-in walk: only the
+    /// `statistics` cache is touched, so it carries no extension overhead.
+    pub fn compute(
+        &self,
+        plan: &dyn ExecutionPlan,
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        self.compute_base(plan, args)
+    }
+
+    /// Computes the [`ExtendedStatistics`] for `plan`: the core statistics plus
+    /// any extensions a provider attached to this node (see the type-level docs
+    /// for how extensions propagate up the tree).
+    pub fn compute_extended(
+        &self,
+        plan: &dyn ExecutionPlan,
+        args: &StatisticsArgs,
+    ) -> Result<Arc<ExtendedStatistics>> {
+        let statistics = self.compute_base(plan, args)?;
+        let extensions = self
+            .cached_extensions(plan, args.partition())
+            .unwrap_or_default();
+        Ok(Arc::new(ExtendedStatistics::new_with_extensions(
+            statistics, extensions,
+        )))
+    }
+
+    /// Bottom-up walk producing the node's core statistics, resolving children
+    /// first and consulting the provider chain before the operator's built-in
+    /// [`ExecutionPlan::statistics_from_inputs`]. Any extensions a provider
+    /// attaches are recorded in the extension cache for [`Self::compute_extended`].
     ///
     /// When `args.partition()` is `Some(idx)`, `idx` is validated against the
     /// plan's partition count.
-    pub fn compute(
+    fn compute_base(
         &self,
         plan: &dyn ExecutionPlan,
         args: &StatisticsArgs,
@@ -184,34 +216,10 @@ impl StatisticsContext {
             );
         }
 
-        if let Some(cached) = self.cache.borrow().get(plan, partition) {
-            return Ok(Arc::clone(cached));
+        if let Some(cached) = self.cached_statistics(plan, partition) {
+            return Ok(cached);
         }
 
-        let child_stats = self.resolve_children(plan, partition)?;
-
-        let result = match self.try_provider_stats(plan, &child_stats, args)? {
-            Some(stats) => stats,
-            None => plan.statistics_from_inputs(&child_stats, args)?,
-        };
-        self.cache
-            .borrow_mut()
-            .insert(plan, partition, Arc::clone(&result));
-        Ok(result)
-    }
-
-    /// Resolves each child's statistics following the operator's
-    /// [`ExecutionPlan::child_stats_requests`] mapping: `At(p)` computes the child
-    /// at partition `p`, `Skip` supplies a [`Statistics::new_unknown`] placeholder.
-    ///
-    /// A provider computes the same node's statistics, so it depends on the same
-    /// children as the node itself: an operator whose statistics (built-in or via
-    /// a provider) depend on a child must declare `At` for it.
-    fn resolve_children(
-        &self,
-        plan: &dyn ExecutionPlan,
-        partition: Option<usize>,
-    ) -> Result<Vec<Arc<Statistics>>> {
         let children = plan.children();
         let requests = plan.child_stats_requests(partition);
         assert_eq_or_internal_err!(
@@ -222,50 +230,147 @@ impl StatisticsContext {
             requests.len(),
             children.len()
         );
-        children
+        let child_statistics: Vec<Arc<Statistics>> = children
             .iter()
-            .zip(requests)
+            .zip(&requests)
             .map(|(child, directive)| match directive {
-                ChildStats::At(p) => {
-                    self.compute(child.as_ref(), &StatisticsArgs::new().with_partition(p))
-                }
+                ChildStats::At(p) => self.compute_base(
+                    child.as_ref(),
+                    &StatisticsArgs::new().with_partition(*p),
+                ),
                 ChildStats::Skip => {
                     Ok(Arc::new(Statistics::new_unknown(child.schema().as_ref())))
                 }
             })
-            .collect()
+            .collect::<Result<_>>()?;
+
+        let statistics = match self.try_provider_stats(
+            plan,
+            &children,
+            &requests,
+            &child_statistics,
+            args,
+        )? {
+            Some(statistics) => statistics,
+            None => plan.statistics_from_inputs(&child_statistics, args)?,
+        };
+        self.store_statistics(plan, partition, Arc::clone(&statistics));
+        Ok(statistics)
     }
 
-    /// Runs the provider chain, returning the first `Computed` result's base
-    /// statistics, or `None` if all delegate or the chain is empty. A
-    /// partition-blind provider applies only to overall stats (its default
-    /// `compute_statistics_with_args` delegates per partition).
+    /// Runs the provider chain, returning the first `Computed` result's core
+    /// statistics (and recording its extensions), or `None` if the chain is empty
+    /// or all delegate. A partition-blind provider applies only to overall stats
+    /// (its default `compute_statistics_with_args` delegates per partition).
     ///
-    /// Providers may attach custom extensions to their [`ExtendedStatistics`]
-    /// result, but the walk uses only the base [`Statistics`].
+    /// Assembles each child's [`ExtendedStatistics`] (statistics plus cached
+    /// extensions) only here, so a walk with no providers pays no extension cost.
     fn try_provider_stats(
         &self,
         plan: &dyn ExecutionPlan,
-        child_stats: &[Arc<Statistics>],
+        children: &[&Arc<dyn ExecutionPlan>],
+        requests: &[ChildStats],
+        child_statistics: &[Arc<Statistics>],
         args: &StatisticsArgs,
     ) -> Result<Option<Arc<Statistics>>> {
         let providers = self.registry.providers();
         if providers.is_empty() {
             return Ok(None);
         }
-        // Providers take `&[ExtendedStatistics]`; wrap the resolved base stats.
-        let child_ext: Vec<ExtendedStatistics> = child_stats
-            .iter()
-            .map(|s| ExtendedStatistics::new_arc(Arc::clone(s)))
-            .collect();
+        let child_extended =
+            self.child_extended_stats(children, requests, child_statistics);
         for provider in providers {
-            if let StatisticsResult::Computed(stats) =
-                provider.compute_statistics_with_args(plan, &child_ext, args)?
+            if let StatisticsResult::Computed(computed) =
+                provider.compute_statistics_with_args(plan, &child_extended, args)?
             {
-                return Ok(Some(Arc::clone(stats.base_arc())));
+                if !computed.extensions().is_empty() {
+                    self.store_extensions(
+                        plan,
+                        args.partition(),
+                        computed.extensions().clone(),
+                    );
+                }
+                return Ok(Some(Arc::clone(computed.base_arc())));
             }
         }
         Ok(None)
+    }
+
+    /// Pairs each child's core statistics with any extensions cached for it,
+    /// producing the [`ExtendedStatistics`] the provider chain consumes. Called
+    /// only when providers exist, so an empty registry pays no extension cost.
+    fn child_extended_stats(
+        &self,
+        children: &[&Arc<dyn ExecutionPlan>],
+        requests: &[ChildStats],
+        child_statistics: &[Arc<Statistics>],
+    ) -> Vec<ExtendedStatistics> {
+        children
+            .iter()
+            .zip(requests)
+            .zip(child_statistics)
+            .map(|((child, directive), statistics)| {
+                let extensions = match directive {
+                    ChildStats::At(p) => self.cached_extensions(child.as_ref(), *p),
+                    ChildStats::Skip => None,
+                };
+                match extensions {
+                    Some(extensions) => ExtendedStatistics::new_with_extensions(
+                        Arc::clone(statistics),
+                        extensions,
+                    ),
+                    None => ExtendedStatistics::new_arc(Arc::clone(statistics)),
+                }
+            })
+            .collect()
+    }
+
+    fn cached_statistics(
+        &self,
+        plan: &dyn ExecutionPlan,
+        partition: Option<usize>,
+    ) -> Option<Arc<Statistics>> {
+        self.cache
+            .borrow()
+            .statistics
+            .get(&cache_key(plan, partition))
+            .cloned()
+    }
+
+    fn store_statistics(
+        &self,
+        plan: &dyn ExecutionPlan,
+        partition: Option<usize>,
+        statistics: Arc<Statistics>,
+    ) {
+        self.cache
+            .borrow_mut()
+            .statistics
+            .insert(cache_key(plan, partition), statistics);
+    }
+
+    fn cached_extensions(
+        &self,
+        plan: &dyn ExecutionPlan,
+        partition: Option<usize>,
+    ) -> Option<Extensions> {
+        self.cache
+            .borrow()
+            .extensions
+            .get(&cache_key(plan, partition))
+            .cloned()
+    }
+
+    fn store_extensions(
+        &self,
+        plan: &dyn ExecutionPlan,
+        partition: Option<usize>,
+        extensions: Extensions,
+    ) {
+        self.cache
+            .borrow_mut()
+            .extensions
+            .insert(cache_key(plan, partition), extensions);
     }
 }
 
@@ -308,6 +413,53 @@ mod tests {
             let mut stats = Statistics::new_unknown(&plan.schema());
             stats.num_rows = Precision::Exact(marker);
             Ok(StatisticsResult::Computed(ExtendedStatistics::new(stats)))
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct Tag(u32);
+
+    /// Leaf provider: sets a row count and attaches a `Tag` extension.
+    #[derive(Debug)]
+    struct TagLeafProvider {
+        rows: usize,
+        tag: u32,
+    }
+    impl StatisticsProvider for TagLeafProvider {
+        fn compute_statistics(
+            &self,
+            plan: &dyn ExecutionPlan,
+            child_stats: &[ExtendedStatistics],
+        ) -> Result<StatisticsResult> {
+            if !child_stats.is_empty() {
+                return Ok(StatisticsResult::Delegate);
+            }
+            let mut stats = Statistics::new_unknown(&plan.schema());
+            stats.num_rows = Precision::Exact(self.rows);
+            let mut extended = ExtendedStatistics::new(stats);
+            extended.set_extension(Tag(self.tag));
+            Ok(StatisticsResult::Computed(extended))
+        }
+    }
+
+    /// Non-leaf provider: re-emits a `Tag` doubled from the first child's `Tag`,
+    /// proving the child's extension reached this provider.
+    #[derive(Debug)]
+    struct TagDoublingProvider;
+    impl StatisticsProvider for TagDoublingProvider {
+        fn compute_statistics(
+            &self,
+            plan: &dyn ExecutionPlan,
+            child_stats: &[ExtendedStatistics],
+        ) -> Result<StatisticsResult> {
+            let Some(Tag(v)) = child_stats.first().and_then(|c| c.get_extension::<Tag>())
+            else {
+                return Ok(StatisticsResult::Delegate);
+            };
+            let mut extended =
+                ExtendedStatistics::new(Statistics::new_unknown(&plan.schema()));
+            extended.set_extension(Tag(v * 2));
+            Ok(StatisticsResult::Computed(extended))
         }
     }
 
@@ -362,7 +514,7 @@ mod tests {
         let args = StatisticsArgs::new();
 
         let s1 = ctx.compute(leaf.as_ref(), &args).unwrap();
-        assert!(!ctx.cache.borrow().0.is_empty());
+        assert!(!ctx.cache.borrow().statistics.is_empty());
 
         let s2 = ctx.compute(leaf.as_ref(), &args).unwrap();
         assert!(Arc::ptr_eq(&s1, &s2));
@@ -373,9 +525,9 @@ mod tests {
         let leaf = make_stats_leaf(10);
         let ctx = StatisticsContext::new();
         let _ = ctx.compute(leaf.as_ref(), &StatisticsArgs::new()).unwrap();
-        assert!(!ctx.cache.borrow().0.is_empty());
+        assert!(!ctx.cache.borrow().statistics.is_empty());
         ctx.reset_cache();
-        assert!(ctx.cache.borrow().0.is_empty());
+        assert!(ctx.cache.borrow().statistics.is_empty());
     }
 
     #[test]
@@ -390,6 +542,41 @@ mod tests {
             )
             .unwrap();
         assert_eq!(per_part.num_rows, Precision::Exact(701));
+    }
+
+    #[test]
+    fn extensions_reach_parent_provider() {
+        let leaf = make_stats_leaf(100);
+        let parent: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(leaf));
+        let ctx = StatisticsContext::new_with_registry(
+            StatisticsRegistry::with_providers(vec![
+                Arc::new(TagLeafProvider { rows: 100, tag: 7 }),
+                Arc::new(TagDoublingProvider),
+            ]),
+        );
+        let extended = ctx
+            .compute_extended(parent.as_ref(), &StatisticsArgs::new())
+            .unwrap();
+        assert_eq!(extended.get_extension::<Tag>(), Some(&Tag(14)));
+    }
+
+    #[test]
+    fn builtin_fallback_drops_extensions() {
+        let leaf = make_stats_leaf(100);
+        let parent: Arc<dyn ExecutionPlan> =
+            Arc::new(CoalescePartitionsExec::new(Arc::clone(&leaf)));
+        let ctx = ctx_with(Arc::new(TagLeafProvider { rows: 100, tag: 7 }));
+
+        let leaf_extended = ctx
+            .compute_extended(leaf.as_ref(), &StatisticsArgs::new())
+            .unwrap();
+        assert_eq!(leaf_extended.get_extension::<Tag>(), Some(&Tag(7)));
+
+        let parent_extended = ctx
+            .compute_extended(parent.as_ref(), &StatisticsArgs::new())
+            .unwrap();
+        assert_eq!(parent_extended.get_extension::<Tag>(), None);
+        assert_eq!(parent_extended.base().num_rows, Precision::Exact(100));
     }
 
     #[test]
