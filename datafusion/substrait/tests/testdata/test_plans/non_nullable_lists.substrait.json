@@ -34,26 +34,28 @@
               }
             },
             "virtualTable": {
-              "values": [
+              "expressions": [
                 {
                   "fields": [
                     {
-                      "list": {
-                        "values": [
-                          {
-                            "i32": 1,
-                            "nullable": false,
-                            "typeVariationReference": 0
-                          },
-                          {
-                            "i32": 2,
-                            "nullable": false,
-                            "typeVariationReference": 0
-                          }
-                        ]
-                      },
-                      "nullable": false,
-                      "typeVariationReference": 0
+                      "literal": {
+                        "list": {
+                          "values": [
+                            {
+                              "i32": 1,
+                              "nullable": false,
+                              "typeVariationReference": 0
+                            },
+                            {
+                              "i32": 2,
+                              "nullable": false,
+                              "typeVariationReference": 0
+                            }
+                          ]
+                        },
+                        "nullable": false,
+                        "typeVariationReference": 0
+                      }
                     }
                   ]
                 }
