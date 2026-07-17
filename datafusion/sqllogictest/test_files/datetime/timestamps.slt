@@ -3823,6 +3823,43 @@ select to_unixtime('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+',
 ----
 1673638290
 
+# a NULL string input is NULL, regardless of the formats
+query I
+select to_unixtime(NULL::VARCHAR, '%Y-%m-%d');
+----
+NULL
+
+# NULL formats are skipped, so an all-NULL format list is NULL
+query I
+select to_unixtime('2020-09-08', NULL::VARCHAR, NULL::VARCHAR);
+----
+NULL
+
+# a NULL string input is NULL, regardless of the formats
+query P
+select to_timestamp(NULL::VARCHAR, '%Y-%m-%d');
+----
+NULL
+
+# NULL formats are skipped, so an all-NULL format list is NULL
+query P
+select to_timestamp('2020-09-08', NULL::VARCHAR, NULL::VARCHAR);
+----
+NULL
+
+# a NULL format is skipped rather than parsed, while a non-NULL one still applies
+query IP
+select id, to_timestamp(value, format1, format2)
+from (
+  values
+    (1, '2020-09-08T12:00:00+00:00', NULL::VARCHAR, NULL::VARCHAR),
+    (2, '2020-09-08T12:00:00+00:00', '%+', NULL::VARCHAR)
+) as t(id, value, format1, format2)
+order by id;
+----
+1 NULL
+2 2020-09-08T12:00:00
+
 query I
 select to_unixtime('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
 ----

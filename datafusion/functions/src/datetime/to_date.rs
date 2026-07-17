@@ -519,4 +519,78 @@ mod tests {
             panic!("Conversion of {date_str} succeeded, but should have failed. ");
         }
     }
+
+    #[test]
+    fn test_to_date_null_scalar_string_with_format() {
+        let res = invoke_to_date_with_args(
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y-%m-%d".into()))),
+            ],
+            1,
+        );
+
+        assert!(matches!(
+            res.unwrap(),
+            ColumnarValue::Scalar(ScalarValue::Date32(None))
+        ));
+    }
+
+    #[test]
+    fn test_to_date_all_scalar_formats_null() {
+        let res = invoke_to_date_with_args(
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("2020-09-08".into()))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+            ],
+            1,
+        );
+
+        assert!(matches!(
+            res.unwrap(),
+            ColumnarValue::Scalar(ScalarValue::Date32(None))
+        ));
+    }
+
+    /// A NULL format must be skipped even when its slot still holds parseable
+    /// bytes, otherwise the row silently parses under a format that is not there.
+    #[test]
+    fn test_to_date_null_format_slot_retaining_bytes() {
+        use arrow::buffer::Buffer;
+
+        // Slot 0 holds "%d/%m/%Y" physically, but is marked NULL.
+        let formats = GenericStringArray::<i32>::from(vec!["%d/%m/%Y", "%Y-%m-%d"]);
+        let data = formats
+            .to_data()
+            .into_builder()
+            .null_bit_buffer(Some(Buffer::from([0b00000010u8])))
+            .build()
+            .unwrap();
+        let formats = GenericStringArray::<i32>::from(data);
+        assert!(formats.is_null(0));
+
+        // Row 0 would parse cleanly under the retained format, so a missing
+        // validity check shows up as a wrong value rather than an error.
+        let values = GenericStringArray::<i32>::from(vec!["08/09/2020", "2020-09-08"]);
+        let res = invoke_to_date_with_args(
+            vec![
+                ColumnarValue::Array(Arc::new(values)),
+                ColumnarValue::Array(Arc::new(formats)),
+            ],
+            2,
+        )
+        .unwrap();
+
+        let ColumnarValue::Array(res) = res else {
+            panic!("expected an array result");
+        };
+        let res = res.as_any().downcast_ref::<Date32Array>().unwrap();
+
+        assert!(res.is_null(0), "NULL format must not parse retained bytes");
+        assert_eq!(
+            res.value(1),
+            Date32Type::parse_formatted("2020-09-08", "%Y-%m-%d").unwrap()
+        );
+    }
 }

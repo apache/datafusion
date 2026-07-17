@@ -298,6 +298,41 @@ SELECT to_date('2020-09-08 12/00/00+00:00', '%c', '%+')
 query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
 SELECT to_date('2020-09-08 12/00/00+00:00', '%q')
 
+# a NULL string input is NULL, regardless of the formats
+query D
+SELECT to_date(NULL::VARCHAR, '%Y-%m-%d')
+----
+NULL
+
+# NULL formats are skipped, so an all-NULL format list is NULL
+query D
+SELECT to_date('2020-09-08', NULL::VARCHAR, NULL::VARCHAR)
+----
+NULL
+
+# a NULL format is skipped rather than parsed, while a non-NULL one still applies
+query ID
+SELECT id, to_date(value, format1, format2)
+FROM (
+  VALUES
+    (1, '2020-09-08', NULL::VARCHAR, NULL::VARCHAR),
+    (2, '2020-09-08', '%Y-%m-%d', NULL::VARCHAR),
+    (3, '2020-09-08', NULL::VARCHAR, '%Y-%m-%d')
+) AS t(id, value, format1, format2)
+ORDER BY id
+----
+1 NULL
+2 2020-09-08
+3 2020-09-08
+
+# skipping NULL formats does not mask a genuine parse failure
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08' using format '%q': trailing input
+SELECT to_date('2020-09-08', NULL::VARCHAR, '%q')
+
+# a NULL input still does not excuse an invalid format type
+query error DataFusion error: Execution error: to_date function unsupported data type at index 1: Int64
+SELECT to_date(NULL::VARCHAR, 12345)
+
 statement ok
 create table ts_utf8_data(ts varchar(100), format varchar(100)) as values
   ('2020-09-08 12/00/00+00:00', '%Y-%m-%d %H/%M/%S%#z'),
