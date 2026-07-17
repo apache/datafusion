@@ -808,11 +808,11 @@ pub trait PhysicalPlanNodeExt: Sized {
                     ctx,
                     proto_converter,
                 ),
-            PhysicalPlanType::Union(union) => {
-                self.try_into_union_physical_plan(union, ctx, proto_converter)
+            PhysicalPlanType::Union(_) => {
+                UnionExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Interleave(interleave) => {
-                self.try_into_interleave_physical_plan(interleave, ctx, proto_converter)
+            PhysicalPlanType::Interleave(_) => {
+                InterleaveExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::CrossJoin(crossjoin) => {
                 self.try_into_cross_join_physical_plan(crossjoin, ctx, proto_converter)
@@ -1023,22 +1023,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         if let Some(exec) = plan.downcast_ref::<SortExec>() {
             return protobuf::PhysicalPlanNode::try_from_sort_exec(
                 exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(union) = plan.downcast_ref::<UnionExec>() {
-            return protobuf::PhysicalPlanNode::try_from_union_exec(
-                union,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(interleave) = plan.downcast_ref::<InterleaveExec>() {
-            return protobuf::PhysicalPlanNode::try_from_interleave_exec(
-                interleave,
                 codec,
                 proto_converter,
             );
@@ -2115,6 +2099,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         .map(|e| Arc::new(e) as _)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `UnionExec` deserializes itself via `UnionExec::try_from_proto`"
+    )]
     fn try_into_union_physical_plan(
         &self,
         union: &protobuf::UnionExecNode,
@@ -2128,6 +2116,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         UnionExec::try_new(inputs)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `InterleaveExec` deserializes itself via `InterleaveExec::try_from_proto`"
+    )]
     fn try_into_interleave_physical_plan(
         &self,
         interleave: &protobuf::InterleaveExecNode,
@@ -3786,6 +3778,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `UnionExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_union_exec(
         union: &UnionExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3808,6 +3804,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `InterleaveExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_interleave_exec(
         interleave: &InterleaveExec,
         codec: &dyn PhysicalExtensionCodec,
