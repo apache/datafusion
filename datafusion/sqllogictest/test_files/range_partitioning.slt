@@ -631,11 +631,9 @@ ORDER BY l.range_key;
 
 ##########
 # TEST 18: Right Join on Range Partition Column
-# Right-side partitioned hash joins also opt in to Range satisfying
-# KeyPartitioned requirements. Compatible Range layouts satisfy both the
-# per-child key requirements and the cross-child layout requirement, so no
-# Hash repartitioning is inserted. The filter on the left input keeps its
-# Range partitioning and leaves the right rows above 150 unmatched.
+# Compatible Range inputs satisfy the join's partitioning requirements, so no
+# Hash repartitioning is inserted. The left filter keeps its Range partitioning
+# and the unmatched right rows above 150 are preserved.
 ##########
 
 query TT
@@ -646,8 +644,8 @@ RIGHT JOIN range_partitioned r ON l.range_key = r.range_key;
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(range_key@0, range_key@0)], projection=[value@1, range_key@2, value@3]
 02)--FilterExec: value@1 <= 150
-03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
-04)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
 query III
 SELECT l.value, r.range_key, r.value
@@ -678,8 +676,8 @@ RIGHT SEMI JOIN range_partitioned r ON l.range_key = r.range_key;
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(range_key@0, range_key@0)]
 02)--FilterExec: value@1 <= 150, projection=[range_key@0]
-03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
-04)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
 query II
 SELECT r.range_key, r.value
@@ -706,8 +704,8 @@ RIGHT ANTI JOIN range_partitioned r ON l.range_key = r.range_key;
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=RightAnti, on=[(range_key@0, range_key@0)]
 02)--FilterExec: value@1 <= 150, projection=[range_key@0]
-03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
-04)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
 query II
 SELECT r.range_key, r.value
@@ -736,9 +734,9 @@ physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(range_key@0, range_key@0)], projection=[value@1, range_key@2, value@3]
 02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
 03)----FilterExec: value@1 <= 150
-04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 05)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-06)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=csv, has_header=false
+06)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=csv, has_header=false
 
 query III
 SELECT l.value, r.range_key, r.value
@@ -757,12 +755,11 @@ NULL 35 350
 
 ##########
 # TEST 22: Right Join on Composite Key With Range Subset Rehashes
-# The join key (range_key, non_range_key) is a strict superset of the exposed
-# Range([range_key]) partitioning column. Unlike aggregates (TEST 3), subset
-# satisfaction is disabled for partitioned joins -- allowing Range([range_key])
-# to satisfy a wider key requirement could let matching rows land in different
-# partitions -- so planning still Hash repartitions both sides on the full
-# join key, even though subset_repartition_threshold is met.
+# The join key (range_key, non_range_key) is a superset of the Range([range_key])
+# partitioning column. Subset satisfaction is disabled for partitioned joins, so
+# both sides Hash repartition on the full key even when subset_repartition_threshold
+# is met -- a narrower Range layout must not let matching rows land in different
+# partitions.
 ##########
 
 statement ok
@@ -776,9 +773,9 @@ RIGHT JOIN range_partitioned r ON l.range_key = r.range_key AND l.non_range_key 
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(range_key@0, range_key@0), (non_range_key@1, non_range_key@1)], projection=[range_key@0, non_range_key@1, value@2, value@5]
 02)--RepartitionExec: partitioning=Hash([range_key@0, non_range_key@1], 4), input_partitions=4
-03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 04)--RepartitionExec: partitioning=Hash([range_key@0, non_range_key@1], 4), input_partitions=4
-05)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+05)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
 query IIII
 SELECT l.range_key, l.non_range_key, l.value, r.value
@@ -814,9 +811,9 @@ RIGHT JOIN range_partitioned_narrow r ON l.range_key = r.range_key;
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(range_key@0, range_key@0)], projection=[value@1, range_key@2, value@3]
 02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 04)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=3
-05)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_narrow/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_narrow/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_narrow/part-2.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20)], 3), file_type=csv, has_header=false
+05)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20)], 3), file_type=csv, has_header=false
 
 query III
 SELECT l.value, r.range_key, r.value
@@ -849,9 +846,9 @@ physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(non_range_key@0, non_range_key@1)], projection=[value@1, range_key@2, value@4]
 02)--RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
 03)----FilterExec: range_key@0 < 10, projection=[non_range_key@1, value@2]
-04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 05)--RepartitionExec: partitioning=Hash([non_range_key@1], 4), input_partitions=4
-06)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+06)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
 query III
 SELECT l.value, r.range_key, r.value
@@ -871,11 +868,8 @@ ORDER BY r.range_key;
 ##########
 # TEST 25: Mark Join Marker Semantics over Range Partitioned Inputs
 # SQL IN subqueries decorrelate to LeftMark joins, which stay on the Hash
-# repartition path (RightMark only arises when a statistical swap turns a
-# LeftMark join around; RightMark plan coverage lives in the
-# enforce_distribution tests). These queries pin the marker semantics --
-# matched, unmatched, and NULL join keys -- for mark joins over range
-# partitioned inputs.
+# repartition path. These queries pin the marker semantics -- matched, unmatched,
+# and NULL join keys -- for mark joins over range partitioned inputs.
 ##########
 
 query TT
@@ -888,10 +882,10 @@ physical_plan
 01)FilterExec: non_range_key@1 = 2 OR mark@3, projection=[range_key@0, value@2]
 02)--HashJoinExec: mode=Partitioned, join_type=LeftMark, on=[(range_key@0, range_key@0)]
 03)----RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 05)----RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
 06)------FilterExec: value@1 <= 150, projection=[range_key@0]
-07)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.csv]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+07)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
 # Matched rows have mark=true and are returned; unmatched rows have
 # mark=false and are only returned when non_range_key = 2.
