@@ -64,7 +64,7 @@ GROUP BY v1
 
 # The same fully ordered query cannot spill and reports OOM under tighter memory.
 statement ok
-SET datafusion.runtime.memory_limit = '64K'
+SET datafusion.runtime.memory_limit = '1K'
 
 query error Resources exhausted
 SELECT v1, sum(v1 * 2)
