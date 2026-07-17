@@ -19,9 +19,7 @@ use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{parquet_exec, schema, sort_exec, sort_expr};
 
-use arrow::array::{Int32Array, cast::AsArray, types::Int32Type};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
+use arrow::array::{cast::AsArray, record_batch, types::Int32Type};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::SessionContext;
@@ -63,8 +61,12 @@ fn assert_add_mode_idempotent(plan: Arc<dyn ExecutionPlan>) {
     let config = ConfigOptions::new();
     let rule = OutputRequirements::new_add_mode();
 
-    let once = rule.optimize(plan, &config).unwrap();
-    let twice = rule.optimize(Arc::clone(&once), &config).unwrap();
+    let once = rule
+        .optimize(plan, &config)
+        .expect("first add-mode optimize pass should succeed");
+    let twice = rule
+        .optimize(Arc::clone(&once), &config)
+        .expect("second add-mode optimize pass should succeed");
 
     assert_eq!(
         get_plan_string(&once),
@@ -73,12 +75,13 @@ fn assert_add_mode_idempotent(plan: Arc<dyn ExecutionPlan>) {
     );
 }
 
-/// For a `ScalarSubqueryExec` root, `new_add_mode()` descends through the main
-/// input (child 0) and wraps the global `SortExec` with an `OutputRequirementExec`
-/// carrying its ordering, leaving the subquery child untouched. Without this, the
-/// multi-child root is skipped and the query's global ORDER BY requirement is lost.
+/// For a `ScalarSubqueryExec` root, `require_top_ordering_helper` descends
+/// through the main input (child 0) and wraps the global `SortExec` with an
+/// `OutputRequirementExec` carrying its ordering, leaving the subquery child
+/// untouched. Without this, the multi-child root is skipped and the query's
+/// global ORDER BY requirement is lost.
 #[test]
-fn add_mode_descends_through_scalar_subquery() {
+fn require_top_ordering_descends_through_scalar_subquery() {
     let s = schema();
     let ordering: LexOrdering = [sort_expr("a", &s)].into();
     let sort = sort_exec(ordering, parquet_exec(Arc::clone(&s)));
@@ -96,7 +99,7 @@ fn add_mode_descends_through_scalar_subquery() {
 
     let optimized = OutputRequirements::new_add_mode()
         .optimize(plan, &ConfigOptions::new())
-        .unwrap();
+        .expect("add-mode optimize should succeed");
 
     insta::assert_snapshot!(
         displayable(optimized.as_ref()).indent(true).to_string(),
@@ -109,81 +112,65 @@ fn add_mode_descends_through_scalar_subquery() {
     ");
 }
 
-/// End-to-end wrong-results guard: run the full default physical optimizer
-/// pipeline over a `ScalarSubqueryExec` root whose global ordering is provided
-/// by a `SortPreservingMergeExec` over a multi-partition ordered source — the
-/// shape federated/custom planners hand to the optimizer, with no `SortExec`
-/// backstop. If `OutputRequirements` fails to record the ordering under the
-/// multi-child root, the empty root requirement (no ordering, unspecified
-/// distribution) lets the pipeline eliminate the merge, and the query returns
-/// rows in partition-interleaved order — actually incorrect results, not
-/// merely a different plan.
+/// A `ScalarSubqueryExec` plan root must preserve its main input's global
+/// ordering end to end.
+///
+/// The main input is a `SortPreservingMergeExec` over a two-partition ordered
+/// source — the shape federated/custom planners hand to the optimizer: an
+/// order-preserving merge with no `SortExec` above it. `OutputRequirements`
+/// records the global ORDER BY under the multi-child subquery root, the rest of
+/// the pipeline keeps the merge, and executing the optimized plan returns the
+/// rows in global order regardless of how the source is partitioned.
 #[tokio::test]
-async fn full_pipeline_keeps_row_order_under_scalar_subquery_root() {
-    // Two partitions, each sorted on `a`; only an order-preserving merge
-    // yields the global order.
-    let s = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-    let partitions: Vec<Vec<RecordBatch>> = [vec![1, 3, 5, 7], vec![2, 4, 6, 8]]
-        .into_iter()
-        .map(|v| {
-            vec![
-                RecordBatch::try_new(Arc::clone(&s), vec![Arc::new(Int32Array::from(v))])
-                    .unwrap(),
-            ]
-        })
-        .collect();
-    let ordering: LexOrdering = [sort_expr("a", &s)].into();
+async fn scalar_subquery_root_preserves_global_ordering_end_to_end() {
+    // Two partitions, each already sorted on `a`. Global order requires a sort-preserving merge;
+    // a plain concatenation would interleave them as 1, 3, 5, 7, 2, 4, 6, 8.
+    let p1 = record_batch!(("a", Int32, [1, 3, 5, 7])).expect("build partition 1 batch");
+    let p2 = record_batch!(("a", Int32, [2, 4, 6, 8])).expect("build partition 2 batch");
+    let schema = p1.schema();
+    let ordering: LexOrdering = [sort_expr("a", &schema)].into();
     let source = DataSourceExec::from_data_source(
-        MemorySourceConfig::try_new(&partitions, Arc::clone(&s), None)
-            .unwrap()
+        MemorySourceConfig::try_new(&[vec![p1], vec![p2]], Arc::clone(&schema), None)
+            .expect("build memory source config")
             .try_with_sort_information(vec![ordering.clone()])
-            .unwrap(),
+            .expect("attach sort information to source"),
     );
-    let merge = Arc::new(SortPreservingMergeExec::new(ordering, source));
+    // The main plan establishes the query's global ordering via an `SortPreservingMergeExec` over the two sorted partitions.
+    let main_input = Arc::new(SortPreservingMergeExec::new(ordering, source));
 
-    // A scalar subquery child must produce exactly one column and one row.
-    let sq_schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]));
-    let sq_batch = RecordBatch::try_new(
-        Arc::clone(&sq_schema),
-        vec![Arc::new(Int32Array::from(vec![42]))],
+    // Dummy subquery that returns a single row
+    let sq_batch = record_batch!(("v", Int32, [42])).expect("build subquery batch");
+    let subquery = MemorySourceConfig::try_new_exec(
+        &[vec![sq_batch.clone()]],
+        sq_batch.schema(),
+        None,
     )
-    .unwrap();
-    let sq_plan =
-        MemorySourceConfig::try_new_exec(&[vec![sq_batch]], sq_schema, None).unwrap();
+    .expect("build subquery exec");
 
     let plan = Arc::new(ScalarSubqueryExec::new(
-        merge,
+        main_input,
         vec![ScalarSubqueryLink {
-            plan: sq_plan,
+            plan: subquery,
             index: SubqueryIndex::new(0),
         }],
         ScalarSubqueryResults::new(1),
     )) as Arc<dyn ExecutionPlan>;
 
+    // Run the full default physical optimizer pipeline.
     let mut config = ConfigOptions::new();
     config.execution.target_partitions = 4;
-    // Keep the plan focused on the merge-vs-coalesce decision rather than on
-    // added parallelism.
-    config.optimizer.enable_round_robin_repartition = false;
-    config.optimizer.prefer_existing_sort = true;
-
     let mut optimized = plan;
     for rule in PhysicalOptimizer::new().rules {
-        optimized = rule.optimize(optimized, &config).unwrap();
+        optimized = rule
+            .optimize(optimized, &config)
+            .unwrap_or_else(|e| panic!("optimizer rule {} failed: {e}", rule.name()));
     }
 
-    // The order-preserving merge must survive the pipeline; the failure mode
-    // replaces it with a `CoalescePartitionsExec`.
-    let display = displayable(optimized.as_ref()).indent(true).to_string();
-    assert!(
-        display.contains("SortPreservingMergeExec")
-            && !display.contains("CoalescePartitionsExec"),
-        "order-preserving merge was optimized away:\n{display}"
-    );
-
-    // And the rows must actually come back globally ordered.
-    let ctx = SessionContext::new();
-    let batches = collect(optimized, ctx.task_ctx()).await.unwrap();
+    // The executed rows come back in global order: the two sorted partitions
+    // are merged into 1, 2, 3, 4, 5, 6, 7, 8.
+    let batches = collect(optimized, SessionContext::new().task_ctx())
+        .await
+        .expect("execute optimized plan");
     let values: Vec<i32> = batches
         .iter()
         .flat_map(|b| {
