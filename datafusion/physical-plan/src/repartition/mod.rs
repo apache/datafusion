@@ -2616,8 +2616,11 @@ mod tests {
 
     #[test]
     fn range_repartition_swaps_with_projection_rewrites_key_index() -> Result<()> {
+        // Three columns so the projection both narrows the schema (required for
+        // swap) and moves the range key from @0 to @1.
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::UInt32, false),
+            Field::new("region", DataType::Utf8, false),
             Field::new("payload", DataType::UInt32, false),
         ]));
         let repartition = Arc::new(RepartitionExec::try_new(
@@ -2625,7 +2628,6 @@ mod tests {
             range_partitioning_on_columns(&schema, &["id"], vec![vec![10]])?,
         )?);
 
-        // Reorder so the range key moves from @0 to @1.
         let projection =
             projection_on_columns(&(Arc::clone(&repartition) as _), &["payload", "id"])?;
 
