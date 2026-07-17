@@ -61,7 +61,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         name = "format_n",
         description = r"Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
   they appear with the first successful one being returned. If none of the formats successfully parse the expression
-  an error will be returned."
+  an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]

@@ -56,7 +56,7 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
     ),
     argument(
         name = "format_n",
-        description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
+        description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
