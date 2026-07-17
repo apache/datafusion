@@ -352,6 +352,10 @@ required-features = ["regex_expressions"]
 
 [[bench]]
 harness = false
+name = "get_field"
+
+[[bench]]
+harness = false
 name = "crypto"
 required-features = ["crypto_expressions"]
 
