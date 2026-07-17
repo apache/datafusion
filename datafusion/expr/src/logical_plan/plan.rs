@@ -1733,7 +1733,7 @@ impl LogicalPlan {
     /// ```
     pub fn display_indent(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -1779,7 +1779,7 @@ impl LogicalPlan {
     /// ```
     pub fn display_indent_schema(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -1799,7 +1799,7 @@ impl LogicalPlan {
     /// Users can use this format to visualize the plan in existing plan visualization tools, for example [dalibo](https://explain.dalibo.com/)
     pub fn display_pg_json(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -1845,7 +1845,7 @@ impl LogicalPlan {
     /// ```
     pub fn display_graphviz(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -1896,7 +1896,7 @@ impl LogicalPlan {
     /// ```
     pub fn display(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -2222,8 +2222,7 @@ impl LogicalPlan {
                             .map(|(i, unnest_info)| {
                                 format!(
                                     "{}|depth={}",
-                                    &input_columns[*i].to_string(),
-                                    unnest_info.depth
+                                    input_columns[*i], unnest_info.depth
                                 )
                             })
                             .collect::<Vec<String>>();

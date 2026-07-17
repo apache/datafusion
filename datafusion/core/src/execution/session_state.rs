@@ -349,9 +349,10 @@ impl SessionState {
         let resolved_ref = self.resolve_table_ref(table_ref);
         if self.config.information_schema() && *resolved_ref.schema == *INFORMATION_SCHEMA
         {
-            return Ok(Arc::new(InformationSchemaProvider::new(Arc::clone(
-                &self.catalog_list,
-            ))));
+            return Ok(Arc::new(
+                InformationSchemaProvider::new(Arc::clone(&self.catalog_list))
+                    .with_table_functions(self.table_functions.clone()),
+            ));
         }
 
         self.catalog_list
@@ -444,7 +445,7 @@ impl SessionState {
             )
         })?;
 
-        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+        let recursion_limit = self.config.options().sql_parser.recursion_limit.get();
 
         let mut statements = DFParserBuilder::new(sql)
             .with_dialect(dialect.as_ref())
@@ -492,7 +493,7 @@ impl SessionState {
             )
         })?;
 
-        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+        let recursion_limit = self.config.options().sql_parser.recursion_limit.get();
         let expr = DFParserBuilder::new(sql)
             .with_dialect(dialect.as_ref())
             .with_recursion_limit(recursion_limit)

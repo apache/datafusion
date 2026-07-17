@@ -54,7 +54,7 @@ use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
@@ -1710,7 +1710,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(convert_required!(empty.schema)?);
-        Ok(Arc::new(EmptyExec::new(schema)))
+        // A zero (absent) partition count comes from a plan encoded before the
+        // field existed, which always meant a single partition.
+        let partitions = empty.partitions.max(1) as usize;
+        Ok(Arc::new(EmptyExec::new(schema).with_partitions(partitions)))
     }
 
     fn try_into_placeholder_row_physical_plan(
@@ -1719,7 +1722,12 @@ pub trait PhysicalPlanNodeExt: Sized {
         _ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(convert_required!(placeholder.schema)?);
-        Ok(Arc::new(PlaceholderRowExec::new(schema)))
+        // A zero (absent) partition count comes from a plan encoded before the
+        // field existed, which always meant a single partition.
+        let partitions = placeholder.partitions.max(1) as usize;
+        Ok(Arc::new(
+            PlaceholderRowExec::new(schema).with_partitions(partitions),
+        ))
     }
 
     fn try_into_sort_physical_plan(
@@ -3015,6 +3023,8 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Empty(protobuf::EmptyExecNode {
                 schema: Some(schema),
+                partitions: empty.properties().output_partitioning().partition_count()
+                    as u32,
             })),
         })
     }
@@ -3028,6 +3038,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             physical_plan_type: Some(PhysicalPlanType::PlaceholderRow(
                 protobuf::PlaceholderRowExecNode {
                     schema: Some(schema),
+                    partitions: empty.properties().output_partitioning().partition_count()
+                        as u32,
                 },
             )),
         })
@@ -3943,6 +3955,24 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
     }
 
     fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
+
+    fn try_decode_higher_order_function(
+        &self,
+        name: &str,
+        _buf: &[u8],
+    ) -> Result<Arc<HigherOrderUDF>> {
+        not_impl_err!(
+            "PhysicalExtensionCodec is not provided for higher order function {name}"
+        )
+    }
+
+    fn try_encode_higher_order_function(
+        &self,
+        _node: &HigherOrderUDF,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
         Ok(())
     }
 

@@ -1413,7 +1413,7 @@ mod tests {
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
 
-    // Migrated to PartialHashAggregateStream coverage in hash_aggregate.rs;
+    // Migrated to PartialHashAggregateStream coverage in hash_stream.rs;
     // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {

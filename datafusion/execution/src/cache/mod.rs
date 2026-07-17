@@ -20,12 +20,14 @@ pub mod lru_queue;
 
 pub mod default_cache;
 
+use datafusion_common::arrow::datatypes::{DataType, Schema};
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::instant::Instant;
 use datafusion_common::{HashMap, TableReference};
 use object_store::path::Path;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt::{Debug, Display, Formatter};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 /// Base trait for cache implementations with common operations.
@@ -163,5 +165,112 @@ impl Display for TableScopedPath {
         } else {
             write!(f, "{}", self.path)
         }
+    }
+}
+
+/// A fingerprint of the `file_schema` used to compute a file's statistics.
+///
+/// Captures exactly the attributes that determine the layout and meaning of
+/// `Statistics::column_statistics`: each column's name, data type and
+/// nullability, in order. It deliberately excludes field/schema metadata, which
+/// cannot affect statistics — including it would needlessly fragment the cache.
+#[derive(Clone, Debug)]
+pub struct SchemaFingerprint {
+    columns: Vec<(String, DataType, bool)>,
+    /// Precomputed hash of `columns`, so hashing a key on every cache lookup is
+    /// O(1) rather than O(schema width). Computed once in `from_schema` with a
+    /// fixed-seed hasher so it is stable across keys; `PartialEq` still compares
+    /// `columns` exactly, so a hash collision can never make two different
+    /// schemas share a cache entry.
+    hash: u64,
+}
+
+impl SchemaFingerprint {
+    /// Builds a fingerprint from the `file_schema` used to compute statistics
+    /// (the schema of the columns physically read, not the full table schema —
+    /// partition columns and their statistics are handled separately).
+    pub fn from_schema(file_schema: &Schema) -> Self {
+        let columns: Vec<(String, DataType, bool)> = file_schema
+            .fields()
+            .iter()
+            .map(|f| (f.name().clone(), f.data_type().clone(), f.is_nullable()))
+            .collect();
+        let mut hasher = DefaultHasher::new();
+        columns.hash(&mut hasher);
+        Self {
+            columns,
+            hash: hasher.finish(),
+        }
+    }
+}
+
+impl PartialEq for SchemaFingerprint {
+    fn eq(&self, other: &Self) -> bool {
+        // Cheap hash gate first, then an exact comparison so collisions are safe.
+        self.hash == other.hash && self.columns == other.columns
+    }
+}
+
+impl Eq for SchemaFingerprint {}
+
+impl Hash for SchemaFingerprint {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
+impl DFHeapSize for SchemaFingerprint {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.columns.heap_size(ctx)
+    }
+}
+
+#[cfg(test)]
+mod schema_fingerprint_tests {
+    use super::*;
+    use datafusion_common::arrow::datatypes::Field;
+
+    fn fp(fields: Vec<Field>) -> SchemaFingerprint {
+        SchemaFingerprint::from_schema(&Schema::new(fields))
+    }
+
+    /// `from_schema` must capture nullability and field order — the two
+    /// attributes most easily dropped by a wrong implementation.
+    #[test]
+    fn fingerprint_captures_nullability_and_order() {
+        assert_ne!(
+            fp(vec![Field::new("id", DataType::Int64, false)]),
+            fp(vec![Field::new("id", DataType::Int64, true)]),
+            "nullability must affect the fingerprint",
+        );
+
+        let ab = fp(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let ba = fp(vec![
+            Field::new("b", DataType::Utf8, true),
+            Field::new("a", DataType::Int64, false),
+        ]);
+        assert_ne!(ab, ba, "field order must affect the fingerprint");
+    }
+
+    /// Metadata must NOT affect the fingerprint: it cannot change column
+    /// statistics, so including it would needlessly fragment the cache.
+    #[test]
+    fn fingerprint_ignores_metadata() {
+        let plain = fp(vec![Field::new("id", DataType::Int64, false)]);
+
+        let field_md = SchemaFingerprint::from_schema(&Schema::new(vec![
+            Field::new("id", DataType::Int64, false)
+                .with_metadata([("note".to_string(), "x".to_string())].into()),
+        ]));
+        assert_eq!(plain, field_md, "field metadata must be ignored");
+
+        let schema_md = SchemaFingerprint::from_schema(
+            &Schema::new(vec![Field::new("id", DataType::Int64, false)])
+                .with_metadata([("k".to_string(), "v".to_string())].into()),
+        );
+        assert_eq!(plain, schema_md, "schema metadata must be ignored");
     }
 }

@@ -278,7 +278,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 statement,
                 analyze,
                 format,
-                describe_alias: _,
                 ..
             } => {
                 let format = format
@@ -2632,17 +2631,35 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             "".to_string()
         };
 
+        // Scalar / aggregate / window functions are resolved by joining
+        // parameters (IN rows aggregated per OUT row) with routines.
+        // Table functions (UDTFs) don't have parameter rows, so they are
+        // sourced directly from routines via a UNION branch. Restricting
+        // the JOIN to non-TABLE routines prevents same-named scalar+UDTF
+        // pairs (e.g. `generate_series`) from cross-joining.
+        let where_clause = where_clause.replace("p.function_name", "sc.function_name");
         let query = format!(
             r#"
 SELECT DISTINCT
-    p.*,
-    r.function_type function_type,
-    r.description description,
-    r.syntax_example syntax_example
-FROM
-    (
+    sc.function_name,
+    sc.return_type,
+    sc.parameters,
+    sc.parameter_types,
+    sc.function_type,
+    sc.description,
+    sc.syntax_example
+FROM (
+    SELECT
+        p.function_name,
+        p.return_type,
+        p.parameters,
+        p.parameter_types,
+        r.function_type function_type,
+        r.description description,
+        r.syntax_example syntax_example
+    FROM (
         SELECT
-            i.specific_name function_name,
+            o.specific_name function_name,
             o.data_type return_type,
             array_agg(i.parameter_name ORDER BY i.ordinal_position ASC) parameters,
             array_agg(i.data_type ORDER BY i.ordinal_position ASC) parameter_types
@@ -2658,9 +2675,9 @@ FROM
                  FROM
                      information_schema.parameters
                  WHERE
-                     parameter_mode = 'IN'
-             ) i
-                 JOIN
+                     parameter_mode = 'OUT'
+             ) o
+                 LEFT JOIN
              (
                  SELECT
                      specific_catalog,
@@ -2673,16 +2690,32 @@ FROM
                  FROM
                      information_schema.parameters
                  WHERE
-                     parameter_mode = 'OUT'
-             ) o
+                     parameter_mode = 'IN'
+             ) i
              ON i.specific_catalog = o.specific_catalog
                  AND i.specific_schema = o.specific_schema
                  AND i.specific_name = o.specific_name
                  AND i.rid = o.rid
-        GROUP BY 1, 2, i.rid
+        GROUP BY 1, 2, o.rid
     ) as p
-JOIN information_schema.routines r
-ON p.function_name = r.routine_name
+    JOIN information_schema.routines r
+      ON p.function_name = r.routine_name
+     AND r.function_type <> 'TABLE'
+
+    UNION ALL
+
+    SELECT
+        routine_name function_name,
+        data_type return_type,
+        array_agg(NULL) FILTER (WHERE FALSE) parameters,
+        array_agg(NULL) FILTER (WHERE FALSE) parameter_types,
+        function_type,
+        description,
+        syntax_example
+    FROM information_schema.routines
+    WHERE function_type = 'TABLE'
+    GROUP BY routine_name, data_type, function_type, description, syntax_example
+) sc
 {where_clause}
             "#
         );

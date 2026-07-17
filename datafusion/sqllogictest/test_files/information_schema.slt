@@ -489,7 +489,7 @@ datafusion.optimizer.max_passes 3 Number of times that the optimizer will attemp
 datafusion.optimizer.prefer_existing_sort false When true, DataFusion will opportunistically remove sorts when the data is already sorted, (i.e. setting `preserve_order` to true on `RepartitionExec`  and using `SortPreservingMergeExec`) When false, DataFusion will maximize plan parallelism using `RepartitionExec` even if this requires subsequently resorting data using a `SortExec`.
 datafusion.optimizer.prefer_existing_union false When set to true, the optimizer will not attempt to convert Union to Interleave
 datafusion.optimizer.prefer_hash_join true When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin. HashJoin can work more efficiently than SortMergeJoin but consumes more memory
-datafusion.optimizer.preserve_file_partitions 0 Minimum number of distinct partition values required to group files by their Hive partition column values (enabling Hash partitioning declaration). How the option is used:     - preserve_file_partitions=0: Disable it.     - preserve_file_partitions=1: Always enable it.     - preserve_file_partitions=N, actual file partitions=M: Only enable when M >= N.     This threshold preserves I/O parallelism when file partitioning is below it. Note: This may reduce parallelism, rooting from the I/O level, if the number of distinct partitions is less than the target_partitions.
+datafusion.optimizer.preserve_file_partitions 0 Minimum number of distinct partition values required to group files by their Hive partition column values (enabling output partitioning declaration). How the option is used:     - preserve_file_partitions=0: Disable it.     - preserve_file_partitions=1: Always enable it.     - preserve_file_partitions=N, actual file partitions=M: Only enable when M >= N.     This threshold preserves I/O parallelism when file partitioning is below it. Note: This may reduce parallelism, rooting from the I/O level, if the number of distinct partitions is less than the target_partitions.
 datafusion.optimizer.repartition_aggregations true Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel using the provided `target_partitions` level
 datafusion.optimizer.repartition_file_min_size 1048576 Minimum total file size in bytes for file-group byte-range splitting to fire. Files (or merged file groups) smaller than this stay as one partition. Lower values produce more, smaller partitions — better at filling `target_partitions` worth of cores when files are modestly sized, at the cost of slightly more per-partition open / metadata-load overhead.
 datafusion.optimizer.repartition_file_scans true When set to `true`, datasource partitions will be repartitioned to achieve maximum parallelism. This applies to both in-memory partitions and FileSource's file groups (1 group is 1 partition). For FileSources, only Parquet and CSV formats are currently supported. If set to `true` for a FileSource, all files will be repartitioned evenly (i.e., a single large file might be partitioned into smaller chunks) for parallel scanning. If set to `false` for a FileSource, different files will be read in parallel, but repartitioning won't happen within a single file. If set to `true` for an in-memory source, all memtable's partitions will have their batches repartitioned evenly to the desired number of `target_partitions`. Repartitioning can change the total number of partitions and batches per partition, but does not slice the initial record tables provided to the MemTable on creation.
@@ -896,6 +896,17 @@ date_trunc String [precision, expression] [String, String] SCALAR Truncates a ti
 date_trunc Time(ns) [precision, expression] [String, Time(ns)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 date_trunc Timestamp(ns) [precision, expression] [String, Timestamp(ns)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 date_trunc Timestamp(ns, "+TZ") [precision, expression] [String, Timestamp(ns, "+TZ")] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
+
+# Table functions (UDTFs) appear in information_schema.routines with
+# function_type = TABLE and data_type = TABLE.
+# Note: built-in `generate_series` and `range` are registered as BOTH a
+# scalar UDF and a UDTF, so this test filters to the TABLE rows to make
+# a stable assertion.
+query TTT rowsort
+select routine_name, data_type, function_type from information_schema.routines where function_type = 'TABLE' order by routine_name;
+----
+generate_series TABLE TABLE
+range TABLE TABLE
 
 statement ok
 show functions
