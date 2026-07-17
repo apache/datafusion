@@ -32,7 +32,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
-    internal_datafusion_err, unwrap_or_internal_err,
+    internal_datafusion_err,
 };
 use datafusion_expr::ColumnarValue;
 
@@ -353,9 +353,10 @@ where
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
             Some(a) => {
-                let a = a.as_ref();
-                // ASK: Why do we trust `a` to be non-null at this point?
-                let a = unwrap_or_internal_err!(a);
+                // A NULL input string yields a NULL result, whatever the formats are.
+                let Some(a) = a else {
+                    return Ok(ColumnarValue::Scalar(scalar_value(dt, None)?));
+                };
 
                 let mut ret = None;
 
@@ -371,6 +372,7 @@ where
                         );
                     };
 
+                    // NULL formats are skipped
                     if let Some(s) = x {
                         match op(a, s.as_str()) {
                             Ok(r) => {
@@ -384,7 +386,11 @@ where
                     }
                 }
 
-                unwrap_or_internal_err!(ret)
+                // `ret` is None only when every format was NULL, which yields NULL.
+                match ret {
+                    Some(ret) => ret,
+                    None => Ok(ColumnarValue::Scalar(scalar_value(dt, None)?)),
+                }
             }
             other => {
                 exec_err!("Unsupported data type {other:?} for function {name}")
@@ -483,6 +489,9 @@ where
             if let Some(x) = x {
                 for arg in args {
                     let v = match arg {
+                        // A null slot may still hold arbitrary bytes, which `value`
+                        // would happily return, so check validity before reading.
+                        ColumnarValue::Array(a) if a.is_null(pos) => continue,
                         ColumnarValue::Array(a) => match a.data_type() {
                             DataType::Utf8View => Ok(a.as_string_view().value(pos)),
                             DataType::LargeUtf8 => Ok(a.as_string::<i64>().value(pos)),
