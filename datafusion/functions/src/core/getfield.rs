@@ -131,17 +131,15 @@ fn process_map_array(
 
     let offsets = map_array.value_offsets();
     // Scan the comparison result in place: slicing it per entry would allocate
-    // a new array for every row of the map.
+    // a new array for every row of the map. Map keys are non-null by
+    // definition, so the comparison result carries no nulls to check here.
     let matches = keys.values();
-    let match_nulls = keys.nulls();
 
     for entry in 0..map_array.len() {
         let start = offsets[entry] as usize;
         let end = offsets[entry + 1] as usize;
 
-        let matched = (start..end).find(|&i| {
-            matches.value(i) && match_nulls.is_none_or(|nulls| nulls.is_valid(i))
-        });
+        let matched = (start..end).find(|&i| matches.value(i));
 
         match matched {
             Some(i) => mutable.try_extend(0, i, i + 1)?,
