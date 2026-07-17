@@ -312,10 +312,17 @@ impl Unparser<'_> {
         match (agg, window) {
             (Some(agg), window) => {
                 let window_option = window.as_deref();
+                let agg_input_has_derived_projection =
+                    Self::contains_projection_before_relation(agg.input.as_ref());
                 let items = exprs
                     .into_iter()
                     .map(|proj_expr| {
                         let unproj = unproject_agg_exprs(proj_expr, agg, window_option)?;
+                        let unproj = Self::normalize_agg_input_columns(
+                            unproj,
+                            agg,
+                            agg_input_has_derived_projection,
+                        )?;
                         self.select_item_to_sql(&unproj)
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -324,7 +331,15 @@ impl Unparser<'_> {
                 select.group_by(ast::GroupByExpr::Expressions(
                     agg.group_expr
                         .iter()
-                        .map(|expr| self.expr_to_sql(expr))
+                        .cloned()
+                        .map(|expr| {
+                            let expr = Self::normalize_agg_input_columns(
+                                expr,
+                                agg,
+                                agg_input_has_derived_projection,
+                            )?;
+                            self.expr_to_sql(&expr)
+                        })
                         .collect::<Result<Vec<_>>>()?,
                     vec![],
                 ));
@@ -360,6 +375,56 @@ impl Unparser<'_> {
                     .collect::<Result<Vec<_>>>()?;
                 select.projection(items);
                 Ok(false)
+            }
+        }
+    }
+
+    fn normalize_agg_input_columns(
+        expr: Expr,
+        agg: &Aggregate,
+        input_has_derived_projection: bool,
+    ) -> Result<Expr> {
+        if input_has_derived_projection {
+            Self::strip_column_qualifiers_for_schema(expr, agg.input.schema().as_ref())
+        } else {
+            Ok(expr)
+        }
+    }
+
+    fn contains_projection_before_relation(plan: &LogicalPlan) -> bool {
+        match plan {
+            LogicalPlan::Projection(_) => true,
+            LogicalPlan::TableScan(_)
+            | LogicalPlan::Subquery(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Join(_)
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Values(_) => false,
+            _ => {
+                let inputs = plan.inputs();
+                matches!(
+                    inputs.as_slice(),
+                    [input] if Self::contains_projection_before_relation(input)
+                )
+            }
+        }
+    }
+
+    fn contains_aggregate_before_relation(plan: &LogicalPlan) -> bool {
+        match plan {
+            LogicalPlan::Aggregate(_) => true,
+            LogicalPlan::TableScan(_)
+            | LogicalPlan::Subquery(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Join(_)
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Values(_) => false,
+            _ => {
+                let inputs = plan.inputs();
+                matches!(
+                    inputs.as_slice(),
+                    [input] if Self::contains_aggregate_before_relation(input)
+                )
             }
         }
     }
@@ -582,6 +647,19 @@ impl Unparser<'_> {
             .collect::<Result<Vec<_>>>()?;
 
         self.project_window_output(&window_expr, select, None)
+    }
+
+    fn extract_join_input_table_scan_filters(
+        plan: &Arc<LogicalPlan>,
+        table_scan_filters: &mut Vec<Expr>,
+    ) -> Result<Arc<LogicalPlan>> {
+        match try_transform_to_simple_table_scan_with_filters(plan)? {
+            Some((plan, filters)) => {
+                table_scan_filters.extend(filters);
+                Ok(Arc::new(plan))
+            }
+            None => Ok(Arc::clone(plan)),
+        }
     }
 
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
@@ -951,12 +1029,22 @@ impl Unparser<'_> {
                         unproject_window_exprs(filter.predicate.clone(), window)?;
                     if let Some(agg) = agg {
                         unprojected = unproject_agg_exprs(unprojected, agg, None)?;
+                        unprojected = Self::normalize_agg_input_columns(
+                            unprojected,
+                            agg,
+                            Self::contains_projection_before_relation(agg.input.as_ref()),
+                        )?;
                     }
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.qualify(Some(filter_expr));
                 } else if let Some(agg) = agg {
                     let unprojected =
                         unproject_agg_exprs(filter.predicate.clone(), agg, None)?;
+                    let unprojected = Self::normalize_agg_input_columns(
+                        unprojected,
+                        agg,
+                        Self::contains_projection_before_relation(agg.input.as_ref()),
+                    )?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
                 } else {
@@ -1058,23 +1146,49 @@ impl Unparser<'_> {
             LogicalPlan::Aggregate(agg) => {
                 // Aggregation can be already handled in the projection case
                 if !select.already_projected() {
+                    let agg_input_has_derived_projection =
+                        Self::contains_projection_before_relation(agg.input.as_ref());
                     // The query returns aggregate and group expressions. If that weren't the case,
                     // the aggregate would have been placed inside a projection, making the check above^ false
                     let exprs: Vec<_> = agg
                         .aggr_expr
                         .iter()
                         .chain(agg.group_expr.iter())
-                        .map(|expr| self.select_item_to_sql(expr))
+                        .cloned()
+                        .map(|expr| {
+                            let expr = Self::normalize_agg_input_columns(
+                                expr,
+                                agg,
+                                agg_input_has_derived_projection,
+                            )?;
+                            self.select_item_to_sql(&expr)
+                        })
                         .collect::<Result<Vec<_>>>()?;
                     select.projection(exprs);
 
                     select.group_by(ast::GroupByExpr::Expressions(
                         agg.group_expr
                             .iter()
-                            .map(|expr| self.expr_to_sql(expr))
+                            .cloned()
+                            .map(|expr| {
+                                let expr = Self::normalize_agg_input_columns(
+                                    expr,
+                                    agg,
+                                    agg_input_has_derived_projection,
+                                )?;
+                                self.expr_to_sql(&expr)
+                            })
                             .collect::<Result<Vec<_>>>()?,
                         vec![],
                     ));
+                } else if Self::contains_aggregate_before_relation(agg.input.as_ref()) {
+                    return self.derive_with_dialect_alias(
+                        "derived_aggregate",
+                        agg.input.as_ref(),
+                        relation,
+                        false,
+                        vec![],
+                    );
                 }
 
                 self.select_to_sql_recursively(
@@ -1153,14 +1267,10 @@ impl Unparser<'_> {
                 // The outer projection plan will handle projecting the correct columns.
                 let already_projected = select.already_projected();
 
-                let left_plan =
-                    match try_transform_to_simple_table_scan_with_filters(left_plan)? {
-                        Some((plan, filters)) => {
-                            table_scan_filters.extend(filters);
-                            Arc::new(plan)
-                        }
-                        None => Arc::clone(left_plan),
-                    };
+                let left_plan = Self::extract_join_input_table_scan_filters(
+                    left_plan,
+                    &mut table_scan_filters,
+                )?;
                 let left_plan = if already_projected {
                     Self::unwrap_qualified_passthrough_join_projection(left_plan)
                 } else {
@@ -1181,14 +1291,10 @@ impl Unparser<'_> {
                     None
                 };
 
-                let right_plan =
-                    match try_transform_to_simple_table_scan_with_filters(right_plan)? {
-                        Some((plan, filters)) => {
-                            table_scan_filters.extend(filters);
-                            Arc::new(plan)
-                        }
-                        None => Arc::clone(right_plan),
-                    };
+                let right_plan = Self::extract_join_input_table_scan_filters(
+                    right_plan,
+                    &mut table_scan_filters,
+                )?;
 
                 let mut right_relation = RelationBuilder::default();
                 if already_projected
@@ -1987,6 +2093,34 @@ impl Unparser<'_> {
         Ok(Some(relation))
     }
 
+    /// Strip the table qualifier from every column in an expression that must
+    /// resolve against an unnamed derived table's output columns rather than a
+    /// deeper table alias that is out of scope at this nesting level.
+    fn strip_column_qualifiers(expr: Expr) -> Result<Expr> {
+        expr.transform(|e| match e {
+            Expr::Column(mut column) => {
+                column.relation = None;
+                Ok(Transformed::yes(Expr::Column(column)))
+            }
+            other => Ok(Transformed::no(other)),
+        })
+        .data()
+    }
+
+    fn strip_column_qualifiers_for_schema(expr: Expr, schema: &DFSchema) -> Result<Expr> {
+        expr.transform(|e| match e {
+            Expr::Column(mut column)
+                if column.relation.is_some()
+                    && schema.index_of_column(&column).is_ok() =>
+            {
+                column.relation = None;
+                Ok(Transformed::yes(Expr::Column(column)))
+            }
+            other => Ok(Transformed::no(other)),
+        })
+        .data()
+    }
+
     /// Try to unparse a table scan with pushdown operations into a new subquery plan.
     /// If the table scan is without any pushdown operations, return None.
     fn unparse_table_scan_pushdown(
@@ -2116,6 +2250,33 @@ impl Unparser<'_> {
                     alias.clone(),
                     already_projected,
                 )? {
+                    // The pushed-down scan alias is only in scope for the
+                    // projection directly above the aliased table scan. `plan`
+                    // is the result of pushing the alias further down: if it is
+                    // itself a `Projection`, the input was another projection
+                    // (e.g. common subexpression elimination stacked one), so
+                    // this projection sits over a derived table rather than
+                    // directly over the aliased scan, and the alias is out of
+                    // scope here. Its qualified pass-through columns must then
+                    // reference the derived table's output unqualified instead
+                    // of being rebased to the alias. Build it directly so the
+                    // unqualified columns are not re-normalized back to the
+                    // alias. (Otherwise `plan` is the scan-derived plan and we
+                    // fall through to rebase to the alias, correct one level
+                    // above the scan.)
+                    if alias.is_some() && matches!(plan, LogicalPlan::Projection(_)) {
+                        let exprs = projection
+                            .expr
+                            .iter()
+                            .cloned()
+                            .map(Self::strip_column_qualifiers)
+                            .collect::<Result<Vec<_>>>()?;
+                        return Ok(Some(LogicalPlan::Projection(Projection::try_new(
+                            exprs,
+                            Arc::new(plan),
+                        )?)));
+                    }
+
                     let exprs = if alias.is_some() {
                         let mut alias_rewriter =
                             alias.as_ref().map(|alias_name| TableAliasRewriter {

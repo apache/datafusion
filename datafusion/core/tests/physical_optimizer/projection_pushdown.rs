@@ -724,7 +724,7 @@ fn test_output_req_after_projection() -> Result<()> {
             ]
             .into(),
         )),
-        Distribution::HashPartitioned(vec![
+        Distribution::KeyPartitioned(vec![
             Arc::new(Column::new("a", 0)),
             Arc::new(Column::new("b", 1)),
         ]),
@@ -746,7 +746,7 @@ fn test_output_req_after_projection() -> Result<()> {
         actual,
         @r"
     ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-      OutputRequirementExec: order_by=[(b@1, asc), (c@2 + a@0, asc)], dist_by=HashPartitioned[[a@0, b@1]])
+      OutputRequirementExec: order_by=[(b@1, asc), (c@2 + a@0, asc)], dist_by=KeyPartitioned[[a@0, b@1]])
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
     "
     );
@@ -762,7 +762,7 @@ fn test_output_req_after_projection() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    OutputRequirementExec: order_by=[(b@2, asc), (c@0 + new_a@1, asc)], dist_by=HashPartitioned[[new_a@1, b@2]])
+    OutputRequirementExec: order_by=[(b@2, asc), (c@0 + new_a@1, asc)], dist_by=KeyPartitioned[[new_a@1, b@2]])
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
     "
     );
@@ -797,10 +797,12 @@ fn test_output_req_after_projection() -> Result<()> {
         Arc::new(Column::new("new_a", 1)),
         Arc::new(Column::new("b", 2)),
     ];
-    if let Distribution::HashPartitioned(vec) = after_optimize
+    if let Distribution::KeyPartitioned(vec) = after_optimize
         .downcast_ref::<OutputRequirementExec>()
         .unwrap()
-        .required_input_distribution()[0]
+        .input_distribution_requirements()
+        .child_distribution(0)
+        .unwrap()
         .clone()
     {
         assert!(
@@ -809,7 +811,7 @@ fn test_output_req_after_projection() -> Result<()> {
                 .all(|(actual, expected)| actual.eq(&expected))
         );
     } else {
-        panic!("Expected HashPartitioned distribution!");
+        panic!("Expected KeyPartitioned distribution!");
     };
 
     Ok(())

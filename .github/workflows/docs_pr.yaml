@@ -26,6 +26,9 @@ on:
   push:
     paths:
       - "docs/**"
+    branches:
+      - main
+      - branch-*
   pull_request:
     paths:
       - "docs/**"
@@ -47,15 +50,18 @@ jobs:
           submodules: true
           fetch-depth: 1
       - name: Setup uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
       - name: Install doc dependencies
         run: uv sync --package datafusion-docs
-      - name: Install dependency graph tooling
+      - name: Install Graphviz
         run: |
           set -x
           sudo apt-get update
           sudo apt-get install -y graphviz
-          cargo install cargo-depgraph --version ^1.6 --locked
+      - name: Install cargo-depgraph
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853  # v2.83.2
+        with:
+          tool: cargo-depgraph@1.6
       - name: Build docs html and check for warnings
         run: |
           set -x

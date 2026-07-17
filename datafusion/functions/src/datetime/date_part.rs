@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::iter::repeat_n;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -240,16 +241,8 @@ impl ScalarUDFImpl for DatePartFunc {
                 "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
                 "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
                 "isodow" => {
-                    // Postgres `isodow` is 1..=7 with Mon=1. Arrow's
-                    // `DayOfWeekMonday0` returns 0..=6 with Mon=0; shift by
-                    // +1 to match Postgres. TODO: switch to a future
-                    // `DatePart::DayOfWeekMonday1` upstream variant once it
-                    // exists, so this kernel-then-add becomes a single call.
-                    let zero_based =
-                        date_part(array.as_ref(), DatePart::DayOfWeekMonday0)?;
-                    let int_arr = as_int32_array(&zero_based)?;
-                    let one_based: Int32Array = int_arr.unary(|v| v + 1);
-                    Arc::new(one_based) as ArrayRef
+                    // Postgres `isodow` is 1..=7 with Mon=1
+                    date_part(array.as_ref(), DatePart::DayOfWeekMonday1)?
                 }
                 "epoch" => epoch(array.as_ref())?,
                 _ => return exec_err!("Date part '{part}' not supported"),
@@ -398,12 +391,25 @@ fn part_normalization(part: &str) -> &str {
 
 /// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
 /// result to a total number of seconds, milliseconds, microseconds or
-/// nanoseconds
+/// nanoseconds as an `Int32Array`
 fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     // Nanosecond is neither supported in Postgres nor DuckDB, to avoid dealing
     // with overflow and precision issue we don't support nanosecond
     if unit == Nanosecond {
         return not_impl_err!("Date part {unit:?} not supported");
+    }
+
+    // Fast path with seconds - no need to compute nanoseconds
+    if unit == Second {
+        return Ok(date_part(array, DatePart::Second)?);
+    }
+
+    // Fast path for Date32 and Date64 - no seconds
+    if array.data_type() == &Date32 || array.data_type() == &Date64 {
+        return Ok(Arc::new(Int32Array::from_iter_values_with_nulls(
+            repeat_n(0, array.len()),
+            array.nulls().cloned(),
+        )));
     }
 
     let conversion_factor = match unit {
@@ -547,6 +553,14 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
 /// `nanosecond`s in each second, so representing up to 60 seconds as
 /// nanoseconds can be values up to 60 billion, which does not fit in Int32.
 fn seconds_ns(array: &dyn Array) -> Result<ArrayRef> {
+    // Fast path for Date32 and Date64 - no nanoseconds
+    if array.data_type() == &Date32 || array.data_type() == &Date64 {
+        return Ok(Arc::new(Int64Array::from_iter_values_with_nulls(
+            repeat_n(0, array.len()),
+            array.nulls().cloned(),
+        )));
+    }
+
     let secs = date_part(array, DatePart::Second)?;
     // This assumes array is primitive and not a dictionary
     let secs = as_int32_array(secs.as_ref())?;

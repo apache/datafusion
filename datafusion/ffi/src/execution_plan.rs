@@ -25,6 +25,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::metrics::MetricsSet;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
+    StatisticsContext,
 };
 use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
@@ -209,8 +210,11 @@ unsafe extern "C" fn partition_statistics_fn_wrapper(
     partition: FFI_Option<usize>,
 ) -> FFI_Result<SVec<u8>> {
     let partition: Option<usize> = partition.into();
-    plan.inner()
-        .statistics_with_args(&StatisticsArgs::new().with_partition(partition))
+    StatisticsContext::new()
+        .compute(
+            plan.inner().as_ref(),
+            &StatisticsArgs::new().with_partition(partition),
+        )
         .map(|stats| SVec::from(serialize_statistics(stats.as_ref()).as_slice()))
         .into()
 }
@@ -556,8 +560,9 @@ pub mod tests {
             self.metrics.clone()
         }
 
-        fn statistics_with_args(
+        fn statistics_from_inputs(
             &self,
+            _input_stats: &[Arc<Statistics>],
             _args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
             Ok(Arc::new(self.statistics.clone().unwrap_or_else(|| {
@@ -745,15 +750,17 @@ pub mod tests {
 
     /// Same round trip as
     /// [`test_ffi_execution_plan_partition_statistics_round_trip`], but queried
-    /// through the **new** `statistics_with_args` entry point.
+    /// through the **new** `StatisticsContext::compute` entry point.
     #[test]
-    fn test_ffi_execution_plan_statistics_with_args_round_trip() -> Result<()> {
+    fn test_ffi_execution_plan_statistics_context_round_trip() -> Result<()> {
         let (schema, original_stats) = stats_round_trip_fixture();
 
         // A plan without explicit statistics reports new_unknown.
         let bare = export_empty_exec_over_ffi(&schema, None)?;
         assert_eq!(
-            bare.statistics_with_args(&StatisticsArgs::new())?.as_ref(),
+            StatisticsContext::new()
+                .compute(bare.as_ref(), &StatisticsArgs::new())?
+                .as_ref(),
             &Statistics::new_unknown(&schema)
         );
 
@@ -761,14 +768,17 @@ pub mod tests {
         let with_stats =
             export_empty_exec_over_ffi(&schema, Some(original_stats.clone()))?;
         assert_eq!(
-            with_stats
-                .statistics_with_args(&StatisticsArgs::new())?
+            StatisticsContext::new()
+                .compute(with_stats.as_ref(), &StatisticsArgs::new())?
                 .as_ref(),
             &original_stats
         );
         assert_eq!(
-            with_stats
-                .statistics_with_args(&StatisticsArgs::new().with_partition(Some(1)))?
+            StatisticsContext::new()
+                .compute(
+                    with_stats.as_ref(),
+                    &StatisticsArgs::new().with_partition(Some(1)),
+                )?
                 .as_ref(),
             &original_stats
         );
