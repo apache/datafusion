@@ -823,6 +823,27 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     ) -> Option<Arc<dyn ExecutionPlan>> {
         None
     }
+
+    /// Serialize this plan to its protobuf representation, if it knows how.
+    ///
+    /// This is the `ExecutionPlan` analog of
+    /// [`PhysicalExpr::try_to_proto`].
+    ///
+    /// * `Ok(None)` (the default) — "I don't serialize myself"; the caller
+    ///   (`datafusion-proto`) falls back to the central downcast chain. Every
+    ///   un-migrated plan keeps its existing behavior.
+    /// * `Ok(Some(node))` — fully serialized; the caller must not fall back.
+    /// * `Err(_)` — a real failure (e.g. a child failed to serialize).
+    ///
+    /// Only *self-contained* plans should override this — see [`crate::proto`]
+    /// for the session-dependency boundary.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        Ok(None)
+    }
 }
 
 impl dyn ExecutionPlan {

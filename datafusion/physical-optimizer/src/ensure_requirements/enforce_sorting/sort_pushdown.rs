@@ -983,12 +983,11 @@ fn handle_hash_join(
     } else {
         column_indices.iter().collect()
     };
-    let len_of_left_fields = projected_indices
-        .iter()
-        .filter(|ci| ci.side == JoinSide::Left)
-        .count();
-
-    let all_from_right_child = all_indices.iter().all(|i| *i >= len_of_left_fields);
+    let all_from_right_child = all_indices.iter().all(|i| {
+        projected_indices
+            .get(*i)
+            .is_some_and(|ci| ci.side == JoinSide::Right)
+    });
 
     let plan_children = plan.children();
 
