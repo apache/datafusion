@@ -95,6 +95,7 @@ impl AggregateHashTable<PartialMarker> {
             group_by_metrics: self.group_by_metrics.clone(),
             input_schema: Arc::clone(&self.input_schema),
             output_schema: Arc::clone(&self.output_schema),
+            emit_schema: Arc::clone(&self.emit_schema),
             batch_size: self.batch_size,
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
                 group_by: Arc::clone(&state.group_by),

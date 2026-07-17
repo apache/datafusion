@@ -33,6 +33,9 @@ use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
 };
+use crate::aggregates::{
+    narrow_group_key_columns, widen_group_key_arrays, widen_group_key_schema,
+};
 
 /// Marker for raw rows -> partial state aggregation.
 pub(in crate::aggregates) struct PartialMarker;
@@ -82,6 +85,13 @@ pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
     /// Output schema: group columns followed by aggregate state or final values.
     pub(super) output_schema: SchemaRef,
 
+    /// `output_schema` with string/binary group key columns widened to the
+    /// internal 64-bit offset representation the group values are emitted
+    /// with (see `PhysicalGroupBy::group_schema`). The materialized output is
+    /// built against this schema and narrowed back to `output_schema` after
+    /// being sliced to `batch_size` rows.
+    pub(super) emit_schema: SchemaRef,
+
     /// Maximum rows per emitted output batch, from config `batch_size`.
     pub(super) batch_size: usize,
 
@@ -127,12 +137,15 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             .collect::<Result<_>>()?;
 
         let group_schema = agg.group_by.group_schema(&input_schema)?;
+        let emit_schema =
+            widen_group_key_schema(&output_schema, group_schema.fields().len());
         let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
 
         Ok(Self {
             group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
             input_schema,
             output_schema,
+            emit_schema,
             batch_size,
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
                 group_by: Arc::clone(&agg.group_by),
@@ -184,7 +197,14 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         batch: &RecordBatch,
         aggregate_fn: AggregateBatchFn,
     ) -> Result<()> {
-        let evaluated_batch = self.evaluate_batch(batch)?;
+        let mut evaluated_batch = self.evaluate_batch(batch)?;
+        // Widen string/binary group keys to the internal representation that
+        // `group_values` interns (see `PhysicalGroupBy::group_schema`).
+        evaluated_batch.grouping_set_args = evaluated_batch
+            .grouping_set_args
+            .into_iter()
+            .map(widen_group_key_arrays)
+            .collect::<Result<_>>()?;
         let state = self.state.building_mut();
 
         let _timer = self.group_by_metrics.aggregation_time.timer();
@@ -221,6 +241,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         materialize_accumulator_fn: MaterializeAccumulatorFn,
     ) -> Result<Option<RecordBatch>> {
         let output_schema = Arc::clone(&self.output_schema);
+        let emit_schema = Arc::clone(&self.emit_schema);
         let batch_size = self.batch_size;
 
         let mut output =
@@ -240,7 +261,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                     }
                     drop(timer);
 
-                    let batch = RecordBatch::try_new(output_schema, columns)?;
+                    let batch = RecordBatch::try_new(emit_schema, columns)?;
                     debug_assert!(batch.num_rows() > 0);
                     MaterializedAggregateOutput::new(batch)
                 }
@@ -253,7 +274,13 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 }
             };
 
-        let batch = output.next_batch(batch_size);
+        // Narrow internally-widened group key columns back to the output
+        // schema types. Each slice holds at most `batch_size` rows, so unlike
+        // the full materialized batch, the narrow representation fits.
+        let batch = output
+            .next_batch(batch_size)
+            .map(|batch| narrow_group_key_columns(batch, &output_schema))
+            .transpose()?;
         if output.is_exhausted() {
             self.state = AggregateHashTableState::Done;
         } else {

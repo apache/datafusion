@@ -29,7 +29,8 @@ use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
     create_schema, evaluate_group_by, evaluate_many, evaluate_optional, group_id_array,
-    max_duplicate_ordinal,
+    max_duplicate_ordinal, narrow_group_key_columns, widen_group_key_arrays,
+    widen_group_key_schema,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
@@ -279,6 +280,13 @@ pub(crate) struct GroupedHashAggregateStream {
     // the execution.
     // ========================================================================
     schema: SchemaRef,
+    /// `schema` with string/binary group key columns widened to their
+    /// internal 64-bit offset representation (see
+    /// [`internal_group_key_type`](crate::aggregates::internal_group_key_type)).
+    ///
+    /// Batches built by [`Self::emit`] use this schema; they are narrowed
+    /// back to `schema` after being sliced to `batch_size` rows for output.
+    emit_schema: SchemaRef,
     input_schema: SchemaRef,
     input: SendableRecordBatchStream,
     mode: AggregateMode,
@@ -440,12 +448,23 @@ impl GroupedHashAggregateStream {
         // Therefore, when we spill these intermediate states or pass them to another
         // aggregation operator, we must use a schema that includes both the group
         // columns **and** the partial-state columns.
-        let spill_schema = Arc::new(create_schema(
-            &agg.input().schema(),
-            &agg_group_by,
-            &aggregate_exprs,
-            AggregateMode::Partial,
-        )?);
+        //
+        // Spilled batches hold the group keys as emitted by `group_values`,
+        // so the group key columns use the widened internal representation.
+        let spill_schema = widen_group_key_schema(
+            &Arc::new(create_schema(
+                &agg.input().schema(),
+                &agg_group_by,
+                &aggregate_exprs,
+                AggregateMode::Partial,
+            )?),
+            group_schema.fields().len(),
+        );
+
+        // Batches built by `emit()` hold the group keys as emitted by
+        // `group_values` and are narrowed to `agg_schema` on output.
+        let emit_schema =
+            widen_group_key_schema(&agg_schema, group_schema.fields().len());
 
         // Need to update the GROUP BY expressions to point to the correct column after schema change
         let merging_group_by_expr = agg_group_by
@@ -590,6 +609,7 @@ impl GroupedHashAggregateStream {
 
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
+            emit_schema,
             input_schema: agg.input().schema(),
             input,
             mode: agg.mode,
@@ -806,6 +826,16 @@ impl Stream for GroupedHashAggregateStream {
                         reduction_factor.add_part(output_batch.num_rows());
                     }
 
+                    // Narrow internally-widened group key columns back to the
+                    // output schema types. Each slice holds at most
+                    // `batch_size` rows, so unlike the full emitted batch, the
+                    // narrow representation fits.
+                    let output_batch =
+                        match narrow_group_key_columns(output_batch, &self.schema) {
+                            Ok(batch) => batch,
+                            Err(e) => return Poll::Ready(Some(Err(e))),
+                        };
+
                     // Empty record batches should not be emitted.
                     // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
                     debug_assert!(output_batch.num_rows() > 0);
@@ -849,6 +879,13 @@ impl GroupedHashAggregateStream {
         } else {
             evaluate_group_by(&self.group_by, batch)?
         };
+
+        // Widen string/binary group keys to the internal representation that
+        // `group_values` interns (see `PhysicalGroupBy::group_schema`).
+        let group_by_values = group_by_values
+            .into_iter()
+            .map(widen_group_key_arrays)
+            .collect::<Result<Vec<_>>>()?;
 
         // Only create the timer if there are actual aggregate arguments to evaluate
         let timer = match (
@@ -1026,7 +1063,7 @@ impl GroupedHashAggregateStream {
         let schema = if spilling {
             Arc::clone(&self.spill_state.spill_schema)
         } else {
-            self.schema()
+            Arc::clone(&self.emit_schema)
         };
         if self.group_values.is_empty() {
             return Ok(None);
@@ -1415,6 +1452,55 @@ mod tests {
 
     // Migrated to PartialHashAggregateStream coverage in hash_stream.rs;
     // kept here for the legacy GroupedHashAggregateStream implementation.
+
+    #[test]
+    fn narrow_group_key_columns_rebases_sliced_offsets() -> Result<()> {
+        let wide_schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::LargeUtf8, true),
+            Field::new("c", DataType::Int64, false),
+        ]));
+        let narrow_schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Utf8, true),
+            Field::new("c", DataType::Int64, false),
+        ]));
+        assert_eq!(widen_group_key_schema(&narrow_schema, 1), wide_schema);
+        // Group keys past the group column prefix are left alone
+        assert_eq!(widen_group_key_schema(&narrow_schema, 0), narrow_schema);
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&wide_schema),
+            vec![
+                Arc::new(LargeStringArray::from(vec![
+                    Some("aa"),
+                    None,
+                    Some("cccc"),
+                    Some("dd"),
+                ])),
+                Arc::new(Int64Array::from(vec![1, 2, 3, 4])),
+            ],
+        )?;
+
+        // Slice so the string column's offsets do not start at zero, as
+        // happens when an emitted batch is sliced into `batch_size` chunks
+        let narrowed =
+            narrow_group_key_columns(batch.slice(1, 3), &Arc::clone(&narrow_schema))?;
+        assert_eq!(narrowed.schema(), narrow_schema);
+        let k = narrowed.column(0).as_string::<i32>();
+        assert!(k.is_null(0));
+        assert_eq!(k.value(1), "cccc");
+        assert_eq!(k.value(2), "dd");
+        let c = narrowed
+            .column(1)
+            .as_primitive::<arrow::datatypes::Int64Type>();
+        assert_eq!(c.values(), &[2, 3, 4]);
+
+        // A batch already matching the target schema passes through untouched
+        let untouched = narrow_group_key_columns(batch.clone(), &wide_schema)?;
+        assert_eq!(untouched.schema(), wide_schema);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {
         // Fix for https://github.com/apache/datafusion/issues/18701
