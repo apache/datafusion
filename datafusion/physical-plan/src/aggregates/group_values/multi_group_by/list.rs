@@ -35,6 +35,7 @@ use arrow::array::{
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::FieldRef;
+use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use std::sync::Arc;
@@ -71,23 +72,19 @@ impl<O: OffsetSizeTrait> ListGroupValueBuilder<O> {
     }
 
     fn push_offset(&mut self, additional: usize) -> Result<()> {
-        // Guard against usize overflow first (cheap, defense in depth: a
-        // List<i32> with cumulative length close to i32::MAX could wrap
-        // before the `O::from_usize` range check below would fire).
-        let next = self
-            .current_end()
-            .as_usize()
-            .checked_add(additional)
-            .ok_or_else(|| {
-                internal_datafusion_err!(
-                    "List offset usize overflow: current={} additional={}",
-                    self.current_end().as_usize(),
-                    additional
-                )
-            })?;
-        let next_o = O::from_usize(next)
-            .ok_or_else(|| internal_datafusion_err!("List offset overflows {}", next))?;
-        self.offsets.push(next_o);
+        let additional = O::from_usize(additional).ok_or_else(|| {
+            internal_datafusion_err!(
+                "List sublist length {additional} overflows the offset type"
+            )
+        })?;
+        let next = self.current_end().checked_add(&additional).ok_or_else(|| {
+            internal_datafusion_err!(
+                "List offset overflow: current={} additional={}",
+                self.current_end().as_usize(),
+                additional.as_usize()
+            )
+        })?;
+        self.offsets.push(next);
         Ok(())
     }
 
@@ -199,8 +196,7 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
             mut outer_nulls,
             outer_len: _,
         } = *self;
-        let outer_nulls =
-            std::mem::replace(&mut outer_nulls, MaybeNullBufferBuilder::new()).build();
+        let outer_nulls = outer_nulls.build();
         let child_array = child.build();
         // SAFETY: offsets are constructed monotonically by `push_offset` /
         // initial `[0]`, and child_array length matches the final offset.
@@ -218,20 +214,11 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
         let cut_offset = self.offsets[n];
         let cut = cut_offset.as_usize();
 
-        // First-n offsets: 0, off[1], ..., off[n].
-        let first_n_offsets: Vec<O> = self.offsets[..=n].to_vec();
-
-        // Remaining offsets shifted so that what was offsets[n] becomes 0.
-        // Overwrite the array in place.
-        // SAFETY: the write range is at most as large as offsets.len().
-        // Values in the possible overlap are read before being overwritten.
-        unsafe {
-            let dst = self.offsets.as_mut_ptr();
-            for (i, &off) in self.offsets[n..].iter().enumerate() {
-                *dst.add(i) = off - cut_offset;
-            }
-        }
-        self.offsets.truncate(self.offsets.len() - n);
+        // Split off first-n offsets: 0, off[1], ..., off[n-1], top up with off[n].
+        let mut first_n_offsets = split_vec_min_alloc(&mut self.offsets, n);
+        first_n_offsets.push(cut_offset);
+        // Remaining offsets shifted so that what was off[n] becomes 0.
+        self.offsets.iter_mut().for_each(|o| *o = o.sub(cut_offset));
 
         let first_n_outer_nulls = self.outer_nulls.take_n(n);
         let first_n_child = self.child.take_n(cut);
