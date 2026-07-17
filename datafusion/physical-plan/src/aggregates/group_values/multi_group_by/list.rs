@@ -193,7 +193,7 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
             field,
             offsets,
             child,
-            mut outer_nulls,
+            outer_nulls,
             outer_len: _,
         } = *self;
         let outer_nulls = outer_nulls.build();
