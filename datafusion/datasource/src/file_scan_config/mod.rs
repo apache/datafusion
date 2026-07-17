@@ -39,6 +39,7 @@ use datafusion_execution::{
 use datafusion_expr::Operator;
 
 use crate::source::OpenArgs;
+use datafusion_common::stats::Precision;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionMapping};
 use datafusion_physical_expr::utils::reassign_expr_columns;
@@ -1225,7 +1226,9 @@ impl FileScanConfig {
     /// we can't guarantee the statistics are exact because we don't know how many
     /// rows will be filtered out.
     pub fn statistics(&self) -> Statistics {
-        if self.file_source.filter().is_some() {
+        let filter_may_change_row_count = self.file_source.filter().is_some()
+            && self.statistics.num_rows != Precision::Exact(0);
+        if filter_may_change_row_count {
             self.statistics.clone().to_inexact()
         } else {
             self.statistics.clone()
@@ -2478,6 +2481,46 @@ mod tests {
         // Verify row count and byte size
         assert_eq!(partition_stats.num_rows, Precision::Exact(100));
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
+    }
+
+    #[test]
+    fn test_partition_statistics_filter() {
+        assert_num_rows_with_filter(Precision::Absent, Precision::Absent);
+        assert_num_rows_with_filter(Precision::Exact(100), Precision::Inexact(100));
+        assert_num_rows_with_filter(Precision::Inexact(100), Precision::Inexact(100));
+        assert_num_rows_with_filter(Precision::Exact(0), Precision::Exact(0));
+
+        /// Creates a file scan with filter and checks the output num_rows stats, given the input
+        /// num_rows stats.
+        fn assert_num_rows_with_filter(
+            input_num_rows: Precision<usize>,
+            expected_num_rows: Precision<usize>,
+        ) {
+            // Create a schema with 4 columns
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "col0",
+                DataType::Int32,
+                false,
+            )]));
+
+            let stats =
+                Statistics::new_unknown(schema.as_ref()).with_num_rows(input_num_rows);
+            let file_group =
+                FileGroup::new(vec![PartitionedFile::new("test.parquet", 1024)]);
+
+            let table_schema = TableSchema::from(&schema);
+            let config = FileScanConfigBuilder::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                Arc::new(MockSource::new(table_schema.clone()).with_filter(Arc::new(
+                    Literal::new(ScalarValue::Boolean(Some(true))),
+                ))),
+            )
+            .with_file_groups(vec![file_group])
+            .with_statistics(stats)
+            .build();
+
+            assert_eq!(config.statistics().num_rows, expected_num_rows,);
+        }
     }
 
     /// Regression test for reusing a `DataSourceExec` after its execution-local
