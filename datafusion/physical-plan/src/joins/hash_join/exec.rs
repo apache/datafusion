@@ -35,7 +35,8 @@ use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::shared_bounds::{
-    ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
+    ColumnBounds, PartitionBounds, PartitionedDynamicFilterExprStyle, PushdownStrategy,
+    SharedBuildAccumulator,
 };
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
@@ -1388,10 +1389,19 @@ impl ExecutionPlan for HashJoinExec {
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
         // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
         let repartition_random_state = REPARTITION_RANDOM_STATE;
+        let partitioned_expr_style = if enable_dynamic_filter_pushdown {
+            Some(PartitionedDynamicFilterExprStyle::from_config(
+                context.session_config().options(),
+            )?)
+        } else {
+            None
+        };
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
                     let filter = Arc::clone(&df.filter);
+                    let partitioned_expr_style = partitioned_expr_style
+                        .expect("partitioned expression style should be set");
                     let on_right = self
                         .on
                         .iter()
@@ -1406,6 +1416,7 @@ impl ExecutionPlan for HashJoinExec {
                             on_right,
                             repartition_random_state,
                             self.null_aware,
+                            partitioned_expr_style,
                         ))
                     })))
                 })

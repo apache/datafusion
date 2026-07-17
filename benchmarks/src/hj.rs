@@ -472,6 +472,51 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         probe_size: "2.3M_long_keys_count",
         isolate_partitioned_join: true,
     },
+    // Q24: selective order-date build side joined to large lineitem probe.
+    //
+    // Build Side: orders for a single day. Probe Side: lineitem. The dynamic
+    // filter should reject nearly all lineitem order keys before probing.
+    HashJoinQuery {
+        sql: r###"SELECT count(*)
+        FROM (
+          SELECT o_orderkey AS k
+          FROM orders
+          WHERE o_orderdate >= DATE '1993-07-01'
+            AND o_orderdate < DATE '1993-07-02'
+        ) o
+        JOIN (
+          SELECT l_orderkey AS k
+          FROM lineitem
+        ) l ON o.k = l.k"###,
+        density: 1.0,
+        prob_hit: 0.0004,
+        build_size: "orders_1_day",
+        probe_size: "60M_count",
+        isolate_partitioned_join: true,
+    },
+    // Q25: wider order-date build side joined to large lineitem probe.
+    //
+    // This keeps the same join shape as Q24 but lets substantially more probe
+    // rows through, which is useful when comparing dynamic-filter overhead to
+    // selectivity.
+    HashJoinQuery {
+        sql: r###"SELECT count(*)
+        FROM (
+          SELECT o_orderkey AS k
+          FROM orders
+          WHERE o_orderdate >= DATE '1993-07-01'
+            AND o_orderdate < DATE '1993-10-01'
+        ) o
+        JOIN (
+          SELECT l_orderkey AS k
+          FROM lineitem
+        ) l ON o.k = l.k"###,
+        density: 1.0,
+        prob_hit: 0.035,
+        build_size: "orders_92_days",
+        probe_size: "60M_count",
+        isolate_partitioned_join: true,
+    },
 ];
 
 impl RunOpt {
@@ -499,7 +544,7 @@ impl RunOpt {
         let ctx = SessionContext::new_with_config_rt(config, rt);
 
         if let Some(path) = &self.path {
-            for table in &["lineitem", "supplier", "nation", "customer"] {
+            for table in &["lineitem", "supplier", "nation", "customer", "orders"] {
                 let table_path = path.join(table);
                 if !table_path.exists() {
                     return exec_err!(

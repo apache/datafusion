@@ -18,6 +18,7 @@
 //! Utilities for shared build-side information. Used in dynamic filter pushdown in Hash Joins.
 // TODO: include the link to the Dynamic Filter blog post.
 
+use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
@@ -31,6 +32,7 @@ use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
 use arrow::array::ArrayRef;
+use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result, ScalarValue, SharedResult};
@@ -57,6 +59,43 @@ pub(crate) struct ColumnBounds {
 impl ColumnBounds {
     pub(crate) fn new(min: ScalarValue, max: ScalarValue) -> Self {
         Self { min, max }
+    }
+}
+
+/// Controls how partitioned hash join dynamic filters are lowered into a
+/// physical expression.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PartitionedDynamicFilterExprStyle {
+    /// Current behavior: route rows through a CASE keyed by the repartition
+    /// hash, with one branch per build-side partition.
+    Case,
+    /// Build each per-partition predicate independently, then OR them together.
+    PartitionedOr,
+    /// Merge partition predicates into one global predicate when possible.
+    Global,
+    /// Merge bounds globally and keep only membership tests partition-routed.
+    GlobalBoundsCaseMembership,
+}
+
+impl PartitionedDynamicFilterExprStyle {
+    pub(crate) fn from_config(config: &ConfigOptions) -> Result<Self> {
+        Self::parse(
+            &config
+                .optimizer
+                .hash_join_dynamic_filter_partitioned_expr_style,
+        )
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "case" => Ok(Self::Case),
+            "partitioned_or" => Ok(Self::PartitionedOr),
+            "global" => Ok(Self::Global),
+            "global_bounds_case_membership" => Ok(Self::GlobalBoundsCaseMembership),
+            _ => datafusion_common::config_err!(
+                "Invalid value for datafusion.optimizer.hash_join_dynamic_filter_partitioned_expr_style: {value}. Valid values are case, partitioned_or, global, global_bounds_case_membership"
+            ),
+        }
     }
 }
 
@@ -203,6 +242,59 @@ fn combine_membership_and_bounds(
     }
 }
 
+fn combine_predicates(
+    predicates: Vec<Arc<dyn PhysicalExpr>>,
+    op: Operator,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    predicates.into_iter().reduce(|acc, pred| {
+        Arc::new(BinaryExpr::new(acc, op.clone(), pred)) as Arc<dyn PhysicalExpr>
+    })
+}
+
+fn or_predicates(
+    predicates: Vec<Arc<dyn PhysicalExpr>>,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    combine_predicates(predicates, Operator::Or)
+}
+
+fn merge_scalar_min(left: &ScalarValue, right: &ScalarValue) -> Result<ScalarValue> {
+    match left.partial_cmp(right) {
+        Some(Ordering::Greater) => Ok(right.clone()),
+        Some(_) => Ok(left.clone()),
+        None => datafusion_common::internal_err!(
+            "cannot merge partitioned dynamic filter lower bounds for incomparable values {left:?} and {right:?}"
+        ),
+    }
+}
+
+fn merge_scalar_max(left: &ScalarValue, right: &ScalarValue) -> Result<ScalarValue> {
+    match left.partial_cmp(right) {
+        Some(Ordering::Less) => Ok(right.clone()),
+        Some(_) => Ok(left.clone()),
+        None => datafusion_common::internal_err!(
+            "cannot merge partitioned dynamic filter upper bounds for incomparable values {left:?} and {right:?}"
+        ),
+    }
+}
+
+fn merge_column_bounds(
+    bounds: impl IntoIterator<Item = ColumnBounds>,
+) -> Result<Option<ColumnBounds>> {
+    let mut bounds = bounds.into_iter();
+    let Some(first) = bounds.next() else {
+        return Ok(None);
+    };
+
+    let mut min = first.min;
+    let mut max = first.max;
+    for bound in bounds {
+        min = merge_scalar_min(&min, &bound.min)?;
+        max = merge_scalar_max(&max, &bound.max)?;
+    }
+
+    Ok(Some(ColumnBounds::new(min, max)))
+}
+
 /// Coordinates build-side information collection across multiple partitions
 ///
 /// This structure collects information from the build side (hash tables and/or bounds) and
@@ -258,6 +350,8 @@ pub(crate) struct SharedBuildAccumulator {
     /// Null-aware anti join (`NOT IN`). A probe-side NULL must reach the join so its
     /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
     null_aware: bool,
+    /// How partitioned dynamic filters should be represented.
+    partitioned_expr_style: PartitionedDynamicFilterExprStyle,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -315,6 +409,14 @@ struct AccumulatorState {
     completion: CompletionState,
 }
 
+struct PartitionFilterBranch {
+    partition_id: usize,
+    pushdown: PushdownStrategy,
+    bounds: PartitionBounds,
+    membership_expr: Option<Arc<dyn PhysicalExpr>>,
+    full_expr: Arc<dyn PhysicalExpr>,
+}
+
 #[derive(Clone)]
 enum PartitionStatus {
     Pending,
@@ -362,6 +464,7 @@ impl SharedBuildAccumulator {
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
         null_aware: bool,
+        partitioned_expr_style: PartitionedDynamicFilterExprStyle,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -409,6 +512,7 @@ impl SharedBuildAccumulator {
             repartition_random_state,
             probe_schema: right_child.schema(),
             null_aware,
+            partitioned_expr_style,
         }
     }
 
@@ -600,103 +704,307 @@ impl SharedBuildAccumulator {
                 }
             },
             FinalizeInput::Partitioned(partitions) => {
-                let num_partitions = partitions.len();
-                let routing_hash_expr = Arc::new(HashExpr::new(
-                    self.on_right.clone(),
-                    self.repartition_random_state.clone(),
-                    "hash_repartition".to_string(),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let modulo_expr = Arc::new(BinaryExpr::new(
-                    routing_hash_expr,
-                    Operator::Modulo,
-                    lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let mut real_branches = Vec::new();
-                let mut empty_partition_ids = Vec::new();
-                let mut has_canceled_unknown = false;
-
-                for (partition_id, partition) in partitions.iter().enumerate() {
-                    match partition {
-                        PartitionStatus::Reported(partition)
-                            if matches!(partition.pushdown, PushdownStrategy::Empty) =>
-                        {
-                            empty_partition_ids.push(partition_id);
-                        }
-                        PartitionStatus::Reported(partition) => {
-                            let membership_expr = create_membership_predicate(
-                                &self.on_right,
-                                partition.pushdown.clone(),
-                                &HASH_JOIN_SEED,
-                                self.probe_schema.as_ref(),
-                            )?;
-                            let bounds_expr = create_bounds_predicate(
-                                &self.on_right,
-                                &partition.bounds,
-                            );
-                            let then_expr = combine_membership_and_bounds(
-                                membership_expr,
-                                bounds_expr,
-                            )
-                            .unwrap_or_else(|| lit(true));
-                            real_branches.push((
-                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                then_expr,
-                            ));
-                        }
-                        PartitionStatus::CanceledUnknown => {
-                            has_canceled_unknown = true;
-                        }
-                        PartitionStatus::Pending => {
-                            return datafusion_common::internal_err!(
-                                "attempted to finalize dynamic filter with pending partition"
-                            );
-                        }
-                    }
-                }
-
-                let filter_expr = if has_canceled_unknown {
-                    let mut when_then_branches = empty_partition_ids
-                        .into_iter()
-                        .map(|partition_id| {
-                            (
-                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                lit(false),
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    when_then_branches.extend(real_branches);
-
-                    if when_then_branches.is_empty() {
-                        lit(true)
-                    } else {
-                        Arc::new(CaseExpr::try_new(
-                            Some(modulo_expr),
-                            when_then_branches,
-                            Some(lit(true)),
-                        )?) as Arc<dyn PhysicalExpr>
-                    }
-                } else if real_branches.is_empty() {
-                    lit(false)
-                } else if real_branches.len() == 1
-                    && empty_partition_ids.len() + 1 == num_partitions
-                {
-                    Arc::clone(&real_branches[0].1)
-                } else {
-                    Arc::new(CaseExpr::try_new(
-                        Some(modulo_expr),
-                        real_branches,
-                        Some(lit(false)),
-                    )?) as Arc<dyn PhysicalExpr>
-                };
-
+                let filter_expr = self.build_partitioned_filter(partitions)?;
                 self.dynamic_filter
                     .update(self.null_aware_filter(filter_expr))?;
             }
         }
 
         Ok(())
+    }
+
+    fn build_partitioned_filter(
+        &self,
+        partitions: Vec<PartitionStatus>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let num_partitions = partitions.len();
+
+        let mut branches = Vec::new();
+        let mut empty_partition_ids = Vec::new();
+        let mut has_canceled_unknown = false;
+
+        for (partition_id, partition) in partitions.iter().enumerate() {
+            match partition {
+                PartitionStatus::Reported(partition)
+                    if matches!(partition.pushdown, PushdownStrategy::Empty) =>
+                {
+                    empty_partition_ids.push(partition_id);
+                }
+                PartitionStatus::Reported(partition) => {
+                    let membership_expr = create_membership_predicate(
+                        &self.on_right,
+                        partition.pushdown.clone(),
+                        &HASH_JOIN_SEED,
+                        self.probe_schema.as_ref(),
+                    )?;
+                    let bounds_expr =
+                        create_bounds_predicate(&self.on_right, &partition.bounds);
+                    let full_expr = combine_membership_and_bounds(
+                        membership_expr.as_ref().map(Arc::clone),
+                        bounds_expr,
+                    )
+                    .unwrap_or_else(|| lit(true));
+
+                    branches.push(PartitionFilterBranch {
+                        partition_id,
+                        pushdown: partition.pushdown.clone(),
+                        bounds: partition.bounds.clone(),
+                        membership_expr,
+                        full_expr,
+                    });
+                }
+                PartitionStatus::CanceledUnknown => {
+                    has_canceled_unknown = true;
+                }
+                PartitionStatus::Pending => {
+                    return datafusion_common::internal_err!(
+                        "attempted to finalize dynamic filter with pending partition"
+                    );
+                }
+            }
+        }
+
+        match self.partitioned_expr_style {
+            PartitionedDynamicFilterExprStyle::Case => {
+                let modulo_expr = self.partition_routing_expr(num_partitions);
+                self.build_case_partitioned_filter(
+                    num_partitions,
+                    modulo_expr,
+                    &branches,
+                    &empty_partition_ids,
+                    has_canceled_unknown,
+                    |branch| Arc::clone(&branch.full_expr),
+                )
+            }
+            PartitionedDynamicFilterExprStyle::PartitionedOr => {
+                self.build_partitioned_or_filter(&branches, has_canceled_unknown)
+            }
+            PartitionedDynamicFilterExprStyle::Global => {
+                self.build_global_partitioned_filter(&branches, has_canceled_unknown)
+            }
+            PartitionedDynamicFilterExprStyle::GlobalBoundsCaseMembership => {
+                let modulo_expr = self.partition_routing_expr(num_partitions);
+                self.build_global_bounds_case_membership_filter(
+                    num_partitions,
+                    modulo_expr,
+                    &branches,
+                    &empty_partition_ids,
+                    has_canceled_unknown,
+                )
+            }
+        }
+    }
+
+    fn partition_routing_expr(&self, num_partitions: usize) -> Arc<dyn PhysicalExpr> {
+        let routing_hash_expr = Arc::new(HashExpr::new(
+            self.on_right.clone(),
+            self.repartition_random_state.clone(),
+            "hash_repartition".to_string(),
+        )) as Arc<dyn PhysicalExpr>;
+
+        Arc::new(BinaryExpr::new(
+            routing_hash_expr,
+            Operator::Modulo,
+            lit(ScalarValue::UInt64(Some(num_partitions as u64))),
+        )) as Arc<dyn PhysicalExpr>
+    }
+
+    fn build_case_partitioned_filter(
+        &self,
+        num_partitions: usize,
+        modulo_expr: Arc<dyn PhysicalExpr>,
+        branches: &[PartitionFilterBranch],
+        empty_partition_ids: &[usize],
+        has_canceled_unknown: bool,
+        branch_expr: impl Fn(&PartitionFilterBranch) -> Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let real_branches = branches
+            .iter()
+            .map(|branch| {
+                (
+                    lit(ScalarValue::UInt64(Some(branch.partition_id as u64))),
+                    branch_expr(branch),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        if has_canceled_unknown {
+            let mut when_then_branches = empty_partition_ids
+                .iter()
+                .map(|partition_id| {
+                    (
+                        lit(ScalarValue::UInt64(Some(*partition_id as u64))),
+                        lit(false),
+                    )
+                })
+                .collect::<Vec<_>>();
+            when_then_branches.extend(real_branches);
+
+            if when_then_branches.is_empty() {
+                Ok(lit(true))
+            } else {
+                Ok(Arc::new(CaseExpr::try_new(
+                    Some(modulo_expr),
+                    when_then_branches,
+                    Some(lit(true)),
+                )?) as Arc<dyn PhysicalExpr>)
+            }
+        } else if real_branches.is_empty() {
+            Ok(lit(false))
+        } else if real_branches.len() == 1
+            && empty_partition_ids.len() + 1 == num_partitions
+        {
+            Ok(Arc::clone(&real_branches[0].1))
+        } else {
+            Ok(Arc::new(CaseExpr::try_new(
+                Some(modulo_expr),
+                real_branches,
+                Some(lit(false)),
+            )?) as Arc<dyn PhysicalExpr>)
+        }
+    }
+
+    fn build_partitioned_or_filter(
+        &self,
+        branches: &[PartitionFilterBranch],
+        has_canceled_unknown: bool,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        if has_canceled_unknown {
+            return Ok(lit(true));
+        }
+
+        Ok(or_predicates(
+            branches
+                .iter()
+                .map(|branch| Arc::clone(&branch.full_expr))
+                .collect(),
+        )
+        .unwrap_or_else(|| lit(false)))
+    }
+
+    fn build_global_partitioned_filter(
+        &self,
+        branches: &[PartitionFilterBranch],
+        has_canceled_unknown: bool,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        if has_canceled_unknown {
+            return Ok(lit(true));
+        }
+
+        let membership_expr = self.create_global_membership_predicate(branches)?;
+        let bounds_expr = self.create_global_bounds_predicate(branches)?;
+        Ok(combine_membership_and_bounds(membership_expr, bounds_expr)
+            .unwrap_or_else(|| lit(false)))
+    }
+
+    fn build_global_bounds_case_membership_filter(
+        &self,
+        num_partitions: usize,
+        modulo_expr: Arc<dyn PhysicalExpr>,
+        branches: &[PartitionFilterBranch],
+        empty_partition_ids: &[usize],
+        has_canceled_unknown: bool,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let membership_case = self.build_case_partitioned_filter(
+            num_partitions,
+            modulo_expr,
+            branches,
+            empty_partition_ids,
+            has_canceled_unknown,
+            |branch| {
+                branch
+                    .membership_expr
+                    .as_ref()
+                    .map(Arc::clone)
+                    .unwrap_or_else(|| lit(true))
+            },
+        )?;
+
+        if has_canceled_unknown {
+            return Ok(membership_case);
+        }
+
+        let bounds_expr = self.create_global_bounds_predicate(branches)?;
+        Ok(
+            combine_membership_and_bounds(Some(membership_case), bounds_expr)
+                .unwrap_or_else(|| lit(false)),
+        )
+    }
+
+    fn create_global_membership_predicate(
+        &self,
+        branches: &[PartitionFilterBranch],
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        let mut in_list_arrays = Vec::new();
+        let mut map_exprs = Vec::new();
+
+        for branch in branches {
+            match &branch.pushdown {
+                PushdownStrategy::InList(array) => {
+                    in_list_arrays.push(Arc::clone(array));
+                }
+                PushdownStrategy::Map(_) => {
+                    if let Some(expr) = &branch.membership_expr {
+                        map_exprs.push(Arc::clone(expr));
+                    }
+                }
+                PushdownStrategy::Empty => {}
+            }
+        }
+
+        let in_list_expr = if in_list_arrays.is_empty() {
+            None
+        } else {
+            let refs = in_list_arrays
+                .iter()
+                .map(|array| array.as_ref())
+                .collect::<Vec<_>>();
+            Some(
+                create_membership_predicate(
+                    &self.on_right,
+                    PushdownStrategy::InList(concat(&refs)?),
+                    &HASH_JOIN_SEED,
+                    self.probe_schema.as_ref(),
+                )?
+                .expect("InList pushdown should produce a membership predicate"),
+            )
+        };
+
+        let mut predicates = Vec::new();
+        if let Some(expr) = in_list_expr {
+            predicates.push(expr);
+        }
+        predicates.extend(map_exprs);
+
+        Ok(or_predicates(predicates))
+    }
+
+    fn create_global_bounds_predicate(
+        &self,
+        branches: &[PartitionFilterBranch],
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        if branches.is_empty() {
+            return Ok(None);
+        }
+
+        let mut merged_bounds = Vec::new();
+        for column_index in 0..self.on_right.len() {
+            let column_bounds = branches
+                .iter()
+                .map(|branch| branch.bounds.get_column_bounds(column_index).cloned())
+                .collect::<Option<Vec<_>>>();
+
+            if let Some(column_bounds) = column_bounds
+                && let Some(bounds) = merge_column_bounds(column_bounds)?
+            {
+                merged_bounds.push(bounds);
+            }
+        }
+
+        Ok(create_bounds_predicate(
+            &self.on_right,
+            &PartitionBounds::new(merged_bounds),
+        ))
     }
 
     /// Wraps a pushdown filter so a null-aware anti join keeps its probe-side NULL rows.
@@ -757,6 +1065,7 @@ pub(super) fn make_partitioned_accumulator_for_test(
         repartition_random_state: SeededRandomState::with_seed(1),
         probe_schema,
         null_aware: false,
+        partitioned_expr_style: PartitionedDynamicFilterExprStyle::Case,
     }
 }
 
@@ -814,6 +1123,7 @@ mod tests {
             repartition_random_state: SeededRandomState::with_seed(1),
             probe_schema: test_probe_schema(),
             null_aware: false,
+            partitioned_expr_style: PartitionedDynamicFilterExprStyle::Case,
         }
     }
 
@@ -831,13 +1141,25 @@ mod tests {
     fn make_partitioned_expr_accumulator_for_test(
         num_partitions: usize,
     ) -> SharedBuildAccumulator {
-        make_accumulator_for_test(
+        make_partitioned_expr_accumulator_for_style(
+            num_partitions,
+            PartitionedDynamicFilterExprStyle::Case,
+        )
+    }
+
+    fn make_partitioned_expr_accumulator_for_style(
+        num_partitions: usize,
+        partitioned_expr_style: PartitionedDynamicFilterExprStyle,
+    ) -> SharedBuildAccumulator {
+        let mut accumulator = make_accumulator_for_test(
             AccumulatedBuildData::Partitioned {
                 partitions: vec![PartitionStatus::Pending; num_partitions],
                 completed_partitions: 0,
             },
             test_on_right(),
-        )
+        );
+        accumulator.partitioned_expr_style = partitioned_expr_style;
+        accumulator
     }
 
     fn in_list(values: &[i32]) -> PushdownStrategy {
@@ -921,6 +1243,49 @@ mod tests {
         assert_eq!(binary_expr(expr).op(), &expected);
     }
 
+    fn contains_case_expr(expr: &PhysicalExprRef) -> bool {
+        if expr.downcast_ref::<CaseExpr>().is_some() {
+            return true;
+        }
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+            return contains_case_expr(binary.left())
+                || contains_case_expr(binary.right());
+        }
+        false
+    }
+
+    fn find_case_expr(expr: &PhysicalExprRef) -> Option<&CaseExpr> {
+        if let Some(case) = expr.downcast_ref::<CaseExpr>() {
+            return Some(case);
+        }
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+            return find_case_expr(binary.left())
+                .or_else(|| find_case_expr(binary.right()));
+        }
+        None
+    }
+
+    fn find_in_list_expr(expr: &PhysicalExprRef) -> Option<&InListExpr> {
+        if let Some(in_list) = expr.downcast_ref::<InListExpr>() {
+            return Some(in_list);
+        }
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+            return find_in_list_expr(binary.left())
+                .or_else(|| find_in_list_expr(binary.right()));
+        }
+        if let Some(case) = expr.downcast_ref::<CaseExpr>() {
+            for (_, then_expr) in case.when_then_expr() {
+                if let Some(in_list) = find_in_list_expr(then_expr) {
+                    return Some(in_list);
+                }
+            }
+            if let Some(else_expr) = case.else_expr() {
+                return find_in_list_expr(else_expr);
+            }
+        }
+        None
+    }
+
     fn partitioned_state(acc: &SharedBuildAccumulator) -> (Vec<PartitionStatus>, usize) {
         let guard = acc.inner.lock();
         let AccumulatedBuildData::Partitioned {
@@ -995,6 +1360,166 @@ mod tests {
         let expr = current_expr(&acc);
         in_list_expr(&expr);
         assert!(expr.downcast_ref::<CaseExpr>().is_none());
+    }
+
+    #[test]
+    fn partitioned_dynamic_filter_style_parses_config_values() {
+        assert_eq!(
+            PartitionedDynamicFilterExprStyle::parse("case").unwrap(),
+            PartitionedDynamicFilterExprStyle::Case
+        );
+        assert_eq!(
+            PartitionedDynamicFilterExprStyle::parse("partitioned_or").unwrap(),
+            PartitionedDynamicFilterExprStyle::PartitionedOr
+        );
+        assert_eq!(
+            PartitionedDynamicFilterExprStyle::parse("global").unwrap(),
+            PartitionedDynamicFilterExprStyle::Global
+        );
+        assert_eq!(
+            PartitionedDynamicFilterExprStyle::parse("global_bounds_case_membership")
+                .unwrap(),
+            PartitionedDynamicFilterExprStyle::GlobalBoundsCaseMembership
+        );
+        assert!(PartitionedDynamicFilterExprStyle::parse("bad_style").is_err());
+    }
+
+    #[test]
+    fn partitioned_case_style_uses_case_expression() {
+        let acc = make_partitioned_expr_accumulator_for_style(
+            3,
+            PartitionedDynamicFilterExprStyle::Case,
+        );
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1]), no_bounds()),
+            reported(PushdownStrategy::Empty, no_bounds()),
+            reported(in_list(&[3]), no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        let case = case_expr(&expr);
+        assert_eq!(case.when_then_expr().len(), 2);
+    }
+
+    #[test]
+    fn partitioned_or_style_uses_or_without_case_expression() {
+        let acc = make_partitioned_expr_accumulator_for_style(
+            2,
+            PartitionedDynamicFilterExprStyle::PartitionedOr,
+        );
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1]), no_bounds()),
+            reported(in_list(&[2]), no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_top_binary_op(&expr, Operator::Or);
+        assert!(!contains_case_expr(&expr));
+    }
+
+    #[test]
+    fn partitioned_global_style_merges_inlists_and_bounds() {
+        let acc = make_partitioned_expr_accumulator_for_style(
+            3,
+            PartitionedDynamicFilterExprStyle::Global,
+        );
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1, 2]), bounds(1, 2)),
+            reported(PushdownStrategy::Empty, no_bounds()),
+            reported(in_list(&[10]), bounds(10, 10)),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_top_binary_op(&expr, Operator::And);
+        assert!(!contains_case_expr(&expr));
+        let in_list = find_in_list_expr(&expr).expect("expected merged InListExpr");
+        let actual_values = in_list
+            .list()
+            .iter()
+            .map(|expr| {
+                let literal = expr
+                    .downcast_ref::<Literal>()
+                    .expect("expected InListExpr literal value");
+                match literal.value() {
+                    ScalarValue::Int32(Some(value)) => *value,
+                    value => panic!("expected Int32 in-list value, got {value:?}"),
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual_values, vec![1, 2, 10]);
+    }
+
+    #[test]
+    fn partitioned_global_bounds_case_membership_uses_global_bounds_and_case_membership()
+    {
+        let acc = make_partitioned_expr_accumulator_for_style(
+            2,
+            PartitionedDynamicFilterExprStyle::GlobalBoundsCaseMembership,
+        );
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1]), bounds(1, 1)),
+            reported(in_list(&[10]), bounds(10, 10)),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_top_binary_op(&expr, Operator::And);
+        let case = find_case_expr(&expr).expect("expected membership CASE");
+        assert_eq!(case.when_then_expr().len(), 2);
+        assert!(
+            case.when_then_expr()
+                .iter()
+                .all(|(_, then_expr)| then_expr.downcast_ref::<InListExpr>().is_some()),
+            "CASE branches should contain membership predicates without per-partition bounds"
+        );
+    }
+
+    #[test]
+    fn partitioned_non_routed_styles_are_permissive_with_canceled_unknown() {
+        for style in [
+            PartitionedDynamicFilterExprStyle::PartitionedOr,
+            PartitionedDynamicFilterExprStyle::Global,
+        ] {
+            let acc = make_partitioned_expr_accumulator_for_style(2, style);
+
+            acc.build_filter(FinalizeInput::Partitioned(vec![
+                PartitionStatus::CanceledUnknown,
+                reported(PushdownStrategy::Empty, no_bounds()),
+            ]))
+            .unwrap();
+
+            let expr = current_expr(&acc);
+            assert_literal_bool(&expr, true);
+        }
+    }
+
+    #[test]
+    fn partitioned_global_bounds_case_membership_keeps_unknown_routes_permissive() {
+        let acc = make_partitioned_expr_accumulator_for_style(
+            2,
+            PartitionedDynamicFilterExprStyle::GlobalBoundsCaseMembership,
+        );
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            PartitionStatus::CanceledUnknown,
+            reported(PushdownStrategy::Empty, no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        let case = case_expr(&expr);
+        assert_eq!(case.when_then_expr().len(), 1);
+        assert_literal_bool(
+            case.else_expr().expect("expected permissive fallback"),
+            true,
+        );
     }
 
     #[test]
