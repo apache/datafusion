@@ -33,7 +33,8 @@ use crate::aggregates::order::GroupClusteringFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
     aggregate_metric_label, create_schema, evaluate_group_by, evaluate_optional,
-    group_id_array, max_duplicate_ordinal,
+    group_id_array, group_keys_with_large_offsets, group_schema_with_large_offsets,
+    max_duplicate_ordinal, restore_group_key_types,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
@@ -276,6 +277,9 @@ pub(crate) struct GroupedHashAggregateStream {
     // the execution.
     // ========================================================================
     schema: SchemaRef,
+    /// Batches from [`Self::emit`] can contain more key data than the
+    /// 32-bit offset limit permits.
+    emit_schema: SchemaRef,
     input_schema: SchemaRef,
     input: SendableRecordBatchStream,
     mode: AggregateMode,
@@ -466,12 +470,19 @@ impl GroupedHashAggregateStream {
         // Therefore, when we spill these intermediate states or pass them to another
         // aggregation operator, we must use a schema that includes both the group
         // columns **and** the partial-state columns.
-        let spill_schema = Arc::new(create_schema(
-            &agg.input().schema(),
-            &agg_group_by,
-            &aggregate_exprs,
-            AggregateMode::Partial,
-        )?);
+        // The keys in files on disk keep 64-bit offsets.
+        let spill_schema = group_schema_with_large_offsets(
+            &Arc::new(create_schema(
+                &agg.input().schema(),
+                &agg_group_by,
+                &aggregate_exprs,
+                AggregateMode::Partial,
+            )?),
+            group_schema.fields().len(),
+        );
+
+        let emit_schema =
+            group_schema_with_large_offsets(&agg_schema, group_schema.fields().len());
 
         // Need to update the GROUP BY expressions to point to the correct column after schema change
         let merging_group_by_expr = agg_group_by
@@ -618,6 +629,7 @@ impl GroupedHashAggregateStream {
 
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
+            emit_schema,
             input_schema: agg.input().schema(),
             input,
             mode: agg.mode,
@@ -817,6 +829,12 @@ impl Stream for GroupedHashAggregateStream {
                         reduction_factor.add_part(output_batch.num_rows());
                     }
 
+                    let output_batch =
+                        match restore_group_key_types(output_batch, &self.schema) {
+                            Ok(batch) => batch,
+                            Err(e) => return Poll::Ready(Some(Err(e))),
+                        };
+
                     // Empty record batches should not be emitted.
                     // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
                     debug_assert!(output_batch.num_rows() > 0);
@@ -865,6 +883,11 @@ impl GroupedHashAggregateStream {
                 evaluate_group_by(&self.group_by, batch)
             }
         })?;
+
+        let group_by_values = group_by_values
+            .into_iter()
+            .map(group_keys_with_large_offsets)
+            .collect::<Result<Vec<_>>>()?;
 
         // Evaluate aggregate arguments and filters together. Per-aggregate
         // argument timers remain limited to their argument expressions because
@@ -1046,7 +1069,7 @@ impl GroupedHashAggregateStream {
         let schema = if spilling {
             Arc::clone(&self.spill_state.spill_schema)
         } else {
-            self.schema()
+            Arc::clone(&self.emit_schema)
         };
         if self.group_values.is_empty() {
             return Ok(None);
