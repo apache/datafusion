@@ -897,6 +897,17 @@ date_trunc Time(ns) [precision, expression] [String, Time(ns)] SCALAR Truncates 
 date_trunc Timestamp(ns) [precision, expression] [String, Timestamp(ns)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 date_trunc Timestamp(ns, "+TZ") [precision, expression] [String, Timestamp(ns, "+TZ")] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 
+# Table functions (UDTFs) appear in information_schema.routines with
+# function_type = TABLE and data_type = TABLE.
+# Note: built-in `generate_series` and `range` are registered as BOTH a
+# scalar UDF and a UDTF, so this test filters to the TABLE rows to make
+# a stable assertion.
+query TTT rowsort
+select routine_name, data_type, function_type from information_schema.routines where function_type = 'TABLE' order by routine_name;
+----
+generate_series TABLE TABLE
+range TABLE TABLE
+
 statement ok
 show functions
 

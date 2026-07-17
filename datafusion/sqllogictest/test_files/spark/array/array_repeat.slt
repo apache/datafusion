@@ -112,3 +112,10 @@ FROM VALUES
 [[123], [123]]
 [[], []]
 [[NULL], [NULL]]
+
+
+# null count
+query ?
+select array_repeat('a', NULL);
+----
+NULL
