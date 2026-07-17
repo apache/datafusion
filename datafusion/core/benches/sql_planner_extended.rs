@@ -386,12 +386,16 @@ fn criterion_benchmark(c: &mut Criterion) {
     let df = build_test_data_frame(&baseline_ctx, &rt);
     let case_heavy_left_join_df = build_case_heavy_left_join_df(&case_heavy_ctx, &rt);
 
-    c.bench_function("logical_plan_optimize", |b| {
+    // really slow :(
+    let mut group = c.benchmark_group("sample_size_10");
+    group.sample_size(10);
+    group.bench_function("logical_plan_optimize", |b| {
         b.iter(|| {
             let df_clone = df.clone();
             black_box(rt.block_on(async { df_clone.into_optimized_plan().unwrap() }));
         })
     });
+    group.finish();
 
     c.bench_function("logical_plan_optimize_hotspot_case_heavy_left_join", |b| {
         b.iter(|| {
