@@ -2485,7 +2485,7 @@ impl NormalizeEq for Expr {
                     args: other_args,
                 }),
             ) => {
-                self_func.name() == other_func.name()
+                self_func == other_func
                     && self_args.len() == other_args.len()
                     && self_args
                         .iter()
@@ -2516,7 +2516,7 @@ impl NormalizeEq for Expr {
                         },
                 }),
             ) => {
-                self_func.name() == other_func.name()
+                self_func == other_func
                     && self_distinct == other_distinct
                     && self_null_treatment == other_null_treatment
                     && self_args.len() == other_args.len()
@@ -2569,7 +2569,7 @@ impl NormalizeEq for Expr {
                         },
                 } = other.as_ref();
 
-                self_fun.name() == other_fun.name()
+                self_fun == other_fun
                     && self_window_frame == other_window_frame
                     && match (self_filter, other_filter) {
                         (Some(a), Some(b)) => a.normalize_eq(b),
