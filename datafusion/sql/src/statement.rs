@@ -1804,7 +1804,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             name,
             columns,
             file_type,
-            location: _,
             locations,
             table_partition_cols,
             if_not_exists,
@@ -1859,6 +1858,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return plan_err!("CREATE EXTERNAL TABLE requires at least one location");
         };
 
+        // Keep the existing single-location builder API: seed it with the first
+        // location, then replace it with the complete list.
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
             Box::new(
                 PlanCreateExternalTable::builder(name, location, file_type, df_schema)

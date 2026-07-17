@@ -424,13 +424,19 @@ async fn roundtrip_create_external_table_multiple_locations() -> Result<()> {
     let bytes = logical_plan_to_bytes(&plan)?;
     let protobuf_plan = protobuf::LogicalPlanNode::decode(bytes.as_ref())
         .expect("failed to decode CreateExternalTable proto");
+    #[cfg(feature = "json")]
+    {
+        let json = serde_json::to_string(&protobuf_plan).unwrap();
+        assert!(!json.contains("\"location\":"));
+        assert!(json.contains("\"locations\":[\"file_a.csv\",\"file_b.csv\"]"));
+    }
     let Some(protobuf::logical_plan_node::LogicalPlanType::CreateExternalTable(
         create_external_table,
     )) = protobuf_plan.logical_plan_type
     else {
         panic!("expected a CreateExternalTable proto");
     };
-    assert_eq!(create_external_table.location, "file_a.csv");
+    assert!(create_external_table.location.is_empty());
     assert_eq!(
         create_external_table.locations,
         vec!["file_a.csv".to_string(), "file_b.csv".to_string()]
@@ -448,6 +454,38 @@ async fn roundtrip_create_external_table_multiple_locations() -> Result<()> {
         rt.locations,
         vec!["file_a.csv".to_string(), "file_b.csv".to_string()]
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_create_external_table_single_location_legacy_field() -> Result<()> {
+    let ctx = SessionContext::new();
+    let query = "CREATE EXTERNAL TABLE t (a INTEGER)
+            STORED AS CSV
+            LOCATION 'file.csv'";
+
+    let plan = ctx.state().create_logical_plan(query).await?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let protobuf_plan = protobuf::LogicalPlanNode::decode(bytes.as_ref())
+        .expect("failed to decode CreateExternalTable proto");
+    #[cfg(feature = "json")]
+    {
+        let json = serde_json::to_string(&protobuf_plan).unwrap();
+        assert!(json.contains("\"location\":\"file.csv\""));
+        assert!(!json.contains("\"locations\""));
+    }
+    let Some(protobuf::logical_plan_node::LogicalPlanType::CreateExternalTable(
+        create_external_table,
+    )) = protobuf_plan.logical_plan_type
+    else {
+        panic!("expected a CreateExternalTable proto");
+    };
+    assert_eq!(create_external_table.location, "file.csv");
+    assert!(create_external_table.locations.is_empty());
+
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(plan, logical_round_trip);
 
     Ok(())
 }

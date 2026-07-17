@@ -1844,6 +1844,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     converted_column_defaults
                         .insert(col_name.clone(), serialize_expr(expr, extension_codec)?);
                 }
+                let (legacy_location, proto_locations) = match locations.as_slice() {
+                    [location] => (location.clone(), vec![]),
+                    _ => (String::new(), locations.clone()),
+                };
 
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
@@ -1851,8 +1855,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             name: Some(protobuf::TableReference::from_proto(
                                 name.clone(),
                             )),
-                            location: locations.first().cloned().unwrap_or_default(),
-                            locations: locations.clone(),
+                            location: legacy_location,
+                            locations: proto_locations,
                             file_type: file_type.clone(),
                             schema: Some(df_schema.try_into()?),
                             table_partition_cols: table_partition_cols.clone(),

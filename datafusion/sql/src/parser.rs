@@ -249,8 +249,6 @@ pub struct CreateExternalTable {
     pub columns: Vec<ColumnDef>,
     /// File type (Parquet, NDJSON, CSV, etc)
     pub file_type: String,
-    /// First path to file, retained for backwards compatibility.
-    pub location: String,
     /// Paths to files
     pub locations: Vec<String>,
     /// Partition Columns
@@ -291,21 +289,22 @@ impl fmt::Display for CreateExternalTable {
             }
             write!(f, ") ")?;
         }
-        if self.locations.len() > 1 {
-            write!(f, "LOCATION (")?;
-            for (idx, location) in self.locations.iter().enumerate() {
-                if idx > 0 {
-                    write!(f, ", ")?;
-                }
-                write!(f, "{}", Value::SingleQuotedString(location.clone()))?;
-            }
-            write!(f, ")")
-        } else {
-            write!(
+        match self.locations.as_slice() {
+            [location] => write!(
                 f,
                 "LOCATION {}",
-                Value::SingleQuotedString(self.location.clone())
-            )
+                Value::SingleQuotedString(location.clone())
+            ),
+            locations => {
+                write!(f, "LOCATION (")?;
+                for (idx, location) in locations.iter().enumerate() {
+                    if idx > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", Value::SingleQuotedString(location.clone()))?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }
@@ -1222,15 +1221,14 @@ impl<'a> DFParser<'a> {
         }
 
         let locations = builder.locations.unwrap();
-        let Some(location) = locations.first().cloned() else {
+        if locations.is_empty() {
             return parser_err!("LOCATION requires at least one path");
-        };
+        }
 
         let create = CreateExternalTable {
             name: table_name,
             columns,
             file_type: builder.file_type.unwrap(),
-            location,
             locations,
             table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
             order_exprs: builder.order_exprs,
@@ -1366,16 +1364,11 @@ mod tests {
             .iter()
             .map(|location| location.to_string())
             .collect::<Vec<_>>();
-        let location = locations
-            .first()
-            .cloned()
-            .expect("test CREATE EXTERNAL TABLE requires a location");
 
         CreateExternalTable {
             name: ObjectName::from(vec![Ident::from("t")]),
             columns: vec![],
             file_type: "CSV".to_string(),
-            location,
             locations,
             table_partition_cols: vec![],
             order_exprs: vec![],

@@ -84,6 +84,15 @@ impl TableProviderFactory for ListingTableFactory {
             return plan_err!("CREATE EXTERNAL TABLE requires at least one location");
         };
 
+        let mut seen_paths = HashSet::with_capacity(table_paths.len());
+        if let Some(duplicate) = table_paths.iter().find(|path| !seen_paths.insert(*path))
+        {
+            return plan_err!(
+                "Duplicate location '{}' in CREATE EXTERNAL TABLE",
+                duplicate.as_str()
+            );
+        }
+
         // `ListingTable` resolves a single object store (from the first location)
         // and scans every location with it, so locations spanning different
         // object stores would silently read the wrong data. Reading across
@@ -629,6 +638,42 @@ mod tests {
             .map(|f| f.name().clone())
             .collect();
         assert_eq!(field_names, vec!["c1".to_string(), "c2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_create_with_duplicate_locations_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file.csv");
+        write_csv(&file, "c1,c2\n1,a\n");
+
+        let (factory, state) = factory_and_state();
+        let cmd = csv_cmd_with_locations(&[&file, &file]);
+        let err = factory.create(&state, &cmd).await.unwrap_err();
+        assert_error_contains(err, "Duplicate location");
+    }
+
+    #[tokio::test]
+    async fn test_create_with_overlapping_locations_reads_each_file_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_a = dir.path().join("file_a.csv");
+        let file_b = dir.path().join("file_b.csv");
+        write_csv(&file_a, "c1,c2\n1,a\n");
+        write_csv(&file_b, "c1,c2\n2,b\n");
+
+        let (factory, state) = factory_and_state();
+        let cmd = csv_cmd_with_locations(&[dir.path(), file_a.as_path()]);
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
+
+        let listed_files = listing_table
+            .list_files_for_scan(&state, &[], None)
+            .await
+            .unwrap()
+            .file_groups
+            .iter()
+            .map(|group| group.len())
+            .sum::<usize>();
+        assert_eq!(listed_files, 2);
     }
 
     #[tokio::test]

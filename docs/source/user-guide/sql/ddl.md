@@ -95,8 +95,7 @@ LOCATION (
 ```
 
 All listed locations must reside on the same object store and resolve to data
-with the same schema. Paths that themselves contain a literal comma can still
-be used as a single string literal, for example `LOCATION 'path/with,comma.csv'`.
+with the same schema.
 
 ### Example: Parquet
 
