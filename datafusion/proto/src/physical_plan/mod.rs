@@ -787,11 +787,11 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Repartition(repart) => {
                 self.try_into_repartition_physical_plan(repart, ctx, proto_converter)
             }
-            PhysicalPlanType::GlobalLimit(limit) => {
-                self.try_into_global_limit_physical_plan(limit, ctx, proto_converter)
+            PhysicalPlanType::GlobalLimit(_) => {
+                GlobalLimitExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::LocalLimit(limit) => {
-                self.try_into_local_limit_physical_plan(limit, ctx, proto_converter)
+            PhysicalPlanType::LocalLimit(_) => {
+                LocalLimitExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Window(window_agg) => {
                 self.try_into_window_physical_plan(window_agg, ctx, proto_converter)
@@ -914,22 +914,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         if let Some(exec) = plan.downcast_ref::<FilterExec>() {
             return protobuf::PhysicalPlanNode::try_from_filter_exec(
                 exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(limit) = plan.downcast_ref::<GlobalLimitExec>() {
-            return protobuf::PhysicalPlanNode::try_from_global_limit_exec(
-                limit,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(limit) = plan.downcast_ref::<LocalLimitExec>() {
-            return protobuf::PhysicalPlanNode::try_from_local_limit_exec(
-                limit,
                 codec,
                 proto_converter,
             );
@@ -1561,6 +1545,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(repart_exec))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `GlobalLimitExec` deserializes itself via `GlobalLimitExec::try_from_proto`"
+    )]
     fn try_into_global_limit_physical_plan(
         &self,
         limit: &protobuf::GlobalLimitExecNode,
@@ -1581,6 +1569,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         )))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `LocalLimitExec` deserializes itself via `LocalLimitExec::try_from_proto`"
+    )]
     fn try_into_local_limit_physical_plan(
         &self,
         limit: &protobuf::LocalLimitExecNode,
@@ -2993,6 +2985,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `GlobalLimitExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_global_limit_exec(
         limit: &GlobalLimitExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3018,6 +3014,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `LocalLimitExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_local_limit_exec(
         limit: &LocalLimitExec,
         codec: &dyn PhysicalExtensionCodec,
