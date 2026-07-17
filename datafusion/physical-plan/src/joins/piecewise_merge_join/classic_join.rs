@@ -125,7 +125,7 @@ impl RecordBatchStream for ClassicPWMJStream {
 // Classic Joins
 //  1. `WaitBufferedSide` - Load in the buffered side data into memory.
 //  2. `FetchStreamBatch` -  Fetch + sort incoming stream batches. We switch the state to
-//     `Completed` if there are are still remaining partitions to process. It is only switched to
+//     `Completed` if there are still remaining partitions to process. It is only switched to
 //     `ExhaustedStreamBatch` if all partitions have been processed.
 //  3. `ProcessStreamBatch` - Compare stream batch row values against the buffered side data.
 //  4. `ExhaustedStreamBatch` - If the join type is Left or Inner we will return state as

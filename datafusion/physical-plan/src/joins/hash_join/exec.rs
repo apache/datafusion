@@ -1427,6 +1427,7 @@ impl ExecutionPlan for HashJoinExec {
                             filter,
                             on_right,
                             repartition_random_state,
+                            self.null_aware,
                         ))
                     })))
                 })
