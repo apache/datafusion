@@ -858,7 +858,7 @@ impl AggregateFunctionExpr {
         // `retract_batch` method will not be called. In this case
         // having retract_batch is not a requirement.
         //
-        // This approach is a a bit different than window function
+        // This approach is a bit different than window function
         // approach. In window function (when they use a window frame)
         // they get all the desired range during evaluation.
         if !accumulator.supports_retract_batch() {
