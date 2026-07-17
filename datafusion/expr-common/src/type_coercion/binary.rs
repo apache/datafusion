@@ -276,20 +276,13 @@ impl<'a> BinaryTypeCoercer<'a> {
             // interval at that resolution. So, like `timestamp(s) + interval
             // '1 nanosecond'`, `time(s) + interval '1 nanosecond'` is a no-op rather
             // than widening the type.
-            let time = if let Interval(_) = lhs {
-                rhs.clone()
-            } else {
-                lhs.clone()
+            let (lhs, rhs, ret) = match (lhs, rhs) {
+                (Interval(_), time) => {
+                    (Interval(MonthDayNano), time.clone(), time.clone())
+                }
+                (time, _) => (time.clone(), Interval(MonthDayNano), time.clone()),
             };
-            let (lhs, rhs) = match (lhs, rhs) {
-                (Interval(_), _) => (Interval(MonthDayNano), time.clone()),
-                (_, _) => (time.clone(), Interval(MonthDayNano)),
-            };
-            return Ok(Signature {
-                lhs,
-                rhs,
-                ret: time,
-            });
+            return Ok(Signature { lhs, rhs, ret });
         }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
             if let Ok(ret) = self.get_result(lhs, rhs) {

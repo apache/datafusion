@@ -302,10 +302,12 @@ fn is_time_minus_interval(lhs: &DataType, rhs: &DataType) -> bool {
 /// not implement time-of-day arithmetic, so it is handled here.
 ///
 /// The result keeps the input time's unit; the interval (normalized to `MonthDayNano`
-/// by the coercion layer) is applied at that resolution, mirroring `timestamp + interval`.
-/// Only the sub-day portion of the interval affects a time-of-day -- whole months and
-/// days are ignored, matching PostgreSQL -- and any interval precision finer than the
-/// time's unit is truncated (so `time(s) + interval '1 nanosecond'` is a no-op).
+/// by the coercion layer) is applied at nanosecond precision and floored to that unit,
+/// mirroring `timestamp(unit) + interval`. Only the sub-day portion of the interval
+/// affects a time-of-day -- whole months and days are ignored, matching PostgreSQL. The
+/// floor is applied after the sign, so `time(s) + interval '1 nanosecond'` is a no-op
+/// while `time(s) - interval '1 nanosecond'` rolls back a second, exactly as the
+/// timestamp case does.
 fn apply_time_interval(
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
@@ -359,13 +361,17 @@ where
     // Units in a 24-hour day, at `T`'s resolution.
     let day_units = DAY_NANOS / ns_per_unit;
 
-    // Wraps `time ± interval` into `[0, day_units)`. The interval's nanoseconds are
-    // reduced modulo a day (so the sum stays within `i64`) and converted to `T`'s unit,
-    // truncating any finer precision; `rem_euclid` keeps the result non-negative when
-    // subtracting. The wrapped value is in `[0, day_units)`, which always fits `T::Native`.
+    // Wraps `time ± interval` into `[0, day_units)`. The interval is reduced modulo a day
+    // (so the sum stays within `i64`), applied at nanosecond precision, then floored to
+    // `T`'s unit -- matching `timestamp(unit) ± interval`. Because the floor is applied
+    // after the sign, `time(s) - interval '1 nanosecond'` rolls back a full second, just
+    // as the timestamp case does, while `time(s) + interval '1 nanosecond'` is a no-op.
+    // `div_euclid`/`rem_euclid` floor toward negative infinity, so the wrapped value stays
+    // in `[0, day_units)`, which always fits `T::Native`.
     let wrap = |time_unit: i64, iv: IntervalMonthDayNano| -> T::Native {
-        let delta = (iv.nanoseconds % DAY_NANOS) / ns_per_unit;
-        let delta = if subtract { -delta } else { delta };
+        let iv_ns = iv.nanoseconds % DAY_NANOS;
+        let signed_ns = if subtract { -iv_ns } else { iv_ns };
+        let delta = signed_ns.div_euclid(ns_per_unit);
         let wrapped = (time_unit + delta).rem_euclid(day_units);
         T::Native::try_from(wrapped).unwrap_or_default()
     };

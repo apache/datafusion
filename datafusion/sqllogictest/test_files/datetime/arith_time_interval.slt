@@ -68,13 +68,20 @@ SELECT arrow_typeof(arrow_cast('22:00', 'Time64(Nanosecond)') + interval '3 hour
 ----
 Time64(ns)
 
-# Interval precision finer than the time's unit is truncated, exactly as for
-# `timestamp(unit) + interval`: adding one nanosecond to a second-resolution time is a
-# no-op, while a finer-resolution time keeps it.
+# The interval is applied at nanosecond precision and floored to the time's unit, exactly
+# as for `timestamp(unit) ± interval`. Adding one nanosecond to a second-resolution time
+# floors back to a no-op...
 query D
 SELECT arrow_cast('22:00', 'Time32(Second)') + interval '1 nanosecond'
 ----
 22:00:00
+
+# ...but subtracting one nanosecond floors down a full second, matching
+# `timestamp(s) - interval '1 nanosecond'` (= 09:59:59) rather than staying put.
+query D
+SELECT arrow_cast('10:00:00', 'Time32(Second)') - interval '1 nanosecond'
+----
+09:59:59
 
 query D
 SELECT arrow_cast('12:00:00', 'Time32(Millisecond)') + interval '1 microsecond'
