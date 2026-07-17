@@ -984,6 +984,22 @@ field existed decode as a single partition, the previous default, and plans
 encoded after it add a field that older readers ignore.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23643">PR #23643</a> for details.</p>
 </section>
+<section id="time-interval-now-returns-a-time-instead-of-an-interval">
+<h3><code class="docutils literal notranslate"><span class="pre">time</span> <span class="pre">±</span> <span class="pre">interval</span></code> now returns a <code class="docutils literal notranslate"><span class="pre">time</span></code> instead of an <code class="docutils literal notranslate"><span class="pre">interval</span></code><a class="headerlink" href="#time-interval-now-returns-a-time-instead-of-an-interval" title="Link to this heading">#</a></h3>
+<p>Adding or subtracting an <code class="docutils literal notranslate"><span class="pre">interval</span></code> to/from a <code class="docutils literal notranslate"><span class="pre">time</span></code> value now returns a <code class="docutils literal notranslate"><span class="pre">time</span></code>
+that wraps within the 24-hour clock, matching PostgreSQL and DuckDB. Previously
+DataFusion returned an <code class="docutils literal notranslate"><span class="pre">interval</span></code>.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- 55.0.0 onwards: returns a time</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">time</span><span class="w"> </span><span class="s1">&#39;23:30:00&#39;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">interval</span><span class="w"> </span><span class="s1">&#39;2 hours&#39;</span><span class="p">;</span>
+<span class="c1">-- 01:30:00</span>
+</pre></div>
+</div>
+<p>Only the sub-day portion of the interval affects the result; whole days and
+months are ignored, as in PostgreSQL. The result keeps the input time’s unit
+(mirroring <code class="docutils literal notranslate"><span class="pre">timestamp</span> <span class="pre">+</span> <span class="pre">interval</span></code>), and any interval precision finer than that
+unit is truncated – so <code class="docutils literal notranslate"><span class="pre">time(s)</span> <span class="pre">+</span> <span class="pre">interval</span> <span class="pre">'1</span> <span class="pre">nanosecond'</span></code> is a no-op.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23279">PR #23279</a> for details.</p>
+</section>
 </section>
 </section>
 
@@ -1053,6 +1069,7 @@ encoded after it add a field that older readers ignore.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unify-lru-memory-limiting-caches-into-one-generic-cache">Unify LRU memory-limiting caches into one generic cache</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cachedfilemetadata-now-validates-file-schema"><code class="docutils literal notranslate"><span class="pre">CachedFileMetadata</span></code> now validates file schema</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#emptyexecnode-and-placeholderrowexecnode-gained-a-partitions-field"><code class="docutils literal notranslate"><span class="pre">EmptyExecNode</span></code> and <code class="docutils literal notranslate"><span class="pre">PlaceholderRowExecNode</span></code> gained a <code class="docutils literal notranslate"><span class="pre">partitions</span></code> field</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#time-interval-now-returns-a-time-instead-of-an-interval"><code class="docutils literal notranslate"><span class="pre">time</span> <span class="pre">±</span> <span class="pre">interval</span></code> now returns a <code class="docutils literal notranslate"><span class="pre">time</span></code> instead of an <code class="docutils literal notranslate"><span class="pre">interval</span></code></a></li>
 </ul>
 </li>
 </ul>
