@@ -41,8 +41,10 @@ use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion::logical_expr::planner::TypePlanner;
 use datafusion::logical_expr::{
-    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility, create_udf,
+    ColumnarValue, Expr, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
+    HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda, Volatility,
+    create_udf,
 };
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
@@ -182,6 +184,10 @@ impl TestContext {
             "async_udf.slt" => {
                 info!("Registering dummy async udf");
                 register_async_abs_udf(test_ctx.session_ctx())
+            }
+            "multi_arg_lambda.slt" => {
+                info!("Registering dummy multi arg higher-order udf");
+                register_multi_arg_lambda_udf(test_ctx.session_ctx())
             }
             _ => {
                 info!("Using default SessionContext");
@@ -711,4 +717,88 @@ fn register_async_abs_udf(ctx: &SessionContext) {
     let async_abs = AsyncAbs::new();
     let udf = AsyncScalarUDF::new(Arc::new(async_abs));
     ctx.register_udf(udf.into_scalar_udf());
+}
+
+fn register_multi_arg_lambda_udf(ctx: &SessionContext) {
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct MultiArgHigherOrderUdf {
+        signature: HigherOrderSignature,
+    }
+
+    impl HigherOrderUDFImpl for MultiArgHigherOrderUdf {
+        fn name(&self) -> &str {
+            "multi_arg_higher_order_udf"
+        }
+
+        fn signature(&self) -> &HigherOrderSignature {
+            &self.signature
+        }
+
+        fn lambda_parameters(
+            &self,
+            _step: usize,
+            fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ) -> Result<LambdaParametersProgress> {
+            let fields = fields
+                .iter()
+                .filter_map(|f| match f {
+                    ValueOrLambda::Value(v) => Some(v),
+                    ValueOrLambda::Lambda(_) => None,
+                })
+                .cloned()
+                .collect();
+
+            Ok(LambdaParametersProgress::Complete(vec![fields]))
+        }
+
+        fn return_field_from_args(
+            &self,
+            args: HigherOrderReturnFieldArgs,
+        ) -> Result<FieldRef> {
+            Ok(match args.arg_fields.last().unwrap() {
+                ValueOrLambda::Value(_) => unreachable!(),
+                ValueOrLambda::Lambda(l) => Arc::clone(l),
+            })
+        }
+
+        fn invoke_with_args(
+            &self,
+            args: HigherOrderFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            let lambda = match args.args.last().unwrap() {
+                ValueOrLambda::Value(_) => unreachable!(),
+                ValueOrLambda::Lambda(l) => l,
+            };
+
+            let num_rows = args
+                .args
+                .iter()
+                .filter_map(|a| match a {
+                    ValueOrLambda::Value(ColumnarValue::Array(a)) => Some(a.len()),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(1);
+
+            let args = args
+                .args
+                .iter()
+                .filter_map(|arg| match arg {
+                    ValueOrLambda::Value(v) => Some(Box::new(|| v.to_array(num_rows))),
+                    ValueOrLambda::Lambda(_) => None,
+                })
+                .collect::<Vec<_>>();
+
+            let args: Vec<&dyn Fn() -> Result<ArrayRef>> =
+                args.iter().map(|v| v as _).collect();
+
+            lambda.evaluate(&args, |arrays| Ok(arrays.to_vec()))
+        }
+    }
+
+    ctx.register_higher_order_function(Arc::new(HigherOrderUDF::new_from_impl(
+        MultiArgHigherOrderUdf {
+            signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
+        },
+    )));
 }

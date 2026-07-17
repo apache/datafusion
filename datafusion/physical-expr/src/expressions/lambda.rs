@@ -29,11 +29,11 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{
-    HashMap, plan_err,
-    tree_node::{Transformed, TreeNode, TreeNodeRecursion},
-};
 use datafusion_common::{HashSet, Result, internal_err};
+use datafusion_common::{
+    plan_err,
+    tree_node::{TreeNode, TreeNodeRecursion},
+};
 use datafusion_expr::ColumnarValue;
 
 /// Represents a lambda with the given parameters names and body
@@ -41,8 +41,7 @@ use datafusion_expr::ColumnarValue;
 pub struct LambdaExpr {
     params: Vec<String>,
     body: Arc<dyn PhysicalExpr>,
-    projected_body: Arc<dyn PhysicalExpr>,
-    projection: Vec<usize>,
+    used_column_indices: HashSet<usize>,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808 [https://github.com/apache/datafusion/issues/13196]
@@ -88,47 +87,10 @@ impl LambdaExpr {
         })
         .expect("closure should be infallible");
 
-        let mut projection = used_column_indices.into_iter().collect::<Vec<_>>();
-
-        projection.sort();
-
-        let column_index_map = projection
-            .iter()
-            .enumerate()
-            .map(|(projected, original)| (*original, projected))
-            .collect::<HashMap<_, _>>();
-
-        let projected_body = Arc::clone(&body)
-            .transform_down(|e| {
-                if let Some(column) = e.downcast_ref::<Column>() {
-                    let original = column.index();
-                    let projected = *column_index_map.get(&original).unwrap();
-                    if projected != original {
-                        return Ok(Transformed::yes(Arc::new(Column::new(
-                            column.name(),
-                            projected,
-                        ))));
-                    }
-                } else if let Some(lambda_variable) = e.downcast_ref::<LambdaVariable>() {
-                    let original = lambda_variable.index();
-                    let projected = *column_index_map.get(&original).unwrap();
-                    if projected != original {
-                        return Ok(Transformed::yes(Arc::new(LambdaVariable::new(
-                            projected,
-                            Arc::clone(lambda_variable.field()),
-                        ))));
-                    }
-                }
-                Ok(Transformed::no(e))
-            })
-            .expect("closure should be infallible")
-            .data;
-
         Self {
             params,
             body,
-            projected_body,
-            projection,
+            used_column_indices,
         }
     }
 
@@ -142,12 +104,8 @@ impl LambdaExpr {
         &self.body
     }
 
-    pub(crate) fn projection(&self) -> &[usize] {
-        &self.projection
-    }
-
-    pub(crate) fn projected_body(&self) -> &Arc<dyn PhysicalExpr> {
-        &self.projected_body
+    pub(crate) fn used_column_indices(&self) -> &HashSet<usize> {
+        &self.used_column_indices
     }
 }
 

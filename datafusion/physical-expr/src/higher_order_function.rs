@@ -36,8 +36,8 @@ use std::sync::Arc;
 use crate::PhysicalExpr;
 use crate::expressions::{LambdaExpr, Literal};
 
-use arrow::array::{Array, RecordBatch};
-use arrow::datatypes::{DataType, FieldRef, Schema};
+use arrow::array::{Array, NullArray, RecordBatch, RecordBatchOptions};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::utils::remove_list_null_values;
@@ -337,21 +337,28 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                         .map(|(name, param)| param.renamed(name.as_str()))
                         .collect();
 
-                    // lambda.projection may include indexes of nested lambda variables not present on this batch
-                    let projection = lambda
-                        .projection()
-                        .iter()
-                        .copied()
-                        .filter(|i| *i < batch.num_columns())
-                        .collect::<Vec<_>>();
+                    let (fields, columns): (Vec<_>, _) = std::iter::zip(batch.schema_ref().fields(), batch.columns())
+                        .enumerate()
+                        .map(|(i, (field, array))| if lambda.used_column_indices().contains(&i) {
+                            (Arc::clone(field), Arc::clone(array))
+                        } else {
+                            (Arc::new(Field::new(field.name(), DataType::Null, true)), Arc::new(NullArray::new(batch.num_rows())) as _)
+                        })
+                        .collect();
+
+                    let batch= RecordBatch::try_new_with_options(
+                        Arc::new(Schema::new(fields)),
+                        columns,
+                    &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+                )?;
 
                     Ok(ValueOrLambda::Lambda(LambdaArgument::new(
                         params,
-                        Arc::clone(lambda.projected_body()),
-                        if projection.is_empty() {
+                        Arc::clone(lambda.body()),
+                        if batch.num_columns() == 0 {
                             None
                         } else {
-                            Some(batch.project(&projection)?)
+                            Some(batch)
                         },
                     )))
                 }
