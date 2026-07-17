@@ -1086,21 +1086,59 @@ logical_plan
 02)--TableScan: aggregate_simple projection=[]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_simple.csv]]}, projection=[NULL as log(NULL,aggregate_simple.c2)], file_type=csv, has_header=true
 
-# Float 16/32/64 for log
+# log result type is the widest float of base and value, so a wider base is
+# not narrowed to the value's type (#22581). Here base 2.5 is Float64.
 query RT
 SELECT log(2.5, arrow_cast(10.9, 'Float16')), arrow_typeof(log(2.5, arrow_cast(10.9, 'Float16')));
 ----
-2.6074219 Float16
+2.606835742462 Float64
 
 query RT
 SELECT log(2.5, 10.9::float), arrow_typeof(log(2.5, 10.9::float));
 ----
-2.606992 Float32
+2.606992159958 Float64
 
 query RT
 SELECT log(2.5, 10.9::double), arrow_typeof(log(2.5, 10.9::double));
 ----
 2.606992198152 Float64
+
+# Homogeneous float widths are preserved
+query RT
+SELECT log(arrow_cast(2.5, 'Float16'), arrow_cast(10.9, 'Float16')), arrow_typeof(log(arrow_cast(2.5, 'Float16'), arrow_cast(10.9, 'Float16')));
+----
+2.6074219 Float16
+
+query RT
+SELECT log(2.5::float, 10.9::float), arrow_typeof(log(2.5::float, 10.9::float));
+----
+2.606992 Float32
+
+# #22581: a Float64 base must keep full precision against a Float32 value.
+# 16777217 is not representable in Float32, so an f32 computation would round it.
+query RT
+SELECT log(arrow_cast(16777217, 'Float64'), arrow_cast(2.0, 'Float32')), arrow_typeof(log(arrow_cast(16777217, 'Float64'), arrow_cast(2.0, 'Float32')));
+----
+0.041666666517 Float64
+
+# A NULL value takes the resolved (widest concrete) float type
+query RT
+SELECT log(2.5::float, NULL), arrow_typeof(log(2.5::float, NULL));
+----
+NULL Float32
+
+# #22581: the log(base, 1) simplification must carry the resolved (widest)
+# type, or a Float16 base with a wider literal 1 fails the optimizer's
+# schema-compatibility check at planning time.
+query RT
+SELECT log(arrow_cast(2.5, 'Float16'), 1.0::double), arrow_typeof(log(arrow_cast(2.5, 'Float16'), 1.0::double));
+----
+0 Float64
+
+query RT
+SELECT log(arrow_cast(2.5, 'Float16'), arrow_cast(1.0, 'Float16')), arrow_typeof(log(arrow_cast(2.5, 'Float16'), arrow_cast(1.0, 'Float16')));
+----
+0 Float16
 
 # lcm with array and scalar
 
