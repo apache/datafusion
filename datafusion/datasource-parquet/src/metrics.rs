@@ -61,6 +61,12 @@ pub struct ParquetFileMetrics {
     /// the initial pruning but were proved unreachable mid-scan after the
     /// dynamic filter tightened.
     pub row_groups_pruned_dynamic_filter: Count,
+    /// Number of row groups for which the per-row
+    /// [`RowFilter`](parquet::arrow::arrow_reader::RowFilter) was skipped
+    /// because the static stats proved every row of the RG satisfies the
+    /// predicate. The decoder is rebuilt at the boundary with an empty
+    /// row filter so the upcoming RG decodes without per-row evaluation.
+    pub row_filter_skipped_fully_matched: Count,
     /// Total number of bytes scanned
     pub bytes_scanned: Count,
     /// Total rows filtered out by predicates pushed into parquet scan
@@ -211,6 +217,12 @@ impl ParquetFileMetrics {
             .with_type(MetricType::Summary)
             .counter("row_groups_pruned_dynamic_filter", partition);
 
+        let row_filter_skipped_fully_matched = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::Summary)
+            .with_category(MetricCategory::Rows)
+            .counter("row_filter_skipped_fully_matched", partition);
+
         Self {
             files_ranges_pruned_statistics,
             predicate_evaluation_errors,
@@ -231,6 +243,7 @@ impl ParquetFileMetrics {
             predicate_cache_inner_records,
             predicate_cache_records,
             row_groups_pruned_dynamic_filter,
+            row_filter_skipped_fully_matched,
         }
     }
 
