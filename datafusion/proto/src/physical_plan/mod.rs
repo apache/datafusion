@@ -946,6 +946,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         }
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_explain_physical_plan(
         &self,
         explain: &protobuf::ExplainExecNode,
@@ -997,6 +1001,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_filter_physical_plan(
         &self,
         filter: &protobuf::FilterExecNode,
@@ -1052,6 +1060,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         }
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_csv_scan_physical_plan(
         &self,
         scan: &protobuf::CsvScanExecNode,
@@ -1105,6 +1117,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(DataSourceExec::from_data_source(conf))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_json_scan_physical_plan(
         &self,
         scan: &protobuf::JsonScanExecNode,
@@ -1122,6 +1138,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(DataSourceExec::from_data_source(scan_conf))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_arrow_scan_physical_plan(
         &self,
         scan: &protobuf::ArrowScanExecNode,
@@ -1142,6 +1162,10 @@ pub trait PhysicalPlanNodeExt: Sized {
     }
 
     #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_parquet_scan_physical_plan(
         &self,
         scan: &protobuf::ParquetScanExecNode,
@@ -1225,6 +1249,10 @@ pub trait PhysicalPlanNodeExt: Sized {
     }
 
     #[cfg_attr(not(feature = "avro"), expect(unused_variables))]
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_avro_scan_physical_plan(
         &self,
         scan: &protobuf::AvroScanExecNode,
@@ -1248,6 +1276,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_memory_scan_physical_plan(
         &self,
         scan: &protobuf::MemoryScanExecNode,
@@ -1296,6 +1328,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(DataSourceExec::from_data_source(source))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_coalesce_batches_physical_plan(
         &self,
         coalesce_batches: &protobuf::CoalesceBatchesExecNode,
@@ -1311,6 +1347,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         ))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_merge_physical_plan(
         &self,
         merge: &protobuf::CoalescePartitionsExecNode,
@@ -1325,6 +1365,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         ))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_repartition_physical_plan(
         &self,
         repart: &protobuf::RepartitionExecNode,
@@ -1346,6 +1390,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(repart_exec))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_global_limit_physical_plan(
         &self,
         limit: &protobuf::GlobalLimitExecNode,
@@ -1366,6 +1414,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         )))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_local_limit_physical_plan(
         &self,
         limit: &protobuf::LocalLimitExecNode,
@@ -1377,6 +1429,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_window_physical_plan(
         &self,
         window_agg: &protobuf::WindowAggExecNode,
@@ -1434,6 +1490,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         }
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_aggregate_physical_plan(
         &self,
         hash_agg: &protobuf::AggregateExecNode,
@@ -1642,6 +1702,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(agg))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_hash_join_physical_plan(
         &self,
         hashjoin: &protobuf::HashJoinExecNode,
@@ -1775,6 +1839,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(hash_join))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_symmetric_hash_join_physical_plan(
         &self,
         sym_join: &protobuf::SymmetricHashJoinExecNode,
@@ -1900,6 +1968,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         .map(|e| Arc::new(e) as _)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_union_physical_plan(
         &self,
         union: &protobuf::UnionExecNode,
@@ -1913,6 +1985,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         UnionExec::try_new(inputs)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_interleave_physical_plan(
         &self,
         interleave: &protobuf::InterleaveExecNode,
@@ -1926,6 +2002,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(InterleaveExec::try_new(inputs)?))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_cross_join_physical_plan(
         &self,
         crossjoin: &protobuf::CrossJoinExecNode,
@@ -1939,6 +2019,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(CrossJoinExec::new(left, right)))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_empty_physical_plan(
         &self,
         empty: &protobuf::EmptyExecNode,
@@ -1952,6 +2036,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(EmptyExec::new(schema).with_partitions(partitions)))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_placeholder_row_physical_plan(
         &self,
         placeholder: &protobuf::PlaceholderRowExecNode,
@@ -1966,6 +2054,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         ))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_sort_physical_plan(
         &self,
         sort: &protobuf::SortExecNode,
@@ -2040,6 +2132,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(new_sort))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_sort_preserving_merge_physical_plan(
         &self,
         sort: &protobuf::SortPreservingMergeExecNode,
@@ -2114,6 +2210,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(extension_node)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_nested_loop_join_physical_plan(
         &self,
         join: &protobuf::NestedLoopJoinExecNode,
@@ -2186,6 +2286,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         )?))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_analyze_physical_plan(
         &self,
         analyze: &protobuf::AnalyzeExecNode,
@@ -2230,6 +2334,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         ))
     }
     #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_unnest_physical_plan(
         &self,
         unnest: &protobuf::UnnestExecNode,
@@ -2264,6 +2372,10 @@ pub trait PhysicalPlanNodeExt: Sized {
             protobuf::GenerateSeriesName::GsRange => "range",
         }
     }
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_sort_join(
         &self,
         sort_join: &SortMergeJoinExecNode,
@@ -2445,6 +2557,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_cooperative_physical_plan(
         &self,
         field_stream: &protobuf::CooperativeExecNode,
@@ -2455,6 +2571,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(CooperativeExec::new(input)))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_async_func_physical_plan(
         &self,
         async_func: &protobuf::AsyncFuncExecNode,
@@ -2492,6 +2612,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(AsyncFuncExec::try_new(async_exprs, input)?))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_buffer_physical_plan(
         &self,
         buffer: &protobuf::BufferExecNode,
@@ -2504,6 +2628,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(BufferExec::new(input, buffer.capacity as usize)))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan deserializes itself via its `try_from_proto` constructor"
+    )]
     fn try_into_scalar_subquery_physical_plan(
         &self,
         sq: &protobuf::ScalarSubqueryExecNode,
@@ -2538,6 +2666,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         )))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_explain_exec(
         exec: &ExplainExec,
         _codec: &dyn PhysicalExtensionCodec,
@@ -2594,6 +2726,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_analyze_exec(
         exec: &AnalyzeExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -2629,6 +2765,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_filter_exec(
         exec: &FilterExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -2661,6 +2801,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_global_limit_exec(
         limit: &GlobalLimitExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -2686,6 +2830,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_local_limit_exec(
         limit: &LocalLimitExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -2706,6 +2854,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_hash_join_exec(
         exec: &HashJoinExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -2801,6 +2953,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_symmetric_hash_join_exec(
         exec: &SymmetricHashJoinExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -2922,6 +3078,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_sort_merge_join_exec(
         exec: &SortMergeJoinExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3009,6 +3169,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_cross_join_exec(
         exec: &CrossJoinExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3034,6 +3198,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_aggregate_exec(
         exec: &AggregateExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3138,6 +3306,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_empty_exec(
         empty: &EmptyExec,
         _codec: &dyn PhysicalExtensionCodec,
@@ -3152,6 +3324,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_placeholder_row_exec(
         empty: &PlaceholderRowExec,
         _codec: &dyn PhysicalExtensionCodec,
@@ -3169,6 +3345,10 @@ pub trait PhysicalPlanNodeExt: Sized {
     }
 
     #[expect(deprecated)]
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_coalesce_batches_exec(
         coalesce_batches: &CoalesceBatchesExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3189,6 +3369,10 @@ pub trait PhysicalPlanNodeExt: Sized {
             ))),
         })
     }
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_coalesce_partitions_exec(
         exec: &CoalescePartitionsExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3209,6 +3393,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_repartition_exec(
         exec: &RepartitionExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3234,6 +3422,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_sort_exec(
         exec: &SortExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3281,6 +3473,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_union_exec(
         union: &UnionExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3303,6 +3499,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_interleave_exec(
         interleave: &InterleaveExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3325,6 +3525,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_sort_preserving_merge_exec(
         exec: &SortPreservingMergeExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3363,6 +3567,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_nested_loop_join_exec(
         exec: &NestedLoopJoinExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3425,6 +3633,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_window_agg_exec(
         exec: &WindowAggExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3460,6 +3672,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_bounded_window_agg_exec(
         exec: &BoundedWindowAggExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3510,6 +3726,10 @@ pub trait PhysicalPlanNodeExt: Sized {
             ))),
         })
     }
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_unnest_exec(
         exec: &UnnestExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3545,6 +3765,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_cooperative_exec(
         exec: &CooperativeExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3688,6 +3912,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(None)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_async_func_exec(
         exec: &AsyncFuncExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -3719,6 +3947,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_buffer_exec(
         exec: &BufferExec,
         extension_codec: &dyn PhysicalExtensionCodec,
@@ -3740,6 +3972,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; the plan serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_scalar_subquery_exec(
         exec: &ScalarSubqueryExec,
         codec: &dyn PhysicalExtensionCodec,
