@@ -200,6 +200,37 @@ pub trait PartitionEvaluator: Debug + Send + std::any::Any {
         not_impl_err!("evaluate is not implemented by default")
     }
 
+    /// Returns `true` if this evaluator can produce its entire output column in
+    /// a single pass from the per-row window-frame ranges via
+    /// [`PartitionEvaluator::evaluate_all_with_frame_ranges`].
+    ///
+    /// This is for window functions that *do* depend on the window frame (so
+    /// the frameless [`PartitionEvaluator::evaluate_all`] cannot be used), but
+    /// whose result is a simple positional gather from the input — e.g.
+    /// `first_value`/`last_value`/`nth_value`. Implementing the pair of methods
+    /// lets the framework build the output with one vectorized kernel instead
+    /// of boxing a [`ScalarValue`] per row. Defaults to `false`, in which case
+    /// the framework falls back to calling [`PartitionEvaluator::evaluate`] once
+    /// per output row.
+    fn supports_evaluate_all_with_frame_ranges(&self) -> bool {
+        false
+    }
+
+    /// Vectorized counterpart to [`PartitionEvaluator::evaluate`]: produces the
+    /// whole output column at once given the already-computed per-row frame
+    /// `ranges` (`ranges[i]` is the window frame of output row `i`).
+    ///
+    /// Only called when
+    /// [`PartitionEvaluator::supports_evaluate_all_with_frame_ranges`] returns
+    /// `true`; the default is therefore unreachable for in-tree functions.
+    fn evaluate_all_with_frame_ranges(
+        &mut self,
+        _values: &[ArrayRef],
+        _ranges: &[Range<usize>],
+    ) -> Result<ArrayRef> {
+        not_impl_err!("evaluate_all_with_frame_ranges is not implemented by default")
+    }
+
     /// [`PartitionEvaluator::evaluate_all_with_rank`] is called for window
     /// functions that only need the rank of a row within its window
     /// frame.
