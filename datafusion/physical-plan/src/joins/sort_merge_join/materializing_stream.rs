@@ -129,6 +129,9 @@ pub(super) struct StreamedBatch {
     pub num_output_rows: usize,
     /// Index of currently scanned batch from buffered data
     pub buffered_batch_idx: Option<usize>,
+    /// Reusable scratch buffer for materializing contiguous buffered index
+    /// ranges in [`Self::append_output_range`]
+    buffered_index_scratch: Vec<u64>,
 }
 
 impl StreamedBatch {
@@ -141,6 +144,7 @@ impl StreamedBatch {
             output_indices: vec![],
             num_output_rows: 0,
             buffered_batch_idx: None,
+            buffered_index_scratch: vec![],
         }
     }
 
@@ -152,6 +156,7 @@ impl StreamedBatch {
             output_indices: vec![],
             num_output_rows: 0,
             buffered_batch_idx: None,
+            buffered_index_scratch: vec![],
         }
     }
 
@@ -198,6 +203,61 @@ impl StreamedBatch {
             current_chunk.buffered_indices.append_null();
         }
         self.num_output_rows += 1;
+    }
+
+    /// Appends `len` output pairs joining the current streamed index against the
+    /// contiguous buffered index range `buffered_start..buffered_start + len`.
+    ///
+    /// Equivalent to calling [`Self::append_output_pair`] once per index in the
+    /// range, but appends into the builders in bulk.
+    fn append_output_range(
+        &mut self,
+        buffered_batch_idx: Option<usize>,
+        buffered_start: usize,
+        len: usize,
+        batch_size: usize,
+    ) {
+        if len == 0 {
+            return;
+        }
+
+        if self.output_indices.is_empty() || self.buffered_batch_idx != buffered_batch_idx
+        {
+            debug_assert!(
+                batch_size > self.num_output_rows,
+                "batch_size ({batch_size}) must be > num_output_rows ({})",
+                self.num_output_rows
+            );
+            let capacity = batch_size - self.num_output_rows;
+            self.output_indices.push(StreamedJoinedChunk {
+                buffered_batch_idx,
+                streamed_indices: UInt64Builder::with_capacity(capacity),
+                buffered_indices: UInt64Builder::with_capacity(capacity),
+            });
+            self.buffered_batch_idx = buffered_batch_idx;
+        };
+
+        let current_chunk = self.output_indices.last_mut().unwrap();
+        if len == 1 {
+            // Fast path avoids touching the scratch buffer for the common
+            // one-row-per-key case.
+            current_chunk.streamed_indices.append_value(self.idx as u64);
+            current_chunk
+                .buffered_indices
+                .append_value(buffered_start as u64);
+        } else {
+            self.buffered_index_scratch.clear();
+            self.buffered_index_scratch
+                .extend((buffered_start..buffered_start + len).map(|idx| idx as u64));
+            current_chunk
+                .streamed_indices
+                .append_value_n(self.idx as u64, len);
+            current_chunk
+                .buffered_indices
+                .append_slice(&self.buffered_index_scratch);
+        }
+
+        self.num_output_rows += len;
     }
 }
 
@@ -1344,22 +1404,32 @@ impl MaterializingSortMergeJoinStream {
             while !self.buffered_data.scanning_finished()
                 && self.num_unfrozen_pairs() < self.batch_size
             {
+                // The buffered rows remaining in the batch being scanned form a
+                // contiguous index range, so append them in one go rather than
+                // one row at a time, capped by the remaining output batch space.
+                let remaining_capacity = self.batch_size - self.num_unfrozen_pairs();
+                let run_len = self
+                    .buffered_data
+                    .scanning_batch_remaining()
+                    .min(remaining_capacity);
                 let scanning_idx = self.buffered_data.scanning_idx();
+
                 if join_streamed {
-                    // Join streamed row and buffered row
-                    self.streamed_batch.append_output_pair(
+                    // Join streamed row and buffered rows
+                    self.streamed_batch.append_output_range(
                         Some(self.buffered_data.scanning_batch_idx),
-                        Some(scanning_idx),
+                        scanning_idx,
+                        run_len,
                         self.batch_size,
                     );
                 } else {
-                    // Join nulls and buffered row for FULL join
+                    // Join nulls and buffered rows for FULL join
                     self.buffered_data
                         .scanning_batch_mut()
                         .null_joined
-                        .push(scanning_idx);
+                        .extend(scanning_idx..scanning_idx + run_len);
                 }
-                self.buffered_data.scanning_advance();
+                self.buffered_data.scanning_advance_by(run_len);
 
                 if self.buffered_data.scanning_finished() {
                     self.streamed_joined = join_streamed;
@@ -1996,12 +2066,22 @@ impl BufferedData {
         self.scanning_offset = 0;
     }
 
-    pub fn scanning_advance(&mut self) {
-        self.scanning_offset += 1;
+    /// Advances the scanning position by `n` rows.
+    ///
+    /// `n` must not exceed [`Self::scanning_batch_remaining`], so that the
+    /// position never runs past the end of the batch being scanned.
+    pub fn scanning_advance_by(&mut self, n: usize) {
+        debug_assert!(n <= self.scanning_batch_remaining());
+        self.scanning_offset += n;
         while !self.scanning_finished() && self.scanning_batch_finished() {
             self.scanning_batch_idx += 1;
             self.scanning_offset = 0;
         }
+    }
+
+    /// Number of unscanned rows remaining in the batch currently being scanned
+    pub fn scanning_batch_remaining(&self) -> usize {
+        self.scanning_batch().range.len() - self.scanning_offset
     }
 
     pub fn scanning_batch(&self) -> &BufferedBatch {
