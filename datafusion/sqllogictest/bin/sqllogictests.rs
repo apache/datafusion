@@ -473,6 +473,10 @@ async fn run_test_file_substrait_round_trip(
 }
 
 #[cfg(not(feature = "substrait"))]
+#[expect(
+    clippy::unused_async,
+    reason = "matches the substrait-enabled implementation"
+)]
 async fn run_test_file_substrait_round_trip(
     _test_file: TestFile,
     _validator: Validator,
@@ -646,6 +650,10 @@ async fn run_test_file_with_postgres(
 }
 
 #[cfg(not(feature = "postgres"))]
+#[expect(
+    clippy::unused_async,
+    reason = "matches the postgres-enabled implementation"
+)]
 async fn run_test_file_with_postgres(
     _test_file: TestFile,
     _validator: Validator,
@@ -771,6 +779,10 @@ async fn run_complete_file_with_postgres(
 }
 
 #[cfg(not(feature = "postgres"))]
+#[expect(
+    clippy::unused_async,
+    reason = "matches the postgres-enabled implementation"
+)]
 async fn run_complete_file_with_postgres(
     _test_file: TestFile,
     _validator: Validator,
