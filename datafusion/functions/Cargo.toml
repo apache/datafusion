@@ -100,6 +100,16 @@ tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [[bench]]
 harness = false
+name = "replace_scalar"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "round_dense"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "ascii"
 required-features = ["string_expressions"]
 
@@ -240,6 +250,10 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "upper"
+
+[[bench]]
+harness = false
+name = "upper_unicode"
 required-features = ["string_expressions"]
 
 [[bench]]
@@ -294,6 +308,11 @@ required-features = ["unicode_expressions"]
 [[bench]]
 harness = false
 name = "trunc"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "trunc_precision"
 required-features = ["math_expressions"]
 
 [[bench]]
