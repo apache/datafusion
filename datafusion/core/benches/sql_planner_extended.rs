@@ -387,8 +387,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     let case_heavy_left_join_df = build_case_heavy_left_join_df(&case_heavy_ctx, &rt);
 
     // really slow :(
-    let mut group = c.benchmark_group("sample_size_10");
-    group.sample_size(10);
+    let mut group = c.benchmark_group("sample_size_5");
+    group.sample_size(5);
     group.bench_function("logical_plan_optimize", |b| {
         b.iter(|| {
             let df_clone = df.clone();
