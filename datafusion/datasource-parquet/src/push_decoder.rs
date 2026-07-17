@@ -47,7 +47,7 @@ use parquet::DecodeResult;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
-    ArrowReaderMetadata, ParquetRecordBatchReader, RowSelectionPolicy,
+    ArrowReaderMetadata, ParquetRecordBatchReader, RowFilter, RowSelectionPolicy,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
@@ -59,8 +59,12 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
 use datafusion_pruning::{PruningPredicate, build_pruning_predicate};
 
+use crate::ParquetFileMetrics;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
+use crate::row_filter::{
+    PrebuiltRowFilterCandidate, prebuild_row_filter_candidates, row_filter_from_prebuilt,
+};
 use crate::row_group_filter::RowGroupPruningStatistics;
 
 /// Shared options applied to the [`ParquetPushDecoderBuilder`] for a file
@@ -109,6 +113,12 @@ impl DecoderBuilderConfig<'_> {
 #[derive(Debug, Clone)]
 pub(crate) struct RgPlanEntry {
     pub(crate) rg_index: usize,
+    /// `true` when the static pruning predicate proved every row of this
+    /// RG satisfies the predicate. The push-decoder stream uses this to
+    /// skip installing the per-row `RowFilter` on RGs where it would be a
+    /// no-op, rebuilding the decoder via `into_builder` at boundaries
+    /// where the filter status flips.
+    pub(crate) fully_matched: bool,
 }
 
 /// Runtime row-group pruner driven by a dynamic predicate (e.g. the
@@ -265,6 +275,82 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) row_group_pruner: Option<RowGroupPruner>,
     /// Count of row groups skipped at runtime by [`Self::row_group_pruner`].
     pub(crate) row_groups_pruned_dynamic: Count,
+    /// Side-channel state for regenerating the parquet [`RowFilter`] when
+    /// the per-RG `fully_matched` toggle flips from skip → install. `None`
+    /// when the scan has no pushdown predicate, so no filter can be
+    /// installed (and the toggle is a no-op).
+    pub(crate) row_filter_context: Option<RowFilterContext>,
+    /// Whether the currently-installed decoder is running with a non-empty
+    /// row filter. Toggled per RG by the `fully_matched` skip path.
+    pub(crate) filter_installed: bool,
+    /// Count of row groups for which the per-row [`RowFilter`] was
+    /// suppressed because the upcoming RG is `fully_matched`.
+    pub(crate) row_filter_skipped_fully_matched: Count,
+}
+
+/// Side-channel state that lets [`PushDecoderStreamState`] **rebuild** the
+/// parquet [`RowFilter`] mid-scan.
+///
+/// The decoder owns the filter once installed, but `Box<dyn ArrowPredicate>`
+/// has no clone path, so a filter that was replaced at a previous boundary
+/// cannot be reinstalled later. This struct keeps a pre-built candidate list
+/// alongside the stream so the next non-fully-matched row group can be
+/// wrapped into a fresh [`RowFilter`] without redoing the tree walks and
+/// column resolution that the initial build did.
+pub(crate) struct RowFilterContext {
+    /// Prebuilt candidates: expression already column-reassigned, projection
+    /// mask already resolved. Shared across the file's row groups. `Arc` so
+    /// cloning into stream state is cheap.
+    pub(crate) prebuilt: Arc<Vec<PrebuiltRowFilterCandidate>>,
+    pub(crate) reorder_predicates: bool,
+    pub(crate) file_metrics: ParquetFileMetrics,
+    pub(crate) max_predicate_cache_size: Option<usize>,
+}
+
+impl RowFilterContext {
+    /// Precompute the candidate list from the raw predicate + file schema +
+    /// metadata. Returns `None` when the predicate has no push-downable
+    /// conjuncts (mirrors the file-open path behaviour).
+    pub(crate) fn try_new(
+        predicate: &Arc<dyn PhysicalExpr>,
+        physical_file_schema: &SchemaRef,
+        file_metadata: &Arc<ParquetMetaData>,
+        reorder_predicates: bool,
+        file_metrics: ParquetFileMetrics,
+        max_predicate_cache_size: Option<usize>,
+    ) -> Option<Self> {
+        match prebuild_row_filter_candidates(
+            predicate,
+            physical_file_schema,
+            file_metadata.as_ref(),
+        ) {
+            Ok(Some(prebuilt)) => Some(Self {
+                prebuilt: Arc::new(prebuilt),
+                reorder_predicates,
+                file_metrics,
+                max_predicate_cache_size,
+            }),
+            Ok(None) => None,
+            Err(e) => {
+                debug!("Ignoring error prebuilding row filter candidates: {e}");
+                None
+            }
+        }
+    }
+
+    /// Build a fresh [`RowFilter`] for the next non-fully-matched run using
+    /// the cached candidates. Cheap: no tree walks, only counter allocation
+    /// and (optionally) a sort by `required_bytes`.
+    pub(crate) fn build_row_filter(&self) -> Option<RowFilter> {
+        if self.prebuilt.is_empty() {
+            return None;
+        }
+        Some(row_filter_from_prebuilt(
+            &self.prebuilt,
+            self.reorder_predicates,
+            &self.file_metrics,
+        ))
+    }
 }
 
 impl PushDecoderStreamState {
@@ -330,11 +416,36 @@ impl PushDecoderStreamState {
             // been handed back yet), step 3 drives it forward and we get
             // another chance at the next boundary — the pruner is stateful
             // and idempotent, so deferring loses nothing.
-            let at_boundary = self
-                .decoder
-                .as_ref()
-                .expect("decoder present")
-                .is_at_row_group_boundary();
+            let decoder_ref = self.decoder.as_ref().expect("decoder present");
+            let at_boundary = decoder_ref.is_at_row_group_boundary();
+            // Sync `rg_plan` with the row group the decoder will actually
+            // emit next. arrow-rs's `try_next_reader` silently advances
+            // past row groups whose row selection is empty (e.g. when
+            // page-index pruning has already eliminated every page of
+            // that RG via the `ColumnIndex` path inside `try_build`).
+            // Without this peek, `rg_plan.front()` would drift off-by-one
+            // from the decoder's frontier and the per-RG toggle below
+            // would target the wrong row group.
+            if at_boundary {
+                match decoder_ref.peek_next_row_group() {
+                    Ok(Some(actual)) => {
+                        while let Some(front) = self.rg_plan.front() {
+                            if front.rg_index == actual {
+                                break;
+                            }
+                            self.rg_plan.pop_front();
+                        }
+                    }
+                    Ok(None) => {
+                        if !self.rg_plan.is_empty() {
+                            // Decoder has nothing left to emit — drain our plan
+                            // so the stream finishes cleanly.
+                            self.rg_plan.clear();
+                        }
+                    }
+                    Err(e) => return Some((Err(DataFusionError::from(e)), self)),
+                }
+            }
             if at_boundary && !self.rg_plan.is_empty() {
                 let mut pruned_count = 0usize;
                 if let Some(pruner) = self.row_group_pruner.as_mut() {
@@ -349,7 +460,21 @@ impl PushDecoderStreamState {
                     }
                     self.rg_plan = kept;
                 }
-                if pruned_count > 0 {
+
+                // Decide whether the per-row `RowFilter` needs to be
+                // toggled for the upcoming RG. `desired_filter` is
+                // `Some(true)` when the next RG needs a real filter,
+                // `Some(false)` when it's fully-matched (filter is a
+                // no-op, so we suppress it), and `None` when there is no
+                // pushdown predicate at all (toggling is meaningless).
+                let desired_filter: Option<bool> = self
+                    .row_filter_context
+                    .as_ref()
+                    .and_then(|_| self.rg_plan.front().map(|e| !e.fully_matched));
+                let filter_needs_toggle =
+                    desired_filter.is_some_and(|want| want != self.filter_installed);
+
+                if pruned_count > 0 || filter_needs_toggle {
                     if self.rg_plan.is_empty() {
                         return None;
                     }
@@ -357,7 +482,48 @@ impl PushDecoderStreamState {
                     let new_indices: Vec<usize> =
                         self.rg_plan.iter().map(|e| e.rg_index).collect();
                     let rebuilt = match decoder.into_builder() {
-                        Ok(b) => b.with_row_groups(new_indices).build(),
+                        Ok(mut builder) => {
+                            builder = builder.with_row_groups(new_indices);
+                            if filter_needs_toggle {
+                                let want_filter = desired_filter
+                                    .expect("filter_needs_toggle ⇒ desired Some");
+                                if want_filter {
+                                    let ctx = self
+                                        .row_filter_context
+                                        .as_ref()
+                                        .expect("filter_needs_toggle ⇒ context set");
+                                    match ctx.build_row_filter() {
+                                        Some(filter) => {
+                                            builder = builder.with_row_filter(filter);
+                                            if let Some(cap) =
+                                                ctx.max_predicate_cache_size
+                                            {
+                                                builder = builder
+                                                    .with_max_predicate_cache_size(cap);
+                                            }
+                                            self.filter_installed = true;
+                                        }
+                                        None => {
+                                            // Filter could not be rebuilt;
+                                            // install empty filter so the
+                                            // decoder runs unfiltered for
+                                            // this run rather than failing.
+                                            builder = builder
+                                                .with_row_filter(RowFilter::new(vec![]));
+                                            self.filter_installed = false;
+                                        }
+                                    }
+                                } else {
+                                    // Skip per-row filtering for the
+                                    // upcoming fully-matched RG.
+                                    builder =
+                                        builder.with_row_filter(RowFilter::new(vec![]));
+                                    self.filter_installed = false;
+                                    self.row_filter_skipped_fully_matched.add(1);
+                                }
+                            }
+                            builder.build()
+                        }
                         Err(e) => Err(e),
                     };
                     match rebuilt {
