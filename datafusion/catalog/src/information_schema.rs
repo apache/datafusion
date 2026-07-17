@@ -20,6 +20,7 @@
 //! [Information Schema]: https://en.wikipedia.org/wiki/Information_schema
 
 use crate::streaming::StreamingTable;
+use crate::table::TableFunction;
 use crate::{CatalogProviderList, SchemaProvider, TableProvider};
 use arrow::array::builder::{BooleanBuilder, UInt8Builder};
 use arrow::{
@@ -81,14 +82,28 @@ impl InformationSchemaProvider {
     /// Creates a new [`InformationSchemaProvider`] for the provided `catalog_list`
     pub fn new(catalog_list: Arc<dyn CatalogProviderList>) -> Self {
         Self {
-            config: InformationSchemaConfig { catalog_list },
+            config: InformationSchemaConfig {
+                catalog_list,
+                table_functions: HashMap::new(),
+            },
         }
+    }
+
+    /// Attach the session's table (UDTF) functions so that they appear in
+    /// `information_schema.routines` / `SHOW FUNCTIONS`.
+    pub fn with_table_functions(
+        mut self,
+        table_functions: HashMap<String, Arc<TableFunction>>,
+    ) -> Self {
+        self.config.table_functions = table_functions;
+        self
     }
 }
 
 #[derive(Clone, Debug)]
 struct InformationSchemaConfig {
     catalog_list: Arc<dyn CatalogProviderList>,
+    table_functions: HashMap<String, Arc<TableFunction>>,
 }
 
 impl InformationSchemaConfig {
@@ -301,6 +316,26 @@ impl InformationSchemaConfig {
                 )
             }
         }
+
+        // Table functions (UDTFs) don't have scalar signatures; their return
+        // type is always a table, so emit a single row per UDTF with
+        // routine_type = "FUNCTION", function_type = "TABLE" and
+        // data_type = "TABLE".
+        for name in self.table_functions.keys() {
+            builder.add_routine(
+                catalog_name,
+                schema_name,
+                name,
+                "FUNCTION",
+                // No signature is available for UDTFs; report deterministic
+                // = false to stay conservative.
+                false,
+                Some(&"TABLE"),
+                "TABLE",
+                None::<String>,
+                None::<String>,
+            )
+        }
         Ok(())
     }
 
@@ -399,6 +434,14 @@ impl InformationSchemaConfig {
                 );
             }
         }
+
+        // UDTFs deliberately do NOT appear in `information_schema.parameters`.
+        // A same-named scalar UDF (e.g. `generate_series` exists as both a
+        // scalar UDF in functions-nested and a UDTF in functions-table) would
+        // cross-join with a UDTF row keyed only by (name, rid) and produce
+        // spurious `TABLE`-typed variants of every scalar signature in
+        // SHOW FUNCTIONS. `show_functions_to_plan` sources UDTFs directly
+        // from `information_schema.routines` via a UNION branch instead.
 
         Ok(())
     }
@@ -1522,6 +1565,7 @@ mod tests {
     async fn make_tables_uses_table_type() {
         let config = InformationSchemaConfig {
             catalog_list: Arc::new(Fixture),
+            table_functions: HashMap::new(),
         };
         let mut builder = InformationSchemaTablesBuilder {
             catalog_names: StringBuilder::new(),
