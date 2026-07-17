@@ -174,7 +174,7 @@ macro_rules! assert_contains {
 }
 
 /// A macro to assert that one string is NOT contained within another with
-/// a nice error message if they are are.
+/// a nice error message if they are.
 ///
 /// Usage: `assert_not_contains!(actual, unexpected)`
 ///
