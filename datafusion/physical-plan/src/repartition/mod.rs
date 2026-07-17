@@ -2913,7 +2913,7 @@ mod tests {
 
 #[cfg(test)]
 mod test {
-    use arrow::array::record_batch;
+    use arrow::array::{UInt32Array, record_batch};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::assert_batches_eq;
@@ -3211,6 +3211,95 @@ mod test {
         RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1, maintains_sort_order=true
           DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
         ");
+        Ok(())
+    }
+
+    /// Regression test for order preservation across spill *file rotation*.
+    ///
+    /// A `preserve_order` repartition relies on each per-(input, output) spill pool delivering
+    /// batches in strict FIFO order (see [`spill_pool::channel`] / [`SpillPoolWriter`]). This uses
+    /// the same memory profile as [`Self::test_preserve_order_with_spilling`] — which is tuned to
+    /// force spilling while still completing — but additionally sets `max_spill_file_size_bytes`
+    /// to 1 so every spilled batch lands in its own file. That exercises the FIFO-across-rotation
+    /// path: if ordering were lost across rotated files (e.g. by feeding an ordered pool with a
+    /// shared multi-producer writer), the downstream `StreamingMerge` would emit out-of-order rows
+    /// and the sortedness assertion below would fail.
+    #[tokio::test]
+    async fn test_preserve_order_with_spill_file_rotation() -> Result<()> {
+        use datafusion_execution::config::SessionConfig;
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+        // Same sorted input as `test_preserve_order_with_spilling`:
+        // Partition1: [1,3], [5,7], [9,11]; Partition2: [2,4], [6,8], [10,12]
+        let batch1 = record_batch!(("c0", UInt32, [1, 3])).unwrap();
+        let batch2 = record_batch!(("c0", UInt32, [2, 4])).unwrap();
+        let batch3 = record_batch!(("c0", UInt32, [5, 7])).unwrap();
+        let batch4 = record_batch!(("c0", UInt32, [6, 8])).unwrap();
+        let batch5 = record_batch!(("c0", UInt32, [9, 11])).unwrap();
+        let batch6 = record_batch!(("c0", UInt32, [10, 12])).unwrap();
+        let schema = batch1.schema();
+        let sort_exprs = LexOrdering::new([PhysicalSortExpr {
+            expr: col("c0", &schema).unwrap(),
+            options: SortOptions::default().asc(),
+        }])
+        .unwrap();
+        let partition1 = vec![batch1, batch3, batch5];
+        let partition2 = vec![batch2, batch4, batch6];
+        let input_partitions = vec![partition1, partition2];
+
+        // Force a new spill file per spilled batch to exercise FIFO across rotation.
+        let mut session_config = SessionConfig::new();
+        session_config
+            .options_mut()
+            .execution
+            .max_spill_file_size_bytes = 1;
+        // Same tight limit as `test_preserve_order_with_spilling`: forces spilling while leaving
+        // the merge enough non-spillable headroom to complete.
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(608, 1.0)
+            .build_arc()?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime),
+        );
+
+        let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![sort_exprs.clone(), sort_exprs])?;
+        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
+        let exec = RepartitionExec::try_new(exec, Partitioning::RoundRobinBatch(3))?
+            .with_preserve_order();
+
+        // Each output partition merges sorted substreams, so its rows must be non-decreasing.
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            let mut last: Option<u32> = None;
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                let col = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<UInt32Array>()
+                    .unwrap();
+                for r in 0..col.len() {
+                    let v = col.value(r);
+                    if let Some(prev) = last {
+                        assert!(
+                            prev <= v,
+                            "output partition {i} not sorted: {prev} came before {v}"
+                        );
+                    }
+                    last = Some(v);
+                }
+            }
+        }
+
+        let metrics = exec.metrics().unwrap();
+        assert!(
+            metrics.spill_count().unwrap() > 0,
+            "Expected spilling to occur for order-preserving repartition at this \
+             memory limit. If this fails, the memory limit may need adjustment."
+        );
         Ok(())
     }
 
