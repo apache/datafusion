@@ -86,6 +86,9 @@ pub(super) const DECIMAL256_ONES: [i256; Decimal256Type::MAX_SCALE as usize] = {
     //
     // This is mainly a shortcut for not needing to manually list out each value
     // anyway.
+    //
+    // TODO: simplify this after https://github.com/apache/arrow-rs/pull/10363
+    //       lands upstream
     let mut values = [i256::ONE; _];
     let mut i = 1;
     while i < values.len() {
