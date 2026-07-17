@@ -29,7 +29,8 @@ use crate::aggregates::group_values::{
 use crate::aggregates::order::GroupClustering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
-    group_id_array, max_duplicate_ordinal,
+    group_id_array, group_keys_with_large_offsets, group_schema_with_large_offsets,
+    max_duplicate_ordinal, restore_group_key_types,
 };
 
 use super::AggregateTableMetrics;
@@ -200,9 +201,13 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     ) -> Result<EvaluatedAggregateBatch> {
         let state = self.state.building_mut();
         // Outer vec: one per grouping set; inner vec: group-by expressions.
-        let grouping_set_args = self
-            .group_by_metrics
-            .time_group_key_preparation(|| evaluate_group_by(&state.group_by, batch))?;
+        let grouping_set_args =
+            self.group_by_metrics.time_group_key_preparation(|| {
+                evaluate_group_by(&state.group_by, batch)?
+                    .into_iter()
+                    .map(group_keys_with_large_offsets)
+                    .collect::<Result<Vec<_>>>()
+            })?;
 
         // The evaluated args for each accumulator.
         let accumulator_args = self.group_by_metrics.time_aggregate_arguments(|| {
@@ -309,7 +314,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                         Ok::<_, datafusion_common::DataFusionError>(columns)
                     })?;
 
-                    let batch = RecordBatch::try_new(output_schema, columns)?;
+                    let emit_schema = group_schema_with_large_offsets(
+                        &output_schema,
+                        state.group_by.num_group_exprs(),
+                    );
+                    let batch = RecordBatch::try_new(emit_schema, columns)?;
                     debug_assert!(batch.num_rows() > 0);
                     MaterializedAggregateOutput::new(batch)
                 }
@@ -322,7 +331,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 }
             };
 
-        let batch = output.next_batch(batch_size)?;
+        let batch = output
+            .next_batch(batch_size)?
+            .map(|batch| restore_group_key_types(batch, &output_schema))
+            .transpose()?;
         if output.is_exhausted() {
             self.state = AggregateHashTableState::Done;
         } else {
@@ -362,6 +374,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     /// Unlike normal single aggregation output, this materializes intermediate
     /// states rather than final values. The states can therefore be merged after
     /// spilling without finalizing the same group more than once.
+    ///
+    /// The keys use 64-bit offsets because this batch can contain more than
+    /// 2 GiB of key data.
+    /// Callers divide the batch, then change the keys to the output types.
     pub(in crate::aggregates) fn take_state_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
@@ -385,6 +401,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             Ok::<_, datafusion_common::DataFusionError>(output)
         })?;
 
+        let state_schema = group_schema_with_large_offsets(
+            &state_schema,
+            state.group_by.num_group_exprs(),
+        );
         let batch = RecordBatch::try_new(state_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
 

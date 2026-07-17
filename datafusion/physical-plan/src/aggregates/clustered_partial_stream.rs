@@ -15,6 +15,7 @@ use futures::stream::StreamExt;
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{ClusteredAggregateTable, PartialMarker};
+use super::restore_group_key_stream;
 use crate::aggregates::AggregateMode;
 use crate::aggregates::order::{GroupClustering, GroupClusteringMode};
 use crate::metrics::{BaselineMetrics, MetricBuilder, SpillMetrics};
@@ -269,6 +270,7 @@ impl ClusteredPartialAggregateStream {
             stage,
         } = self;
         let schema = Arc::clone(&context.schema);
+        let batch_size = context.batch_size;
         let metrics = context.baseline_metrics.clone();
         let stream = async_try_stream(|mut emitter| async move {
             let mut stage = Some(stage);
@@ -287,6 +289,7 @@ impl ClusteredPartialAggregateStream {
             Ok(())
         });
         let stream = Box::pin(RecordBatchStreamAdapter::new(schema, stream));
+        let stream = restore_group_key_stream(stream, batch_size);
         Box::pin(ObservedStream::new(stream, metrics, None))
     }
 }
