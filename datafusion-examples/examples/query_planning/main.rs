@@ -94,12 +94,12 @@ impl ExampleKind {
                 }
             }
             ExampleKind::AnalyzerRule => analyzer_rule::analyzer_rule().await?,
-            ExampleKind::ExprApi => expr_api::expr_api().await?,
+            ExampleKind::ExprApi => expr_api::expr_api()?,
             ExampleKind::OptimizerRule => optimizer_rule::optimizer_rule().await?,
             ExampleKind::ParseSqlExpr => parse_sql_expr::parse_sql_expr().await?,
             ExampleKind::PlanToSql => plan_to_sql::plan_to_sql_examples().await?,
             ExampleKind::PlannerApi => planner_api::planner_api().await?,
-            ExampleKind::Pruning => pruning::pruning().await?,
+            ExampleKind::Pruning => pruning::pruning()?,
             ExampleKind::ThreadPools => thread_pools::thread_pools().await?,
         }
         Ok(())

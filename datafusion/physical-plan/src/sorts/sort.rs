@@ -406,7 +406,7 @@ impl ExternalSorter {
 
     /// Appending globally sorted batches to the in-progress spill file, and clears
     /// the `globally_sorted_batches` (also its memory reservation) afterwards.
-    async fn consume_and_spill_append(
+    fn consume_and_spill_append(
         &mut self,
         globally_sorted_batches: &mut Vec<RecordBatch>,
     ) -> Result<()> {
@@ -445,7 +445,7 @@ impl ExternalSorter {
     }
 
     /// Finishes the in-progress spill file and moves it to the finished spill files.
-    async fn spill_finish(&mut self) -> Result<()> {
+    fn spill_finish(&mut self) -> Result<()> {
         let (mut in_progress_file, max_record_batch_memory) =
             self.in_progress_spill_file.take().ok_or_else(|| {
                 internal_datafusion_err!("Should be called after `spill_append`")
@@ -500,8 +500,7 @@ impl ExternalSorter {
                 // already in memory, so it's okay to combine it with previously
                 // sorted batches, and spill together.
                 globally_sorted_batches.push(batch);
-                self.consume_and_spill_append(&mut globally_sorted_batches)
-                    .await?; // reservation is freed in spill()
+                self.consume_and_spill_append(&mut globally_sorted_batches)?; // reservation is freed in spill()
             } else {
                 globally_sorted_batches.push(batch);
             }
@@ -511,9 +510,8 @@ impl ExternalSorter {
         // upcoming `self.reserve_memory_for_merge()` may fail due to insufficient memory.
         drop(sorted_stream);
 
-        self.consume_and_spill_append(&mut globally_sorted_batches)
-            .await?;
-        self.spill_finish().await?;
+        self.consume_and_spill_append(&mut globally_sorted_batches)?;
+        self.spill_finish()?;
 
         // Sanity check after spilling
         let buffers_cleared_property =

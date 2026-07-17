@@ -425,12 +425,12 @@ async fn test_union_inputs_different_sorted2() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[test]
 // Test with `repartition_sorts` enabled to preserve pre-sorted partitions and avoid resorting
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true()
+fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true()
 -> Result<()> {
     assert_snapshot!(
-        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true)?,
         @r"
     Input Plan:
     OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
@@ -451,12 +451,12 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     Ok(())
 }
 
-#[tokio::test]
+#[test]
 // Test with `repartition_sorts` disabled, causing a full resort of the data
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false()
+fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false()
 -> Result<()> {
     assert_snapshot!(
-        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false)?,
         @r"
     Input Plan:
     OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
@@ -477,7 +477,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     Ok(())
 }
 
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
+fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
     repartition_sorts: bool,
 ) -> Result<String> {
     let schema = create_test_schema()?;

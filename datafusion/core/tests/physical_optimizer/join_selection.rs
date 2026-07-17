@@ -1191,8 +1191,8 @@ struct TestCase {
     expecting_swap: bool,
 }
 
-#[tokio::test]
-async fn test_join_with_swap_full() -> Result<()> {
+#[test]
+fn test_join_with_swap_full() -> Result<()> {
     // NOTE: Currently, some initial conditions are not viable after join order selection.
     //       For example, full join always comes in partitioned mode. See the warning in
     //       function "swap". If this changes in the future, we should update these tests.
@@ -1239,13 +1239,13 @@ async fn test_join_with_swap_full() -> Result<()> {
         },
     ];
     for case in cases.into_iter() {
-        test_join_with_maybe_swap_unbounded_case(case).await?
+        test_join_with_maybe_swap_unbounded_case(case)?
     }
     Ok(())
 }
 
-#[tokio::test]
-async fn test_cases_without_collect_left_check() -> Result<()> {
+#[test]
+fn test_cases_without_collect_left_check() -> Result<()> {
     let mut cases = vec![];
     let join_types = vec![JoinType::LeftSemi, JoinType::Inner];
     for join_type in join_types {
@@ -1332,13 +1332,13 @@ async fn test_cases_without_collect_left_check() -> Result<()> {
     }
 
     for case in cases.into_iter() {
-        test_join_with_maybe_swap_unbounded_case(case).await?
+        test_join_with_maybe_swap_unbounded_case(case)?
     }
     Ok(())
 }
 
-#[tokio::test]
-async fn test_not_support_collect_left() -> Result<()> {
+#[test]
+fn test_not_support_collect_left() -> Result<()> {
     let mut cases = vec![];
     // After [JoinSelection] optimization, these join types cannot run in CollectLeft mode except
     // [JoinType::LeftSemi]
@@ -1387,13 +1387,13 @@ async fn test_not_support_collect_left() -> Result<()> {
     }
 
     for case in cases.into_iter() {
-        test_join_with_maybe_swap_unbounded_case(case).await?
+        test_join_with_maybe_swap_unbounded_case(case)?
     }
     Ok(())
 }
 
-#[tokio::test]
-async fn test_not_supporting_swaps_possible_collect_left() -> Result<()> {
+#[test]
+fn test_not_supporting_swaps_possible_collect_left() -> Result<()> {
     let mut cases = vec![];
     let the_ones_not_support_collect_left =
         vec![JoinType::Right, JoinType::RightAnti, JoinType::RightSemi];
@@ -1487,12 +1487,12 @@ async fn test_not_supporting_swaps_possible_collect_left() -> Result<()> {
     }
 
     for case in cases.into_iter() {
-        test_join_with_maybe_swap_unbounded_case(case).await?
+        test_join_with_maybe_swap_unbounded_case(case)?
     }
     Ok(())
 }
 
-async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
+fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
     let left_unbounded = t.initial_sources_unbounded.0 == SourceType::Unbounded;
     let right_unbounded = t.initial_sources_unbounded.1 == SourceType::Unbounded;
     let left_exec = Arc::new(UnboundedExec::new(

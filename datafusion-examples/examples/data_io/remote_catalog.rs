@@ -130,6 +130,7 @@ struct RemoteCatalogInterface {}
 
 impl RemoteCatalogInterface {
     /// Establish a connection to the remote catalog
+    #[expect(clippy::unused_async)]
     pub async fn connect() -> Result<Self> {
         // In a real implementation this method might connect to a remote
         // catalog, validate credentials, cache basic information, etc
@@ -137,6 +138,7 @@ impl RemoteCatalogInterface {
     }
 
     /// Fetches information for a specific table
+    #[expect(clippy::unused_async)]
     pub async fn table_info(&self, name: &str) -> Result<Option<SchemaRef>> {
         if name != "remote_table" {
             return Ok(None);
@@ -155,6 +157,7 @@ impl RemoteCatalogInterface {
     }
 
     /// Fetches data for a table from a remote data source
+    #[expect(clippy::unused_async)]
     pub async fn read_data(&self, name: &str) -> Result<SendableRecordBatchStream> {
         if name != "remote_table" {
             return plan_err!("Remote table not found: {}", name);

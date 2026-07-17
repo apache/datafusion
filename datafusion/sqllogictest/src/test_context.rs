@@ -142,15 +142,15 @@ impl TestContext {
             }
             "information_schema_table_types.slt" => {
                 info!("Registering local temporary table");
-                register_temp_table(test_ctx.session_ctx()).await;
+                register_temp_table(test_ctx.session_ctx());
             }
             "information_schema_columns.slt" => {
                 info!("Registering table with many types");
-                register_table_with_many_types(test_ctx.session_ctx()).await;
+                register_table_with_many_types(test_ctx.session_ctx());
             }
             "map.slt" => {
                 info!("Registering table with map");
-                register_table_with_map(test_ctx.session_ctx()).await;
+                register_table_with_map(test_ctx.session_ctx());
             }
             "avro.slt" => {
                 #[cfg(feature = "avro")]
@@ -173,7 +173,7 @@ impl TestContext {
                 test_ctx.ctx.register_udf(example_udf);
                 register_partition_table(&mut test_ctx).await;
                 info!("Registering table with many types");
-                register_table_with_many_types(test_ctx.session_ctx()).await;
+                register_table_with_many_types(test_ctx.session_ctx());
             }
             "range_partitioning.slt" => {
                 info!("Registering range partitioned table");
@@ -181,7 +181,7 @@ impl TestContext {
             }
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");
-                register_metadata_tables(test_ctx.session_ctx()).await;
+                register_metadata_tables(test_ctx.session_ctx());
             }
             "union_function.slt" => {
                 info!("Registering table with union column");
@@ -366,7 +366,7 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
 }
 
 // registers a LOCAL TEMPORARY table.
-pub async fn register_temp_table(ctx: &SessionContext) {
+pub fn register_temp_table(ctx: &SessionContext) {
     #[derive(Debug)]
     struct TestTable(TableType);
 
@@ -398,7 +398,7 @@ pub async fn register_temp_table(ctx: &SessionContext) {
     .unwrap();
 }
 
-pub async fn register_table_with_many_types(ctx: &SessionContext) {
+pub fn register_table_with_many_types(ctx: &SessionContext) {
     let catalog = MemoryCatalogProvider::new();
     let schema = MemorySchemaProvider::new();
 
@@ -414,7 +414,7 @@ pub async fn register_table_with_many_types(ctx: &SessionContext) {
     .unwrap();
 }
 
-pub async fn register_table_with_map(ctx: &SessionContext) {
+pub fn register_table_with_map(ctx: &SessionContext) {
     let key = Field::new("key", DataType::Int64, false);
     let value = Field::new("value", DataType::Int64, true);
     let map_field =
@@ -464,7 +464,7 @@ fn table_with_many_types() -> Arc<dyn TableProvider> {
 }
 
 /// Registers a table_with_metadata that contains both field level and Table level metadata
-pub async fn register_metadata_tables(ctx: &SessionContext) {
+pub fn register_metadata_tables(ctx: &SessionContext) {
     let id = Field::new("id", DataType::Int32, true).with_metadata(HashMap::from([(
         String::from("metadata_key"),
         String::from("the id field"),

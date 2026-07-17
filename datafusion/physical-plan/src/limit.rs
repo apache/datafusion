@@ -749,80 +749,73 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_row_number_statistics_for_global_limit() -> Result<()> {
-        let row_count = row_number_statistics_for_global_limit(0, Some(10)).await?;
+    #[test]
+    fn test_row_number_statistics_for_global_limit() -> Result<()> {
+        let row_count = row_number_statistics_for_global_limit(0, Some(10))?;
         assert_eq!(row_count, Precision::Exact(10));
 
-        let row_count = row_number_statistics_for_global_limit(5, Some(10)).await?;
+        let row_count = row_number_statistics_for_global_limit(5, Some(10))?;
         assert_eq!(row_count, Precision::Exact(10));
 
-        let row_count = row_number_statistics_for_global_limit(400, Some(10)).await?;
+        let row_count = row_number_statistics_for_global_limit(400, Some(10))?;
         assert_eq!(row_count, Precision::Exact(0));
 
-        let row_count = row_number_statistics_for_global_limit(398, Some(10)).await?;
+        let row_count = row_number_statistics_for_global_limit(398, Some(10))?;
         assert_eq!(row_count, Precision::Exact(2));
 
-        let row_count = row_number_statistics_for_global_limit(398, Some(1)).await?;
+        let row_count = row_number_statistics_for_global_limit(398, Some(1))?;
         assert_eq!(row_count, Precision::Exact(1));
 
-        let row_count = row_number_statistics_for_global_limit(398, None).await?;
+        let row_count = row_number_statistics_for_global_limit(398, None)?;
         assert_eq!(row_count, Precision::Exact(2));
 
-        let row_count =
-            row_number_statistics_for_global_limit(0, Some(usize::MAX)).await?;
+        let row_count = row_number_statistics_for_global_limit(0, Some(usize::MAX))?;
         assert_eq!(row_count, Precision::Exact(400));
 
-        let row_count =
-            row_number_statistics_for_global_limit(398, Some(usize::MAX)).await?;
+        let row_count = row_number_statistics_for_global_limit(398, Some(usize::MAX))?;
         assert_eq!(row_count, Precision::Exact(2));
 
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(0, Some(10)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(0, Some(10))?;
         assert_eq!(row_count, Precision::Inexact(10));
 
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(5, Some(10)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(5, Some(10))?;
         assert_eq!(row_count, Precision::Inexact(10));
 
         // Input was Inexact, so an `nr <= skip` outcome must remain Inexact:
         // the inexact estimate could be wrong, so we cannot promote 0 to
         // Exact.
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(400, Some(10)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(400, Some(10))?;
         assert_eq!(row_count, Precision::Inexact(0));
 
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(398, Some(10)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(398, Some(10))?;
         assert_eq!(row_count, Precision::Inexact(2));
 
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(398, Some(1)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(398, Some(1))?;
         assert_eq!(row_count, Precision::Inexact(1));
 
-        let row_count = row_number_inexact_statistics_for_global_limit(398, None).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(398, None)?;
         assert_eq!(row_count, Precision::Inexact(2));
 
         let row_count =
-            row_number_inexact_statistics_for_global_limit(0, Some(usize::MAX)).await?;
+            row_number_inexact_statistics_for_global_limit(0, Some(usize::MAX))?;
         assert_eq!(row_count, Precision::Inexact(400));
 
         let row_count =
-            row_number_inexact_statistics_for_global_limit(398, Some(usize::MAX)).await?;
+            row_number_inexact_statistics_for_global_limit(398, Some(usize::MAX))?;
         assert_eq!(row_count, Precision::Inexact(2));
 
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_row_number_statistics_for_local_limit() -> Result<()> {
-        let row_count = row_number_statistics_for_local_limit(4, 10).await?;
+    #[test]
+    fn test_row_number_statistics_for_local_limit() -> Result<()> {
+        let row_count = row_number_statistics_for_local_limit(4, 10)?;
         assert_eq!(row_count, Precision::Exact(10));
 
         Ok(())
     }
 
-    async fn row_number_statistics_for_global_limit(
+    fn row_number_statistics_for_global_limit(
         skip: usize,
         fetch: Option<usize>,
     ) -> Result<Precision<usize>> {
@@ -850,7 +843,7 @@ mod tests {
         PhysicalGroupBy::new_single(group_by_expr.clone())
     }
 
-    async fn row_number_inexact_statistics_for_global_limit(
+    fn row_number_inexact_statistics_for_global_limit(
         skip: usize,
         fetch: Option<usize>,
     ) -> Result<Precision<usize>> {
@@ -881,7 +874,7 @@ mod tests {
             .num_rows)
     }
 
-    async fn row_number_statistics_for_local_limit(
+    fn row_number_statistics_for_local_limit(
         num_partitions: usize,
         fetch: usize,
     ) -> Result<Precision<usize>> {

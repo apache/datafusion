@@ -181,14 +181,14 @@ impl<'a> DFParquetMetadata<'a> {
                 Self::load_page_index(self.store, self.object_meta, cached_metadata)
                     .await?;
             if cache_metadata {
-                self.cache_metadata(Arc::clone(&metadata)).await?;
+                self.cache_metadata(Arc::clone(&metadata))?;
             }
             return Ok(metadata);
         }
 
         let metadata = self.fetch_metadata_from_store(page_index_policy).await?;
         if cache_metadata {
-            self.cache_metadata(Arc::clone(&metadata)).await?;
+            self.cache_metadata(Arc::clone(&metadata))?;
         }
         Ok(metadata)
     }
@@ -207,7 +207,7 @@ impl<'a> DFParquetMetadata<'a> {
         metadata.column_index().is_some() && metadata.offset_index().is_some()
     }
 
-    async fn cache_metadata(&self, metadata: Arc<ParquetMetaData>) -> Result<()> {
+    fn cache_metadata(&self, metadata: Arc<ParquetMetaData>) -> Result<()> {
         if let Some(file_metadata_cache) = &self.file_metadata_cache {
             file_metadata_cache.put(
                 &self.object_meta.location,
