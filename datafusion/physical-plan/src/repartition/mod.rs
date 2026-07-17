@@ -1608,7 +1608,7 @@ impl ExecutionPlan for RepartitionExec {
                 Partitioning::Hash(new_partitions, *size)
             }
             Partitioning::Range(range_partitioning) => {
-                // Rewriting the range key expressions in ordering based on the projection expressions
+                // Rewrite range key expressions through the projection.
                 let mut sort_exprs =
                     Vec::with_capacity(range_partitioning.ordering().len());
                 for sort_expr in range_partitioning.ordering() {
@@ -2639,10 +2639,11 @@ mod tests {
             .expect("top node should be RepartitionExec");
 
         assert!(swapped_repartition.input().is::<ProjectionExec>());
+        let range = expect_range_partitioning(swapped_repartition.partitioning());
+        assert_eq!(range.ordering()[0].to_string(), "id@1 ASC");
         assert_eq!(
-            as_range_partitioning(swapped_repartition.partitioning()).ordering()[0]
-                .to_string(),
-            "id@1 ASC"
+            range.split_points(),
+            &[SplitPoint::new(vec![ScalarValue::UInt32(Some(10))])]
         );
 
         Ok(())
@@ -2713,10 +2714,20 @@ mod tests {
         );
         assert!(repartition.maintains_input_order()[0]);
 
-        assert!(matches!(
-            repartition.try_pushdown_sort(ordering.as_ref())?,
-            SortOrderPushdownResult::Exact { .. }
-        ));
+        match repartition.try_pushdown_sort(ordering.as_ref())? {
+            SortOrderPushdownResult::Exact { inner } => {
+                let pushed = inner
+                    .downcast_ref::<RepartitionExec>()
+                    .expect("pushdown should keep RepartitionExec");
+
+                assert!(pushed.preserve_order());
+                assert!(pushed.maintains_input_order()[0]);
+
+                let range = expect_range_partitioning(pushed.partitioning());
+                assert_eq!(range.ordering()[0].to_string(), "id@0 ASC");
+            }
+            other => panic!("expected Exact sort pushdown, got {other:?}"),
+        }
 
         Ok(())
     }
@@ -2757,7 +2768,7 @@ mod tests {
         key_columns: &[&str],
         split_points: Vec<Vec<u32>>,
     ) -> Result<Partitioning> {
-        let ordering = LexOrdering::new(
+        let Some(ordering) = LexOrdering::new(
             key_columns
                 .iter()
                 .map(|name| {
@@ -2767,8 +2778,9 @@ mod tests {
                     ))
                 })
                 .collect::<Result<Vec<_>>>()?,
-        )
-        .expect("range ordering must not be empty");
+        ) else {
+            return exec_err!("range ordering must not be empty");
+        };
         Ok(Partitioning::Range(RangePartitioning::try_new(
             ordering,
             split_points
@@ -2801,7 +2813,7 @@ mod tests {
         ProjectionExec::try_new(exprs, Arc::clone(input))
     }
 
-    fn as_range_partitioning(partitioning: &Partitioning) -> &RangePartitioning {
+    fn expect_range_partitioning(partitioning: &Partitioning) -> &RangePartitioning {
         match partitioning {
             Partitioning::Range(range) => range,
             other => panic!("expected Range partitioning, got {other:?}"),
