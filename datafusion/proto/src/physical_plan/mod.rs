@@ -178,6 +178,453 @@ mod tests {
         );
     }
 
+    mod file_scan_config_serde {
+        use super::*;
+        use arrow::datatypes::{DataType, Field};
+        use datafusion_common::{Constraint, Constraints, ScalarValue, Statistics};
+        use datafusion_datasource::file::FileSource;
+        use datafusion_datasource::file_groups::FileGroup;
+        use datafusion_datasource::file_stream::FileOpener;
+        use datafusion_datasource::{PartitionedFile, TableSchema};
+        use datafusion_execution::object_store::ObjectStoreUrl;
+        use datafusion_physical_expr::expressions::Column;
+        use datafusion_physical_expr::projection::{
+            ProjectionExpr as FileProjectionExpr, ProjectionExprs as FileProjectionExprs,
+        };
+        use datafusion_physical_expr::{
+            LexOrdering, Partitioning, RangePartitioning, SplitPoint,
+        };
+        use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+        use object_store::ObjectStore;
+
+        #[derive(Clone)]
+        struct SerdeTestSource {
+            metrics: ExecutionPlanMetricsSet,
+            table_schema: TableSchema,
+            projection: Option<FileProjectionExprs>,
+        }
+
+        impl SerdeTestSource {
+            fn new(
+                table_schema: TableSchema,
+                projection: Option<FileProjectionExprs>,
+            ) -> Self {
+                Self {
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    table_schema,
+                    projection,
+                }
+            }
+        }
+
+        impl FileSource for SerdeTestSource {
+            fn create_file_opener(
+                &self,
+                _object_store: Arc<dyn ObjectStore>,
+                _base_config: &FileScanConfig,
+                _partition: usize,
+            ) -> Result<Arc<dyn FileOpener>> {
+                internal_err!("not needed for FileScanConfig serde tests")
+            }
+
+            fn table_schema(&self) -> &TableSchema {
+                &self.table_schema
+            }
+
+            fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
+                Arc::new(self.clone())
+            }
+
+            fn metrics(&self) -> &ExecutionPlanMetricsSet {
+                &self.metrics
+            }
+
+            fn file_type(&self) -> &str {
+                "serde-test"
+            }
+
+            fn try_pushdown_projection(
+                &self,
+                projection: &FileProjectionExprs,
+            ) -> Result<Option<Arc<dyn FileSource>>> {
+                Ok(Some(Arc::new(Self {
+                    projection: Some(projection.clone()),
+                    ..self.clone()
+                })))
+            }
+
+            fn projection(&self) -> Option<&FileProjectionExprs> {
+                self.projection.as_ref()
+            }
+        }
+
+        fn populated_projection() -> FileProjectionExprs {
+            FileProjectionExprs::new(vec![FileProjectionExpr::new(
+                Arc::new(Column::new("value", 0)),
+                "projected_value",
+            )])
+        }
+
+        fn test_config(output_partitioning: Option<Partitioning>) -> FileScanConfig {
+            test_config_with_projection(output_partitioning, Some(populated_projection()))
+        }
+
+        fn test_config_with_projection(
+            output_partitioning: Option<Partitioning>,
+            projection: Option<FileProjectionExprs>,
+        ) -> FileScanConfig {
+            let file_schema = Arc::new(
+                Schema::new(vec![
+                    Field::new("value", DataType::Int32, false),
+                    Field::new("label", DataType::Utf8, true),
+                ])
+                .with_metadata(HashMap::from([(
+                    "serde_test_key".to_string(),
+                    "serde_test_value".to_string(),
+                )])),
+            );
+            let table_schema = TableSchema::builder(Arc::clone(&file_schema))
+                .with_table_partition_cols(vec![Arc::new(Field::new(
+                    "part",
+                    DataType::Utf8,
+                    false,
+                ))])
+                .build();
+            let table_statistics = Statistics::new_unknown(table_schema.table_schema());
+            let source = Arc::new(SerdeTestSource::new(table_schema, projection));
+            let first_file = PartitionedFile::new("data/part=a/file.arrow", 1024)
+                .with_partition_values(vec![ScalarValue::Utf8(Some("a".to_string()))])
+                .with_range(10, 900)
+                .with_arrow_schema(Arc::clone(&file_schema))
+                .with_statistics(Arc::new(table_statistics.clone()));
+            let second_file = PartitionedFile::new("data/part=b/file.arrow", 2048)
+                .with_partition_values(vec![ScalarValue::Utf8(Some("b".to_string()))]);
+            let third_file = PartitionedFile::new("data/part=c/file.arrow", 4096)
+                .with_partition_values(vec![ScalarValue::Utf8(Some("c".to_string()))])
+                .with_arrow_schema(Arc::clone(&file_schema));
+            let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(
+                Arc::new(Column::new("value", 0)),
+            )])
+            .expect("single expression ordering");
+
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                .with_file_groups(vec![
+                    FileGroup::new(vec![first_file, second_file]),
+                    FileGroup::new(vec![third_file]),
+                ])
+                .with_constraints(Constraints::new_unverified(vec![
+                    Constraint::PrimaryKey(vec![0]),
+                ]))
+                .with_statistics(table_statistics)
+                .with_limit(Some(17))
+                .with_batch_size(Some(256))
+                .with_output_ordering(vec![ordering])
+                .with_output_partitioning(output_partitioning)
+                .build()
+        }
+
+        fn hash_partitioning() -> Partitioning {
+            Partitioning::Hash(vec![Arc::new(Column::new("value", 0))], 3)
+        }
+
+        fn range_partitioning() -> Partitioning {
+            let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(
+                Arc::new(Column::new("value", 0)),
+            )])
+            .expect("single expression ordering");
+            Partitioning::Range(RangePartitioning::new(
+                ordering,
+                vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+            ))
+        }
+
+        fn decode_source(
+            conf: &protobuf::FileScanExecConf,
+        ) -> Result<Arc<dyn FileSource>> {
+            Ok(Arc::new(SerdeTestSource::new(
+                FileScanConfig::parse_table_schema_from_proto(conf)?,
+                None,
+            )))
+        }
+
+        struct FileScanSerdeHarness {
+            codec: DefaultPhysicalExtensionCodec,
+            converter: DefaultPhysicalProtoConverter,
+            task_ctx: TaskContext,
+        }
+
+        impl FileScanSerdeHarness {
+            fn new() -> Self {
+                Self {
+                    codec: DefaultPhysicalExtensionCodec {},
+                    converter: DefaultPhysicalProtoConverter {},
+                    task_ctx: TaskContext::default(),
+                }
+            }
+
+            fn encode(
+                &self,
+                config: &FileScanConfig,
+            ) -> Result<protobuf::FileScanExecConf> {
+                let encoder = ConverterPlanEncoder {
+                    codec: &self.codec,
+                    proto_converter: &self.converter,
+                };
+                config.to_proto_conf(&ExecutionPlanEncodeCtx::new(&encoder))
+            }
+
+            fn legacy_encode(
+                &self,
+                config: &FileScanConfig,
+            ) -> Result<protobuf::FileScanExecConf> {
+                serialize_file_scan_config(config, &self.codec, &self.converter)
+            }
+
+            fn decode(
+                &self,
+                conf: &protobuf::FileScanExecConf,
+            ) -> Result<FileScanConfig> {
+                self.decode_with_source(conf, decode_source(conf)?)
+            }
+
+            fn decode_with_source(
+                &self,
+                conf: &protobuf::FileScanExecConf,
+                file_source: Arc<dyn FileSource>,
+            ) -> Result<FileScanConfig> {
+                let physical_decode_ctx =
+                    PhysicalPlanDecodeContext::new(&self.task_ctx, &self.codec);
+                let decoder = ConverterPlanDecoder {
+                    ctx: &physical_decode_ctx,
+                    proto_converter: &self.converter,
+                };
+                FileScanConfig::from_proto_conf(
+                    conf,
+                    &ExecutionPlanDecodeCtx::new(&decoder),
+                    file_source,
+                )
+            }
+
+            fn legacy_decode(
+                &self,
+                conf: &protobuf::FileScanExecConf,
+            ) -> Result<FileScanConfig> {
+                let physical_decode_ctx =
+                    PhysicalPlanDecodeContext::new(&self.task_ctx, &self.codec);
+                parse_protobuf_file_scan_config(
+                    conf,
+                    &physical_decode_ctx,
+                    &self.converter,
+                    decode_source(conf)?,
+                )
+            }
+        }
+
+        #[test]
+        fn new_file_scan_config_serde_matches_legacy_wire_format() -> Result<()> {
+            let serde = FileScanSerdeHarness::new();
+
+            for config in [
+                test_config(None),
+                test_config(Some(Partitioning::RoundRobinBatch(2))),
+                test_config(Some(hash_partitioning())),
+                test_config(Some(range_partitioning())),
+                test_config(Some(Partitioning::UnknownPartitioning(4))),
+                test_config_with_projection(None, None),
+                test_config_with_projection(None, Some(FileProjectionExprs::new(vec![]))),
+            ] {
+                let legacy = serde.legacy_encode(&config)?;
+                let migrated = serde.encode(&config)?;
+
+                assert_eq!(migrated, legacy);
+                assert_eq!(migrated.encode_to_vec(), legacy.encode_to_vec());
+
+                let migrated_reencoded = serde.encode(&serde.decode(&migrated)?)?;
+                let legacy_reencoded =
+                    serde.legacy_encode(&serde.legacy_decode(&legacy)?)?;
+                assert_eq!(migrated_reencoded, legacy_reencoded);
+                assert_eq!(
+                    migrated_reencoded.encode_to_vec(),
+                    legacy_reencoded.encode_to_vec()
+                );
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn new_file_scan_config_serde_preserves_complete_fixture() -> Result<()> {
+            let serde = FileScanSerdeHarness::new();
+            let config = test_config(None);
+            let decoded = serde.decode(&serde.encode(&config)?)?;
+
+            assert_eq!(decoded.constraints, config.constraints);
+            assert_eq!(
+                decoded.file_schema().metadata,
+                config.file_schema().metadata
+            );
+            assert_eq!(decoded.file_groups.len(), 2);
+            assert_eq!(decoded.file_groups[0].len(), 2);
+            assert_eq!(decoded.file_groups[1].len(), 1);
+            assert!(decoded.file_groups[0].files()[0].arrow_schema.is_some());
+            assert!(decoded.file_groups[0].files()[1].arrow_schema.is_none());
+
+            Ok(())
+        }
+
+        #[test]
+        fn new_file_scan_config_serde_preserves_projection_presence() -> Result<()> {
+            let serde = FileScanSerdeHarness::new();
+
+            let absent = serde.encode(&test_config_with_projection(None, None))?;
+            assert!(absent.projection_exprs.is_none());
+            assert!(serde.decode(&absent)?.file_source().projection().is_none());
+
+            let empty = serde.encode(&test_config_with_projection(
+                None,
+                Some(FileProjectionExprs::new(vec![])),
+            ))?;
+            assert!(
+                empty
+                    .projection_exprs
+                    .as_ref()
+                    .is_some_and(|projection| projection.projections.is_empty())
+            );
+            assert!(
+                serde
+                    .decode(&empty)?
+                    .file_source()
+                    .projection()
+                    .is_some_and(|projection| projection.as_ref().is_empty())
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn new_file_scan_config_decode_preserves_legacy_partitioning() -> Result<()> {
+            let serde = FileScanSerdeHarness::new();
+            let mut proto = serde.encode(&test_config(None))?;
+            proto.partitioned_by_file_group = Some(true);
+            proto.output_partitioning = None;
+
+            let decoded = serde.decode(&proto)?;
+
+            match decoded.output_partitioning {
+                Some(Partitioning::Hash(exprs, partition_count)) => {
+                    assert_eq!(partition_count, 2);
+                    let column = exprs[0]
+                        .downcast_ref::<Column>()
+                        .expect("partition expression should be a column");
+                    assert_eq!(column.name(), "part");
+                    assert_eq!(column.index(), 2);
+                }
+                other => panic!("expected legacy hash partitioning, got {other:?}"),
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn new_file_scan_config_decode_rejects_malformed_required_fields() -> Result<()> {
+            let serde = FileScanSerdeHarness::new();
+            let valid = serde.encode(&test_config(None))?;
+            let file_source = decode_source(&valid)?;
+
+            for (field, malformed) in [
+                (
+                    "schema",
+                    protobuf::FileScanExecConf {
+                        schema: None,
+                        ..valid.clone()
+                    },
+                ),
+                (
+                    "constraints",
+                    protobuf::FileScanExecConf {
+                        constraints: None,
+                        ..valid.clone()
+                    },
+                ),
+                (
+                    "statistics",
+                    protobuf::FileScanExecConf {
+                        statistics: None,
+                        ..valid.clone()
+                    },
+                ),
+            ] {
+                let err = serde
+                    .decode_with_source(&malformed, Arc::clone(&file_source))
+                    .expect_err("missing required field must fail");
+                assert!(err.to_string().contains(field), "unexpected error: {err}");
+            }
+
+            let mut missing_projection_expr = valid.clone();
+            missing_projection_expr
+                .projection_exprs
+                .as_mut()
+                .expect("test config has projection expressions")
+                .projections[0]
+                .expr = None;
+            let err = serde
+                .decode_with_source(&missing_projection_expr, file_source)
+                .expect_err("missing projection expression must fail");
+            assert!(
+                err.to_string()
+                    .contains("ProjectionExpr missing expr field"),
+                "unexpected error: {err}"
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn new_file_scan_config_decode_rejects_invalid_range_ordering() -> Result<()> {
+            let serde = FileScanSerdeHarness::new();
+            let mut proto = serde.encode(&test_config(Some(range_partitioning())))?;
+
+            let mut duplicate_ordering = proto.clone();
+            let range = match duplicate_ordering
+                .output_partitioning
+                .as_mut()
+                .and_then(|p| p.partition_method.as_mut())
+            {
+                Some(protobuf::partitioning::PartitionMethod::Range(range)) => range,
+                other => panic!("expected range partitioning, got {other:?}"),
+            };
+            range.sort_expr.push(range.sort_expr[0].clone());
+
+            let err = serde
+                .decode(&duplicate_ordering)
+                .expect_err("duplicate range ordering must fail");
+            assert!(
+                err.to_string().contains("duplicate expressions"),
+                "unexpected error: {err}"
+            );
+
+            let range = match proto
+                .output_partitioning
+                .as_mut()
+                .and_then(|p| p.partition_method.as_mut())
+            {
+                Some(protobuf::partitioning::PartitionMethod::Range(range)) => range,
+                other => panic!("expected range partitioning, got {other:?}"),
+            };
+            range.sort_expr.clear();
+
+            let err = serde
+                .decode(&proto)
+                .expect_err("empty range ordering must fail");
+            assert!(
+                err.to_string().contains("requires non-empty ordering"),
+                "unexpected error: {err}"
+            );
+
+            Ok(())
+        }
+    }
+
     /// Unit tests for the bytes-only function serde exposed on
     /// [`ExecutionPlanEncodeCtx`] / [`ExecutionPlanDecodeCtx`] and backed by
     /// [`ConverterPlanEncoder`] / [`ConverterPlanDecoder`]. Function-carrying
