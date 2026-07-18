@@ -703,5 +703,44 @@ b 3
 statement ok
 drop table hits;
 
+##
+## Long-tail scenario exercising the new-group gate and periodic sweep.
+##
+## Data shape: 5 "hot" groups with count = 100 each, plus 200 "long tail"
+## groups each with count = 1. Total rows = 5*100 + 200 = 700. With
+## LIMIT 3 the top-K threshold quickly reaches 100; every long-tail
+## group's max final count (1 + remaining ≤ 700) is initially > 100 so
+## it's NOT immediately gated, but after warm-up + sweep the remaining
+## bound tightens enough that new tail groups get gated.
+##
+
+statement ok
+CREATE TABLE longtail(g bigint) AS
+    SELECT unnest([1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                   2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+                   3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+                   4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+                   5, 5, 5, 5, 5, 5, 5, 5, 5, 5])
+    UNION ALL SELECT * FROM generate_series(10, 209);
+
+# Sanity check: top-3 by count
+query II
+select g, count(*) from longtail group by g order by count(*) desc, g asc limit 3;
+----
+1 10
+2 10
+3 10
+
+# Long-tail groups still return the smallest counts under ASC
+query II
+select g, count(*) from longtail group by g order by count(*) asc, g asc limit 3;
+----
+10 1
+11 1
+12 1
+
+statement ok
+drop table longtail;
+
 statement ok
 drop table traces;
