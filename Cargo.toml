@@ -176,7 +176,7 @@ liblzma = { version = "0.4.6", features = ["static"] }
 log = "^0.4"
 memchr = "2.8.1"
 num-traits = { version = "0.2" }
-object_store = { version = "0.13.2", default-features = false }
+object_store = { version = "0.14.1", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "59.1.0", default-features = false, features = [
     "arrow",
@@ -294,3 +294,28 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+# Force all transitive uses of `object_store` (e.g., the `parquet` crate) to
+# resolve to the local 0.14.1 checkout while we are transitioning the API.
+# Also patch the arrow/parquet crates to arrow-rs revision 30ae8d3 ("chore:
+# bump object_store to 0.14.1") so their `parquet` depends on the same
+# object_store 0.14.1 rather than 0.13.x from crates.io.
+[patch.crates-io]
+object_store = { path = "/Users/ovoievodin/dev/prj/apple/ovoievodin/rust/arrow-rs-object-store" }
+arrow = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-arith = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-array = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-avro = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-buffer = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-cast = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-csv = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-data = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-flight = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-ipc = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-json = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-ord = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-row = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-schema = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-select = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+arrow-string = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
+parquet = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
