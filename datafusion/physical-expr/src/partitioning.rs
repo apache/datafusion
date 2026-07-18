@@ -19,12 +19,12 @@
 
 use crate::{
     EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
-    expressions::UnKnownColumn, physical_exprs_equal,
+    expressions::UnKnownColumn, physical_exprs_contains, physical_exprs_equal,
 };
-use datafusion_common::{Result, ScalarValue, plan_err};
+pub use datafusion_common::SplitPoint;
+use datafusion_common::{Result, validate_range_split_points};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -156,20 +156,7 @@ impl Display for Partitioning {
 /// Comparisons use the lexicographic order defined by `ordering`, including
 /// `ASC`/`DESC` and null ordering. Split points must be strictly ordered
 /// according to that ordering, and each split point must have one value per
-/// ordering expression.
-///
-/// `N` split points define `N + 1` partitions:
-///
-/// ```text
-/// partition 0: key < split_points[0]
-/// partition 1: split_points[0] <= key < split_points[1]
-/// ...
-/// partition N - 1: split_points[N - 2] <= key < split_points[N - 1]
-/// partition N: split_points[N - 1] <= key
-/// ```
-///
-/// Values equal to split point `i` belong to partition `i + 1`, so interior
-/// partitions are lower-inclusive and upper-exclusive.
+/// ordering expression. See [`SplitPoint`] for the shared boundary convention.
 ///
 /// Like other user-specified data properties such as sortedness, if a source
 /// declares range partitioning, it is responsible for placing each row in the
@@ -217,39 +204,6 @@ pub struct RangePartitioning {
     split_points: Vec<SplitPoint>,
 }
 
-/// A boundary between adjacent range partitions.
-///
-/// A split point is a tuple with one [`ScalarValue`] per sort expression in the
-/// parent [`RangePartitioning`] ordering.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SplitPoint {
-    values: Vec<ScalarValue>,
-}
-
-impl SplitPoint {
-    /// Creates a new split point from its tuple values.
-    pub fn new(values: Vec<ScalarValue>) -> Self {
-        Self { values }
-    }
-
-    /// Returns the tuple values for this split point.
-    pub fn values(&self) -> &[ScalarValue] {
-        &self.values
-    }
-}
-
-impl Display for SplitPoint {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let values = self
-            .values
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        write!(f, "({values})")
-    }
-}
-
 impl RangePartitioning {
     /// Creates range partitioning metadata without validating split points.
     ///
@@ -265,7 +219,13 @@ impl RangePartitioning {
     /// Creates range partitioning metadata and validates split point shape and
     /// ordering.
     pub fn try_new(ordering: LexOrdering, split_points: Vec<SplitPoint>) -> Result<Self> {
-        validate_range_split_points(&ordering, &split_points)?;
+        validate_range_split_points(
+            &split_points,
+            &ordering
+                .iter()
+                .map(|sort_expr| sort_expr.options)
+                .collect::<Vec<_>>(),
+        )?;
         Ok(Self::new(ordering, split_points))
     }
 
@@ -282,50 +242,6 @@ impl RangePartitioning {
     /// Returns the number of partitions.
     pub fn partition_count(&self) -> usize {
         self.split_points.len() + 1
-    }
-
-    /// Returns true when `self` and `other` describe the same range partition
-    /// map.
-    ///
-    /// Single-partition range partitionings are always compatible. Otherwise,
-    /// the two partitionings must have identical split points and equivalent
-    /// ordering expressions with the same sort options.
-    pub fn compatible_with(
-        &self,
-        other: &Self,
-        eq_properties: &EquivalenceProperties,
-    ) -> bool {
-        if self.partition_count() == 1 && other.partition_count() == 1 {
-            return true;
-        }
-
-        if self.split_points != other.split_points
-            || self.ordering.len() != other.ordering.len()
-        {
-            return false;
-        }
-
-        if !self
-            .ordering
-            .iter()
-            .zip(other.ordering.iter())
-            .all(|(left, right)| left.options == right.options)
-        {
-            return false;
-        }
-
-        let left_exprs = self
-            .ordering
-            .iter()
-            .map(|sort_expr| Arc::clone(&sort_expr.expr))
-            .collect::<Vec<_>>();
-        let right_exprs = other
-            .ordering
-            .iter()
-            .map(|sort_expr| Arc::clone(&sort_expr.expr))
-            .collect::<Vec<_>>();
-
-        equivalent_exprs(&left_exprs, &right_exprs, eq_properties)
     }
 
     /// Calculates the range partitioning after applying the given projection.
@@ -382,86 +298,6 @@ fn format_range_split_points(split_points: &[SplitPoint]) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn validate_range_split_points(
-    ordering: &LexOrdering,
-    split_points: &[SplitPoint],
-) -> Result<()> {
-    let width = ordering.len();
-    for (idx, split_point) in split_points.iter().enumerate() {
-        let split_point_width = split_point.values.len();
-        if split_point_width != width {
-            return plan_err!(
-                "Range partitioning split point {idx} has width {split_point_width}, but ordering has width {width}"
-            );
-        }
-    }
-
-    for (idx, split_points) in split_points.windows(2).enumerate() {
-        if compare_split_points(ordering, &split_points[0], &split_points[1])?
-            != Ordering::Less
-        {
-            return plan_err!(
-                "Range partitioning split points must be strictly ordered: split point {idx} ({}) must be less than split point {} ({})",
-                split_points[0],
-                idx + 1,
-                split_points[1]
-            );
-        }
-    }
-
-    Ok(())
-}
-
-fn compare_split_points(
-    ordering: &LexOrdering,
-    left: &SplitPoint,
-    right: &SplitPoint,
-) -> Result<Ordering> {
-    for ((left_value, right_value), sort_expr) in
-        left.values.iter().zip(&right.values).zip(ordering.iter())
-    {
-        let value_ordering =
-            compare_scalar_values_for_sort(left_value, right_value, sort_expr)?;
-        if value_ordering != Ordering::Equal {
-            return Ok(value_ordering);
-        }
-    }
-
-    Ok(Ordering::Equal)
-}
-
-fn compare_scalar_values_for_sort(
-    left: &ScalarValue,
-    right: &ScalarValue,
-    sort_expr: &PhysicalSortExpr,
-) -> Result<Ordering> {
-    match (left.is_null(), right.is_null()) {
-        (true, true) => Ok(Ordering::Equal),
-        (true, false) => Ok(if sort_expr.options.nulls_first {
-            Ordering::Less
-        } else {
-            Ordering::Greater
-        }),
-        (false, true) => Ok(if sort_expr.options.nulls_first {
-            Ordering::Greater
-        } else {
-            Ordering::Less
-        }),
-        (false, false) => {
-            let Some(ordering) = left.partial_cmp(right) else {
-                return plan_err!(
-                    "Range partitioning split point values are not comparable: {left:?} and {right:?}"
-                );
-            };
-            Ok(if sort_expr.options.descending {
-                ordering.reverse()
-            } else {
-                ordering
-            })
-        }
-    }
 }
 
 fn equivalent_exprs(
@@ -526,42 +362,6 @@ impl Partitioning {
         }
     }
 
-    /// Returns true when `self` and `other` describe compatible partition maps.
-    ///
-    /// Compatible partition maps can be used for partition-local behavior: if
-    /// this returns true, partition `i` from both partitionings can be treated
-    /// as covering the same partition domain. This is stricter than
-    /// [`Self::satisfaction`], which only answers whether this partitioning can
-    /// satisfy a required distribution.
-    pub fn compatible_with(
-        &self,
-        other: &Self,
-        eq_properties: &EquivalenceProperties,
-    ) -> bool {
-        if self.partition_count() == 1 && other.partition_count() == 1 {
-            return true;
-        }
-
-        match (self, other) {
-            (
-                Partitioning::Hash(left_exprs, left_count),
-                Partitioning::Hash(right_exprs, right_count),
-            ) => {
-                if left_count != right_count {
-                    return false;
-                }
-                if left_exprs.is_empty() || right_exprs.is_empty() {
-                    return false;
-                }
-                equivalent_exprs(left_exprs, right_exprs, eq_properties)
-            }
-            (Partitioning::Range(left), Partitioning::Range(right)) => {
-                left.compatible_with(right, eq_properties)
-            }
-            _ => false,
-        }
-    }
-
     /// Returns true if `subset_exprs` is a subset of `exprs`.
     /// For example: Hash(a, b) is subset of Hash(a) since a partition with all occurrences of
     /// a distinct (a) must also contain all occurrences of a distinct (a, b) with the same (a).
@@ -574,11 +374,9 @@ impl Partitioning {
             return false;
         }
 
-        subset_exprs.iter().all(|subset_expr| {
-            superset_exprs
-                .iter()
-                .any(|superset_expr| subset_expr.eq(superset_expr))
-        })
+        subset_exprs
+            .iter()
+            .all(|subset_expr| physical_exprs_contains(superset_exprs, subset_expr))
     }
 
     #[deprecated(since = "52.0.0", note = "Use satisfaction instead")]
@@ -593,6 +391,10 @@ impl Partitioning {
 
     /// Returns how this [`Partitioning`] satisfies the partitioning scheme mandated
     /// by the `required` [`Distribution`].
+    #[expect(
+        deprecated,
+        reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+    )]
     pub fn satisfaction(
         &self,
         required: &Distribution,
@@ -604,11 +406,14 @@ impl Partitioning {
             Distribution::SinglePartition if self.partition_count() == 1 => {
                 PartitioningSatisfaction::Exact
             }
-            // When partition count is 1, hash requirement is satisfied.
-            Distribution::HashPartitioned(_) if self.partition_count() == 1 => {
+            // When partition count is 1, key partitioning is satisfied.
+            Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_)
+                if self.partition_count() == 1 =>
+            {
                 PartitioningSatisfaction::Exact
             }
-            Distribution::HashPartitioned(required_exprs) => match self {
+            Distribution::HashPartitioned(required_exprs)
+            | Distribution::KeyPartitioned(required_exprs) => match self {
                 // Here we do not check the partition count for hash partitioning and assumes the partition count
                 // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
                 // then we need to have the partition count and hash functions validation.
@@ -713,11 +518,19 @@ pub enum Distribution {
     UnspecifiedDistribution,
     /// A single partition is required
     SinglePartition,
+    /// Deprecated historical name for [`Distribution::KeyPartitioned`].
+    /// See <https://github.com/apache/datafusion/issues/23236> for details.
+    #[deprecated(since = "55.0.0", note = "Use Distribution::KeyPartitioned")]
+    HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
     /// Requires children to be distributed in such a way that the same
     /// values of the keys end up in the same partition
-    HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
+    KeyPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
+#[expect(
+    deprecated,
+    reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+)]
 impl Distribution {
     /// Creates a `Partitioning` that satisfies this `Distribution`
     pub fn create_partitioning(self, partition_count: usize) -> Partitioning {
@@ -726,13 +539,17 @@ impl Distribution {
                 Partitioning::UnknownPartitioning(partition_count)
             }
             Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
-            Distribution::HashPartitioned(expr) => {
+            Distribution::HashPartitioned(expr) | Distribution::KeyPartitioned(expr) => {
                 Partitioning::Hash(expr, partition_count)
             }
         }
     }
 }
 
+#[expect(
+    deprecated,
+    reason = "HashPartitioned display is preserved during the KeyPartitioned migration"
+)]
 impl Display for Distribution {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -740,6 +557,9 @@ impl Display for Distribution {
             Distribution::SinglePartition => write!(f, "SinglePartition"),
             Distribution::HashPartitioned(exprs) => {
                 write!(f, "HashPartitioned[{}])", format_physical_expr_list(exprs))
+            }
+            Distribution::KeyPartitioned(exprs) => {
+                write!(f, "KeyPartitioned[{}])", format_physical_expr_list(exprs))
             }
         }
     }
@@ -754,7 +574,7 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::Result;
+    use datafusion_common::{Result, ScalarValue};
 
     struct PartitioningTestFixture {
         schema: SchemaRef,
@@ -809,11 +629,11 @@ mod tests {
             Partitioning::Hash(self.cols(indices), partition_count)
         }
 
-        fn hash_distribution(
+        fn key_distribution(
             &self,
             indices: impl IntoIterator<Item = usize>,
         ) -> Distribution {
-            Distribution::HashPartitioned(self.cols(indices))
+            Distribution::KeyPartitioned(self.cols(indices))
         }
 
         fn range_sort_expr(
@@ -866,6 +686,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        deprecated,
+        reason = "test intentionally covers deprecated HashPartitioned compatibility"
+    )]
     fn partitioning_satisfy_distribution() -> Result<()> {
         let fixture = PartitioningTestFixture::new(vec![
             ("column_1", DataType::Int64),
@@ -875,7 +699,8 @@ mod tests {
         let distribution_types = vec![
             Distribution::UnspecifiedDistribution,
             Distribution::SinglePartition,
-            fixture.hash_distribution([0, 1]),
+            Distribution::HashPartitioned(fixture.cols([0, 1])),
+            fixture.key_distribution([0, 1]),
         ];
 
         let single_partition = Partitioning::UnknownPartitioning(1);
@@ -910,11 +735,34 @@ mod tests {
                 Distribution::SinglePartition => {
                     assert_eq!(result, (true, false, false, false, false))
                 }
-                Distribution::HashPartitioned(_) => {
+                Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_) => {
                     assert_eq!(result, (true, false, false, true, false))
                 }
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    #[expect(
+        deprecated,
+        reason = "test intentionally covers deprecated HashPartitioned compatibility"
+    )]
+    fn deprecated_hash_partitioned_matches_key_partitioned() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let partitioning = fixture.hash_partitioning([0, 1], 4);
+        let hash_distribution = Distribution::HashPartitioned(fixture.cols([0, 1]));
+        let key_distribution = fixture.key_distribution([0, 1]);
+
+        assert_eq!(
+            partitioning.satisfaction(&hash_distribution, &fixture.eq_properties, false),
+            partitioning.satisfaction(&key_distribution, &fixture.eq_properties, false)
+        );
+        assert_eq!(
+            hash_distribution.create_partitioning(4),
+            key_distribution.create_partitioning(4)
+        );
 
         Ok(())
     }
@@ -925,37 +773,37 @@ mod tests {
 
         let test_cases = vec![
             (
-                "Hash([a]) vs Hash([a, b])",
+                "KeyPartitioned([a, b]) satisfied by Hash([a])",
                 fixture.hash_partitioning([0], 4),
-                fixture.hash_distribution([0, 1]),
+                fixture.key_distribution([0, 1]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a]) vs Hash([a, b, c])",
+                "KeyPartitioned([a, b, c]) satisfied by Hash([a])",
                 fixture.hash_partitioning([0], 4),
-                fixture.hash_distribution([0, 1, 2]),
+                fixture.key_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a, b]) vs Hash([a, b, c])",
+                "KeyPartitioned([a, b, c]) satisfied by Hash([a, b])",
                 fixture.hash_partitioning([0, 1], 4),
-                fixture.hash_distribution([0, 1, 2]),
+                fixture.key_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([b]) vs Hash([a, b, c])",
+                "KeyPartitioned([a, b, c]) satisfied by Hash([b])",
                 fixture.hash_partitioning([1], 4),
-                fixture.hash_distribution([0, 1, 2]),
+                fixture.key_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([b, a]) vs Hash([a, b, c])",
+                "KeyPartitioned([a, b, c]) satisfied by Hash([b, a])",
                 fixture.hash_partitioning([1, 0], 4),
-                fixture.hash_distribution([0, 1, 2]),
+                fixture.key_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -986,23 +834,23 @@ mod tests {
 
         let test_cases = vec![
             (
-                "Hash([a, b]) vs Hash([a])",
+                "KeyPartitioned([a]) satisfied by Hash([a, b])",
                 fixture.hash_partitioning([0, 1], 4),
-                fixture.hash_distribution([0]),
+                fixture.key_distribution([0]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a, b, c]) vs Hash([a])",
+                "KeyPartitioned([a]) satisfied by Hash([a, b, c])",
                 fixture.hash_partitioning([0, 1, 2], 4),
-                fixture.hash_distribution([0]),
+                fixture.key_distribution([0]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a, b, c]) vs Hash([a, b])",
+                "KeyPartitioned([a, b]) satisfied by Hash([a, b, c])",
                 fixture.hash_partitioning([0, 1, 2], 4),
-                fixture.hash_distribution([0, 1]),
+                fixture.key_distribution([0, 1]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -1032,9 +880,9 @@ mod tests {
         let fixture = PartitioningTestFixture::int64(&["a", "b", "c"])?;
 
         let test_cases = vec![(
-            "Partial overlap: Hash([a, c]) vs Hash([a, b])",
+            "Partial overlap: KeyPartitioned([a, b]) satisfied by Hash([a, c])",
             fixture.hash_partitioning([0, 2], 4),
-            fixture.hash_distribution([0, 1]),
+            fixture.key_distribution([0, 1]),
             PartitioningSatisfaction::NotSatisfied,
             PartitioningSatisfaction::NotSatisfied,
         )];
@@ -1064,16 +912,16 @@ mod tests {
 
         let test_cases = vec![
             (
-                "Hash([a]) vs Hash([b, c])",
+                "KeyPartitioned([b, c]) satisfied by Hash([a])",
                 fixture.hash_partitioning([0], 4),
-                fixture.hash_distribution([1, 2]),
+                fixture.key_distribution([1, 2]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a, b]) vs Hash([c])",
+                "KeyPartitioned([c]) satisfied by Hash([a, b])",
                 fixture.hash_partitioning([0, 1], 4),
-                fixture.hash_distribution([2]),
+                fixture.key_distribution([2]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -1104,16 +952,16 @@ mod tests {
 
         let test_cases = vec![
             (
-                "Hash([a, b]) vs Hash([a, b])",
+                "KeyPartitioned([a, b]) satisfied by Hash([a, b])",
                 fixture.hash_partitioning([0, 1], 4),
-                fixture.hash_distribution([0, 1]),
+                fixture.key_distribution([0, 1]),
                 PartitioningSatisfaction::Exact,
                 PartitioningSatisfaction::Exact,
             ),
             (
-                "Hash([a]) vs Hash([a])",
+                "KeyPartitioned([a]) satisfied by Hash([a])",
                 fixture.hash_partitioning([0], 4),
-                fixture.hash_distribution([0]),
+                fixture.key_distribution([0]),
                 PartitioningSatisfaction::Exact,
                 PartitioningSatisfaction::Exact,
             ),
@@ -1145,23 +993,30 @@ mod tests {
 
         let test_cases = vec![
             (
-                "Hash([unknown]) vs Hash([a, b])",
+                "KeyPartitioned([a, b]) satisfied by Hash([unknown])",
                 Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
-                fixture.hash_distribution([0, 1]),
+                fixture.key_distribution([0, 1]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a, b]) vs Hash([unknown])",
+                "KeyPartitioned([unknown]) satisfied by Hash([a, b])",
                 fixture.hash_partitioning([0, 1], 4),
-                Distribution::HashPartitioned(vec![Arc::clone(&unknown)]),
+                Distribution::KeyPartitioned(vec![Arc::clone(&unknown)]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([unknown]) vs Hash([unknown])",
+                "KeyPartitioned([unknown]) satisfied by Hash([unknown])",
                 Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
-                Distribution::HashPartitioned(vec![Arc::clone(&unknown)]),
+                Distribution::KeyPartitioned(vec![Arc::clone(&unknown)]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "KeyPartitioned([unknown, a]) satisfied by Hash([unknown])",
+                Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
+                Distribution::KeyPartitioned(vec![Arc::clone(&unknown), fixture.col(0)]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -1192,23 +1047,23 @@ mod tests {
 
         let test_cases = vec![
             (
-                "Hash([]) vs Hash([a])",
+                "KeyPartitioned([a]) satisfied by Hash([])",
                 Partitioning::Hash(vec![], 4),
-                fixture.hash_distribution([0]),
+                fixture.key_distribution([0]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([a]) vs Hash([])",
+                "KeyPartitioned([]) satisfied by Hash([a])",
                 fixture.hash_partitioning([0], 4),
-                Distribution::HashPartitioned(vec![]),
+                Distribution::KeyPartitioned(vec![]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "Hash([]) vs Hash([])",
+                "KeyPartitioned([]) satisfied by Hash([])",
                 Partitioning::Hash(vec![], 4),
-                Distribution::HashPartitioned(vec![]),
+                Distribution::KeyPartitioned(vec![]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -1375,162 +1230,11 @@ mod tests {
     }
 
     #[test]
-    fn test_range_partitioning_compatible_with() -> Result<()> {
-        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
-        let mut eq_properties = fixture.eq_properties.clone();
-        eq_properties.add_equal_conditions(fixture.col(0), fixture.col(1))?;
-
-        let split_points = vec![int_split_point([10]), int_split_point([20])];
-        let range_a = fixture.range([0], split_points.clone());
-        let range_a_same = fixture.range([0], split_points.clone());
-        let range_b_equivalent = fixture.range([1], split_points.clone());
-        let range_b_different_split = fixture.range([1], vec![int_split_point([30])]);
-        let range_a_desc = RangePartitioning::try_new(
-            [fixture.range_sort_expr(0, SortOptions::new(true, false))].into(),
-            vec![int_split_point([10])],
-        )?;
-        let single_partition_range_a = fixture.range([0], vec![]);
-        let single_partition_range_b = fixture.range([1], vec![]);
-
-        assert!(range_a.compatible_with(&range_a_same, &fixture.eq_properties));
-        assert!(range_a.compatible_with(&range_b_equivalent, &eq_properties));
-        assert!(!range_a.compatible_with(&range_b_equivalent, &fixture.eq_properties));
-        assert!(!range_a.compatible_with(&range_b_different_split, &eq_properties));
-        assert!(!range_a.compatible_with(&range_a_desc, &eq_properties));
-        assert!(
-            single_partition_range_a
-                .compatible_with(&single_partition_range_b, &fixture.eq_properties)
-        );
-
-        assert!(
-            fixture
-                .range_partitioning([0], vec![int_split_point([10])])
-                .compatible_with(
-                    &fixture.range_partitioning([1], vec![int_split_point([10])]),
-                    &eq_properties
-                )
-        );
-        assert!(
-            !fixture
-                .range_partitioning([0], vec![int_split_point([10])])
-                .compatible_with(
-                    &fixture.range_partitioning([0], vec![int_split_point([20])]),
-                    &fixture.eq_properties
-                )
-        );
-        assert!(
-            !fixture
-                .range_partitioning([0], vec![int_split_point([10])])
-                .compatible_with(
-                    &fixture.hash_partitioning([0], 2),
-                    &fixture.eq_properties
-                )
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_hash_partitioning_compatible_with() -> Result<()> {
-        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
-        let mut eq_properties = fixture.eq_properties.clone();
-        eq_properties.add_equal_conditions(fixture.col(0), fixture.col(1))?;
-
-        assert!(
-            fixture.hash_partitioning([0], 2).compatible_with(
-                &fixture.hash_partitioning([0], 2),
-                &fixture.eq_properties
-            )
-        );
-        assert!(
-            fixture
-                .hash_partitioning([0], 2)
-                .compatible_with(&fixture.hash_partitioning([1], 2), &eq_properties)
-        );
-        assert!(
-            !fixture.hash_partitioning([0], 2).compatible_with(
-                &fixture.hash_partitioning([1], 2),
-                &fixture.eq_properties
-            )
-        );
-        assert!(
-            !fixture.hash_partitioning([0], 2).compatible_with(
-                &fixture.hash_partitioning([0], 3),
-                &fixture.eq_properties
-            )
-        );
-        assert!(!fixture.hash_partitioning([0], 2).compatible_with(
-            &fixture.hash_partitioning([0, 1], 2),
-            &fixture.eq_properties
-        ));
-        assert!(
-            !Partitioning::Hash(vec![], 2)
-                .compatible_with(&Partitioning::Hash(vec![], 2), &fixture.eq_properties)
-        );
-        assert!(!fixture.hash_partitioning([0], 2).compatible_with(
-            &fixture.range_partitioning([0], vec![int_split_point([10])]),
-            &fixture.eq_properties
-        ));
-        assert!(
-            fixture.hash_partitioning([0], 1).compatible_with(
-                &Partitioning::RoundRobinBatch(1),
-                &fixture.eq_properties
-            )
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_round_robin_partitioning_compatible_with() {
-        let eq_properties = EquivalenceProperties::new(Arc::new(Schema::empty()));
-
-        assert!(
-            Partitioning::RoundRobinBatch(1)
-                .compatible_with(&Partitioning::RoundRobinBatch(1), &eq_properties)
-        );
-        assert!(
-            !Partitioning::RoundRobinBatch(2)
-                .compatible_with(&Partitioning::RoundRobinBatch(2), &eq_properties)
-        );
-        assert!(
-            Partitioning::RoundRobinBatch(1)
-                .compatible_with(&Partitioning::UnknownPartitioning(1), &eq_properties)
-        );
-        assert!(
-            !Partitioning::RoundRobinBatch(2)
-                .compatible_with(&Partitioning::UnknownPartitioning(2), &eq_properties)
-        );
-    }
-
-    #[test]
-    fn test_unknown_partitioning_compatible_with() {
-        let eq_properties = EquivalenceProperties::new(Arc::new(Schema::empty()));
-
-        assert!(
-            Partitioning::UnknownPartitioning(1)
-                .compatible_with(&Partitioning::UnknownPartitioning(1), &eq_properties)
-        );
-        assert!(
-            !Partitioning::UnknownPartitioning(2)
-                .compatible_with(&Partitioning::UnknownPartitioning(2), &eq_properties)
-        );
-        assert!(
-            Partitioning::UnknownPartitioning(1)
-                .compatible_with(&Partitioning::RoundRobinBatch(1), &eq_properties)
-        );
-        assert!(
-            !Partitioning::UnknownPartitioning(2)
-                .compatible_with(&Partitioning::RoundRobinBatch(2), &eq_properties)
-        );
-    }
-
-    #[test]
     fn test_multi_partition_range_does_not_satisfy_hash_distribution() -> Result<()> {
         let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
         let range_partitioning =
             fixture.range_partitioning([0, 1], vec![int_split_point([10, 100])]);
-        let required = fixture.hash_distribution([0, 1]);
+        let required = fixture.key_distribution([0, 1]);
 
         assert_eq!(
             range_partitioning.satisfaction(&required, &fixture.eq_properties, false),

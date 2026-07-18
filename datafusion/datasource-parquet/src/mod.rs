@@ -32,6 +32,7 @@ pub mod metadata;
 mod metrics;
 mod opener;
 mod page_filter;
+mod projection_read_plan;
 mod push_decoder;
 mod reader;
 mod row_filter;
@@ -46,7 +47,8 @@ mod test_util;
 mod virtual_column;
 mod writer;
 
-pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
+pub use access_plan::{ParquetAccessPlan, ParquetRowSelection, RowGroupAccess};
+pub use bloom_filter::BloomFilterStatistics;
 pub use file_format::*;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;
@@ -55,10 +57,10 @@ pub use row_filter::build_row_filter;
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use row_group_filter::RowGroupAccessPlanFilter;
 #[expect(deprecated)]
+pub use schema_coercion::coerce_int96_to_resolution;
 pub use schema_coercion::{
-    Int96Coercer, apply_file_schema_type_coercions, coerce_file_schema_to_string_type,
-    coerce_file_schema_to_view_type, coerce_int96_to_resolution,
-    transform_binary_to_string, transform_schema_to_view,
+    Int96Coercer, apply_file_schema_type_coercions, transform_binary_to_string,
+    transform_schema_to_view,
 };
 pub use sink::ParquetSink;
 pub use virtual_column::ParquetVirtualColumn;

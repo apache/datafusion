@@ -15,11 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(feature = "memory-accounting")]
-#[global_allocator]
-static GLOBAL: datafusion_sqllogictest::AccountingAllocator =
-    datafusion_sqllogictest::AccountingAllocator::system();
-
 use clap::{ColorChoice, Parser};
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
@@ -143,19 +138,6 @@ async fn run_tests() -> Result<()> {
 
     options.warn_on_ignored();
 
-    #[cfg(feature = "memory-accounting")]
-    if let Some(pool_mb) = options.default_pool_size_mb {
-        let pool_bytes = pool_mb.saturating_mul(1024 * 1024);
-        // Same value drives the inner MemoryPool's size and the bank's
-        // default budget. The wrapper renders this value as `unlimited` in
-        // `SHOW ALL` (sentinel for "no SET has happened"); once a test
-        // calls `SET datafusion.runtime.memory_limit`, the wrapper retunes
-        // the bank to that limit + 10% headroom.
-        datafusion_sqllogictest::set_memory_tracker_limit(pool_bytes);
-        datafusion_sqllogictest::set_default_budget(pool_bytes as isize);
-        log::info!("memory-accounting on: default pool size = {pool_mb} MB");
-    }
-
     // Print parallelism info for debugging CI performance
     eprintln!(
         "Running with {} test threads (available parallelism: {})",
@@ -228,7 +210,7 @@ async fn run_tests() -> Result<()> {
             let currently_running_sql_tracker_clone =
                 currently_running_sql_tracker.clone();
             let file_start = Instant::now();
-            let body = async move {
+            SpawnedTask::spawn(async move {
                 let result = match (
                     options.postgres_runner,
                     options.complete,
@@ -301,41 +283,9 @@ async fn run_tests() -> Result<()> {
                 }
 
                 (result, elapsed)
-            };
-            // Each file gets its own multi-thread runtime so a stable per-file
-            // context-id (stamped via `on_thread_start`) is readable from the
-            // global allocator hook. Bank accounting and SET-driven limit
-            // retuning will key off this id in later steps. The outer
-            // orchestration runtime hosts this via `spawn_blocking` so its
-            // worker threads aren't blocked by the per-file `block_on`.
-            //
-            // Worker count matches `SLT_TARGET_PARTITIONS` so a query's
-            // partition streams each get a worker rather than contending.
-            #[cfg(feature = "memory-accounting")]
-            let spawned = {
-                let context_id = datafusion_sqllogictest::next_context_id();
-                SpawnedTask::spawn_blocking(move || {
-                    // Stamp this thread too — `block_on` polls `body` here, so
-                    // statements that don't suspend (e.g. `SET memory_limit`,
-                    // pool construction) run on this thread, not a worker.
-                    datafusion_sqllogictest::set_thread_context_id(context_id);
-                    let runtime = tokio::runtime::Builder::new_multi_thread()
-                        .enable_all()
-                        .worker_threads(datafusion_sqllogictest::SLT_TARGET_PARTITIONS)
-                        .thread_name(format!("slt-file-{context_id}"))
-                        .on_thread_start(move || {
-                            datafusion_sqllogictest::set_thread_context_id(context_id);
-                        })
-                        .build()
-                        .expect("build per-file Tokio runtime");
-                    let out = runtime.block_on(body);
-                    runtime.shutdown_background();
-                    out
-                })
-            };
-            #[cfg(not(feature = "memory-accounting"))]
-            let spawned = SpawnedTask::spawn(body);
-            spawned.join().map(move |result| {
+            })
+            .join()
+            .map(move |result| {
                 let elapsed = match &result {
                     Ok((_, elapsed)) => *elapsed,
                     Err(_) => Duration::ZERO,
@@ -503,7 +453,7 @@ async fn run_test_file_substrait_round_trip(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{:?}", &relative_path));
+    pb.set_message(format!("{relative_path:?}"));
 
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusionSubstraitRoundTrip::new(
@@ -558,7 +508,7 @@ async fn run_test_file(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{:?}", &relative_path));
+    pb.set_message(format!("{relative_path:?}"));
 
     // If DataFusion configuration has changed during test file runs, errors will be
     // pushed to this vec.
@@ -677,7 +627,7 @@ async fn run_test_file_with_postgres(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{:?}", &relative_path));
+    pb.set_message(format!("{relative_path:?}"));
 
     let mut runner = sqllogictest::Runner::new(|| {
         Postgres::connect_with_tracked_sql(
@@ -732,7 +682,7 @@ async fn run_complete_file(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{:?}", &relative_path));
+    pb.set_message(format!("{relative_path:?}"));
 
     let config_change_errors = Arc::new(Mutex::new(Vec::new()));
     let mut runner = sqllogictest::Runner::new(|| async {
@@ -788,7 +738,7 @@ async fn run_complete_file_with_postgres(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{:?}", &relative_path));
+    pb.set_message(format!("{relative_path:?}"));
 
     let mut runner = sqllogictest::Runner::new(|| {
         Postgres::connect_with_tracked_sql(
@@ -965,19 +915,6 @@ struct Options {
         default_value_t = ColorChoice::Auto
     )]
     color: ColorChoice,
-
-    #[clap(
-        long,
-        help = "Default MemoryPool size in MB for each per-file SLT context. \
-                The pool is wrapped in AccountingMemoryPool, which doubles \
-                this value as the 'no SET has happened yet' sentinel — until \
-                an SLT calls `SET datafusion.runtime.memory_limit`, SHOW ALL \
-                renders the limit as 'unlimited' and the allocator bank \
-                stays loose. Once a test SETs a limit, the bank tightens to \
-                that limit + 10% headroom. Requires the memory-accounting \
-                feature; ignored without it."
-    )]
-    default_pool_size_mb: Option<usize>,
 }
 
 impl Options {

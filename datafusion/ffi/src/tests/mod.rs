@@ -17,14 +17,13 @@
 
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
+use arrow::array::{RecordBatch, record_batch};
 use arrow_schema::{DataType, Field, Schema};
 use async_provider::create_async_table_provider;
 use async_trait::async_trait;
 use catalog::create_catalog_provider;
 use datafusion_catalog::MemTable;
 use datafusion_catalog::{Session, TableProvider};
-use datafusion_common::record_batch;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Statistics};
 use datafusion_common::{Result, ScalarValue};
@@ -89,6 +88,8 @@ pub struct ForeignLibraryModule {
     pub create_nullary_udf: extern "C" fn() -> FFI_ScalarUDF,
 
     pub create_timezone_udf: extern "C" fn() -> FFI_ScalarUDF,
+
+    pub create_placement_udf: extern "C" fn() -> FFI_ScalarUDF,
 
     pub create_table_function:
         extern "C" fn(FFI_LogicalExtensionCodec) -> FFI_TableFunction,
@@ -251,6 +252,7 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_scalar_udf: create_ffi_abs_func,
         create_nullary_udf: create_ffi_random_func,
         create_timezone_udf: udf_udaf_udwf::create_timezone_func,
+        create_placement_udf: udf_udaf_udwf::create_placement_func,
         create_table_function: create_ffi_table_func,
         create_sum_udaf: create_ffi_sum_func,
         create_stddev_udaf: create_ffi_stddev_func,

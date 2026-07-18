@@ -41,6 +41,7 @@ use crate::fuzz_cases::aggregation_fuzzer::data_generator::Dataset;
 ///   - `batch_size`
 ///   - `target_partitions`
 ///   - `skip_partial parameters`
+///   - `enable_migration_aggregate`
 ///   - hint `sorted` or not
 ///   - `spilling` or not (TODO, I think a special `MemoryPool` may be needed
 ///     to support this)
@@ -96,11 +97,13 @@ impl SessionContextGenerator {
         let batch_size = self.max_batch_size;
         let target_partitions = 1;
         let skip_partial_params = SkipPartialParams::ensure_not_trigger();
+        let enable_migration_aggregate = false;
 
         let builder = GeneratedSessionContextBuilder {
             batch_size,
             target_partitions,
             skip_partial_params,
+            enable_migration_aggregate,
             sort_hint: false,
             table_name: self.table_name.clone(),
             table_provider: Arc::new(provider),
@@ -120,6 +123,7 @@ impl SessionContextGenerator {
         //   - `batch_size`, from range: [1, `total_rows_num`]
         //   - `target_partitions`, from range: [1, cpu_num]
         //   - `skip_partial`, trigger or not trigger currently for simplicity
+        //   - `enable_migration_aggregate`, true or false
         //   - `sorted`, if found a sorted dataset, will or will not push down this information
         //   - `spilling`(TODO)
         let batch_size = rng.random_range(1..=self.max_batch_size);
@@ -130,6 +134,8 @@ impl SessionContextGenerator {
             rng.random_range(0..self.candidate_skip_partial_params.len());
         let skip_partial_params =
             self.candidate_skip_partial_params[skip_partial_params_idx];
+
+        let enable_migration_aggregate = rng.random_bool(0.5);
 
         let (provider, sort_hint) =
             if rng.random_bool(0.5) && !self.dataset.sort_keys.is_empty() {
@@ -150,6 +156,7 @@ impl SessionContextGenerator {
             target_partitions,
             sort_hint,
             skip_partial_params,
+            enable_migration_aggregate,
             table_name: self.table_name.clone(),
             table_provider: Arc::new(provider),
         };
@@ -173,6 +180,7 @@ struct GeneratedSessionContextBuilder {
     target_partitions: usize,
     sort_hint: bool,
     skip_partial_params: SkipPartialParams,
+    enable_migration_aggregate: bool,
     table_name: String,
     table_provider: Arc<dyn TableProvider>,
 }
@@ -197,6 +205,10 @@ impl GeneratedSessionContextBuilder {
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
             &ScalarValue::Float64(Some(self.skip_partial_params.ratio_threshold)),
         );
+        session_config = session_config.set_bool(
+            "datafusion.execution.enable_migration_aggregate",
+            self.enable_migration_aggregate,
+        );
 
         let ctx = SessionContext::new_with_config(session_config);
         ctx.register_table(self.table_name, self.table_provider)?;
@@ -206,6 +218,7 @@ impl GeneratedSessionContextBuilder {
             target_partitions: self.target_partitions,
             sort_hint: self.sort_hint,
             skip_partial_params: self.skip_partial_params,
+            enable_migration_aggregate: self.enable_migration_aggregate,
         };
 
         Ok(SessionContextWithParams { ctx, params })
@@ -220,6 +233,7 @@ pub struct SessionContextParams {
     target_partitions: usize,
     sort_hint: bool,
     skip_partial_params: SkipPartialParams,
+    enable_migration_aggregate: bool,
 }
 
 /// Partial skipping parameters

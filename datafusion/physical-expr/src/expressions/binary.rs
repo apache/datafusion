@@ -24,9 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
-use arrow::compute::kernels::concat_elements::{
-    concat_element_binary, concat_elements_utf8,
-};
+use arrow::compute::kernels::concat_elements::concat_elements_dyn;
 use arrow::compute::{SlicesIterator, cast, filter_record_batch};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
@@ -50,8 +48,7 @@ use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
-    concat_elements_binary_view_array, concat_elements_utf8view, regex_match_dyn,
-    regex_match_dyn_scalar,
+    regex_match_dyn, regex_match_dyn_scalar,
 };
 
 /// Binary expression
@@ -274,6 +271,189 @@ where
     }
 }
 
+/// Returns true for `time + interval` or `interval + time`.
+fn is_time_plus_interval(lhs: &DataType, rhs: &DataType) -> bool {
+    matches!(
+        (lhs, rhs),
+        (
+            DataType::Time32(_) | DataType::Time64(_),
+            DataType::Interval(_)
+        ) | (
+            DataType::Interval(_),
+            DataType::Time32(_) | DataType::Time64(_)
+        )
+    )
+}
+
+/// Returns true for `time - interval`.
+fn is_time_minus_interval(lhs: &DataType, rhs: &DataType) -> bool {
+    matches!(
+        (lhs, rhs),
+        (
+            DataType::Time32(_) | DataType::Time64(_),
+            DataType::Interval(_)
+        )
+    )
+}
+
+/// Evaluates `time + interval`, `interval + time`, or `time - interval`, returning a
+/// `time` wrapped within the 24-hour clock to match PostgreSQL and DuckDB (e.g.
+/// `time '23:30' + interval '2 hours'` is `01:30:00`). arrow's arithmetic kernels do
+/// not implement time-of-day arithmetic, so it is handled here.
+///
+/// The result keeps the input time's unit; the interval (normalized to `MonthDayNano`
+/// by the coercion layer) is applied at nanosecond precision and floored to that unit,
+/// mirroring `timestamp(unit) + interval`. Only the sub-day portion of the interval
+/// affects a time-of-day -- whole months and days are ignored, matching PostgreSQL. The
+/// floor is applied after the sign, so `time(s) + interval '1 nanosecond'` is a no-op
+/// while `time(s) - interval '1 nanosecond'` rolls back a second, exactly as the
+/// timestamp case does.
+fn apply_time_interval(
+    lhs: &ColumnarValue,
+    rhs: &ColumnarValue,
+    subtract: bool,
+) -> Result<ColumnarValue> {
+    // The `time` operand determines the result type; the other is the interval.
+    let (time, interval) = if matches!(lhs.data_type(), DataType::Interval(_)) {
+        (rhs, lhs)
+    } else {
+        (lhs, rhs)
+    };
+
+    // Dispatch on the time unit; `ns_per_unit` converts the interval's nanoseconds to
+    // that unit, and the arithmetic is done (and wrapped) at that resolution.
+    match time.data_type() {
+        DataType::Time32(TimeUnit::Second) => wrap_time_interval::<Time32SecondType>(
+            time,
+            interval,
+            subtract,
+            1_000_000_000,
+        ),
+        DataType::Time32(TimeUnit::Millisecond) => {
+            wrap_time_interval::<Time32MillisecondType>(
+                time, interval, subtract, 1_000_000,
+            )
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            wrap_time_interval::<Time64MicrosecondType>(time, interval, subtract, 1_000)
+        }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            wrap_time_interval::<Time64NanosecondType>(time, interval, subtract, 1)
+        }
+        other => internal_err!("time operand expected, got: {other}"),
+    }
+}
+
+/// Adds or subtracts an interval to/from a `time` of arrow primitive type `T`, wrapping
+/// the result within the 24-hour clock and keeping the type `T`. `ns_per_unit` is the
+/// number of nanoseconds in one unit of `T` (e.g. `1_000` for microseconds).
+fn wrap_time_interval<T: ArrowPrimitiveType>(
+    time: &ColumnarValue,
+    interval: &ColumnarValue,
+    subtract: bool,
+    ns_per_unit: i64,
+) -> Result<ColumnarValue>
+where
+    T::Native: Copy + Into<i64> + TryFrom<i64>,
+{
+    /// Nanoseconds in a 24-hour day.
+    const DAY_NANOS: i64 = 86_400_000_000_000;
+    // Units in a 24-hour day, at `T`'s resolution.
+    let day_units = DAY_NANOS / ns_per_unit;
+
+    // Wraps `time ± interval` into `[0, day_units)`. The interval is reduced modulo a day
+    // (so the sum stays within `i64`), applied at nanosecond precision, then floored to
+    // `T`'s unit -- matching `timestamp(unit) ± interval`. Because the floor is applied
+    // after the sign, `time(s) - interval '1 nanosecond'` rolls back a full second, just
+    // as the timestamp case does, while `time(s) + interval '1 nanosecond'` is a no-op.
+    // `div_euclid`/`rem_euclid` floor toward negative infinity, so the wrapped value stays
+    // in `[0, day_units)`, which always fits `T::Native`.
+    let wrap = |time_unit: i64, iv: IntervalMonthDayNano| -> T::Native {
+        let iv_ns = iv.nanoseconds % DAY_NANOS;
+        let signed_ns = if subtract { -iv_ns } else { iv_ns };
+        let delta = signed_ns.div_euclid(ns_per_unit);
+        let wrapped = (time_unit + delta).rem_euclid(day_units);
+        T::Native::try_from(wrapped).unwrap_or_default()
+    };
+
+    /// Extracts an `Interval(MonthDayNano)` scalar.
+    fn interval_scalar(scalar: &ScalarValue) -> Result<Option<IntervalMonthDayNano>> {
+        match scalar {
+            ScalarValue::IntervalMonthDayNano(value) => Ok(*value),
+            other => internal_err!(
+                "Interval(MonthDayNano) scalar expected, got: {}",
+                other.data_type()
+            ),
+        }
+    }
+
+    /// Extracts a time scalar as its unit count since midnight.
+    fn time_scalar_units(scalar: &ScalarValue) -> Result<Option<i64>> {
+        match scalar {
+            ScalarValue::Time32Second(value) | ScalarValue::Time32Millisecond(value) => {
+                Ok(value.map(i64::from))
+            }
+            ScalarValue::Time64Microsecond(value)
+            | ScalarValue::Time64Nanosecond(value) => Ok(*value),
+            other => {
+                internal_err!("time scalar expected, got: {}", other.data_type())
+            }
+        }
+    }
+
+    /// Builds a time scalar of type `P` from a unit count.
+    fn time_scalar<P: ArrowPrimitiveType>(value: Option<i64>) -> ScalarValue {
+        match P::DATA_TYPE {
+            DataType::Time32(TimeUnit::Second) => {
+                ScalarValue::Time32Second(value.map(|v| v as i32))
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                ScalarValue::Time32Millisecond(value.map(|v| v as i32))
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                ScalarValue::Time64Microsecond(value)
+            }
+            _ => ScalarValue::Time64Nanosecond(value),
+        }
+    }
+
+    match (time, interval) {
+        (ColumnarValue::Array(time), ColumnarValue::Array(interval)) => {
+            let time = time.as_primitive::<T>();
+            let interval = interval.as_primitive::<IntervalMonthDayNanoType>();
+            let result: PrimitiveArray<T> =
+                arrow::compute::binary(time, interval, |t, iv| wrap(t.into(), iv))?;
+            Ok(ColumnarValue::Array(Arc::new(result)))
+        }
+        (ColumnarValue::Array(time), ColumnarValue::Scalar(interval)) => {
+            let time = time.as_primitive::<T>();
+            match interval_scalar(interval)? {
+                Some(iv) => {
+                    let result: PrimitiveArray<T> = time.unary(|t| wrap(t.into(), iv));
+                    Ok(ColumnarValue::Array(Arc::new(result)))
+                }
+                None => Ok(ColumnarValue::Scalar(time_scalar::<T>(None))),
+            }
+        }
+        (ColumnarValue::Scalar(time), ColumnarValue::Array(interval)) => {
+            let interval = interval.as_primitive::<IntervalMonthDayNanoType>();
+            match time_scalar_units(time)? {
+                Some(t) => {
+                    let result: PrimitiveArray<T> = interval.unary(|iv| wrap(t, iv));
+                    Ok(ColumnarValue::Array(Arc::new(result)))
+                }
+                None => Ok(ColumnarValue::Scalar(time_scalar::<T>(None))),
+            }
+        }
+        (ColumnarValue::Scalar(time), ColumnarValue::Scalar(interval)) => {
+            let result = time_scalar_units(time)?
+                .zip(interval_scalar(interval)?)
+                .map(|(t, iv)| wrap(t, iv).into());
+            Ok(ColumnarValue::Scalar(time_scalar::<T>(result)))
+        }
+    }
+}
+
 impl PhysicalExpr for BinaryExpr {
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         BinaryTypeCoercer::new(
@@ -356,6 +536,18 @@ impl PhysicalExpr for BinaryExpr {
         let input_schema = schema.as_ref();
 
         match self.op {
+            // `time ± interval` returns a wrapped `time` (PostgreSQL/DuckDB
+            // semantics); arrow's arithmetic kernels don't implement it.
+            Operator::Plus
+                if is_time_plus_interval(&left_data_type, &right_data_type) =>
+            {
+                return apply_time_interval(&lhs, &rhs, false);
+            }
+            Operator::Minus
+                if is_time_minus_interval(&left_data_type, &right_data_type) =>
+            {
+                return apply_time_interval(&lhs, &rhs, true);
+            }
             Operator::Plus if self.fail_on_overflow => return apply(&lhs, &rhs, add),
             Operator::Plus => return apply(&lhs, &rhs, add_wrapping),
             // Special case: Date - Date returns Int64 (days difference)
@@ -833,7 +1025,7 @@ impl BinaryExpr {
             BitwiseXor => bitwise_xor_dyn(left, right),
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
-            StringConcat => concat_elements(&left, &right),
+            StringConcat => concat_elements_dyn(&left, &right).map_err(|e| e.into()),
             AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
             | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
             | IntegerDivide | Colon => {
@@ -1051,40 +1243,6 @@ fn pre_selection_scatter(
     let boolean_result = result_array_builder.finish();
 
     Ok(ColumnarValue::Array(Arc::new(boolean_result)))
-}
-
-fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
-    Ok(match left.data_type() {
-        DataType::Utf8 => Arc::new(concat_elements_utf8(
-            left.as_string::<i32>(),
-            right.as_string::<i32>(),
-        )?),
-        DataType::LargeUtf8 => Arc::new(concat_elements_utf8(
-            left.as_string::<i64>(),
-            right.as_string::<i64>(),
-        )?),
-        DataType::Utf8View => Arc::new(concat_elements_utf8view(
-            left.as_string_view(),
-            right.as_string_view(),
-        )?),
-        DataType::Binary => Arc::new(concat_element_binary::<i32>(
-            left.as_binary(),
-            right.as_binary(),
-        )?),
-        DataType::LargeBinary => Arc::new(concat_element_binary::<i64>(
-            left.as_binary(),
-            right.as_binary(),
-        )?),
-        DataType::BinaryView => Arc::new(concat_elements_binary_view_array(
-            left.as_binary_view(),
-            right.as_binary_view(),
-        )?),
-        other => {
-            return internal_err!(
-                "Data type {other:?} not supported for binary operation 'concat_elements' on string arrays"
-            );
-        }
-    })
 }
 
 /// Create a binary expression whose arguments are correctly coerced.

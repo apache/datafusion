@@ -21,7 +21,7 @@
 //! `CREATE EXTERNAL TABLE`
 
 use datafusion_common::DataFusionError;
-use datafusion_common::config::SqlParserOptions;
+use datafusion_common::config::{ConfigNonZeroUsize, SqlParserOptions};
 use datafusion_common::format::{ExplainFormat, ExplainStatementOptions};
 use datafusion_common::{Diagnostic, Span, sql_err};
 use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions};
@@ -472,7 +472,7 @@ impl<'a, 'b> DFParserBuilder<'a, 'b> {
                 .with_tokens_with_locations(tokens)
                 .with_recursion_limit(self.recursion_limit),
             options: SqlParserOptions {
-                recursion_limit: self.recursion_limit,
+                recursion_limit: ConfigNonZeroUsize::try_new(self.recursion_limit)?,
                 ..Default::default()
             },
             supports_explain_with_utility_options: self
@@ -504,19 +504,6 @@ fn token_starts_query(tok: &Token) -> bool {
 }
 
 impl<'a> DFParser<'a> {
-    #[deprecated(since = "46.0.0", note = "DFParserBuilder")]
-    pub fn new(sql: &'a str) -> Result<Self, DataFusionError> {
-        DFParserBuilder::new(sql).build()
-    }
-
-    #[deprecated(since = "46.0.0", note = "DFParserBuilder")]
-    pub fn new_with_dialect(
-        sql: &'a str,
-        dialect: &'a dyn Dialect,
-    ) -> Result<Self, DataFusionError> {
-        DFParserBuilder::new(sql).with_dialect(dialect).build()
-    }
-
     /// Parse a sql string into one or [`Statement`]s using the
     /// [`GenericDialect`].
     pub fn parse_sql(sql: &'a str) -> Result<VecDeque<Statement>, DataFusionError> {

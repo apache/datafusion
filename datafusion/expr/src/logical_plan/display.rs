@@ -515,6 +515,23 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                         "Partitioning Key": hash_expr
                     })
                 }
+                Partitioning::Range(range) => {
+                    let range_expr: Vec<String> =
+                        range.ordering().iter().map(|e| format!("{e}")).collect();
+                    let split_points: Vec<String> = range
+                        .split_points()
+                        .iter()
+                        .map(|e| format!("{e}"))
+                        .collect();
+
+                    json!({
+                        "Node Type": "Repartition",
+                        "Partitioning Scheme": "Range",
+                        "Partition Count": range.partition_count(),
+                        "Partitioning Key": range_expr,
+                        "Split Points": split_points
+                    })
+                }
                 Partitioning::DistributeBy(expr) => {
                     let dist_by_expr: Vec<String> =
                         expr.iter().map(|e| format!("{e}")).collect();
@@ -617,11 +634,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 let list_type_columns = list_col_indices
                     .iter()
                     .map(|(i, unnest_info)| {
-                        format!(
-                            "{}|depth={:?}",
-                            &input_columns[*i].to_string(),
-                            unnest_info.depth
-                        )
+                        format!("{}|depth={:?}", input_columns[*i], unnest_info.depth)
                     })
                     .collect::<Vec<String>>();
                 let struct_type_columns = struct_col_indices

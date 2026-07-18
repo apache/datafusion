@@ -54,7 +54,7 @@ use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
@@ -86,6 +86,10 @@ use datafusion_physical_plan::memory::LazyMemoryExec;
 use datafusion_physical_plan::metrics::MetricCategory;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::proto::{
+    ExecutionPlanDecode, ExecutionPlanDecodeCtx, ExecutionPlanEncode,
+    ExecutionPlanEncodeCtx,
+};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -172,6 +176,429 @@ mod tests {
             split_human_display_alias(&display, "agg"),
             (display.as_str(), None)
         );
+    }
+
+    /// Unit tests for the bytes-only function serde exposed on
+    /// [`ExecutionPlanEncodeCtx`] / [`ExecutionPlanDecodeCtx`] and backed by
+    /// [`ConverterPlanEncoder`] / [`ConverterPlanDecoder`]. Function-carrying
+    /// plans migrate in follow-up PRs, so these paths have no in-tree plan
+    /// caller yet; the tests pin the payload semantics (`None` == encode by
+    /// name) and the decode lookup order (payload → codec; else registry →
+    /// codec fallback with an empty buffer) that those migrations rely on.
+    mod function_serde {
+        use super::*;
+        use arrow::datatypes::{DataType, Field, FieldRef};
+        use datafusion_common::plan_err;
+        use datafusion_execution::config::SessionConfig;
+        use datafusion_execution::runtime_env::RuntimeEnv;
+        use datafusion_expr::function::AccumulatorArgs;
+        use datafusion_expr::{
+            Accumulator, AggregateUDFImpl, ColumnarValue, PartitionEvaluator,
+            ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility, WindowUDFImpl,
+        };
+        use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+        use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestUdf {
+            signature: Signature,
+        }
+
+        impl TestUdf {
+            fn new() -> Self {
+                Self {
+                    signature: Signature::exact(
+                        vec![DataType::Int64],
+                        Volatility::Immutable,
+                    ),
+                }
+            }
+        }
+
+        impl ScalarUDFImpl for TestUdf {
+            fn name(&self) -> &str {
+                "test_udf"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Int64)
+            }
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                plan_err!("test only")
+            }
+        }
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestUdaf {
+            signature: Signature,
+        }
+
+        impl TestUdaf {
+            fn new() -> Self {
+                Self {
+                    signature: Signature::exact(
+                        vec![DataType::Int64],
+                        Volatility::Immutable,
+                    ),
+                }
+            }
+        }
+
+        impl AggregateUDFImpl for TestUdaf {
+            fn name(&self) -> &str {
+                "test_udaf"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Int64)
+            }
+            fn accumulator(
+                &self,
+                _acc_args: AccumulatorArgs,
+            ) -> Result<Box<dyn Accumulator>> {
+                plan_err!("test only")
+            }
+        }
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestUdwf {
+            signature: Signature,
+        }
+
+        impl TestUdwf {
+            fn new() -> Self {
+                Self {
+                    signature: Signature::exact(
+                        vec![DataType::Int64],
+                        Volatility::Immutable,
+                    ),
+                }
+            }
+        }
+
+        impl WindowUDFImpl for TestUdwf {
+            fn name(&self) -> &str {
+                "test_udwf"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn partition_evaluator(
+                &self,
+                _partition_evaluator_args: PartitionEvaluatorArgs,
+            ) -> Result<Box<dyn PartitionEvaluator>> {
+                plan_err!("test only")
+            }
+            fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+                Ok(Field::new(field_args.name(), DataType::Int64, true).into())
+            }
+        }
+
+        /// Codec that encodes every function as its name bytes and decodes by
+        /// checking the payload it receives, so tests can observe exactly what
+        /// crosses the bytes-only boundary.
+        #[derive(Debug)]
+        struct PayloadCodec;
+
+        impl PhysicalExtensionCodec for PayloadCodec {
+            fn try_decode(
+                &self,
+                _buf: &[u8],
+                _inputs: &[Arc<dyn ExecutionPlan>],
+                _ctx: &TaskContext,
+                _proto_converter: &dyn PhysicalProtoConverterExtension,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                internal_err!("not needed for these tests")
+            }
+
+            fn try_encode(
+                &self,
+                _node: Arc<dyn ExecutionPlan>,
+                _buf: &mut Vec<u8>,
+                _proto_converter: &dyn PhysicalProtoConverterExtension,
+            ) -> Result<()> {
+                internal_err!("not needed for these tests")
+            }
+
+            fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+                buf.extend_from_slice(node.name().as_bytes());
+                Ok(())
+            }
+
+            fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+                assert_eq!(name, "test_udf");
+                assert_eq!(buf, name.as_bytes());
+                Ok(Arc::new(ScalarUDF::from(TestUdf::new())))
+            }
+
+            fn try_encode_udaf(
+                &self,
+                node: &AggregateUDF,
+                buf: &mut Vec<u8>,
+            ) -> Result<()> {
+                buf.extend_from_slice(node.name().as_bytes());
+                Ok(())
+            }
+
+            fn try_decode_udaf(
+                &self,
+                name: &str,
+                buf: &[u8],
+            ) -> Result<Arc<AggregateUDF>> {
+                assert_eq!(name, "test_udaf");
+                assert_eq!(buf, name.as_bytes());
+                Ok(Arc::new(AggregateUDF::from(TestUdaf::new())))
+            }
+
+            fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
+                buf.extend_from_slice(node.name().as_bytes());
+                Ok(())
+            }
+
+            fn try_decode_udwf(&self, name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
+                assert_eq!(name, "test_udwf");
+                assert_eq!(buf, name.as_bytes());
+                Ok(Arc::new(WindowUDF::from(TestUdwf::new())))
+            }
+        }
+
+        /// Codec whose decode hooks only accept an empty payload, to pin the
+        /// by-name decode fallback (registry miss → codec with `&[]`).
+        #[derive(Debug)]
+        struct EmptyPayloadOnlyCodec;
+
+        impl PhysicalExtensionCodec for EmptyPayloadOnlyCodec {
+            fn try_decode(
+                &self,
+                _buf: &[u8],
+                _inputs: &[Arc<dyn ExecutionPlan>],
+                _ctx: &TaskContext,
+                _proto_converter: &dyn PhysicalProtoConverterExtension,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                internal_err!("not needed for these tests")
+            }
+
+            fn try_encode(
+                &self,
+                _node: Arc<dyn ExecutionPlan>,
+                _buf: &mut Vec<u8>,
+                _proto_converter: &dyn PhysicalProtoConverterExtension,
+            ) -> Result<()> {
+                internal_err!("not needed for these tests")
+            }
+
+            fn try_decode_udf(&self, _name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+                assert!(buf.is_empty());
+                Ok(Arc::new(ScalarUDF::from(TestUdf::new())))
+            }
+
+            fn try_decode_udaf(
+                &self,
+                _name: &str,
+                buf: &[u8],
+            ) -> Result<Arc<AggregateUDF>> {
+                assert!(buf.is_empty());
+                Ok(Arc::new(AggregateUDF::from(TestUdaf::new())))
+            }
+
+            fn try_decode_udwf(&self, _name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
+                assert!(buf.is_empty());
+                Ok(Arc::new(WindowUDF::from(TestUdwf::new())))
+            }
+        }
+
+        fn encode_ctx_over<'a>(
+            codec: &'a dyn PhysicalExtensionCodec,
+            proto_converter: &'a dyn PhysicalProtoConverterExtension,
+        ) -> ConverterPlanEncoder<'a> {
+            ConverterPlanEncoder {
+                codec,
+                proto_converter,
+            }
+        }
+
+        #[test]
+        fn encode_by_name_functions_produce_no_payload() -> Result<()> {
+            let codec = DefaultPhysicalExtensionCodec {};
+            let converter = DefaultPhysicalProtoConverter {};
+            let encoder = encode_ctx_over(&codec, &converter);
+            let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+            assert!(ctx.encode_udf(&ScalarUDF::from(TestUdf::new()))?.is_none());
+            assert!(
+                ctx.encode_udaf(&AggregateUDF::from(TestUdaf::new()))?
+                    .is_none()
+            );
+            assert!(
+                ctx.encode_udwf(&WindowUDF::from(TestUdwf::new()))?
+                    .is_none()
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn encode_functions_surface_codec_payload() -> Result<()> {
+            let codec = PayloadCodec;
+            let converter = DefaultPhysicalProtoConverter {};
+            let encoder = encode_ctx_over(&codec, &converter);
+            let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+            assert_eq!(
+                ctx.encode_udf(&ScalarUDF::from(TestUdf::new()))?.as_deref(),
+                Some(b"test_udf".as_slice())
+            );
+            assert_eq!(
+                ctx.encode_udaf(&AggregateUDF::from(TestUdaf::new()))?
+                    .as_deref(),
+                Some(b"test_udaf".as_slice())
+            );
+            assert_eq!(
+                ctx.encode_udwf(&WindowUDF::from(TestUdwf::new()))?
+                    .as_deref(),
+                Some(b"test_udwf".as_slice())
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn decode_functions_prefer_explicit_payload() -> Result<()> {
+            let task_ctx = TaskContext::default();
+            let codec = PayloadCodec;
+            let decode_context = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+            let converter = DefaultPhysicalProtoConverter {};
+            let decoder = ConverterPlanDecoder {
+                ctx: &decode_context,
+                proto_converter: &converter,
+            };
+            let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+            assert_eq!(
+                ctx.decode_udf("test_udf", Some(b"test_udf"))?.name(),
+                "test_udf"
+            );
+            assert_eq!(
+                ctx.decode_udaf("test_udaf", Some(b"test_udaf"))?.name(),
+                "test_udaf"
+            );
+            assert_eq!(
+                ctx.decode_udwf("test_udwf", Some(b"test_udwf"))?.name(),
+                "test_udwf"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn decode_functions_by_name_resolve_from_registry() -> Result<()> {
+            let udf = Arc::new(ScalarUDF::from(TestUdf::new()));
+            let udaf = Arc::new(AggregateUDF::from(TestUdaf::new()));
+            let udwf = Arc::new(WindowUDF::from(TestUdwf::new()));
+            let task_ctx = TaskContext::new(
+                None,
+                "test".to_string(),
+                SessionConfig::new(),
+                HashMap::from([("test_udf".to_string(), Arc::clone(&udf))]),
+                HashMap::new(),
+                HashMap::from([("test_udaf".to_string(), Arc::clone(&udaf))]),
+                HashMap::from([("test_udwf".to_string(), Arc::clone(&udwf))]),
+                Arc::new(RuntimeEnv::default()),
+            );
+            // The default codec fails any decode, so a success proves the
+            // registry satisfied the lookup without a codec fallback.
+            let codec = DefaultPhysicalExtensionCodec {};
+            let decode_context = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+            let converter = DefaultPhysicalProtoConverter {};
+            let decoder = ConverterPlanDecoder {
+                ctx: &decode_context,
+                proto_converter: &converter,
+            };
+            let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+            assert!(Arc::ptr_eq(&ctx.decode_udf("test_udf", None)?, &udf));
+            assert!(Arc::ptr_eq(&ctx.decode_udaf("test_udaf", None)?, &udaf));
+            assert!(Arc::ptr_eq(&ctx.decode_udwf("test_udwf", None)?, &udwf));
+            assert_eq!(ctx.task_ctx().session_id(), "test");
+            Ok(())
+        }
+
+        #[test]
+        fn decode_functions_by_name_fall_back_to_codec_on_registry_miss() -> Result<()> {
+            let task_ctx = TaskContext::default();
+            let codec = EmptyPayloadOnlyCodec;
+            let decode_context = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+            let converter = DefaultPhysicalProtoConverter {};
+            let decoder = ConverterPlanDecoder {
+                ctx: &decode_context,
+                proto_converter: &converter,
+            };
+            let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+            assert_eq!(ctx.decode_udf("test_udf", None)?.name(), "test_udf");
+            assert_eq!(ctx.decode_udaf("test_udaf", None)?.name(), "test_udaf");
+            assert_eq!(ctx.decode_udwf("test_udwf", None)?.name(), "test_udwf");
+            Ok(())
+        }
+
+        #[test]
+        fn decode_required_helpers_error_on_missing_fields() {
+            let task_ctx = TaskContext::default();
+            let codec = DefaultPhysicalExtensionCodec {};
+            let decode_context = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+            let converter = DefaultPhysicalProtoConverter {};
+            let decoder = ConverterPlanDecoder {
+                ctx: &decode_context,
+                proto_converter: &converter,
+            };
+            let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+            let err = ctx
+                .decode_required_child(None, "FooExec", "input")
+                .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("FooExec is missing required field 'input'"),
+                "unexpected error: {err}"
+            );
+
+            let schema = Schema::empty();
+            let err = ctx
+                .decode_required_expr(None, &schema, "FooExec", "predicate")
+                .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("FooExec is missing required field 'predicate'"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn try_from_proto_rejects_wrong_plan_variant() {
+            let task_ctx = TaskContext::default();
+            let codec = DefaultPhysicalExtensionCodec {};
+            let decode_context = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+            let converter = DefaultPhysicalProtoConverter {};
+            let decoder = ConverterPlanDecoder {
+                ctx: &decode_context,
+                proto_converter: &converter,
+            };
+            let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+            let node = protobuf::PhysicalPlanNode {
+                physical_plan_type: None,
+            };
+            let err = ProjectionExec::try_from_proto(&node, &ctx).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("PhysicalPlanNode is not a ProjectionExec"),
+                "unexpected error: {err}"
+            );
+        }
     }
 }
 
@@ -312,12 +739,20 @@ pub trait PhysicalPlanNodeExt: Sized {
                 self.node(),
             ))
         })?;
+        // Decode context for plans migrated to the `try_from_proto` pattern
+        // (#22419). Arms for migrated plans are one-liners delegating to the
+        // plan's own crate; un-migrated arms keep their inline bodies.
+        let plan_decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&plan_decoder);
         match plan {
             PhysicalPlanType::Explain(explain) => {
                 self.try_into_explain_physical_plan(explain, ctx, proto_converter)
             }
-            PhysicalPlanType::Projection(projection) => {
-                self.try_into_projection_physical_plan(projection, ctx, proto_converter)
+            PhysicalPlanType::Projection(_) => {
+                ProjectionExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Filter(filter) => {
                 self.try_into_filter_physical_plan(filter, ctx, proto_converter)
@@ -442,18 +877,30 @@ pub trait PhysicalPlanNodeExt: Sized {
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
         let plan_clone = Arc::clone(&plan);
-        let plan = plan.as_ref() as &dyn Any;
+        let mut plan = plan.as_ref();
+        // Resolve the downcast identity first so wrapper plans serialize as
+        // their delegate, matching how the `downcast_ref` chain below sees
+        // them. Without this a wrapper around a migrated plan would hit the
+        // wrapper's default `try_to_proto` (`Ok(None)`) and find no fallback
+        // arm for the delegate.
+        while let Some(delegate) = plan.downcast_delegate() {
+            plan = delegate;
+        }
+
+        // Self-serializing plans handle themselves via the `try_to_proto` hook
+        // (#22419). `Ok(None)` means "not migrated" and falls through to the
+        // central downcast chain below.
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        if let Some(node) = plan.try_to_proto(&encode_ctx)? {
+            return Ok(node);
+        }
 
         if let Some(exec) = plan.downcast_ref::<ExplainExec>() {
             return protobuf::PhysicalPlanNode::try_from_explain_exec(exec, codec);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<ProjectionExec>() {
-            return protobuf::PhysicalPlanNode::try_from_projection_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
         }
 
         if let Some(exec) = plan.downcast_ref::<AnalyzeExec>() {
@@ -731,6 +1178,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         )))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ProjectionExec` deserializes itself via `ProjectionExec::try_from_proto`"
+    )]
     fn try_into_projection_physical_plan(
         &self,
         projection: &protobuf::ProjectionExecNode,
@@ -1498,16 +1949,15 @@ pub trait PhysicalPlanNodeExt: Sized {
             protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
             protobuf::PartitionMode::Auto => PartitionMode::Auto,
         };
-        let projection = if !hashjoin.projection.is_empty() {
-            Some(
-                hashjoin
-                    .projection
-                    .iter()
-                    .map(|i| *i as usize)
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            None
+        // Proto3 `repeated` cannot distinguish `None` from `Some(vec![])`. The latter
+        // is reachable via `try_embed_projection` for `SELECT count(1) … JOIN …` and
+        // changes the join's output schema, so the encoder reserves the single-element
+        // sentinel `[u32::MAX]` (never a valid column index) to mean "explicitly empty";
+        // every other state is sent as-is. See `try_from_hash_join_exec`.
+        let projection = match hashjoin.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
         let mut hash_join = HashJoinExec::try_new(
             left,
@@ -1711,7 +2161,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(convert_required!(empty.schema)?);
-        Ok(Arc::new(EmptyExec::new(schema)))
+        // A zero (absent) partition count comes from a plan encoded before the
+        // field existed, which always meant a single partition.
+        let partitions = empty.partitions.max(1) as usize;
+        Ok(Arc::new(EmptyExec::new(schema).with_partitions(partitions)))
     }
 
     fn try_into_placeholder_row_physical_plan(
@@ -1720,7 +2173,12 @@ pub trait PhysicalPlanNodeExt: Sized {
         _ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(convert_required!(placeholder.schema)?);
-        Ok(Arc::new(PlaceholderRowExec::new(schema)))
+        // A zero (absent) partition count comes from a plan encoded before the
+        // field existed, which always meant a single partition.
+        let partitions = placeholder.partitions.max(1) as usize;
+        Ok(Arc::new(
+            PlaceholderRowExec::new(schema).with_partitions(partitions),
+        ))
     }
 
     fn try_into_sort_physical_plan(
@@ -1925,15 +2383,13 @@ pub trait PhysicalPlanNodeExt: Sized {
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
-        let projection = if !join.projection.is_empty() {
-            Some(
-                join.projection
-                    .iter()
-                    .map(|i| *i as usize)
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            None
+        // See `try_into_hash_join_physical_plan` for the rationale behind the
+        // `[u32::MAX]` sentinel; `NestedLoopJoinExec` has the same `Option<Vec<usize>>`
+        // projection field and shares the proto3 `repeated` ambiguity.
+        let projection = match join.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
 
         Ok(Arc::new(NestedLoopJoinExec::try_new(
@@ -2433,6 +2889,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ProjectionExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_projection_exec(
         exec: &ProjectionExec,
         codec: &dyn PhysicalExtensionCodec,
@@ -2658,9 +3118,14 @@ pub trait PhysicalPlanNodeExt: Sized {
                     partition_mode: partition_mode.into(),
                     null_equality: null_equality.into(),
                     filter,
-                    projection: exec.projection.as_ref().map_or_else(Vec::new, |v| {
-                        v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
-                    }),
+                    // Send `Some(vec![])` as `[u32::MAX]` (never a valid index) so the
+                    // wire format can distinguish it from `None` (which stays empty).
+                    // See `try_into_hash_join_physical_plan` for the matching decoder.
+                    projection: match exec.projection.as_ref() {
+                        None => Vec::new(),
+                        Some(v) if v.is_empty() => vec![u32::MAX],
+                        Some(v) => v.iter().map(|x| *x as u32).collect(),
+                    },
                     null_aware: exec.null_aware,
                     dynamic_filter,
                 },
@@ -3013,6 +3478,8 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Empty(protobuf::EmptyExecNode {
                 schema: Some(schema),
+                partitions: empty.properties().output_partitioning().partition_count()
+                    as u32,
             })),
         })
     }
@@ -3026,6 +3493,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             physical_plan_type: Some(PhysicalPlanType::PlaceholderRow(
                 protobuf::PlaceholderRowExecNode {
                     schema: Some(schema),
+                    partitions: empty.properties().output_partitioning().partition_count()
+                        as u32,
                 },
             )),
         })
@@ -3449,9 +3918,13 @@ pub trait PhysicalPlanNodeExt: Sized {
                     right: Some(Box::new(right)),
                     join_type: join_type.into(),
                     filter,
-                    projection: exec.projection().as_ref().map_or_else(Vec::new, |v| {
-                        v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
-                    }),
+                    // `[u32::MAX]` sentinel distinguishes `Some(vec![])` from `None`;
+                    // see `try_from_hash_join_exec`.
+                    projection: match exec.projection().as_ref() {
+                        None => Vec::new(),
+                        Some(v) if v.is_empty() => vec![u32::MAX],
+                        Some(v) => v.iter().map(|x| *x as u32).collect(),
+                    },
                 },
             ))),
         })
@@ -3940,6 +4413,24 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
         Ok(())
     }
 
+    fn try_decode_higher_order_function(
+        &self,
+        name: &str,
+        _buf: &[u8],
+    ) -> Result<Arc<HigherOrderUDF>> {
+        not_impl_err!(
+            "PhysicalExtensionCodec is not provided for higher order function {name}"
+        )
+    }
+
+    fn try_encode_higher_order_function(
+        &self,
+        _node: &HigherOrderUDF,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn try_decode_expr(
         &self,
         _buf: &[u8],
@@ -4361,5 +4852,122 @@ fn into_physical_plan(
         proto_converter.proto_to_execution_plan(field, ctx)
     } else {
         Err(proto_error("Missing required field in protobuf"))
+    }
+}
+
+/// Adapter backing [`ExecutionPlanEncodeCtx`] for plans migrated to the
+/// `try_to_proto` hook (#22419). Routes child-plan and child-expr encoding back
+/// through the central converter so nested plans honor their own hooks.
+struct ConverterPlanEncoder<'a> {
+    codec: &'a dyn PhysicalExtensionCodec,
+    proto_converter: &'a dyn PhysicalProtoConverterExtension,
+}
+
+impl ExecutionPlanEncode for ConverterPlanEncoder<'_> {
+    fn encode_plan(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+    ) -> Result<protobuf::PhysicalPlanNode> {
+        self.proto_converter
+            .execution_plan_to_proto(plan, self.codec)
+    }
+
+    fn encode_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        self.proto_converter
+            .physical_expr_to_proto(expr, self.codec)
+    }
+
+    // Bytes-only function serde. `(!buf.is_empty()).then_some(buf)` preserves the
+    // existing `fun_definition` wire semantics (empty payload == encode-by-name).
+    fn encode_udf(&self, udf: &ScalarUDF) -> Result<Option<Vec<u8>>> {
+        let mut buf = vec![];
+        self.codec.try_encode_udf(udf, &mut buf)?;
+        Ok((!buf.is_empty()).then_some(buf))
+    }
+
+    fn encode_udaf(&self, udaf: &AggregateUDF) -> Result<Option<Vec<u8>>> {
+        let mut buf = vec![];
+        self.codec.try_encode_udaf(udaf, &mut buf)?;
+        Ok((!buf.is_empty()).then_some(buf))
+    }
+
+    fn encode_udwf(&self, udwf: &WindowUDF) -> Result<Option<Vec<u8>>> {
+        let mut buf = vec![];
+        self.codec.try_encode_udwf(udwf, &mut buf)?;
+        Ok((!buf.is_empty()).then_some(buf))
+    }
+}
+
+/// Adapter backing [`ExecutionPlanDecodeCtx`] for plans migrated to the
+/// `try_from_proto` pattern (#22419). Routes child-plan and child-expr decoding
+/// back through the central converter, and exposes the session task context
+/// (never the extension codec).
+struct ConverterPlanDecoder<'a, 'ctx> {
+    ctx: &'a PhysicalPlanDecodeContext<'ctx>,
+    proto_converter: &'a dyn PhysicalProtoConverterExtension,
+}
+
+impl ExecutionPlanDecode for ConverterPlanDecoder<'_, '_> {
+    fn decode_plan(
+        &self,
+        node: &protobuf::PhysicalPlanNode,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.proto_converter.proto_to_execution_plan(node, self.ctx)
+    }
+
+    fn decode_expr(
+        &self,
+        node: &protobuf::PhysicalExprNode,
+        input_schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        self.proto_converter
+            .proto_to_physical_expr(node, input_schema, self.ctx)
+    }
+
+    fn task_ctx(&self) -> &TaskContext {
+        self.ctx.task_ctx()
+    }
+
+    // Lookup-order policy, owned here so no plan re-derives it: an explicit
+    // payload is decoded by the codec; otherwise resolve by name from the
+    // registry, falling back to the codec with an empty buffer.
+    fn decode_udf(&self, name: &str, payload: Option<&[u8]>) -> Result<Arc<ScalarUDF>> {
+        match payload {
+            Some(buf) => self.ctx.codec().try_decode_udf(name, buf),
+            None => self
+                .ctx
+                .task_ctx()
+                .udf(name)
+                .or_else(|_| self.ctx.codec().try_decode_udf(name, &[])),
+        }
+    }
+
+    fn decode_udaf(
+        &self,
+        name: &str,
+        payload: Option<&[u8]>,
+    ) -> Result<Arc<AggregateUDF>> {
+        match payload {
+            Some(buf) => self.ctx.codec().try_decode_udaf(name, buf),
+            None => self
+                .ctx
+                .task_ctx()
+                .udaf(name)
+                .or_else(|_| self.ctx.codec().try_decode_udaf(name, &[])),
+        }
+    }
+
+    fn decode_udwf(&self, name: &str, payload: Option<&[u8]>) -> Result<Arc<WindowUDF>> {
+        match payload {
+            Some(buf) => self.ctx.codec().try_decode_udwf(name, buf),
+            None => self
+                .ctx
+                .task_ctx()
+                .udwf(name)
+                .or_else(|_| self.ctx.codec().try_decode_udwf(name, &[])),
+        }
     }
 }

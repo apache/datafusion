@@ -100,6 +100,16 @@ tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [[bench]]
 harness = false
+name = "replace_scalar"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "round_dense"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "ascii"
 required-features = ["string_expressions"]
 
@@ -155,6 +165,11 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "regexp_match"
+required-features = ["regex_expressions"]
+
+[[bench]]
+harness = false
 name = "regx"
 required-features = ["regex_expressions"]
 
@@ -180,6 +195,11 @@ required-features = ["datetime_expressions"]
 [[bench]]
 harness = false
 name = "date_trunc"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "date_part"
 required-features = ["datetime_expressions"]
 
 [[bench]]
@@ -235,6 +255,10 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "upper"
+
+[[bench]]
+harness = false
+name = "upper_unicode"
 required-features = ["string_expressions"]
 
 [[bench]]
@@ -293,6 +317,11 @@ required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
+name = "trunc_precision"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "initcap"
 required-features = ["unicode_expressions"]
 
@@ -320,6 +349,15 @@ required-features = ["string_expressions"]
 harness = false
 name = "regexp_count"
 required-features = ["regex_expressions"]
+
+[[bench]]
+harness = false
+name = "regexp_instr"
+required-features = ["regex_expressions"]
+
+[[bench]]
+harness = false
+name = "get_field"
 
 [[bench]]
 harness = false

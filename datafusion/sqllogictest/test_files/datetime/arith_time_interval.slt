@@ -1,70 +1,143 @@
 # postgresql behavior
 #
 # time + interval → time
-# Add an interval to a time
+# Add an interval to a time. The result is a `time` value that wraps within the
+# 24-hour clock, matching PostgreSQL and DuckDB.
 # time '01:00' + interval '3 hours' → 04:00:00
-#
-# note that while the above reflects what postgresql does
-# in the case of datafusion/arrow that is not the case. The
-# result will be an interval, not a time.
+# time '22:00' + interval '3 hours' → 01:00:00 (wraps past midnight)
 
-query ?
+query D
 SELECT '01:00'::time + interval '3 hours'
 ----
-4 hours
+04:00:00
 
 query T
 SELECT arrow_typeof('01:00'::time + interval '3 hours')
 ----
-Interval(MonthDayNano)
+Time64(ns)
 
-query ?
+query D
 SELECT '22:00'::time + interval '3 hours'
 ----
-25 hours
+01:00:00
 
-query ?
+query D
 SELECT interval '3 hours' + '22:00'::time
 ----
-25 hours
+01:00:00
 
-query ?
+# The result keeps the input time's unit, mirroring `timestamp + interval`, rather
+# than widening to Time64(ns).
+query D
 SELECT arrow_cast('22:00', 'Time32(Second)') + interval '3 hours'
 ----
-25 hours
+01:00:00
 
-query ?
+query T
+SELECT arrow_typeof(arrow_cast('22:00', 'Time32(Second)') + interval '3 hours')
+----
+Time32(s)
+
+query D
 SELECT arrow_cast('22:00', 'Time32(Millisecond)') + interval '3 hours'
 ----
-25 hours
+01:00:00
 
-query ?
+query T
+SELECT arrow_typeof(arrow_cast('22:00', 'Time32(Millisecond)') + interval '3 hours')
+----
+Time32(ms)
+
+query D
 SELECT arrow_cast('22:00', 'Time64(Microsecond)') + interval '3 hours'
 ----
-25 hours
+01:00:00
 
-query ?
+query T
+SELECT arrow_typeof(arrow_cast('22:00', 'Time64(Microsecond)') + interval '3 hours')
+----
+Time64(µs)
+
+query D
 SELECT arrow_cast('22:00', 'Time64(Nanosecond)') + interval '3 hours'
 ----
-25 hours
+01:00:00
+
+query T
+SELECT arrow_typeof(arrow_cast('22:00', 'Time64(Nanosecond)') + interval '3 hours')
+----
+Time64(ns)
+
+# The interval is applied at nanosecond precision and floored to the time's unit, exactly
+# as for `timestamp(unit) ± interval`. Adding one nanosecond to a second-resolution time
+# floors back to a no-op...
+query D
+SELECT arrow_cast('22:00', 'Time32(Second)') + interval '1 nanosecond'
+----
+22:00:00
+
+# ...but subtracting one nanosecond floors down a full second, matching
+# `timestamp(s) - interval '1 nanosecond'` (= 09:59:59) rather than staying put.
+query D
+SELECT arrow_cast('10:00:00', 'Time32(Second)') - interval '1 nanosecond'
+----
+09:59:59
+
+query D
+SELECT arrow_cast('12:00:00', 'Time32(Millisecond)') + interval '1 microsecond'
+----
+12:00:00
+
+query D
+SELECT arrow_cast('12:00:00', 'Time64(Microsecond)') + interval '1 microsecond'
+----
+12:00:00.000001
+
+# Whole days and months in the interval do not affect a time-of-day (PostgreSQL).
+query D
+SELECT '10:00'::time + interval '1 day 2 hours'
+----
+12:00:00
 
 # postgresql behavior
 #
 # time - interval → time
-# Subtract an interval from a time
+# Subtract an interval from a time, wrapping within the 24-hour clock.
 # time '05:00' - interval '2 hours' → 03:00:00
+# time '02:00' - interval '3 hours' → 23:00:00 (wraps before midnight)
 
-query ?
+query D
 SELECT '05:00'::time - interval '2 hours'
 ----
-3 hours
+03:00:00
 
 query T
 SELECT arrow_typeof('05:00'::time - interval '2 hours')
 ----
-Interval(MonthDayNano)
+Time64(ns)
 
-query ?
+query D
 SELECT '02:00'::time - interval '3 hours'
 ----
--1 hours
+23:00:00
+
+# Array inputs (not only scalars) exercise the columnar path, including nulls.
+statement ok
+CREATE TABLE time_vals(id INT, t TIME) AS VALUES (1, '01:00'::time), (2, '22:00'::time), (3, NULL);
+
+query D
+SELECT t + interval '3 hours' FROM time_vals ORDER BY id
+----
+04:00:00
+01:00:00
+NULL
+
+query D
+SELECT t - interval '2 hours' FROM time_vals ORDER BY id
+----
+23:00:00
+20:00:00
+NULL
+
+statement ok
+DROP TABLE time_vals

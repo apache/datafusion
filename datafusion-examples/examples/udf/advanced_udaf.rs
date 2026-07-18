@@ -23,8 +23,10 @@ use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, AsArray, Float32Array, PrimitiveArray, PrimitiveBuilder, UInt32Array,
+    Array, ArrayRef, AsArray, BooleanArray, Float32Array, PrimitiveArray,
+    PrimitiveBuilder, UInt32Array,
 };
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::{ArrowNativeTypeOp, ArrowPrimitiveType, Float64Type, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
@@ -237,7 +239,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&arrow::array::BooleanArray>,
+        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
@@ -268,7 +270,6 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&arrow::array::BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
@@ -280,7 +281,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         self.null_state.accumulate(
             group_indices,
             partial_counts,
-            opt_filter,
+            None,
             total_num_groups,
             |group_index, partial_count| {
                 self.counts[group_index] += partial_count;
@@ -292,7 +293,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         self.null_state.accumulate(
             group_indices,
             partial_prods,
-            opt_filter,
+            None,
             total_num_groups,
             |group_index, new_value: <Float64Type as ArrowPrimitiveType>::Native| {
                 let prod = &mut self.prods[group_index];
@@ -358,6 +359,43 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
             Arc::new(prods) as ArrayRef,
             Arc::new(counts) as ArrayRef,
         ])
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        assert_eq!(values.len(), 1, "single argument to convert_to_state");
+
+        let prods = values[0]
+            .as_primitive::<Float64Type>()
+            .clone()
+            .with_data_type(self.prod_data_type.clone());
+        let counts = UInt32Array::from_value(1, prods.len());
+
+        let filter_nulls = opt_filter.map(|filter| {
+            let validity = match filter.nulls() {
+                Some(nulls) => filter.values() & nulls.inner(),
+                None => filter.values().clone(),
+            };
+            NullBuffer::new(validity)
+        });
+        let nulls = NullBuffer::union(filter_nulls.as_ref(), prods.nulls());
+
+        let prods =
+            PrimitiveArray::<Float64Type>::new(prods.values().clone(), nulls.clone())
+                .with_data_type(self.prod_data_type.clone());
+        let counts = UInt32Array::new(counts.values().clone(), nulls);
+
+        Ok(vec![
+            Arc::new(prods) as ArrayRef,
+            Arc::new(counts) as ArrayRef,
+        ])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {

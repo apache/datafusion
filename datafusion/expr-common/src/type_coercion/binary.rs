@@ -237,7 +237,7 @@ impl<'a> BinaryTypeCoercer<'a> {
             })
         }
         StringConcat => {
-            string_concat_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
+            string_concat_coercion(lhs, rhs).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common string type for string concat operation {} {} {}", self.lhs, self.op, self.rhs
                 )
@@ -266,6 +266,23 @@ impl<'a> BinaryTypeCoercer<'a> {
                 rhs: rhs.clone(),
                 ret: Int64,
             });
+        }
+        Plus | Minus if is_time_interval_arithmetic(lhs, rhs, self.op) => {
+            // `time ± interval` yields a `time` wrapped within the 24-hour clock,
+            // matching PostgreSQL and DuckDB (e.g. `time '23:30' + interval '2 hours'`
+            // is `01:30:00`). The interval is normalized to `MonthDayNano`; the time
+            // operand keeps its own unit and is also the result type -- mirroring
+            // `timestamp/date + interval`, which preserve their unit and apply the
+            // interval at that resolution. So, like `timestamp(s) + interval
+            // '1 nanosecond'`, `time(s) + interval '1 nanosecond'` is a no-op rather
+            // than widening the type.
+            let (lhs, rhs, ret) = match (lhs, rhs) {
+                (Interval(_), time) => {
+                    (Interval(MonthDayNano), time.clone(), time.clone())
+                }
+                (time, _) => (time.clone(), Interval(MonthDayNano), time.clone()),
+            };
+            return Ok(Signature { lhs, rhs, ret });
         }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
             if let Ok(ret) = self.get_result(lhs, rhs) {
@@ -360,6 +377,23 @@ fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
         (lhs, rhs),
         (DataType::Date32, DataType::Date32) | (DataType::Date64, DataType::Date64)
     )
+}
+
+/// Returns true for `time + interval`, `interval + time`, or `time - interval`.
+///
+/// These follow PostgreSQL/DuckDB semantics where the result is a `time` value
+/// wrapped within the 24-hour clock, rather than being widened to an interval.
+fn is_time_interval_arithmetic(lhs: &DataType, rhs: &DataType, op: &Operator) -> bool {
+    use DataType::{Interval, Time32, Time64};
+    match op {
+        Operator::Plus => matches!(
+            (lhs, rhs),
+            (Time32(_) | Time64(_), Interval(_)) | (Interval(_), Time32(_) | Time64(_))
+        ),
+        // `interval - time` is not meaningful, so only `time - interval` is accepted.
+        Operator::Minus => matches!((lhs, rhs), (Time32(_) | Time64(_), Interval(_))),
+        _ => false,
+    }
 }
 
 /// Coercion rules for mathematics operators between decimal and non-decimal types.
@@ -654,11 +688,8 @@ pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
             // For example,
             //  i64 and decimal(7, 2) are expect to get coerced type decimal(22, 2)
             //  numeric string ('1') and numeric (2) are expect to get coerced type numeric (1, 2)
-            if let Some(t) = type_union_resolution_coercion(data_type, candidate_t) {
-                candidate_type = Some(t);
-            } else {
-                return None;
-            }
+            let t = type_union_resolution_coercion(data_type, candidate_t)?;
+            candidate_type = Some(t);
         } else {
             candidate_type = Some(data_type.clone());
         }
@@ -743,14 +774,11 @@ fn type_union_resolution_coercion(
             ) -> Option<DataType> {
                 for rhs_field in rhs.iter() {
                     if lhs_field.name() == rhs_field.name() {
-                        if let Some(t) = type_union_resolution_coercion(
+                        let t = type_union_resolution_coercion(
                             lhs_field.data_type(),
                             rhs_field.data_type(),
-                        ) {
-                            return Some(t);
-                        } else {
-                            return None;
-                        }
+                        )?;
+                        return Some(t);
                     }
                 }
 
@@ -774,6 +802,7 @@ fn type_union_resolution_coercion(
         }
         _ => binary_numeric_coercion(lhs_type, rhs_type)
             .or_else(|| list_coercion(lhs_type, rhs_type, type_union_resolution_coercion))
+            .or_else(|| map_coercion(lhs_type, rhs_type, type_union_resolution_coercion))
             .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
             .or_else(|| string_coercion(lhs_type, rhs_type))
             .or_else(|| null_coercion(lhs_type, rhs_type))
@@ -938,6 +967,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| binary_coercion(lhs_type, rhs_type))
         .or_else(|| struct_coercion(lhs_type, rhs_type, comparison_coercion))
         .or_else(|| map_coercion(lhs_type, rhs_type, comparison_coercion))
+        .or_else(|| union_coercion(lhs_type, rhs_type))
 }
 
 /// Coerce a numeric/string pair to the numeric type.
@@ -1421,6 +1451,28 @@ fn map_coercion(
     }
 }
 
+/// Coerce a Union and an "opaque" (non-Union) type for comparison.
+///
+/// the resulting type is the opaque scalar type whenever any union variant
+/// can be cast to it. at execution time, arrow's `cast(Union -> T)` extracts
+/// values from the matching variant; rows whose active variant cannot be
+/// cast to `T` become NULL.
+///
+/// Identical union types are already handled by the `equals_datatype` fast path
+/// in [`comparison_coercion`]; coercing between two different union types is not
+/// supported.
+fn union_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    match (lhs_type, rhs_type) {
+        (Union(fields, _), opaque) | (opaque, Union(fields, _)) => fields
+            .iter()
+            .any(|(_, f)| can_cast_types(f.data_type(), opaque))
+            .then(|| opaque.clone()),
+        _ => None,
+    }
+}
+
 /// Returns the output type of applying mathematics operations such as
 /// `+` to arguments of `lhs_type` and `rhs_type`.
 fn mathematics_numerical_coercion(
@@ -1612,50 +1664,55 @@ fn ree_coercion(
 /// 1. At least one side of lhs and rhs should be string type (Utf8 / LargeUtf8)
 /// 2. Data type of the other side should be able to cast to string type
 /// 3. Binary and string types cannot be mixed
-fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Signature> {
     use arrow::datatypes::DataType::*;
-    string_coercion(lhs_type, rhs_type).or_else(|| match (lhs_type, rhs_type) {
-        // Allow pure binary + binary
-        (
-            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
-            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
-        ) => {
-            // Coerce fixed-sized binary to variable-sized `Binary` to make uniform signature
-            // with the `Binary` result
-            let lhs_type = match lhs_type {
-                FixedSizeBinary(_) => &Binary,
-                val => val,
-            };
-            let rhs_type = match rhs_type {
-                FixedSizeBinary(_) => &Binary,
-                val => val,
-            };
-            binary_coercion(lhs_type, rhs_type)
-        }
-        // Deny other mixed binary + string combinations
-        (
-            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
-            Utf8 | LargeUtf8 | Utf8View,
-        ) => None,
-        (
-            Utf8 | LargeUtf8 | Utf8View,
-            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
-        ) => None,
-        // Predicate-based coercion rules are following
-        (Utf8View, from_type) | (from_type, Utf8View) => {
-            string_concat_internal_coercion(from_type, &Utf8View)
-        }
-        (Utf8, from_type) | (from_type, Utf8) => {
-            string_concat_internal_coercion(from_type, &Utf8)
-        }
-        (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
-            string_concat_internal_coercion(from_type, &LargeUtf8)
-        }
-        (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
-            string_coercion(lhs_value_type, rhs_value_type).or(None)
-        }
-        _ => None,
-    })
+
+    string_coercion(lhs_type, rhs_type)
+        .map(Signature::uniform)
+        .or_else(|| match (lhs_type, rhs_type) {
+            // Allow concatenation of mixed fixed size binary
+            (FixedSizeBinary(l), FixedSizeBinary(r)) => Some(Signature {
+                lhs: lhs_type.clone(),
+                rhs: rhs_type.clone(),
+                ret: FixedSizeBinary(l + r),
+            }),
+            // Allow pure binary + binary
+            (
+                Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
+                Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
+            ) => {
+                // Coerce fixed-sized binary to variable-sized `Binary` to make uniform signature
+                // with the `Binary` result
+                let lhs_type = match lhs_type {
+                    FixedSizeBinary(_) => &Binary,
+                    val => val,
+                };
+                let rhs_type = match rhs_type {
+                    FixedSizeBinary(_) => &Binary,
+                    val => val,
+                };
+                binary_coercion(lhs_type, rhs_type).map(Signature::uniform)
+            }
+            // Predicate-based coercion rules are following,
+            // including mixed binary + string combinations
+            (Utf8View, from_type) | (from_type, Utf8View) => {
+                string_concat_internal_coercion(from_type, &Utf8View)
+                    .map(Signature::uniform)
+            }
+            (Utf8, from_type) | (from_type, Utf8) => {
+                string_concat_internal_coercion(from_type, &Utf8).map(Signature::uniform)
+            }
+            (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
+                string_concat_internal_coercion(from_type, &LargeUtf8)
+                    .map(Signature::uniform)
+            }
+            (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
+                string_coercion(lhs_value_type, rhs_value_type)
+                    .or(None)
+                    .map(Signature::uniform)
+            }
+            _ => None,
+        })
 }
 
 fn array_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
