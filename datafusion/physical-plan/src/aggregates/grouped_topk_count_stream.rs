@@ -86,10 +86,11 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::EmitTo;
 use futures::stream::{Stream, StreamExt};
 
-use crate::aggregates::AggregateExec;
 use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrdering;
-use crate::aggregates::{AggregateInputMode, evaluate_group_by};
+use crate::aggregates::{
+    AggregateExec, AggregateInputMode, TopKCountSharedState, evaluate_group_by,
+};
 use crate::metrics::{BaselineMetrics, Count, MetricBuilder};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
@@ -141,6 +142,16 @@ pub struct GroupedTopKCountAggregateStream {
     /// Rows seen since the last sweep.
     rows_since_sweep: u64,
 
+    // --- Cross-partition threshold sharing -------------------------------
+    /// `None` for single-partition or Single-mode aggregates; `Some` when
+    /// the plan supports [`TopKCountSharedState`]. Every partition
+    /// publishes its local top-K counts to this shared list and reads
+    /// back the global K-th value.
+    shared: Option<Arc<TopKCountSharedState>>,
+    /// This partition's index in `shared`'s slot vector — must be stable
+    /// for the life of the stream (see the shared state's slot design).
+    partition: usize,
+
     // --- Metrics ---------------------------------------------------------
     baseline_metrics: BaselineMetrics,
     groups_seen: Count,
@@ -166,6 +177,7 @@ impl GroupedTopKCountAggregateStream {
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(context))?;
         let input_mode = agg.mode.input_mode();
+        let shared = agg.count_topk_shared().cloned();
 
         // Build the GroupValues implementation over the group-by schema.
         // `evaluate_group_by` returns arrays whose types match the
@@ -225,6 +237,8 @@ impl GroupedTopKCountAggregateStream {
             limit,
             descending,
             output_schema,
+            shared,
+            partition,
             rows_seen: 0,
             total_input_rows,
             rows_since_sweep: 0,
@@ -372,12 +386,19 @@ impl GroupedTopKCountAggregateStream {
         Ok(())
     }
 
-    /// Whether the new-group gate + sweep are active. Requires a known
-    /// `total_input_rows` AND at least `WARMUP_GROUPS` groups so the
-    /// threshold is well-defined.
+    /// Whether the new-group gate + sweep are active. Requires:
+    ///   * a known `total_input_rows` bound so we can compute
+    ///     `remaining_rows_upper()`, and
+    ///   * *some* usable threshold — either a locally-populated top-K
+    ///     (>= WARMUP_GROUPS ≥ K live groups) or a global threshold
+    ///     already published by another partition to the shared state.
     fn pruning_armed(&self) -> bool {
-        self.total_input_rows.is_some()
-            && self.live_group_count() >= WARMUP_GROUPS.max(self.limit)
+        if self.total_input_rows.is_none() {
+            return false;
+        }
+        let local_ready = self.live_group_count() >= WARMUP_GROUPS.max(self.limit);
+        let shared_ready = self.shared.as_ref().and_then(|s| s.threshold()).is_some();
+        local_ready || shared_ready
     }
 
     fn live_group_count(&self) -> usize {
@@ -402,36 +423,67 @@ impl GroupedTopKCountAggregateStream {
         }
     }
 
-    /// The current top-K threshold. For DESC: the K-th largest live
-    /// count (heap.min → smallest of the K survivors). For ASC: the K-th
-    /// smallest (heap.max → largest of the K survivors).
-    ///
-    /// Returns `None` when fewer than `limit` live groups exist — the
-    /// heap isn't full yet so no group can be gated on the basis of
-    /// "cannot make it".
-    fn current_threshold(&self) -> Option<i64> {
-        // Collect live counts.
+    /// Compute the top-K live counts for this partition without altering
+    /// the counts vector. Used both for publishing to shared state and
+    /// for computing the local-only threshold as a fallback.
+    fn local_top_k(&self) -> Vec<i64> {
         let mut vals: Vec<i64> = self
             .counts
             .iter()
             .zip(self.dead.iter())
             .filter_map(|(c, &d)| if !d { Some(*c) } else { None })
             .collect();
-        if vals.len() < self.limit {
+        if vals.len() > self.limit {
+            let k = self.limit;
+            if self.descending {
+                let idx = vals.len() - k;
+                let _ = vals.select_nth_unstable_by(idx, |a, b| a.cmp(b));
+                vals.drain(..idx);
+            } else {
+                let idx = k - 1;
+                let _ = vals.select_nth_unstable_by(idx, |a, b| a.cmp(b));
+                vals.truncate(k);
+            }
+        }
+        vals
+    }
+
+    /// The current top-K threshold. When cross-partition shared state is
+    /// available, this partition publishes its local top-K to the shared
+    /// pool and reads back the global K-th value — much tighter than the
+    /// local K-th, especially when top-K keys are hash-repartitioned
+    /// across many Final partitions and each partition only sees a
+    /// diluted slice of the skew.
+    ///
+    /// Publishing uses per-partition slot semantics (overwrite, not
+    /// append) — see [`TopKCountSharedState`] — so repeated calls from
+    /// the same partition never inflate the shared pool with duplicates.
+    ///
+    /// Returns `None` when neither the global nor the local list has yet
+    /// accumulated `limit` counts.
+    fn current_threshold(&self) -> Option<i64> {
+        let local = self.local_top_k();
+        if let Some(shared) = self.shared.as_ref() {
+            // Publish only if we actually have counts to contribute.
+            // `publish` overwrites the slot, so a stray empty publish
+            // would erase this partition's earlier contribution — hence
+            // the guard.
+            if !local.is_empty() {
+                if let Some(t) = shared.publish(self.partition, &local) {
+                    return Some(t);
+                }
+            }
+            return shared.threshold();
+        }
+        // Non-shared fallback (Single mode or missing shared state): use
+        // the local K-th.
+        if local.len() < self.limit {
             return None;
         }
-        // Partition-select: kth largest for DESC, kth smallest for ASC.
-        let k = self.limit;
         if self.descending {
-            // K-th largest = element at index (len - k) after nth_element.
-            // Use select_nth_unstable_by for O(n).
-            let idx = vals.len() - k;
-            let (_, kth, _) = vals.select_nth_unstable_by(idx, |a, b| a.cmp(b));
-            Some(*kth)
+            local.iter().copied().min()
         } else {
-            let idx = k - 1;
-            let (_, kth, _) = vals.select_nth_unstable_by(idx, |a, b| a.cmp(b));
-            Some(*kth)
+            local.iter().copied().max()
         }
     }
 

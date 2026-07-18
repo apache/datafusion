@@ -235,6 +235,93 @@ pub fn is_topk_count_pattern(agg: &AggregateExec) -> Option<FieldRef> {
     agg.get_count_topk_field()
 }
 
+/// Cross-partition shared state for count-TopK aggregate: lets every
+/// [`GroupedTopKCountAggregateStream`] instance read the current *global*
+/// K-th count and prune more aggressively than its own per-partition
+/// threshold would allow.
+///
+/// # Why global rather than per-partition
+///
+/// `RepartitionExec::Hash([group_keys])` sends each group to exactly one
+/// Final partition, so per-partition top-K is *correct*. But it is far
+/// less selective: with K=10 spread across N partitions, each partition
+/// only holds ~K/N hot groups, and its local K-th count collapses to the
+/// value of ordinary tail groups (typically 1). No group can then be
+/// pruned. Publishing local top-K counts to a global merged list and
+/// reading the global K-th value back solves this — see Section 4 of the
+/// [Zippy paper][zippy] for the analogous cross-thread synchronization
+/// step in their offline algorithm.
+///
+/// # Slot design
+///
+/// Every partition owns one **slot** (`Vec<i64>` of length ≤ `limit`)
+/// into which it *overwrites* its current local top-K on each publish.
+/// The global threshold is computed by concatenating all slots, sorting
+/// in the query direction, and reading the K-th element.
+///
+/// The alternative — a single global list that partitions `extend` into
+/// — is unsound: a partition may publish repeatedly during its scan
+/// (each new-group gate check calls this), and the same "5" would then
+/// appear N times, filling the global top-K with duplicates and driving
+/// the threshold above any other partition's real counts.
+///
+/// [zippy]: https://www.vldb.org/pvldb/vol17/p644-siddiqui.pdf
+#[derive(Debug)]
+pub struct TopKCountSharedState {
+    /// `slots[i]` is partition `i`'s most-recently-published local top-K
+    /// (empty until the partition publishes).
+    slots: std::sync::Mutex<Vec<Vec<i64>>>,
+    limit: usize,
+    descending: bool,
+}
+
+impl TopKCountSharedState {
+    pub fn new(limit: usize, descending: bool, num_partitions: usize) -> Self {
+        Self {
+            slots: std::sync::Mutex::new(vec![Vec::new(); num_partitions]),
+            limit,
+            descending,
+        }
+    }
+
+    /// Overwrite partition `partition_idx`'s slot with the given local
+    /// top-K counts, then return the resulting global K-th value if the
+    /// merged concatenation has ≥ `limit` counts; otherwise `None`.
+    pub fn publish(&self, partition_idx: usize, local_top_counts: &[i64]) -> Option<i64> {
+        let mut slots = self.slots.lock().ok()?;
+        if partition_idx >= slots.len() {
+            return None;
+        }
+        slots[partition_idx].clear();
+        slots[partition_idx].extend_from_slice(local_top_counts);
+        self.compute_threshold(&slots)
+    }
+
+    /// Snapshot the current global K-th value (`None` if fewer than
+    /// `limit` counts have been contributed globally).
+    pub fn threshold(&self) -> Option<i64> {
+        let slots = self.slots.lock().ok()?;
+        self.compute_threshold(&slots)
+    }
+
+    fn compute_threshold(&self, slots: &[Vec<i64>]) -> Option<i64> {
+        let mut all: Vec<i64> = slots.iter().flatten().copied().collect();
+        if all.len() < self.limit {
+            return None;
+        }
+        // Partial-select: k-th largest for DESC, k-th smallest for ASC.
+        // Uses `select_nth_unstable` (O(N)) which is sufficient given the
+        // small size of `all` (≤ limit * num_partitions ~ hundreds).
+        let k = self.limit - 1;
+        let (_, kth, _) = if self.descending {
+            all.select_nth_unstable_by(k, |a, b| b.cmp(a))
+        } else {
+            all.select_nth_unstable_by(k, |a, b| a.cmp(b))
+        };
+        Some(*kth)
+    }
+}
+
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
 const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
     // This seed is chosen to be a large 64-bit number
@@ -919,6 +1006,15 @@ pub struct AggregateExec {
     /// it remains `Some(..)` to enable dynamic filtering during aggregate execution;
     /// otherwise, it is cleared to `None`.
     dynamic_filter: Option<Arc<AggrDynFilter>>,
+    /// Shared state across all partition streams when
+    /// `limit_options.kind == TopKKind::Count`. Every partition publishes
+    /// its local top-K counts and reads back the global K-th value to use
+    /// as the gate/sweep threshold. See [`TopKCountSharedState`].
+    ///
+    /// `None` for every non-Count-TopK aggregate. Initialized (`Some`)
+    /// by `TopKAggregation::transform_agg` when it marks a Count TopK
+    /// aggregate. Clones inherit the same `Arc`.
+    count_topk_shared: Option<Arc<TopKCountSharedState>>,
 }
 
 impl AggregateExec {
@@ -944,11 +1040,29 @@ impl AggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            count_topk_shared: self.count_topk_shared.clone(),
         }
     }
 
     /// Clone this exec, overriding only the limit hint.
+    ///
+    /// If the new `limit_options` marks a `TopKKind::Count` aggregate and
+    /// this instance did not already carry a shared state, allocate one
+    /// eagerly — every partition stream will get an [`Arc`] to it via
+    /// [`Self::count_topk_shared`].
     pub fn with_new_limit_options(&self, limit_options: Option<LimitOptions>) -> Self {
+        let count_topk_shared = match (limit_options, self.count_topk_shared.as_ref()) {
+            (Some(opts), None) if opts.kind == TopKKind::Count => {
+                let num_partitions =
+                    self.cache.output_partitioning().partition_count().max(1);
+                Some(Arc::new(TopKCountSharedState::new(
+                    opts.limit,
+                    opts.descending.unwrap_or(true),
+                    num_partitions,
+                )))
+            }
+            (_, prev) => prev.cloned(),
+        };
         Self {
             limit_options,
             // clone the rest of the fields
@@ -964,6 +1078,7 @@ impl AggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            count_topk_shared,
         }
     }
 
@@ -1099,6 +1214,7 @@ impl AggregateExec {
             input_order_mode,
             cache: Arc::new(cache),
             dynamic_filter: None,
+            count_topk_shared: None,
         };
 
         exec.init_dynamic_filter();
@@ -1409,6 +1525,13 @@ impl AggregateExec {
     pub fn get_minmax_desc(&self) -> Option<(FieldRef, bool)> {
         let agg_expr = self.aggr_expr.iter().exactly_one().ok()?;
         agg_expr.get_minmax_desc()
+    }
+
+    /// Returns the cross-partition shared state used by the count-TopK
+    /// stream, or `None` for aggregates that are not marked as
+    /// [`TopKKind::Count`]. See [`TopKCountSharedState`].
+    pub fn count_topk_shared(&self) -> Option<&Arc<TopKCountSharedState>> {
+        self.count_topk_shared.as_ref()
     }
 
     /// If this aggregate is a single, non-distinct `count(*)` or `count(col)`
