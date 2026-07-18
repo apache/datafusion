@@ -27,11 +27,12 @@ use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
-    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, group_id_array,
-    max_duplicate_ordinal,
+    AggregateInputMode, AggregateMode, AggregateOutputMode, GroupHashTracker,
+    PhysicalGroupBy, create_schema, evaluate_group_by, evaluate_many, evaluate_optional,
+    group_id_array, max_duplicate_ordinal,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
+use crate::repartition::{ExpressionHasher, HashMetrics};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::stream::EmptyRecordBatchStream;
@@ -334,6 +335,12 @@ pub(crate) struct GroupedHashAggregateStream {
     /// processed. Reused across batches here to avoid reallocations
     current_group_indices: Vec<usize>,
 
+    /// Hashes retained for the internal hash column when output requires it.
+    group_hash_tracker: Option<GroupHashTracker>,
+
+    /// Computes group hashes when the input has no reusable hash column.
+    hasher: ExpressionHasher,
+
     /// Accumulators, one for each `AggregateFunctionExpr` in the query
     ///
     /// For example, if the query has aggregates, `SUM(x)`,
@@ -587,6 +594,13 @@ impl GroupedHashAggregateStream {
         } else {
             None
         };
+        let track_group_hashes = !agg_group_by.is_true_no_grouping()
+            && (agg.mode.output_mode() == AggregateOutputMode::Partial
+                || oom_mode == OutOfMemoryMode::Spill);
+        let hasher = ExpressionHasher::new_with_metrics(
+            agg_group_by.input_exprs(),
+            HashMetrics::new(&agg.metrics, partition),
+        );
 
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
@@ -601,6 +615,8 @@ impl GroupedHashAggregateStream {
             oom_mode,
             group_values,
             current_group_indices: Default::default(),
+            group_hash_tracker: track_group_hashes.then(GroupHashTracker::default),
+            hasher,
             exec_state,
             baseline_metrics,
             group_by_metrics,
@@ -878,17 +894,39 @@ impl GroupedHashAggregateStream {
             evaluate_optional(&self.filter_expressions, batch)?
         };
 
+        let group_by = match self.spill_state.is_stream_merging {
+            true => &self.spill_state.merging_group_by,
+            false => &self.group_by,
+        };
+
+        let precomputed_hashes = self.hasher.precomputed_group_by(group_by, batch);
+
         for group_values in &group_by_values {
             let groups_start_time = Instant::now();
 
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
-            self.group_values
-                .intern(group_values, &mut self.current_group_indices)?;
+            let hashes = match precomputed_hashes {
+                Some(hashes) => hashes,
+                None => self.hasher.compute_hashes(group_values)?,
+            };
+            self.group_values.intern(
+                group_values,
+                &mut self.current_group_indices,
+                hashes,
+            )?;
             let group_indices = &self.current_group_indices;
 
             // Update ordering information if necessary
             let total_num_groups = self.group_values.len();
+            if let Some(group_hash_tracker) = &mut self.group_hash_tracker {
+                group_hash_tracker.record_new_groups(
+                    starting_num_groups,
+                    total_num_groups,
+                    group_indices,
+                    hashes,
+                );
+            }
             if total_num_groups > starting_num_groups {
                 self.group_ordering.new_groups(
                     group_values,
@@ -991,7 +1029,12 @@ impl GroupedHashAggregateStream {
         let groups_and_acc_size = acc
             + self.group_values.size()
             + self.group_ordering.size()
-            + self.current_group_indices.allocated_size();
+            + self.current_group_indices.allocated_size()
+            + self
+                .group_hash_tracker
+                .as_ref()
+                .map_or(0, |v| v.allocated_size())
+            + self.hasher.allocated_size();
 
         // Reserve extra headroom for sorting during potential spill.
         // When OOM triggers, group_aggregate_batch has already processed the
@@ -1046,6 +1089,12 @@ impl GroupedHashAggregateStream {
                 // Output partial state: either because we're in a non-final mode,
                 // or because we're spilling and will merge/re-evaluate later.
                 output.extend(acc.state(emit_to)?)
+            }
+        }
+        if let Some(group_hash_tracker) = &mut self.group_hash_tracker {
+            let group_hashes = group_hash_tracker.emit(emit_to);
+            if spilling || self.mode.output_mode() == AggregateOutputMode::Partial {
+                output.push(group_hashes);
             }
         }
         drop(timer);
@@ -1103,9 +1152,18 @@ impl GroupedHashAggregateStream {
             cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
 
             let starting_groups = self.group_values.len();
+            let hashes = self.hasher.compute_hashes(&cols)?;
             self.group_values
-                .intern(&cols, &mut self.current_group_indices)?;
+                .intern(&cols, &mut self.current_group_indices, hashes)?;
             let total_groups = self.group_values.len();
+            if let Some(group_hash_tracker) = &mut self.group_hash_tracker {
+                group_hash_tracker.record_new_groups(
+                    starting_groups,
+                    total_groups,
+                    &self.current_group_indices,
+                    hashes,
+                );
+            }
             if total_groups > starting_groups {
                 self.group_ordering.new_groups(
                     &cols,
@@ -1238,6 +1296,10 @@ impl GroupedHashAggregateStream {
         self.group_values.clear_shrink(num_rows);
         self.current_group_indices.clear();
         self.current_group_indices.shrink_to(num_rows);
+        if let Some(group_hash_tracker) = &mut self.group_hash_tracker {
+            group_hash_tracker.clear_shrink(num_rows);
+        }
+        self.hasher.clear_shrink(num_rows);
     }
 
     /// Clear memory and shrink capacities to zero.
@@ -1289,6 +1351,9 @@ impl GroupedHashAggregateStream {
 
             // Mark that we're switching to stream merging mode.
             self.spill_state.is_stream_merging = true;
+            self.hasher = self
+                .hasher
+                .new_for_exprs(self.spill_state.merging_group_by.input_exprs());
 
             self.input = StreamingMergeBuilder::new()
                 .with_schema(Arc::clone(&self.spill_state.spill_schema))
@@ -1372,7 +1437,7 @@ impl GroupedHashAggregateStream {
     }
 
     /// Transforms input batch to intermediate aggregate state, without grouping it
-    fn transform_to_states(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+    fn transform_to_states(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let mut group_values = evaluate_group_by(&self.group_by, batch)?;
         let input_values = evaluate_many(&self.aggregate_arguments, batch)?;
         let filter_values = evaluate_optional(&self.filter_expressions, batch)?;
@@ -1382,6 +1447,15 @@ impl GroupedHashAggregateStream {
             1,
             "group_values expected to have single element"
         );
+        let group_hashes = if self.group_hash_tracker.is_some() {
+            let hashes = match self.hasher.precomputed_group_by(&self.group_by, batch) {
+                Some(hashes) => hashes,
+                None => self.hasher.compute_hashes(&group_values[0])?,
+            };
+            Some(Arc::new(UInt64Array::from(hashes.to_vec())) as ArrayRef)
+        } else {
+            None
+        };
         let mut output = group_values.swap_remove(0);
 
         let iter = self
@@ -1393,6 +1467,9 @@ impl GroupedHashAggregateStream {
         for ((acc, values), opt_filter) in iter {
             let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
             output.extend(acc.convert_to_state(values, opt_filter)?);
+        }
+        if let Some(group_hashes) = group_hashes {
+            output.push(group_hashes);
         }
 
         let states_batch = RecordBatch::try_new(self.schema(), output)?;

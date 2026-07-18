@@ -7183,6 +7183,10 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
 
     let binding = partial_agg.schema();
     let actual_field_names: Vec<_> = binding.fields().iter().map(|f| f.name()).collect();
+    let (hash_field_name, actual_field_names) = actual_field_names
+        .split_last()
+        .expect("Partial aggregate schema should not be empty");
+    assert!(hash_field_name.starts_with("__datafusion_internal_hash_"));
     assert_eq!(actual_field_names, expected_field_names);
 
     // Ensure that DFSchema::try_from does not fail

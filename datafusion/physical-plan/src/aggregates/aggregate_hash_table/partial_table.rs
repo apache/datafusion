@@ -19,14 +19,16 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, BooleanArray, new_null_array};
+use arrow::array::{ArrayRef, BooleanArray, UInt64Array, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 
 use crate::aggregates::group_values::new_group_values;
 use crate::aggregates::order::GroupOrdering;
-use crate::aggregates::{AggregateExec, group_id_array, max_duplicate_ordinal};
+use crate::aggregates::{
+    AggregateExec, GroupHashTracker, group_id_array, max_duplicate_ordinal,
+};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
@@ -100,6 +102,11 @@ impl AggregateHashTable<PartialMarker> {
                 group_by: Arc::clone(&state.group_by),
                 group_values,
                 batch_group_indices: Default::default(),
+                group_hash_tracker: state
+                    .group_hash_tracker
+                    .is_some()
+                    .then(GroupHashTracker::default),
+                hasher: state.hasher.new_for_exprs(state.group_by.input_exprs()),
                 accumulators,
             }),
             _mode: PhantomData,
@@ -167,9 +174,19 @@ impl AggregateHashTable<PartialMarker> {
                 .collect();
             cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
 
+            let previous_group_count = state.group_values.len();
+            let hashes = state.hasher.compute_hashes(&cols)?;
             state
                 .group_values
-                .intern(&cols, &mut state.batch_group_indices)?;
+                .intern(&cols, &mut state.batch_group_indices, hashes)?;
+            if let Some(group_hash_tracker) = &mut state.group_hash_tracker {
+                group_hash_tracker.record_new_groups(
+                    previous_group_count,
+                    state.group_values.len(),
+                    &state.batch_group_indices,
+                    hashes,
+                );
+            }
             any_interned = true;
         }
 
@@ -202,19 +219,34 @@ impl AggregateHashTable<PartialSkipMarker> {
             1,
             "group_values expected to have single element"
         );
+        let state = self.state.building_mut();
+        let hash_array = if state.group_hash_tracker.is_some() {
+            let hashes = match evaluated_batch.precomputed_group_hashes {
+                Some(hashes) => hashes,
+                None => state
+                    .hasher
+                    .compute_hashes(&evaluated_batch.grouping_set_args[0])?,
+            };
+            Some(Arc::new(UInt64Array::from(hashes.to_vec())) as ArrayRef)
+        } else {
+            None
+        };
+
         let mut output = evaluated_batch
             .grouping_set_args
             .into_iter()
             .next()
             .unwrap_or_default();
 
-        let state = self.state.building_mut();
         for (acc, values) in state
             .accumulators
             .iter_mut()
             .zip(evaluated_batch.accumulator_args.iter())
         {
             output.extend(acc.convert_to_state(values)?);
+        }
+        if let Some(hash_array) = hash_array {
+            output.push(hash_array);
         }
 
         Ok(RecordBatch::try_new(

@@ -93,11 +93,17 @@ pub trait GroupValues: Send {
     ///
     /// When the function returns, `groups`  must contain the group id for each
     /// row in `cols`.
+    /// `hashes` contains the precomputed hash for each input row.
     ///
     /// If a row has the same value as a previous row, the same group id is
     /// assigned. If a row has a new value, the next available group id is
     /// assigned.
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hashes: &[u64],
+    ) -> Result<()>;
 
     /// Returns the number of bytes of memory used by this [`GroupValues`]
     fn size(&self) -> usize;

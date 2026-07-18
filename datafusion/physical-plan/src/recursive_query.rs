@@ -29,6 +29,7 @@ use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
+use crate::repartition::ExpressionHasher;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
@@ -43,7 +44,8 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 
 use futures::{Stream, StreamExt, ready};
 
@@ -440,10 +442,19 @@ struct DistinctDeduplicator {
     group_values: Box<dyn GroupValues>,
     reservation: MemoryReservation,
     intern_output_buffer: Vec<usize>,
+    hasher: ExpressionHasher,
 }
 
 impl DistinctDeduplicator {
     fn new(schema: SchemaRef, task_context: &TaskContext) -> Result<Self> {
+        let hash_exprs = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                Arc::new(Column::new(field.name(), index)) as Arc<dyn PhysicalExpr>
+            })
+            .collect();
         let group_values = new_group_values(schema, &GroupOrdering::None)?;
         let reservation = MemoryConsumer::new("RecursiveQueryHashTable")
             .register(task_context.memory_pool());
@@ -451,6 +462,7 @@ impl DistinctDeduplicator {
             group_values,
             reservation,
             intern_output_buffer: Vec::new(),
+            hasher: ExpressionHasher::new(hash_exprs),
         })
     }
 
@@ -470,8 +482,12 @@ impl DistinctDeduplicator {
                     "failed to reserve {additional} recursive query group ids: {e}"
                 )
             })?;
-        self.group_values
-            .intern(batch.columns(), &mut self.intern_output_buffer)?;
+        let hashes = self.hasher.compute_hashes(batch.columns())?;
+        self.group_values.intern(
+            batch.columns(),
+            &mut self.intern_output_buffer,
+            hashes,
+        )?;
         let mask = new_groups_mask(&self.intern_output_buffer, size_before);
         self.intern_output_buffer.clear();
         // We update the reservation to reflect the new size of the hash table.

@@ -47,6 +47,7 @@ impl GroupValues for GroupValuesBytesView {
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
+        hashes: &[u64],
     ) -> datafusion_common::Result<()> {
         assert_eq!(cols.len(), 1);
 
@@ -54,8 +55,9 @@ impl GroupValues for GroupValuesBytesView {
         let arr = &cols[0];
 
         groups.clear();
-        self.map.insert_if_new(
+        self.map.insert_if_new_with_hashes(
             arr,
+            hashes,
             // called for each new group
             |_value| {
                 // assign new group index on each insert
@@ -110,7 +112,10 @@ impl GroupValues for GroupValuesBytesView {
 
                 self.num_groups = 0;
                 let mut group_indexes = vec![];
-                self.intern(&[remaining_group_values], &mut group_indexes)?;
+                let cols = [remaining_group_values];
+                let mut hasher = crate::repartition::ExpressionHasher::new(vec![]);
+                let hashes = hasher.compute_hashes(&cols)?;
+                self.intern(&cols, &mut group_indexes, hashes)?;
 
                 // Verify that the group indexes were assigned in the correct order
                 assert_eq!(0, group_indexes[0]);

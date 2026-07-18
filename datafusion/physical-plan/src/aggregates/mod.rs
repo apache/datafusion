@@ -162,6 +162,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::repartition::ExpressionHasher;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputDistributionRequirements,
@@ -177,13 +178,14 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
+use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{
     Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err,
     internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryLimit;
-use datafusion_expr::{Accumulator, Aggregate};
+use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
@@ -196,6 +198,7 @@ use datafusion_physical_expr_common::sort_expr::{
 };
 
 use datafusion_expr::utils::AggregateOrderSensitivity;
+use datafusion_expr::{Accumulator, Aggregate, EmitTo};
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
 use topk::hash_table::is_supported_hash_key_type;
@@ -226,10 +229,62 @@ pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool 
     is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
 }
 
-/// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
-const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
-    // This seed is chosen to be a large 64-bit number
-    datafusion_common::hash_utils::RandomState::with_seed(15395726432021054657);
+fn outputs_group_hashes(mode: AggregateMode, group_by: &PhysicalGroupBy) -> bool {
+    mode.output_mode() == AggregateOutputMode::Partial && !group_by.is_true_no_grouping()
+}
+
+/// Tracks hashes for interned groups solely for inclusion in aggregate output.
+///
+/// This type does not compute hashes or decide whether an input hash can be
+/// reused; that is the responsibility of `ExpressionHasher`. When
+/// `GroupValues` interns a new group, this tracker copies the hash used for that
+/// group into the corresponding group-id position. It therefore contains one
+/// hash per distinct group and remains aligned with `GroupValues` as groups are
+/// emitted.
+///
+/// Aggregations create this tracker only when partial or spill output must carry
+/// an internal hash column for a downstream operator to reuse.
+#[derive(Default)]
+struct GroupHashTracker {
+    values: Vec<u64>,
+}
+
+impl GroupHashTracker {
+    fn record_new_groups(
+        &mut self,
+        previous_group_count: usize,
+        total_group_count: usize,
+        group_indices: &[usize],
+        hashes: &[u64],
+    ) {
+        assert_eq!(group_indices.len(), hashes.len());
+        assert_eq!(self.values.len(), previous_group_count);
+        self.values.resize(total_group_count, 0);
+
+        for (&group_index, &hash) in group_indices.iter().zip(hashes) {
+            if group_index >= previous_group_count {
+                self.values[group_index] = hash;
+            }
+        }
+    }
+
+    fn emit(&mut self, emit_to: EmitTo) -> ArrayRef {
+        let hashes = match emit_to {
+            EmitTo::All => std::mem::take(&mut self.values),
+            EmitTo::First(n) => split_vec_min_alloc(&mut self.values, n),
+        };
+        Arc::new(UInt64Array::from(hashes))
+    }
+
+    fn allocated_size(&self) -> usize {
+        self.values.allocated_size()
+    }
+
+    fn clear_shrink(&mut self, capacity: usize) {
+        self.values.clear();
+        self.values.shrink_to(capacity);
+    }
+}
 
 /// Whether an aggregate stage consumes raw input data or intermediate
 /// accumulator state from a previous aggregation stage.
@@ -2193,7 +2248,11 @@ fn create_schema(
     aggr_expr: &[Arc<AggregateFunctionExpr>],
     mode: AggregateMode,
 ) -> Result<Schema> {
-    let mut fields = Vec::with_capacity(group_by.num_output_exprs() + aggr_expr.len());
+    let mut fields = Vec::with_capacity(
+        group_by.num_output_exprs()
+            + aggr_expr.len()
+            + outputs_group_hashes(mode, group_by) as usize,
+    );
     fields.extend(group_by.output_fields(input_schema)?);
 
     match mode.output_mode() {
@@ -2209,6 +2268,13 @@ fn create_schema(
                 fields.extend(expr.state_fields()?.iter().cloned());
             }
         }
+    }
+
+    if outputs_group_hashes(mode, group_by) {
+        let hasher = ExpressionHasher::new(group_by.output_exprs());
+        fields.push(
+            Field::new(hasher.internal_hash_col_name(), DataType::UInt64, false).into(),
+        );
     }
 
     Ok(Schema::new_with_metadata(
@@ -2719,6 +2785,7 @@ mod tests {
     use datafusion_physical_expr::expressions::Literal;
 
     use crate::projection::ProjectionExec;
+    use crate::repartition::{HASH_ROWS_COMPUTED, HASH_ROWS_REUSED, RepartitionExec};
     use datafusion_physical_expr::projection::ProjectionExpr;
     use futures::{FutureExt, Stream, StreamExt};
     use insta::{allow_duplicates, assert_snapshot};
@@ -2733,6 +2800,81 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
 
         Ok(schema)
+    }
+
+    fn assert_and_strip_group_hashes(
+        batches: &[RecordBatch],
+        hash_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Vec<RecordBatch>> {
+        let mut hasher = ExpressionHasher::new(hash_exprs.to_vec());
+        let hash_name = hasher.internal_hash_col_name();
+        batches
+            .iter()
+            .map(|batch| {
+                let actual = hasher
+                    .precomputed(batch)
+                    .expect("partial aggregate output should contain group hashes");
+                let arrays = evaluate_expressions_to_arrays(hash_exprs, batch)?;
+                let expected = hasher.compute_hashes(&arrays)?;
+                assert_eq!(actual, expected);
+
+                let hash_index = batch.schema().index_of(&hash_name)?;
+                let projection = (0..batch.num_columns())
+                    .filter(|&index| index != hash_index)
+                    .collect::<Vec<_>>();
+                Ok(batch.project(&projection)?)
+            })
+            .collect()
+    }
+
+    fn batch_with_group_hashes(
+        schema: SchemaRef,
+        group_by: &PhysicalGroupBy,
+        columns: Vec<ArrayRef>,
+    ) -> Result<RecordBatch> {
+        let hash_exprs = group_by.output_exprs();
+        let mut hasher = ExpressionHasher::new(hash_exprs.clone());
+        let hash_name = hasher.internal_hash_col_name();
+        let fields = schema
+            .fields()
+            .iter()
+            .filter(|field| field.name() != &hash_name)
+            .cloned()
+            .collect::<Vec<_>>();
+        let visible_schema =
+            Arc::new(Schema::new(fields).with_metadata(schema.metadata().clone()));
+        let batch = RecordBatch::try_new(visible_schema, columns)?;
+        let arrays = evaluate_expressions_to_arrays(&hash_exprs, &batch)?;
+        let hashes = hasher.compute_hashes(&arrays)?;
+        let mut columns = batch.columns().to_vec();
+        columns.push(Arc::new(UInt64Array::from(hashes.to_vec())));
+        Ok(RecordBatch::try_new(schema, columns)?)
+    }
+
+    #[test]
+    fn uses_precomputed_group_hashes_from_batch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let hash_exprs = group_by.input_exprs();
+        let hasher = ExpressionHasher::new(hash_exprs);
+        let hash_schema = Arc::new(Schema::new(vec![
+            schema.field(0).clone(),
+            Field::new(hasher.internal_hash_col_name(), DataType::UInt64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            hash_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(UInt64Array::from(vec![11, 22])),
+            ],
+        )?;
+
+        let hashes = hasher
+            .precomputed_group_by(&group_by, &batch)
+            .expect("batch should contain precomputed group hashes");
+        assert_eq!(hashes, &[11, 22]);
+        Ok(())
     }
 
     /// some mock data to aggregates
@@ -2858,6 +3000,12 @@ mod tests {
         ))
     }
 
+    fn metric_value(plan: &dyn ExecutionPlan, name: &str) -> usize {
+        plan.metrics()
+            .and_then(|metrics| metrics.sum_by_name(name))
+            .map_or(0, |value| value.as_usize())
+    }
+
     async fn check_grouping_sets(
         input: Arc<dyn ExecutionPlan>,
         spill: bool,
@@ -2906,6 +3054,8 @@ mod tests {
 
         let result =
             collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+        let result =
+            assert_and_strip_group_hashes(&result, &grouping_set.output_exprs())?;
 
         if spill {
             // In spill mode, we test with the limited memory, if the mem usage exceeds,
@@ -3056,6 +3206,8 @@ mod tests {
 
         let result =
             collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+        let result =
+            assert_and_strip_group_hashes(&result, &grouping_set.output_exprs())?;
 
         if spill {
             allow_duplicates! {
@@ -3522,6 +3674,125 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn partial_repartition_final_preserves_group_hashes() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+        let partitions = vec![
+            vec![RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 1])),
+                    Arc::new(Int32Array::from(vec![1, 1, 1])),
+                ],
+            )?],
+            vec![RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![2, 3])),
+                    Arc::new(Int32Array::from(vec![1, 1])),
+                ],
+            )?],
+        ];
+        let input: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let aggregate_exprs = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("COUNT(value)")
+                .build()?,
+        )];
+        let partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggregate_exprs.clone(),
+            vec![None],
+            Arc::clone(&input),
+            Arc::clone(&schema),
+        )?);
+        let hash_exprs = group_by.output_exprs();
+        let repartition = Arc::new(RepartitionExec::try_new(
+            Arc::clone(&partial) as Arc<dyn ExecutionPlan>,
+            Partitioning::Hash(hash_exprs.clone(), 2),
+        )?);
+        let task_ctx = new_migrated_hash_ctx(1024);
+
+        let repartition_output = crate::collect_partitioned(
+            Arc::clone(&repartition) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&task_ctx),
+        )
+        .await?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        assert_and_strip_group_hashes(&repartition_output, &hash_exprs)?;
+        assert_eq!(metric_value(partial.as_ref(), HASH_ROWS_COMPUTED), 5);
+        assert_eq!(metric_value(partial.as_ref(), HASH_ROWS_REUSED), 0);
+        assert_eq!(metric_value(repartition.as_ref(), HASH_ROWS_COMPUTED), 0);
+        assert_eq!(
+            metric_value(repartition.as_ref(), HASH_ROWS_REUSED),
+            repartition_output
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>()
+        );
+
+        // A RepartitionExec can only be consumed once, so build an equivalent
+        // pipeline for the end-to-end final aggregation assertion.
+        let partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggregate_exprs.clone(),
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+        let repartition = Arc::new(RepartitionExec::try_new(
+            Arc::clone(&partial) as Arc<dyn ExecutionPlan>,
+            Partitioning::Hash(hash_exprs, 2),
+        )?);
+        let final_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            group_by.as_final(),
+            aggregate_exprs,
+            vec![None],
+            Arc::clone(&repartition) as Arc<dyn ExecutionPlan>,
+            schema,
+        )?);
+        let output = crate::collect_partitioned(
+            Arc::clone(&final_aggregate) as Arc<dyn ExecutionPlan>,
+            task_ctx,
+        )
+        .await?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        assert_eq!(metric_value(partial.as_ref(), HASH_ROWS_COMPUTED), 5);
+        assert_eq!(metric_value(partial.as_ref(), HASH_ROWS_REUSED), 0);
+        assert_eq!(metric_value(repartition.as_ref(), HASH_ROWS_COMPUTED), 0);
+        assert!(metric_value(repartition.as_ref(), HASH_ROWS_REUSED) > 0);
+        assert_eq!(
+            metric_value(final_aggregate.as_ref(), HASH_ROWS_COMPUTED),
+            0
+        );
+        assert!(metric_value(final_aggregate.as_ref(), HASH_ROWS_REUSED) > 0);
+        assert_snapshot!(batches_to_sort_string(&output), @r"
++-----+--------------+
+| key | COUNT(value) |
++-----+--------------+
+| 1   | 2            |
+| 2   | 2            |
+| 3   | 1            |
++-----+--------------+
+");
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn partial_grouped_aggregate_materializes_before_slicing() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", DataType::Int32, false),
@@ -3538,6 +3809,7 @@ mod tests {
             TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let output_hash_exprs = group_by.output_exprs();
         let udaf = Arc::new(AggregateUDF::from(NoFirstEmitUdaf::new()));
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
             AggregateExprBuilder::new(udaf, vec![col("value", &schema)?])
@@ -3578,6 +3850,7 @@ mod tests {
             vec![2, 1]
         );
         assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+        let batches = assert_and_strip_group_hashes(&batches, &output_hash_exprs)?;
         assert_snapshot!(batches_to_sort_string(&batches), @r"
         +-----+-----------------------------+
         | key | no_first_emit(value)[count] |
@@ -3642,6 +3915,8 @@ mod tests {
                 .sum::<usize>(),
             2
         );
+        let partial_output =
+            assert_and_strip_group_hashes(&partial_output, &group_by.output_exprs())?;
         assert_snapshot!(batches_to_sort_string(&partial_output), @r"
 +---+
 | a |
@@ -3787,8 +4062,9 @@ mod tests {
             Arc::clone(&schema),
         )?;
         let partial_schema = partial.schema();
-        let partial_state_batch = RecordBatch::try_new(
+        let partial_state_batch = batch_with_group_hashes(
             Arc::clone(&partial_schema),
+            &group_by,
             vec![
                 Arc::new(UInt32Array::from(vec![1, 2, 1, 3])),
                 Arc::new(Float64Array::from(vec![10.0, 20.0, 40.0, 30.0])),
@@ -3894,6 +4170,7 @@ mod tests {
             (col("sort_col", &schema)?, "sort_col".to_string()),
             (col("group_col", &schema)?, "group_col".to_string()),
         ]);
+        let output_hash_exprs = group_by.output_exprs();
         let aggr_expr = vec![Arc::new(
             AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
                 .schema(Arc::clone(&schema))
@@ -3919,6 +4196,7 @@ mod tests {
 
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
+        let output = assert_and_strip_group_hashes(&output, &output_hash_exprs)?;
         assert_snapshot!(batches_to_sort_string(&output), @r"
 +----------+-----------+-------------------------+
 | sort_col | group_col | COUNT(value_col)[count] |
@@ -3965,8 +4243,9 @@ mod tests {
             Arc::clone(&schema),
         )?;
         let partial_schema = partial_aggregate.schema();
-        let partial_state_batch = RecordBatch::try_new(
+        let partial_state_batch = batch_with_group_hashes(
             Arc::clone(&partial_schema),
+            &group_by,
             vec![
                 Arc::new(Int32Array::from(vec![1, 1, 2, 3])),
                 Arc::new(Int64Array::from(vec![2, 3, 5, 7])),
@@ -4776,6 +5055,7 @@ mod tests {
 
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let output_hash_exprs = group_by.output_exprs();
 
         let aggr_expr = vec![
             AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
@@ -4830,6 +5110,7 @@ mod tests {
             GroupedHashAggregateStream::new(aggregate_exec.as_ref(), &ctx, 0)?,
         );
         let output = collect(stream).await?;
+        let output = assert_and_strip_group_hashes(&output, &output_hash_exprs)?;
 
         allow_duplicates! {
             assert_snapshot!(batches_to_string(&output), @r"
@@ -4860,6 +5141,7 @@ mod tests {
 
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let output_hash_exprs = group_by.output_exprs();
 
         let aggr_expr = vec![
             AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
@@ -4922,6 +5204,7 @@ mod tests {
             GroupedHashAggregateStream::new(aggregate_exec.as_ref(), &ctx, 0)?,
         );
         let output = collect(stream).await?;
+        let output = assert_and_strip_group_hashes(&output, &output_hash_exprs)?;
 
         allow_duplicates! {
             assert_snapshot!(batches_to_string(&output), @r"
@@ -4951,6 +5234,7 @@ mod tests {
 
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let output_hash_exprs = group_by.output_exprs();
 
         let aggr_expr = vec![
             AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
@@ -5003,6 +5287,7 @@ mod tests {
 
         let ctx = Arc::new(TaskContext::default().with_session_config(session_config));
         let output = collect(aggregate_exec.execute(0, Arc::clone(&ctx))?).await?;
+        let output = assert_and_strip_group_hashes(&output, &output_hash_exprs)?;
 
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&output), @r"
@@ -5038,6 +5323,7 @@ mod tests {
 
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let output_hash_exprs = group_by.output_exprs();
 
         let aggr_expr = vec![
             AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
@@ -5098,6 +5384,7 @@ mod tests {
 
         let ctx = Arc::new(TaskContext::default().with_session_config(session_config));
         let output = collect(aggregate_exec.execute(0, Arc::clone(&ctx))?).await?;
+        let output = assert_and_strip_group_hashes(&output, &output_hash_exprs)?;
 
         allow_duplicates! {
         assert_snapshot!(batches_to_sort_string(&output), @r"

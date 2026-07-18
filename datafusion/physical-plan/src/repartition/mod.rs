@@ -34,7 +34,6 @@ use super::{
 };
 use crate::coalesce::LimitedBatchCoalescer;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
-use crate::hash_utils::create_hashes;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
@@ -79,7 +78,12 @@ use log::trace;
 use parking_lot::Mutex;
 
 mod distributor_channels;
+mod hash;
+
 use crate::repartition::distributor_channels::SendError;
+pub(crate) use crate::repartition::hash::{ExpressionHasher, HashMetrics};
+#[cfg(test)]
+pub(crate) use crate::repartition::hash::{HASH_ROWS_COMPUTED, HASH_ROWS_REUSED};
 use distributor_channels::{
     DistributionReceiver, DistributionSender, channels, partition_aware_channels,
 };
@@ -398,7 +402,7 @@ impl RepartitionExecState {
         &mut self,
         input: &Arc<dyn ExecutionPlan>,
         metrics: &ExecutionPlanMetricsSet,
-        output_partitions: usize,
+        partitioning: &Partitioning,
         ctx: &Arc<TaskContext>,
     ) -> Result<()> {
         if !matches!(self, RepartitionExecState::NotInitialized) {
@@ -406,10 +410,16 @@ impl RepartitionExecState {
         }
 
         let num_input_partitions = input.output_partitioning().partition_count();
+        let output_partitions = partitioning.partition_count();
         let mut streams_and_metrics = Vec::with_capacity(num_input_partitions);
 
         for i in 0..num_input_partitions {
-            let metrics = RepartitionMetrics::new(i, output_partitions, metrics);
+            let metrics = RepartitionMetrics::new(
+                i,
+                output_partitions,
+                matches!(partitioning, Partitioning::Hash(..)),
+                metrics,
+            );
 
             let timer = metrics.fetch_time.timer();
             let stream = input.execute(i, Arc::clone(ctx))?;
@@ -437,7 +447,7 @@ impl RepartitionExecState {
                 self.ensure_input_streams_initialized(
                     input,
                     metrics,
-                    partitioning.partition_count(),
+                    partitioning,
                     context,
                 )?;
                 let RepartitionExecState::InputStreamsInitialized(value) = self else {
@@ -610,9 +620,8 @@ pub struct BatchPartitioner {
 
 enum BatchPartitionerState {
     Hash {
-        exprs: Vec<Arc<dyn PhysicalExpr>>,
         partition_reducer: StrengthReducedU64,
-        hash_buffer: Vec<u64>,
+        hasher: ExpressionHasher,
         indices: Vec<Vec<u32>>,
     },
     RoundRobin {
@@ -710,6 +719,12 @@ impl StrengthReducedU64 {
 }
 
 impl BatchPartitioner {
+    fn set_hash_metrics(&mut self, metrics: HashMetrics) {
+        if let BatchPartitionerState::Hash { hasher, .. } = &mut self.state {
+            hasher.set_metrics(metrics);
+        }
+    }
+
     /// Create a new [`BatchPartitioner`] for hash-based repartitioning.
     ///
     /// # Parameters
@@ -733,9 +748,8 @@ impl BatchPartitioner {
 
         Ok(Self {
             state: BatchPartitionerState::Hash {
-                exprs,
                 partition_reducer: StrengthReducedU64::new(num_partitions as u64),
-                hash_buffer: vec![],
+                hasher: ExpressionHasher::new(exprs),
                 indices: vec![vec![]; num_partitions],
             },
             timer,
@@ -883,27 +897,19 @@ impl BatchPartitioner {
                     Box::new(std::iter::once(Ok((idx, batch))))
                 }
                 BatchPartitionerState::Hash {
-                    exprs,
                     partition_reducer,
-                    hash_buffer,
+                    hasher,
                     indices,
                 } => {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
 
-                    let arrays =
-                        evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
-
-                    hash_buffer.clear();
-                    hash_buffer.resize(batch.num_rows(), 0);
-
-                    create_hashes(
-                        &arrays,
-                        REPARTITION_RANDOM_STATE.random_state(),
-                        hash_buffer,
-                    )?;
-
                     indices.iter_mut().for_each(|v| v.clear());
+
+                    let hash_buffer = match hasher.precomputed(&batch) {
+                        Some(hashes) => hashes,
+                        None => hasher.compute_hashes_for_batch(&batch)?,
+                    };
 
                     partition_reducer.partition_indices(hash_buffer, indices);
 
@@ -1218,12 +1224,15 @@ struct RepartitionMetrics {
     ///
     /// One metric per output partition.
     send_time: Vec<metrics::Time>,
+    /// Rows whose hash values were computed or reused from an internal column.
+    hash_metrics: Option<HashMetrics>,
 }
 
 impl RepartitionMetrics {
     pub fn new(
         input_partition: usize,
         num_output_partitions: usize,
+        track_hashes: bool,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Self {
         // Time in nanos to execute child operator and fetch batches
@@ -1249,6 +1258,8 @@ impl RepartitionMetrics {
             fetch_time,
             repartition_time,
             send_time,
+            hash_metrics: track_hashes
+                .then(|| HashMetrics::new(metrics, input_partition)),
         }
     }
 }
@@ -1407,7 +1418,7 @@ impl ExecutionPlan for RepartitionExec {
             state.ensure_input_streams_initialized(
                 &input,
                 &metrics,
-                partitioning.partition_count(),
+                &partitioning,
                 &context,
             )?;
         }
@@ -1812,6 +1823,9 @@ impl RepartitionExec {
             input_partition,
             num_input_partitions,
         )?;
+        if let Some(hash_metrics) = &metrics.hash_metrics {
+            partitioner.set_hash_metrics(hash_metrics.clone());
+        }
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
