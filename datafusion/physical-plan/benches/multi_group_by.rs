@@ -27,11 +27,15 @@
 //! covers a `(FixedSizeBinary, Int32)` key to exercise the
 //! `FixedSizeBinaryGroupValueBuilder`.
 
-use arrow::array::{ArrayRef, Int32Array, UInt32Array};
+use arrow::array::{
+    ArrayRef, BinaryArray, Int32Array, LargeBinaryArray, LargeStringArray, StringArray,
+    UInt32Array,
+};
 use arrow::compute::take;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::util::bench_util::create_fsb_array;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use datafusion_expr::EmitTo;
 use datafusion_physical_plan::aggregates::group_values::GroupValues;
 use datafusion_physical_plan::aggregates::group_values::GroupValuesRows;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupValuesColumn;
@@ -444,6 +448,192 @@ fn bench_fixed_size_binary(c: &mut Criterion) {
     group.finish();
 }
 
+/// Offset width of the byte group columns used by the emit experiment.
+///
+/// Both variants use two byte columns, so both route through
+/// `ByteGroupValueBuilder` and its `take_n` (the code under test). `Large` uses
+/// 64-bit offsets, which doubles the size of the offset vector that
+/// `take_n_offsets` splits/shifts — making that path a larger share of `take_n`.
+#[derive(Clone, Copy)]
+enum OffsetWidth {
+    /// `(Binary, Utf8)` — 32-bit offsets.
+    Normal,
+    /// `(LargeBinary, LargeUtf8)` — 64-bit offsets.
+    Large,
+}
+
+impl OffsetWidth {
+    fn label(self) -> &'static str {
+        match self {
+            OffsetWidth::Normal => "i32_offsets",
+            OffsetWidth::Large => "i64_offsets",
+        }
+    }
+
+    /// The `(binary, utf8)` arrow types for this width.
+    fn data_types(self) -> (DataType, DataType) {
+        match self {
+            OffsetWidth::Normal => (DataType::Binary, DataType::Utf8),
+            OffsetWidth::Large => (DataType::LargeBinary, DataType::LargeUtf8),
+        }
+    }
+}
+
+/// Schema for the emit experiment: a byte (`Binary`/`LargeBinary`) group column
+/// paired with a string (`Utf8`/`LargeUtf8`) column. Both columns route the
+/// multi-column GROUP BY through the `ByteGroupValueBuilder`, whose `take_n`
+/// implementation is what the emit benchmark below exercises.
+fn make_bytes_schema(width: OffsetWidth) -> SchemaRef {
+    let (binary, utf8) = width.data_types();
+    Arc::new(Schema::new(vec![
+        Field::new("b", binary, false),
+        Field::new("s", utf8, false),
+    ]))
+}
+
+/// Generate byte-column batches with exactly `num_distinct_groups` distinct
+/// keys, for the given [`OffsetWidth`]. Rows cycle through the group pool so the
+/// accumulated group count is deterministic; values are short, variable-length
+/// labels (`g0`, `g1`, …) — realistic keys without letting the value-buffer copy
+/// dominate the offset work in `take_n`. The two columns carry identical labels
+/// (as bytes / as str), so the combined cardinality equals `num_distinct_groups`.
+fn generate_bytes_batches(
+    width: OffsetWidth,
+    num_distinct_groups: usize,
+    num_rows: usize,
+    batch_size: usize,
+) -> Vec<Vec<ArrayRef>> {
+    let labels: Vec<String> = (0..num_distinct_groups).map(|g| format!("g{g}")).collect();
+
+    let num_full_batches = num_rows / batch_size;
+    let remainder = num_rows % batch_size;
+    let num_batches = num_full_batches + if remainder > 0 { 1 } else { 0 };
+
+    (0..num_batches)
+        .map(|batch_idx| {
+            let batch_start = batch_idx * batch_size;
+            let current_batch_size = if batch_idx == num_batches - 1 && remainder > 0 {
+                remainder
+            } else {
+                batch_size
+            };
+
+            let group_ids = (0..current_batch_size)
+                .map(|row| (batch_start + row) % num_distinct_groups);
+            let strings = group_ids.clone().map(|g| labels[g].as_str());
+            let bytes = group_ids.map(|g| g.to_be_bytes());
+
+            let (binary, utf8): (ArrayRef, ArrayRef) = match width {
+                OffsetWidth::Normal => (
+                    Arc::new(BinaryArray::from_iter_values(bytes)),
+                    Arc::new(StringArray::from_iter_values(strings)),
+                ),
+                OffsetWidth::Large => (
+                    Arc::new(LargeBinaryArray::from_iter_values(bytes)),
+                    Arc::new(LargeStringArray::from_iter_values(strings)),
+                ),
+            };
+            vec![binary, utf8]
+        })
+        .collect()
+}
+
+/// Populate a fresh vectorized `GroupValuesColumn` by interning every batch,
+/// returning it ready to emit. Used as the (untimed) setup for the emit bench.
+///
+/// The builder's final state depends only on the set of distinct keys, not on
+/// how many rows carry them — so to populate `g` groups it is enough to intern a
+/// single batch of `g` distinct rows (see [`generate_bytes_batches`] with
+/// `num_rows == num_distinct_groups`), which is what the small-cardinality
+/// caller passes.
+fn populate_group_values(
+    schema: &SchemaRef,
+    batches: &[Vec<ArrayRef>],
+) -> Box<dyn GroupValues> {
+    let mut gv = create_group_values(schema, /* vectorized */ true);
+    let mut groups = Vec::with_capacity(DEFAULT_BATCH_SIZE);
+    for batch in batches {
+        groups.clear();
+        gv.intern(batch, &mut groups).unwrap();
+    }
+    gv
+}
+
+/// The two `emit(EmitTo::First(n))` split-branch cases, keyed on `n` vs the
+/// accumulated group count `g`. `take_n_offsets`
+/// allocates for whichever side is smaller:
+///
+/// * `shift_larger`: emit a smaller prefix — `n = g / 4`, shift remaining in place.
+/// * `shift_mid`: emit the half-sized prefix in existing buffer — `n = g / 2`,
+///   allocate and shift the remaining half.
+/// * `shift_smaller`: emit a larger prefix in existing buffer — `n = g - g / 4`,
+///   allocate and shift remaining.
+fn emit_first_cases(num_groups: usize) -> [(&'static str, usize); 3] {
+    [
+        ("shift_larger", num_groups / 4),
+        ("shift_midsize", num_groups / 2),
+        ("shift_smaller", num_groups - num_groups / 4),
+    ]
+}
+
+/// Experiment 8a: `emit(EmitTo::First(n))` on a low-cardinality (1K groups)
+/// `(Binary, Utf8)` key — reaches `ByteGroupValueBuilder::take_n`.
+fn bench_emit_first_small(c: &mut Criterion) {
+    let mut group = c.benchmark_group("emit_first_small");
+    group.sample_size(200);
+
+    let num_groups = 1_000usize;
+    for width in [OffsetWidth::Normal, OffsetWidth::Large] {
+        let schema = make_bytes_schema(width);
+        let batches =
+            generate_bytes_batches(width, num_groups, num_groups, DEFAULT_BATCH_SIZE);
+
+        for (branch, n) in emit_first_cases(num_groups) {
+            group.bench_with_input(
+                BenchmarkId::new(branch, format!("{}_grp_{num_groups}", width.label())),
+                &batches,
+                |b, batches| {
+                    b.iter_batched_ref(
+                        || populate_group_values(&schema, batches),
+                        |gv| gv.emit(EmitTo::First(n)).unwrap(),
+                        criterion::BatchSize::SmallInput,
+                    );
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+/// Experiment 8b: `emit(EmitTo::First(n))` on a high-cardinality (1M groups)
+/// `(Binary, Utf8)` key — reaches `ByteGroupValueBuilder::take_n`.
+fn bench_emit_first_large(c: &mut Criterion) {
+    let mut group = c.benchmark_group("emit_first_large");
+    group.sample_size(50);
+
+    let num_groups = 1_000_000usize;
+    for width in [OffsetWidth::Normal, OffsetWidth::Large] {
+        let schema = make_bytes_schema(width);
+        let batches =
+            generate_bytes_batches(width, num_groups, 1_000_000, DEFAULT_BATCH_SIZE);
+
+        for (branch, n) in emit_first_cases(num_groups) {
+            group.bench_with_input(
+                BenchmarkId::new(branch, format!("{}_grp_{num_groups}", width.label())),
+                &batches,
+                |b, batches| {
+                    b.iter_batched_ref(
+                        || populate_group_values(&schema, batches),
+                        |gv| gv.emit(EmitTo::First(n)).unwrap(),
+                        criterion::BatchSize::LargeInput,
+                    );
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_issue_17850_regression,
@@ -453,5 +643,7 @@ criterion_group!(
     bench_high_cardinality_scaling,
     bench_group_count_sweep,
     bench_fixed_size_binary,
+    bench_emit_first_small,
+    bench_emit_first_large,
 );
 criterion_main!(benches);
