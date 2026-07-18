@@ -33,7 +33,8 @@ use arrow::{
     datatypes::{DataType, Field},
     record_batch::RecordBatch,
 };
-use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use log::{debug, trace};

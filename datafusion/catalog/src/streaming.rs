@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, Result, plan_err};
-use datafusion_expr::execution_props::PhysicalPlanningContext;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::equivalence::project_ordering;
 use datafusion_physical_expr::projection::ProjectionMapping;

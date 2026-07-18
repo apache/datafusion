@@ -38,7 +38,7 @@ use datafusion_expr::{Expr, col, lit};
 use datafusion_physical_expr::create_physical_expr;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_expr::execution_props::PhysicalPlanningContext;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use futures::StreamExt;
 use object_store::ObjectMeta;
 use object_store::path::Path;

@@ -32,11 +32,12 @@ use datafusion_common::{
     DFSchema, Result, ScalarValue, TableReference, ToDFSchema, exec_err,
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
 };
-use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
     Alias, Cast, HigherOrderFunction, InList, Lambda, LambdaVariable, Placeholder,
     ScalarFunction,
 };
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::{
@@ -62,7 +63,8 @@ use datafusion_expr::{
 /// # use datafusion_common::DFSchema;
 /// # use datafusion_expr::{Expr, col, lit};
 /// # use datafusion_physical_expr::create_physical_expr;
-/// # use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
+/// # use datafusion_expr::execution_props::ExecutionProps;
+/// # use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 /// // For a logical expression `a = 1`, we can create a physical expression
 /// let expr = col("a").eq(lit(1));
 /// // To create a PhysicalExpr we need 1. a schema
@@ -85,7 +87,8 @@ use datafusion_expr::{
 /// # use datafusion_common::{assert_batches_eq, DFSchema};
 /// # use datafusion_expr::{Expr, col, lit, ColumnarValue};
 /// # use datafusion_physical_expr::create_physical_expr;
-/// # use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
+/// # use datafusion_expr::execution_props::ExecutionProps;
+/// # use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 /// # let expr = col("a").eq(lit(1));
 /// # let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
 /// # let df_schema = DFSchema::try_from(schema.clone()).unwrap();

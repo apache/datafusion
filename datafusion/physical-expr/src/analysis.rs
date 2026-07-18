@@ -349,10 +349,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{DFSchema, ScalarValue, assert_contains, stats::Precision};
     use datafusion_expr::{
-        Expr, col,
-        execution_props::{ExecutionProps, PhysicalPlanningContext},
-        interval_arithmetic::Interval,
-        lit,
+        Expr, col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit,
+        physical_planning_context::PhysicalPlanningContext,
     };
 
     use crate::{AnalysisContext, create_physical_expr, expressions::Column};

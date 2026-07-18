@@ -29,7 +29,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::session_state::CacheFactory;
 use datafusion::execution::{SessionState, SessionStateBuilder};
-use datafusion::logical_expr::execution_props::PhysicalPlanningContext;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };

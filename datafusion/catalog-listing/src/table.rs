@@ -43,7 +43,8 @@ use datafusion_execution::cache::cache_manager::{
     CachedFileMetadata, FileStatisticsCache, SchemaFingerprint, TableScopedPath,
 };
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
     Expr, Partitioning as LogicalPartitioning, TableProviderFilterPushDown, TableType,
 };

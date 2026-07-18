@@ -1655,7 +1655,8 @@ mod tests {
     fn test_split_groups_by_statistics() -> Result<()> {
         use chrono::TimeZone;
         use datafusion_common::DFSchema;
-        use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
+        use datafusion_expr::execution_props::ExecutionProps;
+        use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
         use object_store::{ObjectMeta, path::Path};
 
         struct File {
@@ -2237,8 +2238,8 @@ mod tests {
     fn test_split_groups_by_statistics_with_target_partitions() -> Result<()> {
         use datafusion_common::DFSchema;
         use datafusion_expr::{
-            col,
-            execution_props::{ExecutionProps, PhysicalPlanningContext},
+            col, execution_props::ExecutionProps,
+            physical_planning_context::PhysicalPlanningContext,
         };
 
         let schema = Arc::new(Schema::new(vec![Field::new(

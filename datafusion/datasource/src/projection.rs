@@ -299,8 +299,8 @@ mod test {
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_common::{DFSchema, ScalarValue, config::ConfigOptions};
     use datafusion_expr::{
-        Expr, ScalarUDF, col,
-        execution_props::{ExecutionProps, PhysicalPlanningContext},
+        Expr, ScalarUDF, col, execution_props::ExecutionProps,
+        physical_planning_context::PhysicalPlanningContext,
     };
     use datafusion_functions::core::input_file_name::InputFileNameFunc;
     use datafusion_physical_expr::{

@@ -25,7 +25,8 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{DFSchema, HashMap, ScalarValue, SplitPoint};
 use datafusion_common::{Result, plan_err};
-use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, Partitioning as LogicalPartitioning, SortExpr};
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 

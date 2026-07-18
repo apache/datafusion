@@ -252,9 +252,10 @@ mod tests {
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
         Expr, HigherOrderReturnFieldArgs, HigherOrderUDFImpl, ValueOrLambda, col,
-        execution_props::{ExecutionProps, PhysicalPlanningContext},
+        execution_props::ExecutionProps,
         expr::{HigherOrderFunction, LambdaVariable},
         lambda, lit,
+        physical_planning_context::PhysicalPlanningContext,
     };
     use datafusion_physical_expr::create_physical_expr;
 

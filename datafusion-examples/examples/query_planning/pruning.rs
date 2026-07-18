@@ -26,7 +26,7 @@ use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::{DFSchema, ScalarValue};
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionProps;
-use datafusion::logical_expr::execution_props::PhysicalPlanningContext;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::prelude::*;
