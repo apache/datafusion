@@ -148,7 +148,17 @@ message RepartitionNode {
   oneof partition_method {
     uint64 round_robin = 2;
     HashRepartition hash = 3;
+    RangeRepartition range = 4;
   }
+}
+
+message RangeSplitPoint {
+  repeated datafusion_common.ScalarValue value = 1;
+}
+
+message RangeRepartition {
+  repeated SortExprNode sort_expr = 1;
+  repeated RangeSplitPoint split_point = 2;
 }
 
 message HashRepartition {
@@ -491,6 +501,10 @@ message LogicalExprNode {
 
     // Subquery expressions
     ScalarSubqueryExprNode scalar_subquery_expr = 36;
+
+    HigherOrderUDFExprNode higher_order_udf_expr = 37;
+    Lambda lambda = 38;
+    LambdaVariable lambda_variable = 39;
   }
 }
 
@@ -626,6 +640,22 @@ message ScalarUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
   optional bytes fun_definition = 3;
+}
+
+message HigherOrderUDFExprNode {
+  string fun_name = 1;
+  repeated LogicalExprNode args = 2;
+  optional bytes fun_definition = 3;
+}
+
+message Lambda {
+  repeated string params = 1;
+  LogicalExprNode body = 2;
+}
+
+message LambdaVariable {
+  string name = 1;
+  datafusion_common.Field field = 2;
 }
 
 message WindowExprNode {
@@ -997,6 +1027,10 @@ message PhysicalExprNode {
     PhysicalScalarSubqueryExprNode scalar_subquery = 22;
 
     PhysicalDynamicFilterNode dynamic_filter = 23;
+
+    PhysicalHigherOrderUdfNode higher_order_udf = 24;
+    PhysicalLambdaExprNode lambda = 25;
+    PhysicalLambdaVariableExprNode lambda_variable = 26;
   }
 }
 
@@ -1015,6 +1049,22 @@ message PhysicalScalarUdfNode {
   datafusion_common.ArrowType return_type = 4;
   bool nullable = 5;
   string return_field_name = 6;
+}
+
+message PhysicalHigherOrderUdfNode {
+  string name = 1;
+  repeated PhysicalExprNode args = 2;
+  optional bytes fun_definition = 3;
+}
+
+message PhysicalLambdaExprNode {
+  repeated string params = 1;
+  PhysicalExprNode body = 2;
+}
+
+message PhysicalLambdaVariableExprNode {
+  uint32 index = 1;
+  datafusion_common.Field field = 2;
 }
 
 message PhysicalAggregateExprNode {
@@ -1181,6 +1231,7 @@ message FileScanExecConf {
 
   optional ProjectionExprs projection_exprs = 13;
   optional bool partitioned_by_file_group = 14;
+  optional Partitioning output_partitioning = 15;
 }
 
 message ParquetScanExecNode {
@@ -1318,10 +1369,16 @@ message JoinOn {
 
 message EmptyExecNode {
   datafusion_common.Schema schema = 1;
+  // Number of output partitions. Absent (0) means a single partition, so that
+  // plans encoded before this field existed decode to the previous default.
+  uint32 partitions = 2;
 }
 
 message PlaceholderRowExecNode {
   datafusion_common.Schema schema = 1;
+  // Number of output partitions. Absent (0) means a single partition, so that
+  // plans encoded before this field existed decode to the previous default.
+  uint32 partitions = 2;
 }
 
 message ProjectionExecNode {

@@ -47,6 +47,7 @@ clap = { version = "4.6.0", features = ["derive", "env"] }
 criterion = { workspace = true, features = ["html_reports"] }
 datafusion = { workspace = true, default-features = true }
 datafusion-common = { workspace = true, default-features = true }
+datafusion-common-runtime = { workspace = true }
 env_logger = { workspace = true }
 futures = { workspace = true }
 libmimalloc-sys = { version = "0.1", optional = true }
@@ -63,7 +64,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tokio-util = { version = "0.7.17" }
 
 [dev-dependencies]
-datafusion-proto = { workspace = true }
+datafusion-proto = { workspace = true, features = ["parquet"] }
 tempfile = { workspace = true }
 
 [[bench]]

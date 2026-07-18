@@ -43,7 +43,7 @@ use crate::filter_pushdown::{
 };
 use crate::metrics::BaselineMetrics;
 use crate::projection::{ProjectionExec, make_with_child};
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -111,24 +111,6 @@ pub struct UnionExec {
 }
 
 impl UnionExec {
-    /// Create a new UnionExec
-    #[deprecated(since = "44.0.0", note = "Use UnionExec::try_new instead")]
-    pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
-        let schema =
-            union_schema(&inputs).expect("UnionExec::new called with empty inputs");
-        // The schema of the inputs and the union schema is consistent when:
-        // - They have the same number of fields, and
-        // - Their fields have same types at the same indices.
-        // Here, we know that schemas are consistent and the call below can
-        // not return an error.
-        let cache = Self::compute_properties(&inputs, schema).unwrap();
-        UnionExec {
-            inputs,
-            metrics: ExecutionPlanMetricsSet::new(),
-            cache: Arc::new(cache),
-        }
-    }
-
     /// Try to create a new UnionExec.
     ///
     /// # Errors
@@ -148,9 +130,7 @@ impl UnionExec {
                 // The schema of the inputs and the union schema is consistent when:
                 // - They have the same number of fields, and
                 // - Their fields have same types at the same indices.
-                // Here, we know that schemas are consistent and the call below can
-                // not return an error.
-                let cache = Self::compute_properties(&inputs, schema).unwrap();
+                let cache = Self::compute_properties(&inputs, schema)?;
                 Ok(Arc::new(UnionExec {
                     inputs,
                     metrics: ExecutionPlanMetricsSet::new(),
@@ -163,6 +143,20 @@ impl UnionExec {
     /// Get inputs of the execution plan
     pub fn inputs(&self) -> &Vec<Arc<dyn ExecutionPlan>> {
         &self.inputs
+    }
+
+    /// Maps a global output partition index to the `(input index, local
+    /// partition index)` of the input that owns it, or `None` if out of range.
+    fn owning_input(&self, partition: usize) -> Option<(usize, usize)> {
+        let mut remaining = partition;
+        for (i, input) in self.inputs.iter().enumerate() {
+            let count = input.output_partitioning().partition_count();
+            if remaining < count {
+                return Some((i, remaining));
+            }
+            remaining -= count;
+        }
+        None
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -189,17 +183,6 @@ impl UnionExec {
             emission_type_from_children(inputs),
             boundedness_from_children(inputs),
         ))
-    }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            inputs: children,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
     }
 }
 
@@ -277,6 +260,17 @@ impl ExecutionPlan for UnionExec {
         UnionExec::try_new(children)
     }
 
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            inputs: children,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
+    }
+
     fn execute(
         &self,
         mut partition: usize,
@@ -319,30 +313,41 @@ impl ExecutionPlan for UnionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        if let Some(partition_idx) = partition {
+            // For a specific partition, compute stats only for the input that
+            // owns it; the other inputs are not needed and are skipped.
+            let targeted = self.owning_input(partition_idx);
+            self.inputs
+                .iter()
+                .enumerate()
+                .map(|(i, _)| match targeted {
+                    Some((target_i, target_partition)) if i == target_i => {
+                        ChildStats::At(Some(target_partition))
+                    }
+                    _ => ChildStats::Skip,
+                })
+                .collect()
+        } else {
+            vec![ChildStats::At(None); self.inputs.len()]
+        }
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
         if let Some(partition_idx) = args.partition() {
             // For a specific partition, find which input it belongs to
-            let mut remaining_idx = partition_idx;
-            for (i, input) in self.inputs.iter().enumerate() {
-                let input_partition_count = input.output_partitioning().partition_count();
-                if remaining_idx < input_partition_count {
-                    // This partition belongs to this input - compute stats
-                    // for the specific child at the specific partition
-                    let child = &self.inputs[i];
-                    return args.compute_child_statistics(child, Some(remaining_idx));
-                }
-                remaining_idx -= input_partition_count;
+            if let Some((target_i, _)) = self.owning_input(partition_idx) {
+                // This partition belongs to this input - return its stats
+                return Ok(Arc::clone(&input_stats[target_i]));
             }
             // If we get here, the partition index is out of bounds
             Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         } else {
-            // Collect overall stats for each input from the cache
-            let stats = self
-                .inputs
-                .iter()
-                .map(|input| args.compute_child_statistics(input, None))
-                .collect::<Result<Vec<_>>>()?;
-            let stats_refs = stats.iter().map(|s| s.as_ref()).collect::<Vec<_>>();
+            let stats_refs = input_stats.iter().map(|s| s.as_ref()).collect::<Vec<_>>();
 
             Ok(Arc::new(Statistics::try_merge_iter_with_ndv_fallback(
                 stats_refs,
@@ -472,7 +477,10 @@ impl ExecutionPlan for UnionExec {
 
 /// Combines multiple input streams by interleaving them.
 ///
-/// This only works if all inputs have the same hash-partitioning.
+/// All inputs must share an identical [`Partitioning::Hash`] or [`Partitioning::Range`] so that
+/// partition `k` covers the same data across every input. Each output partition is the
+/// interleaving of the same-indexed partition from all inputs:
+/// `output[k] = input[0][k] + input[1][k] + ... + input[n-1][k]`
 ///
 /// # Data Flow
 /// ```text
@@ -517,7 +525,7 @@ impl InterleaveExec {
     pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
         assert_or_internal_err!(
             can_interleave(inputs.iter()),
-            "Not all InterleaveExec children have a consistent hash partitioning"
+            "Not all InterleaveExec children have a consistent hash or range partitioning"
         );
         let cache = Self::compute_properties(&inputs)?;
         Ok(InterleaveExec {
@@ -544,17 +552,6 @@ impl InterleaveExec {
             emission_type_from_children(inputs),
             boundedness_from_children(inputs),
         ))
-    }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            inputs: children,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
     }
 }
 
@@ -604,6 +601,17 @@ impl ExecutionPlan for InterleaveExec {
         Ok(Arc::new(InterleaveExec::try_new(children)?))
     }
 
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            inputs: children,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -651,15 +659,19 @@ impl ExecutionPlan for InterleaveExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let stats = self
-            .inputs
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition); self.inputs.len()]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats
             .iter()
-            .map(|input| {
-                args.compute_child_statistics(input, args.partition())
-                    .map(Arc::unwrap_or_clone)
-            })
-            .collect::<Result<Vec<_>>>()?;
+            .map(|s| s.as_ref().clone())
+            .collect::<Vec<_>>();
 
         Ok(Arc::new(Statistics::try_merge_iter_with_ndv_fallback(
             stats.iter(),
@@ -673,8 +685,12 @@ impl ExecutionPlan for InterleaveExec {
     }
 }
 
-/// If all the input partitions have the same Hash partition spec with the first_input_partition
-/// The InterleaveExec is partition aware.
+/// Returns true if all inputs have the same [`Partitioning::Hash`] or [`Partitioning::Range`]
+/// spec, making them safe to interleave. Two inputs are interleave-compatible when partition
+/// `k` covers the identical key range or hash bucket across every input.
+///
+/// Note: compatibility is checked sequentially against the first input, so
+/// `InputDistributionRequirements::co_partitioned` is not needed here.
 ///
 /// It might be too strict here in the case that the input partition specs are compatible but not exactly the same.
 /// For example one input partition has the partition spec Hash('a','b','c') and
@@ -687,7 +703,7 @@ pub fn can_interleave<T: Borrow<Arc<dyn ExecutionPlan>>>(
     };
 
     let reference = first.borrow().output_partitioning();
-    matches!(reference, Partitioning::Hash(_, _))
+    matches!(reference, Partitioning::Hash(_, _) | Partitioning::Range(_))
         && inputs
             .map(|plan| plan.borrow().output_partitioning().clone())
             .all(|partition| partition == *reference)
@@ -829,16 +845,19 @@ mod tests {
     use super::*;
     use crate::collect;
     use crate::repartition::RepartitionExec;
-    use crate::statistics::StatisticsArgs;
+    use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test::exec::StatisticsExec;
     use crate::test::{self, TestMemoryExec};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::DataType;
+    use datafusion_common::SplitPoint;
     use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, ScalarValue};
+    use datafusion_physical_expr::RangePartitioning;
     use datafusion_physical_expr::equivalence::convert_to_orderings;
     use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -1020,7 +1039,8 @@ mod tests {
             Arc::new(StatisticsExec::new(right, schema.as_ref().clone()));
 
         let union = UnionExec::try_new(vec![left, right])?;
-        let stats = union.statistics_with_args(&StatisticsArgs::new())?;
+        let stats =
+            StatisticsContext::new().compute(union.as_ref(), &StatisticsArgs::new())?;
 
         assert_eq!(stats.as_ref(), &expected);
         Ok(())
@@ -1037,7 +1057,8 @@ mod tests {
             Arc::new(StatisticsExec::new(right, schema.as_ref().clone()));
 
         let union = UnionExec::try_new(vec![left, right])?;
-        let stats = union.statistics_with_args(&StatisticsArgs::new())?;
+        let stats =
+            StatisticsContext::new().compute(union.as_ref(), &StatisticsArgs::new())?;
 
         assert_eq!(stats.as_ref(), &expected);
         Ok(())
@@ -1058,7 +1079,8 @@ mod tests {
         )?);
 
         let interleave = InterleaveExec::try_new(vec![left, right])?;
-        let stats = interleave.statistics_with_args(&StatisticsArgs::new())?;
+        let stats =
+            StatisticsContext::new().compute(&interleave, &StatisticsArgs::new())?;
 
         assert_eq!(stats.as_ref(), &expected);
         Ok(())
@@ -1080,8 +1102,8 @@ mod tests {
         )?);
 
         let interleave = InterleaveExec::try_new(vec![left, right])?;
-        let stats = interleave
-            .statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))?;
+        let stats = StatisticsContext::new()
+            .compute(&interleave, &StatisticsArgs::new().with_partition(Some(0)))?;
 
         let expected = Statistics::default()
             .with_num_rows(Precision::Inexact(5))
@@ -1274,6 +1296,124 @@ mod tests {
                 "UnionExec/InterleaveExec requires all inputs to have the same number of fields"
             )
         );
+    }
+
+    fn make_hash_exec(
+        schema: &SchemaRef,
+        hash_cols: Vec<&str>,
+        buckets: usize,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let exprs = hash_cols
+            .iter()
+            .map(|c| col(c, schema))
+            .collect::<Result<Vec<_>>>()?;
+        let base = Arc::new(TestMemoryExec::try_new(&[], Arc::clone(schema), None)?);
+        Ok(Arc::new(RepartitionExec::try_new(
+            base,
+            Partitioning::Hash(exprs, buckets),
+        )?))
+    }
+
+    fn make_range_exec(
+        schema: &SchemaRef,
+        split_values: Vec<i32>,
+        sort_options: SortOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let sort_expr =
+            PhysicalSortExpr::new(col(schema.field(0).name(), schema)?, sort_options);
+        let ordering = LexOrdering::new(vec![sort_expr]).unwrap();
+        let split_points = split_values
+            .into_iter()
+            .map(|v| SplitPoint::new(vec![ScalarValue::Int32(Some(v))]))
+            .collect();
+        let base = Arc::new(TestMemoryExec::try_new(&[], Arc::clone(schema), None)?);
+        Ok(Arc::new(RepartitionExec::try_new(
+            base,
+            Partitioning::Range(RangePartitioning::try_new(ordering, split_points)?),
+        )?))
+    }
+
+    #[test]
+    fn test_can_interleave_matrix() -> Result<()> {
+        let name_column = "name";
+        let age_column = "age";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(name_column, DataType::Int32, true),
+            Field::new(age_column, DataType::Int32, true),
+        ]));
+
+        let ascending = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        struct Case {
+            inputs: Vec<Arc<dyn ExecutionPlan>>,
+            expected: bool,
+            label: &'static str,
+        }
+
+        let cases = vec![
+            // compatible
+            Case {
+                label: "matching hash on single column",
+                expected: true,
+                inputs: vec![
+                    make_hash_exec(&schema, vec![name_column], 3)?,
+                    make_hash_exec(&schema, vec![name_column], 3)?,
+                ],
+            },
+            Case {
+                label: "matching hash on multiple columns",
+                expected: true,
+                inputs: vec![
+                    make_hash_exec(&schema, vec![name_column, age_column], 3)?,
+                    make_hash_exec(&schema, vec![name_column, age_column], 3)?,
+                ],
+            },
+            Case {
+                label: "matching range same splits and order",
+                expected: true,
+                inputs: vec![
+                    make_range_exec(&schema, vec![10, 20], ascending)?,
+                    make_range_exec(&schema, vec![10, 20], ascending)?,
+                ],
+            },
+            // incompatible
+            Case {
+                label: "subset range partition",
+                expected: false,
+                inputs: vec![
+                    make_range_exec(&schema, vec![10, 20], ascending)?,
+                    make_range_exec(&schema, vec![10, 15], ascending)?,
+                ],
+            },
+            Case {
+                label: "range different split points",
+                expected: false,
+                inputs: vec![
+                    make_range_exec(&schema, vec![10, 20], ascending)?,
+                    make_range_exec(&schema, vec![10, 30], ascending)?,
+                ],
+            },
+            Case {
+                label: "mixed range and hash",
+                expected: false,
+                inputs: vec![
+                    make_range_exec(&schema, vec![10, 20], ascending)?,
+                    make_hash_exec(&schema, vec![name_column], 3)?,
+                ],
+            },
+        ];
+
+        for case in cases {
+            assert_eq!(
+                can_interleave(case.inputs.iter()),
+                case.expected,
+                "{}",
+                case.label
+            );
+        }
+        Ok(())
     }
 
     #[test]

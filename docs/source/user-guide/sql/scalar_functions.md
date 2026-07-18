@@ -3248,6 +3248,7 @@ _Alias of [current_date](#current_date)._
 - [array_any_match](#array_any_match)
 - [array_any_value](#array_any_value)
 - [array_append](#array_append)
+- [array_avg](#array_avg)
 - [array_cat](#array_cat)
 - [array_compact](#array_compact)
 - [array_concat](#array_concat)
@@ -3260,6 +3261,7 @@ _Alias of [current_date](#current_date)._
 - [array_except](#array_except)
 - [array_extract](#array_extract)
 - [array_filter](#array_filter)
+- [array_first](#array_first)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
@@ -3309,6 +3311,7 @@ _Alias of [current_date](#current_date)._
 - [list_any_match](#list_any_match)
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
+- [list_avg](#list_avg)
 - [list_cat](#list_cat)
 - [list_compact](#list_compact)
 - [list_concat](#list_concat)
@@ -3321,6 +3324,7 @@ _Alias of [current_date](#current_date)._
 - [list_except](#list_except)
 - [list_extract](#list_extract)
 - [list_filter](#list_filter)
+- [list_first](#list_first)
 - [list_has](#list_has)
 - [list_has_all](#list_has_all)
 - [list_has_any](#list_has_any)
@@ -3480,6 +3484,33 @@ array_append(array, element)
 - list_append
 - array_push_back
 - list_push_back
+
+### `array_avg`
+
+Returns the arithmetic mean (sum divided by count) of the elements of the input array. NULL elements are skipped (per SQL aggregate convention) and excluded from the count. Returns NULL if the input row is NULL, every element is NULL, or the array is empty.
+
+```sql
+array_avg(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_avg([1.0, 2.0, 3.0]);
++----------------------------+
+| array_avg(List([1.0,2.0,3.0])) |
++----------------------------+
+| 2.0                        |
++----------------------------+
+```
+
+#### Aliases
+
+- list_avg
 
 ### `array_cat`
 
@@ -3727,6 +3758,34 @@ array_filter(array, x -> x > 2)
 #### Aliases
 
 - list_filter
+
+### `array_first`
+
+Returns the first element of an array that satisfies the given predicate. Returns null if the array is empty or no element matches. A predicate that returns null for an element is treated as not matching.
+
+```sql
+array_first(array, predicate)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **predicate**: Lambda predicate that returns a boolean. The first element for which it returns true is returned.
+
+#### Example
+
+```sql
+> select array_first([1, 2, 3, 4], x -> x > 2);
++----------------------------------------+
+| array_first([1,2,3,4],x -> x > 2)      |
++----------------------------------------+
+| 3                                      |
++----------------------------------------+
+```
+
+#### Aliases
+
+- list_first
 
 ### `array_has`
 
@@ -4909,6 +4968,10 @@ _Alias of [array_any_value](#array_any_value)._
 
 _Alias of [array_append](#array_append)._
 
+### `list_avg`
+
+_Alias of [array_avg](#array_avg)._
+
 ### `list_cat`
 
 _Alias of [array_concat](#array_concat)._
@@ -4956,6 +5019,10 @@ _Alias of [array_element](#array_element)._
 ### `list_filter`
 
 _Alias of [array_filter](#array_filter)._
+
+### `list_first`
+
+_Alias of [array_first](#array_first)._
 
 ### `list_has`
 
@@ -5704,6 +5771,7 @@ union_tag(union_expression)
 - [cast_to_type](#cast_to_type)
 - [file_row_index](#file_row_index)
 - [get_field](#get_field)
+- [input_file_name](#input_file_name)
 - [try_cast_to_type](#try_cast_to_type)
 - [version](#version)
 - [with_metadata](#with_metadata)
@@ -5957,6 +6025,26 @@ get_field(expression, field_name[, field_name2, ...])
 +--------+
 | 42     |
 +--------+
+```
+
+### `input_file_name`
+
+Returns the path of the input file that produced the current row.
+
+Note: file paths/URIs may be sensitive metadata depending on your environment.
+
+This function is intended to be rewritten at file-scan time (when the file is
+known). If the input file is not known (for example, if this function is
+evaluated outside a file scan, or was not pushed down into one), direct evaluation returns an error.
+
+```sql
+input_file_name()
+```
+
+#### Example
+
+```sql
+SELECT input_file_name() FROM t;
 ```
 
 ### `try_cast_to_type`

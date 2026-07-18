@@ -397,9 +397,9 @@ impl AsyncUpper {
     pub fn new() -> Self {
         Self {
             signature: Signature::new(
-                TypeSignature::Coercible(vec![Coercion::Exact {
-                    desired_type: TypeSignatureClass::Native(logical_string()),
-                }]),
+                TypeSignature::Coercible(vec![Coercion::new_exact(
+                    TypeSignatureClass::Native(logical_string()),
+                )]),
                 Volatility::Volatile,
             ),
         }
@@ -497,9 +497,9 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 #     pub fn new() -> Self {
 #         Self {
 #             signature: Signature::new(
-#                 TypeSignature::Coercible(vec![Coercion::Exact {
-#                     desired_type: TypeSignatureClass::Native(logical_string()),
-#                 }]),
+#                 TypeSignature::Coercible(vec![Coercion::new_exact(
+#                     TypeSignatureClass::Native(logical_string()),
+#                 )]),
 #                 Volatility::Volatile,
 #             ),
 #         }
@@ -1228,6 +1228,36 @@ The `create_udaf` has six arguments to check:
   for the same input.
 - The fifth argument is the function implementation. This is the function that we defined above.
 - The sixth argument is the description of the state, which will by passed between execution stages.
+
+### Returning multiple values from an Aggregate UDF
+
+An aggregate UDF can return a `DataType::Struct` when one aggregate result needs
+to carry multiple values. This is useful for time-windowing extensions that
+need to return metadata such as the window start, window end, and the aggregate
+value together.
+
+Pass the relevant input columns to the aggregate so the accumulator has enough
+information to update and merge state normally in multi-stage aggregate plans.
+For example, rows can be grouped into time buckets with the built-in `date_bin`
+function, while a struct-returning aggregate computes the value and carries
+metadata about each bucket:
+
+```sql
+SELECT
+  augmented_avg(time, value)['window_start'] AS window_start,
+  augmented_avg(time, value)['window_end'] AS window_end,
+  augmented_avg(time, value)['window_duration'] AS window_duration,
+  augmented_avg(time, value)['avg_value'] AS avg_value
+FROM t
+GROUP BY date_bin(INTERVAL '30 seconds', time)
+ORDER BY window_start;
+```
+
+In this pattern `date_bin(...)` assigns rows to a time bucket, while
+`augmented_avg(time, value)` is a normal aggregate UDF whose accumulator stores
+mergeable state such as `window_start`, `window_end`, `sum`, and `count`.
+The aggregate's `evaluate` method returns a `ScalarValue::Struct`, and callers
+can project individual fields from that struct.
 
 ```rust
 

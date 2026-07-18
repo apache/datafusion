@@ -518,7 +518,7 @@ impl OptimizerRule for TopKOptimizerRule {
         if let LogicalPlan::Sort(Sort { expr, input, .. }) = limit.input.as_ref()
             && expr.len() == 1
         {
-            // we found a sort with a single sort expr, replace with a a TopK
+            // we found a sort with a single sort expr, replace with a TopK
             return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                 node: Arc::new(TopKPlanNode {
                     k: fetch,
@@ -708,8 +708,12 @@ impl ExecutionPlan for TopKExec {
         &self.cache
     }
 
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+    fn input_distribution_requirements(
+        &self,
+    ) -> datafusion_physical_plan::InputDistributionRequirements {
+        datafusion_physical_plan::InputDistributionRequirements::new(vec![
+            Distribution::SinglePartition,
+        ])
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

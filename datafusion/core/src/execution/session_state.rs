@@ -349,9 +349,10 @@ impl SessionState {
         let resolved_ref = self.resolve_table_ref(table_ref);
         if self.config.information_schema() && *resolved_ref.schema == *INFORMATION_SCHEMA
         {
-            return Ok(Arc::new(InformationSchemaProvider::new(Arc::clone(
-                &self.catalog_list,
-            ))));
+            return Ok(Arc::new(
+                InformationSchemaProvider::new(Arc::clone(&self.catalog_list))
+                    .with_table_functions(self.table_functions.clone()),
+            ));
         }
 
         self.catalog_list
@@ -444,7 +445,7 @@ impl SessionState {
             )
         })?;
 
-        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+        let recursion_limit = self.config.options().sql_parser.recursion_limit.get();
 
         let mut statements = DFParserBuilder::new(sql)
             .with_dialect(dialect.as_ref())
@@ -492,7 +493,7 @@ impl SessionState {
             )
         })?;
 
-        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+        let recursion_limit = self.config.options().sql_parser.recursion_limit.get();
         let expr = DFParserBuilder::new(sql)
             .with_dialect(dialect.as_ref())
             .with_recursion_limit(recursion_limit)
@@ -2354,13 +2355,11 @@ mod tests {
     use crate::logical_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
     use crate::physical_plan::ExecutionPlan;
     use crate::sql::planner::ContextProvider;
-    use crate::sql::{ResolvedTableReference, TableReference};
     use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_catalog::MemoryCatalogProviderList;
-    use datafusion_common::DFSchema;
-    use datafusion_common::Result;
     use datafusion_common::config::Dialect;
+    use datafusion_common::{DFSchema, ResolvedTableReference, Result, TableReference};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
     use datafusion_expr::HigherOrderUDF;

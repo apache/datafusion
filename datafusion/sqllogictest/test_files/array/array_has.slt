@@ -41,13 +41,15 @@ select array_has([1, null, 2], 3),
 false false
 
 #TODO: array_has_all and array_has_any cannot handle NULL
-#query BBBB
-#select array_has_any([], null),
-#       array_has_any([1, 2, 3], null),
-#       array_has_all([], null),
-#       array_has_all([1, 2, 3], null);
-#----
-#false false false false
+query BB
+select array_has_any([], null),
+       array_has_any([1, 2, 3], null);
+----
+NULL NULL
+
+query error array_has does not support type 'Null'
+select array_has_all([], null),
+       array_has_all([1, 2, 3], null);
 
 query BBBBBBBBBBBB
 select array_has(make_array(1,2), 1),
@@ -892,6 +894,120 @@ NULL
 
 statement ok
 DROP TABLE any_op_test;
+
+
+# -------------------------------------------------------------------------
+# array_has with an array (column) needle -- one needle value per row, which
+# goes through array_has_dispatch_for_array (the cases above use a scalar
+# literal needle and take a different path).
+# -------------------------------------------------------------------------
+
+statement ok
+create table array_has_int_needle (arr int[], needle int) as values
+  ([1, 2, 3], 2),        -- found
+  ([4, 5, 6], 9),        -- not found
+  (NULL, 5),             -- null row
+  ([7, NULL, 9], NULL),  -- null needle
+  ([7, NULL, 9], 7),     -- element null skipped, found
+  ([0, NULL], 0),        -- valid 0 matches
+  ([NULL, 5], 0),        -- null-fill collision: a null slot must not match 0
+  ([], 1),               -- empty
+  ([NULL, NULL], 3);     -- all null
+
+query B
+select array_has(arr, needle) from array_has_int_needle;
+----
+true
+false
+NULL
+NULL
+true
+true
+false
+false
+false
+
+# same over LargeList (i64) offsets
+query B
+select array_has(arrow_cast(arr, 'LargeList(Int32)'), needle) from array_has_int_needle;
+----
+true
+false
+NULL
+NULL
+true
+true
+false
+false
+false
+
+statement ok
+drop table array_has_int_needle;
+
+statement ok
+create table array_has_str_needle (arr text[], needle text) as values
+  (['a', 'bb', 'ccc'], 'bb'),                                  -- inline, found
+  (['short', 'tiny'], 'missing'),                              -- inline, not found
+  (['this_is_a_long_value_xyz'], 'this_is_a_long_value_xyz'),  -- long, found
+  (['prefixAAAA_1111', 'prefixAAAA_2222'], 'prefixAAAA_2222'), -- long shared prefix
+  (['x', NULL, 'y'], 'y'),                                     -- element null skipped
+  ([NULL], ''),                                                -- null slot vs "" -> false
+  (NULL, 'q');                                                 -- null row
+
+query B
+select array_has(arr, needle) from array_has_str_needle;
+----
+true
+false
+true
+true
+true
+false
+NULL
+
+# Utf8View exercises the view-aware fast path
+query B
+select array_has(arrow_cast(arr, 'List(Utf8View)'), arrow_cast(needle, 'Utf8View'))
+from array_has_str_needle;
+----
+true
+false
+true
+true
+true
+false
+NULL
+
+# LargeUtf8 elements
+query B
+select array_has(arrow_cast(arr, 'LargeList(LargeUtf8)'), arrow_cast(needle, 'LargeUtf8'))
+from array_has_str_needle;
+----
+true
+false
+true
+true
+true
+false
+NULL
+
+statement ok
+drop table array_has_str_needle;
+
+# > ROW_CONVERSION_CHUNK_SIZE (512) rows with element nulls exercises the chunked
+# element-null path. The needle equals an element that is always present, so all
+# rows match; the second query shifts the needle out of range, so none do.
+query I
+select count(*) from generate_series(1, 2000) as t(v)
+where array_has(make_array(v % 7, NULL, (v + 2) % 7), v % 7);
+----
+2000
+
+query I
+select count(*) from generate_series(1, 2000) as t(v)
+where array_has(make_array(v % 7, NULL, (v + 2) % 7), v % 7 + 100);
+----
+0
 
 
 include ./cleanup.slt.part

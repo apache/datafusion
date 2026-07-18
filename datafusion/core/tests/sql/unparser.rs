@@ -37,14 +37,22 @@
 
 use std::fs::ReadDir;
 use std::future::Future;
+use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::Result;
+use datafusion::datasource::empty::EmptyTable;
+use datafusion::optimizer::{
+    OptimizerRule, single_distinct_to_groupby::SingleDistinctToGroupBy,
+};
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
+use datafusion_catalog::memory::MemorySchemaProvider;
+use datafusion_catalog::{CatalogProvider, MemoryCatalogProvider, SchemaProvider};
 use datafusion_common::Column;
 use datafusion_expr::Expr;
 use datafusion_sql::unparser::Unparser;
-use datafusion_sql::unparser::dialect::DefaultDialect;
+use datafusion_sql::unparser::dialect::{DefaultDialect, DuckDBDialect};
 use itertools::Itertools;
 use recursive::{set_minimum_stack_size, set_stack_allocation_size};
 
@@ -216,6 +224,392 @@ async fn sort_batches(
         df = df.sort(sort_exprs)?;
     }
     df.collect().await
+}
+
+const ISSUE_22961_QUERY: &str = r#"
+SELECT * FROM
+(
+SELECT
+        item_id,
+        order_id,
+        product_id,
+        quantity,
+        unit_price,
+        quantity * unit_price AS line_total
+    FROM
+        "warehouse"."main"."order_items"
+) oi
+JOIN (
+    SELECT
+        order_id,
+        customer_id,
+        order_date,
+        lower(STATUS) AS STATUS,
+        lower(channel) AS channel,
+        coalesce(discount_pct, 0) AS discount_pct,
+        coalesce(shipping_cost, 0) AS shipping_cost,
+        STATUS IN ('completed', 'shipped') AS is_fulfilled
+    FROM
+        "warehouse"."main"."orders"
+) o USING (order_id)
+JOIN (
+    SELECT
+        p.product_id,
+        p.category_id,
+        p.sku,
+        p.name AS product_name,
+        p.price,
+        p.cost,
+        p.weight_kg,
+        p.is_active,
+        p.stock_qty,
+        round(p.price - p.cost, 2) AS gross_margin,
+        round((p.price - p.cost) / nullif(p.price, 0), 4) AS margin_pct,
+        c.name AS category_name
+    FROM
+        "warehouse"."main"."products" p
+        LEFT JOIN "warehouse"."main"."categories" c USING (category_id)
+) p USING (product_id)
+"#;
+
+fn issue_22961_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+
+    let schema_provider = Arc::new(MemorySchemaProvider::new());
+    schema_provider.register_table(
+        "order_items".to_string(),
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+            Field::new("item_id", DataType::Int32, false),
+            Field::new("order_id", DataType::Int32, true),
+            Field::new("product_id", DataType::Int32, true),
+            Field::new("quantity", DataType::Int32, true),
+            Field::new("unit_price", DataType::Decimal128(10, 2), true),
+        ])))),
+    )?;
+    schema_provider.register_table(
+        "orders".to_string(),
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+            Field::new("order_id", DataType::Int32, false),
+            Field::new("customer_id", DataType::Int32, true),
+            Field::new("order_date", DataType::Date32, true),
+            Field::new("status", DataType::Utf8, true),
+            Field::new("channel", DataType::Utf8, true),
+            Field::new("discount_pct", DataType::Decimal128(5, 2), true),
+            Field::new("shipping_cost", DataType::Decimal128(8, 2), true),
+        ])))),
+    )?;
+    schema_provider.register_table(
+        "products".to_string(),
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+            Field::new("product_id", DataType::Int32, false),
+            Field::new("category_id", DataType::Int32, true),
+            Field::new("sku", DataType::Utf8, true),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("price", DataType::Decimal128(10, 2), true),
+            Field::new("cost", DataType::Decimal128(10, 2), true),
+            Field::new("weight_kg", DataType::Decimal128(6, 3), true),
+            Field::new("is_active", DataType::Boolean, true),
+            Field::new("stock_qty", DataType::Int32, true),
+        ])))),
+    )?;
+    schema_provider.register_table(
+        "categories".to_string(),
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+            Field::new("category_id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("parent_id", DataType::Int32, true),
+            Field::new("display_rank", DataType::Int32, true),
+        ])))),
+    )?;
+
+    let catalog = Arc::new(MemoryCatalogProvider::new());
+    catalog.register_schema("main", schema_provider)?;
+    ctx.register_catalog("warehouse", catalog);
+
+    Ok(ctx)
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_preserves_derived_table_scope() -> Result<()> {
+    let ctx = issue_22961_context()?;
+    let plan = ctx.sql(ISSUE_22961_QUERY).await?.into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert!(!sql.contains(r#""o"."__common_expr_1""#));
+    assert!(!sql.contains(r#""o"."__common_expr_2""#));
+    assert!(sql.contains(
+        r#"ON "oi"."order_id" = "o"."order_id" INNER JOIN (SELECT "p"."product_id""#
+    ));
+
+    Ok(())
+}
+
+// https://github.com/apache/datafusion/issues/23138
+//
+// CSE on `coalesce(discount_pct, 0)` factors a shared CAST into an extra inner
+// projection, so `SubqueryAlias: o` ends up over two stacked projections. When
+// the unparser renders that as nested derived tables it must qualify the
+// pass-through `order_id` with a name in scope at each level -- it must not
+// rebase it to the outer subquery alias `o`, which is not visible inside the
+// inner derived table.
+const ISSUE_23138_QUERY: &str = r#"
+SELECT * FROM
+(
+    SELECT order_id FROM "warehouse"."main"."order_items"
+) oi
+JOIN (
+    SELECT order_id, coalesce(discount_pct, 0) AS discount_pct_2
+    FROM "warehouse"."main"."orders"
+) o USING (order_id)
+"#;
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_qualifies_nested_passthrough_column() -> Result<()> {
+    let ctx = issue_22961_context()?;
+    let plan = ctx.sql(ISSUE_23138_QUERY).await?.into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    // The intermediate derived table has no `o` in scope, so the pass-through
+    // `order_id` must be unqualified there, not rebased to the subquery alias
+    // `o` (which is only the base-table alias one level deeper). The bug emitted
+    // `"o"."order_id"` inside that derived table; the fix emits a bare column.
+    let expected = concat!(
+        r#"SELECT "o"."order_id", "o"."discount_pct_2" "#,
+        r#"FROM "warehouse"."main"."order_items" AS "oi" "#,
+        r#"INNER JOIN (SELECT "order_id", "#,
+        r#"CASE WHEN "__common_expr_1" IS NOT NULL "#,
+        r#"THEN "__common_expr_1" ELSE 0.00 END AS "discount_pct_2" "#,
+        r#"FROM (SELECT CAST("o"."discount_pct" AS DECIMAL(22,2)) "#,
+        r#"AS "__common_expr_1", "o"."order_id" "#,
+        r#"FROM "warehouse"."main"."orders" AS "o")) AS "o" "#,
+        r#"ON "oi"."order_id" = "o"."order_id""#,
+    );
+    assert_eq!(sql, expected);
+
+    assert!(
+        sql.contains(r#"(SELECT "order_id", CASE WHEN"#),
+        "pass-through order_id should be unqualified in derived table: {sql}"
+    );
+    assert!(
+        !sql.contains(r#"(SELECT "o"."order_id", CASE WHEN"#),
+        "derived table must not reference out-of-scope alias o: {sql}"
+    );
+
+    Ok(())
+}
+
+// https://github.com/apache/datafusion/issues/23317
+//
+// `SingleDistinctToGroupBy` rewrites single DISTINCT aggregates into a
+// two-phase aggregate plan. The inner Aggregate defines intermediate fields
+// such as `group_alias_0`, `alias1`, and `alias2`. The unparser must preserve
+// that inner Aggregate as a derived table before the outer Aggregate
+// references those fields.
+//
+// Without `SingleDistinctToGroupBy`, the Aggregate still sits over an unnamed
+// derived Projection. In that SQL scope, base table aliases `cs` and `c` are no
+// longer visible, so aggregate expressions must refer to the derived table's
+// output columns unqualified.
+const ISSUE_23317_QUERY: &str = r#"
+WITH cohort AS (
+    SELECT
+        signup_year,
+        sum(customers) AS customers,
+        sum(revenue) AS revenue
+    FROM
+        (
+            SELECT
+                date_part('year', c.signup_date) AS signup_year,
+                count(DISTINCT cs.customer_id) AS customers,
+                round(sum(cs.total_revenue), 2) AS revenue
+            FROM
+                "warehouse"."main"."sales" cs
+                JOIN "warehouse"."main"."customers" c USING (customer_id)
+            GROUP BY
+                1
+        )
+    GROUP BY
+        signup_year
+)
+SELECT
+    *
+FROM
+    cohort
+"#;
+
+const ISSUE_23317_HAVING_QUERY: &str = r#"
+SELECT
+    date_part('year', c.signup_date) AS signup_year,
+    count(DISTINCT cs.customer_id) AS customers
+FROM
+    "warehouse"."main"."sales" cs
+    JOIN "warehouse"."main"."customers" c USING (customer_id)
+GROUP BY
+    1
+HAVING
+    count(DISTINCT cs.customer_id) > 0
+"#;
+
+const ISSUE_23317_QUALIFY_QUERY: &str = r#"
+SELECT
+    date_part('year', c.signup_date) AS signup_year,
+    count(DISTINCT cs.customer_id) AS customers,
+    row_number() OVER (ORDER BY date_part('year', c.signup_date)) AS rn
+FROM
+    "warehouse"."main"."sales" cs
+    JOIN "warehouse"."main"."customers" c USING (customer_id)
+GROUP BY
+    1
+QUALIFY
+    rn = 1 AND count(DISTINCT cs.customer_id) > 0
+"#;
+
+fn issue_23317_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+
+    let schema_provider = Arc::new(MemorySchemaProvider::new());
+    schema_provider.register_table(
+        "customers".to_string(),
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+            Field::new("customer_id", DataType::Int32, false),
+            Field::new("signup_date", DataType::Date32, true),
+        ])))),
+    )?;
+    schema_provider.register_table(
+        "sales".to_string(),
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+            Field::new("customer_id", DataType::Int32, false),
+            Field::new("total_revenue", DataType::Decimal128(12, 2), true),
+        ])))),
+    )?;
+
+    let catalog = Arc::new(MemoryCatalogProvider::new());
+    catalog.register_schema("main", schema_provider)?;
+    ctx.register_catalog("warehouse", catalog);
+
+    Ok(ctx)
+}
+
+async fn assert_issue_23317_unparsed_sql_plans(
+    ctx: &SessionContext,
+    sql: &str,
+) -> Result<()> {
+    ctx.sql(sql).await?.into_optimized_plan()?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_preserves_nested_aggregate_scope() -> Result<()> {
+    let ctx = issue_23317_context()?;
+    let plan = ctx.sql(ISSUE_23317_QUERY).await?.into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
+
+    assert!(
+        sql.contains(concat!(
+            r#"FROM (SELECT sum("total_revenue") AS "alias2", "#,
+            r#"date_part('year', "signup_date") AS "group_alias_0", "#,
+            r#""customer_id" AS "alias1" "#
+        )),
+        "inner aggregate should define the aliases before the outer aggregate uses them: {sql}",
+    );
+    assert!(
+        !sql.contains(r#"date_part('year', "c"."signup_date") AS "group_alias_0""#),
+        "inner aggregate must not reference out-of-scope alias c: {sql}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_unqualifies_aggregate_input_projection() -> Result<()> {
+    let ctx = issue_23317_context()?;
+    assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
+
+    let plan = ctx.sql(ISSUE_23317_QUERY).await?.into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
+
+    assert!(
+        sql.contains(
+            r#"SELECT date_part('year', "signup_date") AS "signup_year", count(DISTINCT "customer_id") AS "customers", round(sum("total_revenue"), 2) AS "revenue" FROM ("#
+        ),
+        "aggregate expressions should resolve against the derived projection output: {sql}",
+    );
+    assert!(
+        !sql.contains(r#"date_part('year', "c"."signup_date") AS "signup_year""#),
+        "derived aggregate must not reference out-of-scope alias c: {sql}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_having_unqualifies_agg_input() -> Result<()> {
+    let ctx = issue_23317_context()?;
+    assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
+
+    let plan = ctx
+        .sql(ISSUE_23317_HAVING_QUERY)
+        .await?
+        .into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
+
+    assert!(
+        sql.contains(r#"HAVING (count(DISTINCT "customer_id") > 0)"#),
+        "HAVING aggregate should resolve against the derived projection output: {sql}",
+    );
+    assert!(
+        !sql.contains(r#"count(DISTINCT "cs"."customer_id")"#),
+        "HAVING must not reference out-of-scope alias cs: {sql}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_qualify_unqualifies_agg_input() -> Result<()> {
+    let ctx = issue_23317_context()?;
+    assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
+
+    let plan = ctx
+        .sql(ISSUE_23317_QUALIFY_QUERY)
+        .await?
+        .into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
+
+    assert!(
+        sql.contains("QUALIFY"),
+        "expected QUALIFY clause in unparsed SQL: {sql}",
+    );
+    assert!(
+        sql.contains(r#"count(DISTINCT "customer_id") > 0"#),
+        "QUALIFY aggregate should resolve against the derived projection output: {sql}",
+    );
+    assert!(
+        !sql.contains(r#"count(DISTINCT "cs"."customer_id")"#),
+        "QUALIFY must not reference out-of-scope alias cs: {sql}",
+    );
+
+    Ok(())
 }
 
 /// The outcome of running a single roundtrip test.

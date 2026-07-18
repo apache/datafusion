@@ -1853,6 +1853,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn test_create_hashes_with_quality_hash_state() {
         let int_array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
         let str_array: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));

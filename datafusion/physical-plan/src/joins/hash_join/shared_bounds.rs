@@ -37,7 +37,7 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, SharedResult};
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, lit,
+    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, IsNullExpr, lit,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
@@ -255,6 +255,9 @@ pub(crate) struct SharedBuildAccumulator {
     repartition_random_state: SeededRandomState,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
+    /// Null-aware anti join (`NOT IN`). A probe-side NULL must reach the join so its
+    /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
+    null_aware: bool,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -358,6 +361,7 @@ impl SharedBuildAccumulator {
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
+        null_aware: bool,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -404,6 +408,7 @@ impl SharedBuildAccumulator {
             on_right,
             repartition_random_state,
             probe_schema: right_child.schema(),
+            null_aware,
         }
     }
 
@@ -579,7 +584,8 @@ impl SharedBuildAccumulator {
                     if let Some(filter_expr) =
                         combine_membership_and_bounds(membership_expr, bounds_expr)
                     {
-                        self.dynamic_filter.update(filter_expr)?;
+                        self.dynamic_filter
+                            .update(self.null_aware_filter(filter_expr))?;
                     }
                 }
                 PartitionStatus::Pending => {
@@ -685,11 +691,39 @@ impl SharedBuildAccumulator {
                     )?) as Arc<dyn PhysicalExpr>
                 };
 
-                self.dynamic_filter.update(filter_expr)?;
+                self.dynamic_filter
+                    .update(self.null_aware_filter(filter_expr))?;
             }
         }
 
         Ok(())
+    }
+
+    /// Wraps a pushdown filter so a null-aware anti join keeps its probe-side NULL rows.
+    ///
+    /// The build-side predicate drops probe rows whose key is NULL, but `NOT IN` three-valued
+    /// logic needs that NULL to reach the join. OR-ing `probe_key IS NULL` preserves the dynamic
+    /// filter's selectivity for non-NULL rows while letting the NULL through.
+    fn null_aware_filter(
+        &self,
+        filter_expr: Arc<dyn PhysicalExpr>,
+    ) -> Arc<dyn PhysicalExpr> {
+        if !self.null_aware {
+            return filter_expr;
+        }
+        debug_assert_eq!(
+            self.on_right.len(),
+            1,
+            "null_aware anti join must have exactly one probe key"
+        );
+        let probe_key_is_null: Arc<dyn PhysicalExpr> =
+            Arc::new(IsNullExpr::new(Arc::clone(&self.on_right[0])));
+        // Cheap null check first short-circuits before the costlier dynamic filter.
+        Arc::new(BinaryExpr::new(
+            probe_key_is_null,
+            Operator::Or,
+            filter_expr,
+        ))
     }
 }
 
@@ -722,6 +756,7 @@ pub(super) fn make_partitioned_accumulator_for_test(
         on_right: vec![],
         repartition_random_state: SeededRandomState::with_seed(1),
         probe_schema,
+        null_aware: false,
     }
 }
 
@@ -742,6 +777,150 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 mod tests {
     use super::*;
 
+    use arrow::array::{ArrayRef, Int32Array};
+    use datafusion_physical_expr::expressions::{Column, Literal};
+
+    fn test_on_right() -> Vec<PhysicalExprRef> {
+        vec![Arc::new(Column::new("probe_key", 0))]
+    }
+
+    fn test_probe_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![Field::new(
+            "probe_key",
+            DataType::Int32,
+            false,
+        )]))
+    }
+
+    fn test_dynamic_filter(
+        on_right: &[PhysicalExprRef],
+    ) -> Arc<DynamicFilterPhysicalExpr> {
+        Arc::new(DynamicFilterPhysicalExpr::new(on_right.to_vec(), lit(true)))
+    }
+
+    fn make_accumulator_for_test(
+        data: AccumulatedBuildData,
+        on_right: Vec<PhysicalExprRef>,
+    ) -> SharedBuildAccumulator {
+        let dynamic_filter = test_dynamic_filter(&on_right);
+        SharedBuildAccumulator {
+            inner: Mutex::new(AccumulatorState {
+                data,
+                completion: CompletionState::Pending,
+            }),
+            completion_notify: Notify::new(),
+            dynamic_filter,
+            on_right,
+            repartition_random_state: SeededRandomState::with_seed(1),
+            probe_schema: test_probe_schema(),
+            null_aware: false,
+        }
+    }
+
+    fn make_collect_left_accumulator_for_test() -> SharedBuildAccumulator {
+        make_accumulator_for_test(
+            AccumulatedBuildData::CollectLeft {
+                data: PartitionStatus::Pending,
+                reported_count: 0,
+                expected_reports: 1,
+            },
+            test_on_right(),
+        )
+    }
+
+    fn make_partitioned_expr_accumulator_for_test(
+        num_partitions: usize,
+    ) -> SharedBuildAccumulator {
+        make_accumulator_for_test(
+            AccumulatedBuildData::Partitioned {
+                partitions: vec![PartitionStatus::Pending; num_partitions],
+                completed_partitions: 0,
+            },
+            test_on_right(),
+        )
+    }
+
+    fn in_list(values: &[i32]) -> PushdownStrategy {
+        PushdownStrategy::InList(Arc::new(Int32Array::from(values.to_vec())) as ArrayRef)
+    }
+
+    fn bounds(min: i32, max: i32) -> PartitionBounds {
+        PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Int32(Some(min)),
+            ScalarValue::Int32(Some(max)),
+        )])
+    }
+
+    fn no_bounds() -> PartitionBounds {
+        PartitionBounds::new(vec![])
+    }
+
+    fn reported(pushdown: PushdownStrategy, bounds: PartitionBounds) -> PartitionStatus {
+        PartitionStatus::Reported(PartitionData { pushdown, bounds })
+    }
+
+    fn current_expr(acc: &SharedBuildAccumulator) -> PhysicalExprRef {
+        acc.dynamic_filter
+            .current()
+            .expect("dynamic filter current expression should be available")
+    }
+
+    fn in_list_expr(expr: &PhysicalExprRef) -> &InListExpr {
+        expr.downcast_ref::<InListExpr>()
+            .expect("expected InListExpr dynamic filter")
+    }
+
+    fn assert_in_list_column_values(
+        expr: &PhysicalExprRef,
+        expected_column_name: &str,
+        expected_column_index: usize,
+        expected_values: &[i32],
+    ) {
+        let in_list = in_list_expr(expr);
+        let column = in_list
+            .expr()
+            .downcast_ref::<Column>()
+            .expect("expected InListExpr child column");
+        assert_eq!(column.name(), expected_column_name);
+        assert_eq!(column.index(), expected_column_index);
+
+        let actual_values = in_list
+            .list()
+            .iter()
+            .map(|expr| {
+                let literal = expr
+                    .downcast_ref::<Literal>()
+                    .expect("expected InListExpr literal value");
+                match literal.value() {
+                    ScalarValue::Int32(Some(value)) => *value,
+                    value => panic!("expected Int32 in-list value, got {value:?}"),
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual_values, expected_values);
+    }
+
+    fn binary_expr(expr: &PhysicalExprRef) -> &BinaryExpr {
+        expr.downcast_ref::<BinaryExpr>()
+            .expect("expected BinaryExpr dynamic filter")
+    }
+
+    fn case_expr(expr: &PhysicalExprRef) -> &CaseExpr {
+        expr.downcast_ref::<CaseExpr>()
+            .expect("expected CaseExpr dynamic filter")
+    }
+
+    fn assert_literal_bool(expr: &PhysicalExprRef, expected: bool) {
+        let literal = expr
+            .downcast_ref::<Literal>()
+            .expect("expected literal bool dynamic filter");
+        assert_eq!(literal.value(), &ScalarValue::Boolean(Some(expected)));
+    }
+
+    fn assert_top_binary_op(expr: &PhysicalExprRef, expected: Operator) {
+        assert_eq!(binary_expr(expr).op(), &expected);
+    }
+
     fn partitioned_state(acc: &SharedBuildAccumulator) -> (Vec<PartitionStatus>, usize) {
         let guard = acc.inner.lock();
         let AccumulatedBuildData::Partitioned {
@@ -752,6 +931,90 @@ mod tests {
             panic!("expected partitioned accumulator");
         };
         (partitions.clone(), *completed_partitions)
+    }
+
+    #[test]
+    fn collect_left_updates_with_membership_only() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            in_list(&[1, 2, 3]),
+            no_bounds(),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_in_list_column_values(&expr, "probe_key", 0, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn collect_left_updates_with_bounds_only() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            PushdownStrategy::Empty,
+            bounds(10, 20),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_top_binary_op(&expr, Operator::And);
+    }
+
+    #[test]
+    fn collect_left_empty_build_data_does_not_update_filter() {
+        let acc = make_collect_left_accumulator_for_test();
+        let initial_generation = acc.dynamic_filter.snapshot_generation();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            PushdownStrategy::Empty,
+            no_bounds(),
+        )))
+        .unwrap();
+
+        assert_eq!(
+            acc.dynamic_filter.snapshot_generation(),
+            initial_generation,
+            "empty CollectLeft input must not update with a no-op filter"
+        );
+        let expr = current_expr(&acc);
+        assert_literal_bool(&expr, true);
+    }
+
+    #[test]
+    fn partitioned_one_real_partition_with_rest_empty_skips_case() {
+        let acc = make_partitioned_expr_accumulator_for_test(3);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(PushdownStrategy::Empty, no_bounds()),
+            reported(in_list(&[2]), no_bounds()),
+            reported(PushdownStrategy::Empty, no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        in_list_expr(&expr);
+        assert!(expr.downcast_ref::<CaseExpr>().is_none());
+    }
+
+    #[test]
+    fn partitioned_canceled_unknown_partitions_keep_unknown_routes_permissive() {
+        let acc = make_partitioned_expr_accumulator_for_test(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            PartitionStatus::CanceledUnknown,
+            reported(PushdownStrategy::Empty, no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        let case = case_expr(&expr);
+        assert_eq!(case.when_then_expr().len(), 1);
+        assert_literal_bool(&case.when_then_expr()[0].1, false);
+        assert_literal_bool(
+            case.else_expr().expect("expected permissive fallback"),
+            true,
+        );
     }
 
     // Regression guard for the build-report lifecycle fix: on `Drop`, a stream
