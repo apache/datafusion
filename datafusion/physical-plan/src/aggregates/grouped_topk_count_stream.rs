@@ -41,7 +41,7 @@
 //!    mark any group with `count + remaining < heap.min` dead. Dead
 //!    groups' rows are ignored for the rest of the scan.
 //! 4. **Emit**: convert the top-K live groups back to arrow columns via
-//!    the [`RowConverter`] stored inside [`GroupValues`].
+//!    the [`arrow::row::RowConverter`] stored inside [`GroupValues`].
 //!
 //! # Correctness
 //!
@@ -151,6 +151,12 @@ pub struct GroupedTopKCountAggregateStream {
     /// This partition's index in `shared`'s slot vector — must be stable
     /// for the life of the stream (see the shared state's slot design).
     partition: usize,
+    /// Last-known threshold, refreshed only during `sweep()`. Reading
+    /// this per-row from the gate check is O(1); recomputing it per row
+    /// (allocating `local_top_k` + acquiring the shared mutex) was the
+    /// perf catastrophe that made release builds worse than baseline
+    /// by several orders of magnitude.
+    cached_threshold: Option<i64>,
 
     // --- Metrics ---------------------------------------------------------
     baseline_metrics: BaselineMetrics,
@@ -239,6 +245,7 @@ impl GroupedTopKCountAggregateStream {
             output_schema,
             shared,
             partition,
+            cached_threshold: None,
             rows_seen: 0,
             total_input_rows,
             rows_since_sweep: 0,
@@ -317,7 +324,15 @@ impl GroupedTopKCountAggregateStream {
                 self.groups_seen.add(1);
                 // ⛔ new-group gate — only armed after warmup and only
                 //    when we can bound remaining rows.
-                if self.pruning_armed() {
+                // Read the cached threshold — never recompute per row.
+                // The cache is refreshed only during `sweep()`, so a
+                // stale value here is an UPPER bound on the true global
+                // K-th and is therefore safe (we err on the side of
+                // admitting groups, never rejecting a true top-K
+                // candidate).
+                if self.pruning_armed()
+                    && let Some(threshold) = self.cached_threshold
+                {
                     let contrib = per_row_contrib.contribution_at(row);
                     // remaining bound uses rows_seen so far, which does
                     // NOT include this batch's rows yet. This is loose
@@ -328,43 +343,27 @@ impl GroupedTopKCountAggregateStream {
                     } else {
                         remaining as i64
                     };
-                    if let Some(threshold) = self.current_threshold() {
-                        // Even with contrib+remaining fully allocated to
-                        // this group, can it beat the heap min?
-                        // For DESC: keep large counts → threshold =
-                        //   heap.min_count. Reject if contrib + remaining
-                        //   ≤ threshold.
-                        // For ASC: keep small counts → threshold =
-                        //   heap.max_count. Reject if contrib + 0 ≥
-                        //   threshold (any additional contrib only makes
-                        //   it worse for ASC).
-                        // Ties are ambiguous — a group whose max/min
-                        // matches the current K-th value MIGHT be one of
-                        // the top-K survivors (tie-break by any means).
-                        // We stay conservative and admit ties.
-                        let can_reach = if self.descending {
-                            contrib.saturating_add(remaining_i64) >= threshold
-                        } else {
-                            // For ASC, the smallest possible final count
-                            // for a new group first appearing here is
-                            // `contrib` — remaining rows only make it
-                            // bigger. So we reject only when contrib is
-                            // strictly greater than the K-th smallest.
-                            contrib <= threshold
-                        };
-                        if !can_reach {
-                            // Gate rejects this row. We must ALSO undo
-                            // the intern's insertion of this key —
-                            // otherwise the map keeps a dangling
-                            // group_index. But GroupValues has no
-                            // rollback. Workaround: allocate the count
-                            // slot but immediately mark dead — the
-                            // sweep and emit both skip dead groups.
-                            self.counts.push(0);
-                            self.dead.push(true);
-                            self.groups_gated.add(1);
-                            continue;
-                        }
+                    // For DESC: keep large counts → threshold = heap.min.
+                    //   Reject if contrib + remaining < threshold. Admit
+                    //   ties (>= threshold) — the group MIGHT tie-break
+                    //   into the K survivors.
+                    // For ASC: keep small counts → reject only when
+                    //   contrib is strictly > K-th smallest, since
+                    //   remaining rows only push count up.
+                    let can_reach = if self.descending {
+                        contrib.saturating_add(remaining_i64) >= threshold
+                    } else {
+                        contrib <= threshold
+                    };
+                    if !can_reach {
+                        // Gate rejects this row. `GroupValues::intern`
+                        // has no rollback, so allocate the count slot
+                        // but mark it dead — sweep and emit skip dead
+                        // slots.
+                        self.counts.push(0);
+                        self.dead.push(true);
+                        self.groups_gated.add(1);
+                        continue;
                     }
                 }
                 self.counts.push(0);
@@ -386,19 +385,17 @@ impl GroupedTopKCountAggregateStream {
         Ok(())
     }
 
-    /// Whether the new-group gate + sweep are active. Requires:
-    ///   * a known `total_input_rows` bound so we can compute
-    ///     `remaining_rows_upper()`, and
-    ///   * *some* usable threshold — either a locally-populated top-K
-    ///     (>= WARMUP_GROUPS ≥ K live groups) or a global threshold
-    ///     already published by another partition to the shared state.
+    /// Whether the new-group gate + sweep are active. Requires only a
+    /// known `total_input_rows` bound (so `remaining_rows_upper()` is
+    /// meaningful). The actual "has the threshold been established"
+    /// gate happens at the call site, which reads
+    /// `self.cached_threshold`.
+    ///
+    /// **Perf**: this is called per row and MUST stay O(1). An earlier
+    /// version consulted the mutex-guarded shared pool here and drove
+    /// release Q33 into a multi-minute hang.
     fn pruning_armed(&self) -> bool {
-        if self.total_input_rows.is_none() {
-            return false;
-        }
-        let local_ready = self.live_group_count() >= WARMUP_GROUPS.max(self.limit);
-        let shared_ready = self.shared.as_ref().and_then(|s| s.threshold()).is_some();
-        local_ready || shared_ready
+        self.total_input_rows.is_some()
     }
 
     fn live_group_count(&self) -> usize {
@@ -496,7 +493,12 @@ impl GroupedTopKCountAggregateStream {
     fn sweep(&mut self) {
         self.sweeps_performed.add(1);
         self.rows_since_sweep = 0;
-        let Some(threshold) = self.current_threshold() else {
+        // Refresh the threshold cache. This is the ONLY place that
+        // calls `current_threshold()` (which allocates + acquires the
+        // shared mutex), so the cost is bounded to one refresh per
+        // `SWEEP_INTERVAL_ROWS` batch instead of one per row.
+        self.cached_threshold = self.current_threshold();
+        let Some(threshold) = self.cached_threshold else {
             return;
         };
         let remaining = self.remaining_rows_upper();

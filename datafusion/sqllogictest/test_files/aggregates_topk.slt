@@ -708,12 +708,15 @@ b 3
 ## `exactly_one` group expression for this path.
 ##
 
+# All (url, ts) pairs have count=1 (unique), so use secondary sort keys
+# to get deterministic tie-break.
 query TII
-select url, ts, count(*) from hits group by url, ts order by count(*) desc limit 3;
+select url, ts, count(*) from hits group by url, ts
+    order by count(*) desc, url asc nulls last, ts asc limit 3;
 ----
-a 5 1
+a 1 1
+a 2 1
 a 3 1
-a 4 1
 
 # EXPLAIN: the multi-column FinalPartitioned aggregate now carries lim=[3]
 query TT
