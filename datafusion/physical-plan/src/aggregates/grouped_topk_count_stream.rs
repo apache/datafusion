@@ -406,14 +406,22 @@ impl GroupedTopKCountAggregateStream {
         self.counts.len()
     }
 
-    /// Upper bound on rows still to arrive. If `total_input_rows` is
-    /// `None`, returns `u64::MAX` — pruning callers should further gate
-    /// on `pruning_armed()` before acting, since `u64::MAX + count >
-    /// threshold` always, so nothing would be pruned anyway.
+    /// Upper bound on rows still to arrive.
     ///
-    /// Never underflows: if `rows_seen > total_input_rows` (stats were
-    /// underestimates) we return 0.
+    /// - After `input_done`, we've observed every row this partition
+    ///   will ever see → `remaining = 0` unconditionally. This is the
+    ///   critical case for the end-of-input sweep: without it, stale
+    ///   `total_input_rows` estimates from statistics (which for
+    ///   `count(*)` at Final commonly over-estimate by 5-10× because
+    ///   Partial doesn't have per-column NDV) would keep `remaining`
+    ///   inflated and no group would ever be pruned.
+    /// - Otherwise, if `total_input_rows` is `Some`, subtract
+    ///   `rows_seen`.
+    /// - If `None`, return `u64::MAX`.
     fn remaining_rows_upper(&self) -> u64 {
+        if self.input_done {
+            return 0;
+        }
         match self.total_input_rows {
             Some(total) => total.saturating_sub(self.rows_seen),
             None => u64::MAX,
