@@ -607,14 +607,17 @@ fn test_simplify_with_cycle_count(
 #[test]
 fn test_simplify_log() {
     // Log(c3, 1) ===> 0
+    // The zero carries log's Float64 return type, not the base's Int64, so the
+    // simplified literal stays consistent with the plan schema (issue #22581).
     {
         let expr = log(col("c3_non_null"), lit(1));
-        test_simplify(expr, lit(0i64));
+        test_simplify(expr, lit(0.0f64));
     }
     // Log(c3, c3) ===> 1
+    // The one carries log's Float64 return type, not the base's Int64 (#22581).
     {
         let expr = log(col("c3_non_null"), col("c3_non_null"));
-        let expected = lit(1i64);
+        let expected = lit(1.0f64);
         test_simplify(expr, expected);
     }
     // Log(c3, Power(c3, c4)) ===> c4
