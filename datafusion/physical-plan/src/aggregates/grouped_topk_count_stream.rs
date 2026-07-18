@@ -185,21 +185,23 @@ impl GroupedTopKCountAggregateStream {
         // Precision::Exact/Inexact both give us a bound to work with; on
         // Absent we set None and skip pruning.
         //
-        // NOTE: `partition_statistics` is being migrated to
-        // `StatisticsContext::compute` (issue #22730), but that requires a
-        // context threaded down from the query planner which is not
-        // currently plumbed into `AggregateExec::execute_typed`. Suppress
-        // the deprecation until the migration lands.
-        #[expect(
-            deprecated,
-            reason = "StatisticsContext migration is pending — see comment above"
-        )]
-        let total_input_rows = match agg.input.partition_statistics(Some(partition)) {
-            Ok(stats) => match stats.num_rows {
-                Precision::Exact(n) | Precision::Inexact(n) => Some(n as u64),
-                Precision::Absent => None,
-            },
-            Err(_) => None,
+        // Use `StatisticsContext::compute` which walks the plan tree and
+        // is the current recommended API. The deprecated
+        // `partition_statistics` default returns `Statistics::new_unknown`
+        // for every node without an override, so it would report Absent
+        // even when e.g. `RepartitionExec::statistics_from_inputs` would
+        // give us a real `Precision::Inexact`.
+        let total_input_rows = {
+            use crate::statistics::{StatisticsArgs, StatisticsContext};
+            let ctx = StatisticsContext::new();
+            let args = StatisticsArgs::new().with_partition(Some(partition));
+            match ctx.compute(agg.input.as_ref(), &args) {
+                Ok(stats) => match stats.num_rows {
+                    Precision::Exact(n) | Precision::Inexact(n) => Some(n as u64),
+                    Precision::Absent => None,
+                },
+                Err(_) => None,
+            }
         };
 
         let groups_seen =
