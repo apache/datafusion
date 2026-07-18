@@ -59,9 +59,30 @@ impl LimitedBatchCoalescer {
         target_batch_size: usize,
         fetch: Option<usize>,
     ) -> Self {
+        Self::new_with_bypass_threshold(schema, target_batch_size, fetch, None)
+    }
+
+    /// Create a new `BatchCoalescer` with an explicit bypass threshold.
+    ///
+    /// # Arguments
+    /// - `bypass_threshold` - batches strictly larger than this size are
+    ///   passed through without buffering. If `None`, defaults to
+    ///   `target_batch_size / 2`, matching legacy behavior. Lower values
+    ///   push us toward the "Binary Compaction" strategy from the SIGMOD
+    ///   2025 paper "Data Chunk Compaction in Vectorized Execution" —
+    ///   with alpha around 128, only very small chunks are coalesced,
+    ///   avoiding memcpy for medium-sized batches from CROs like hash
+    ///   joins.
+    pub fn new_with_bypass_threshold(
+        schema: SchemaRef,
+        target_batch_size: usize,
+        fetch: Option<usize>,
+        bypass_threshold: Option<usize>,
+    ) -> Self {
+        let bypass = bypass_threshold.unwrap_or(target_batch_size / 2);
         Self {
             inner: BatchCoalescer::new(schema, target_batch_size)
-                .with_biggest_coalesce_batch_size(Some(target_batch_size / 2)),
+                .with_biggest_coalesce_batch_size(Some(bypass)),
             total_rows: 0,
             fetch,
             finished: false,
@@ -223,6 +244,58 @@ mod tests {
             .with_fetch(Some(7))
             .with_expected_output_sizes(vec![7])
             .run()
+    }
+
+    /// With an explicit low bypass threshold (Binary Compaction alpha),
+    /// mid-sized input batches should pass through unchanged instead of
+    /// being merged into `target_batch_size` chunks. Verifies the plumbing
+    /// of `LimitedBatchCoalescer::new_with_bypass_threshold`.
+    #[test]
+    fn test_coalesce_low_bypass_threshold_passthrough() {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::UInt32, true)]));
+        let mid_batch = uint32_batch(0..32);
+        let mut coalescer = LimitedBatchCoalescer::new_with_bypass_threshold(
+            Arc::clone(&schema),
+            /* target_batch_size = */ 128,
+            None,
+            /* bypass_threshold  = */ Some(16),
+        );
+        // Two mid-sized batches, each 32 > bypass_threshold=16.
+        coalescer.push_batch(mid_batch.clone()).unwrap();
+        coalescer.push_batch(mid_batch.clone()).unwrap();
+        coalescer.finish().unwrap();
+
+        let mut out = Vec::new();
+        while let Some(b) = coalescer.next_completed_batch() {
+            out.push(b.num_rows());
+        }
+        // Both batches must have bypassed the coalescer; no 64-row merge.
+        assert_eq!(out, vec![32, 32]);
+    }
+
+    /// With the default (bypass_threshold = target/2) the same input
+    /// gets merged as before — sanity check that legacy behavior is
+    /// preserved when the new parameter is `None`.
+    #[test]
+    fn test_coalesce_default_bypass_threshold_merges() {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::UInt32, true)]));
+        let mid_batch = uint32_batch(0..32);
+        let mut coalescer = LimitedBatchCoalescer::new(
+            Arc::clone(&schema),
+            /* target_batch_size = */ 128,
+            None,
+        );
+        coalescer.push_batch(mid_batch.clone()).unwrap();
+        coalescer.push_batch(mid_batch.clone()).unwrap();
+        coalescer.finish().unwrap();
+
+        let mut out = Vec::new();
+        while let Some(b) = coalescer.next_completed_batch() {
+            out.push(b.num_rows());
+        }
+        // Default bypass = target/2 = 64. 32 <= 64 so both batches get
+        // merged into a single 64-row output.
+        assert_eq!(out, vec![64]);
     }
 
     /// Test for [`LimitedBatchCoalescer`]

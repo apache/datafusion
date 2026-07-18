@@ -114,6 +114,10 @@ name = "spill_io"
 
 [[bench]]
 harness = false
+name = "coalesce_threshold"
+
+[[bench]]
+harness = false
 name = "sort_preserving_merge"
 
 [[bench]]
