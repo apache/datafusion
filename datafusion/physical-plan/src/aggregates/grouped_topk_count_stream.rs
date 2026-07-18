@@ -300,6 +300,7 @@ impl GroupedTopKCountAggregateStream {
             // Grow counts / dead if this is a NEW group index.
             if group_idx >= self.counts.len() {
                 debug_assert_eq!(group_idx, self.counts.len());
+                self.groups_seen.add(1);
                 // ⛔ new-group gate — only armed after warmup and only
                 //    when we can bound remaining rows.
                 if self.pruning_armed() {
@@ -354,7 +355,6 @@ impl GroupedTopKCountAggregateStream {
                 }
                 self.counts.push(0);
                 self.dead.push(false);
-                self.groups_seen.add(1);
             }
             if self.dead[group_idx] {
                 continue;
