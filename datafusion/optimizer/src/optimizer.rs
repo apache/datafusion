@@ -483,6 +483,42 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
     })
 }
 
+/// Rewrites the direct children of `plan` and refreshes its schema when a
+/// rewritten child has a different schema.
+///
+/// Logical plan nodes cache schemas derived from their children. This helper
+/// keeps that cache in sync for owned-plan rewrites without recomputing the
+/// schema when a child was transformed but its schema stayed the same.
+pub(crate) fn map_children_recompute_schema_if_needed<F>(
+    plan: LogicalPlan,
+    f: F,
+) -> Result<Transformed<LogicalPlan>>
+where
+    F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
+{
+    let child_schemas = plan
+        .inputs()
+        .into_iter()
+        .map(|child| Arc::clone(child.schema()))
+        .collect::<Vec<_>>();
+
+    let transformed_plan = plan.map_children(f)?;
+    if !transformed_plan.transformed {
+        return Ok(transformed_plan);
+    }
+
+    let schema_changed = child_schemas
+        .iter()
+        .zip(transformed_plan.data.inputs())
+        .any(|(old_schema, child)| old_schema.as_ref() != child.schema().as_ref());
+
+    if schema_changed {
+        transformed_plan.map_data(LogicalPlan::recompute_schema)
+    } else {
+        Ok(transformed_plan)
+    }
+}
+
 /// Rewrites a plan tree in place using `Arc::make_mut` for
 /// copy-on-write semantics on `Arc<LogicalPlan>` children.
 ///
@@ -902,6 +938,46 @@ mod tests {
         assert!(changed);
         assert_eq!(plan.schema().fields().len(), 2);
         assert!(plan.schema().has_column_with_unqualified_name("a"));
+        Ok(())
+    }
+
+    #[test]
+    fn owned_rewrite_recomputes_parent_schema_when_child_schema_changes() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(lit(true))?
+            .build()?;
+
+        let transformed =
+            super::map_children_recompute_schema_if_needed(plan, |child| {
+                let child = LogicalPlanBuilder::from(child)
+                    .project([col("a")])?
+                    .build()?;
+                Ok(Transformed::yes(child))
+            })?;
+
+        assert!(transformed.transformed);
+        assert_eq!(transformed.data.schema().fields().len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn owned_rewrite_preserves_parent_schema_when_child_schema_is_unchanged() -> Result<()>
+    {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(lit(true))?
+            .build()?;
+        let original_schema = Arc::clone(plan.schema());
+
+        let transformed =
+            super::map_children_recompute_schema_if_needed(plan, |child| {
+                let child = LogicalPlanBuilder::from(child)
+                    .project([col("a"), col("b"), col("c")])?
+                    .build()?;
+                Ok(Transformed::yes(child))
+            })?;
+
+        assert!(transformed.transformed);
+        assert_eq!(transformed.data.schema().as_ref(), original_schema.as_ref());
         Ok(())
     }
 
