@@ -700,6 +700,29 @@ where
 /// Wraps on overflow, matching the `sum` aggregate and [`arrow::compute::sum`].
 /// [`avg_sum_data_type`] gives `S` enough headroom that this is unreachable for
 /// any realistic row count.
+#[inline]
+fn add_avg_sum<I, S>(sum: S::Native, value: I::Native) -> S::Native
+where
+    I: ArrowNumericType,
+    S: ArrowNumericType,
+    I::Native: Into<S::Native>,
+{
+    sum.add_wrapping(value.into())
+}
+
+/// Subtracts a value already represented by AVG's widened state. The wrapping
+/// operation is intentional because `avg_sum_data_type` reserves the
+/// documented headroom for the intermediate sum.
+#[inline]
+fn sub_avg_sum<I, S>(sum: S::Native, value: I::Native) -> S::Native
+where
+    I: ArrowNumericType,
+    S: ArrowNumericType,
+    I::Native: Into<S::Native>,
+{
+    sum.sub_wrapping(value.into())
+}
+
 fn decimal_sum_as<I, S>(values: &PrimitiveArray<I>) -> Option<S::Native>
 where
     I: DecimalType + ArrowNumericType,
@@ -714,11 +737,11 @@ where
     let mut sum = S::Native::default();
     if values.null_count() == 0 {
         for value in values.values() {
-            sum = sum.add_wrapping((*value).into());
+            sum = add_avg_sum::<I, S>(sum, *value);
         }
     } else {
         for value in values.iter().flatten() {
-            sum = sum.add_wrapping(value.into());
+            sum = add_avg_sum::<I, S>(sum, value);
         }
     }
 
@@ -738,7 +761,7 @@ where
 
         if let Some(x) = decimal_sum_as::<I, S>(values) {
             let v = self.sum.unwrap_or_default();
-            self.sum = Some(v.add_wrapping(x));
+            self.sum = Some(add_avg_sum::<S, S>(v, x));
         }
         Ok(())
     }
@@ -774,7 +797,7 @@ where
         // sums are summed
         if let Some(x) = sum(states[1].as_primitive::<S>()) {
             let v = self.sum.unwrap_or_default();
-            self.sum = Some(v.add_wrapping(x));
+            self.sum = Some(add_avg_sum::<S, S>(v, x));
         }
         Ok(())
     }
@@ -783,7 +806,7 @@ where
         self.count -= (values.len() - values.null_count()) as u64;
         if let Some(x) = decimal_sum_as::<I, S>(values) {
             let v = self.sum.unwrap_or_default();
-            self.sum = Some(v.sub_wrapping(x));
+            self.sum = Some(sub_avg_sum::<S, S>(v, x));
         }
         Ok(())
     }
@@ -990,7 +1013,7 @@ where
             |group_index, new_value| {
                 // SAFETY: group_index is guaranteed to be in bounds
                 let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
-                *sum = sum.add_wrapping(new_value.into());
+                *sum = add_avg_sum::<I, S>(*sum, new_value);
 
                 self.counts[group_index] += 1;
             },
@@ -1090,7 +1113,7 @@ where
             |group_index, new_value: <S as ArrowPrimitiveType>::Native| {
                 // SAFETY: group_index is guaranteed to be in bounds
                 let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
-                *sum = sum.add_wrapping(new_value);
+                *sum = add_avg_sum::<S, S>(*sum, new_value);
             },
         );
 
