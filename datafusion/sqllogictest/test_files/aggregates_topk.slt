@@ -583,5 +583,125 @@ drop table values_table;
 statement ok
 drop table ids;
 
+##
+## count(*) / count(col) ORDER BY count(...) DESC/ASC LIMIT K
+##
+## Dandandan proposed this optimization in PR #21580 (2026-04-17) and the
+## Microsoft "Zippy" VLDB'24 paper shows 2-10x gains on similar patterns.
+## Implementation lives in GroupedTopKCountAggregateStream.
+##
+
+statement ok
+CREATE TABLE hits(url varchar, ts bigint) AS VALUES
+('a', 1),  ('a', 2),  ('a', 3),  ('a', 4),  ('a', 5),
+('b', 1),  ('b', 2),  ('b', 3),
+('c', 1),  ('c', 2),  ('c', 3),  ('c', 4),
+('d', 1),  ('d', 2),
+('e', 1),
+(NULL, 1);
+
+# baseline: optimizer disabled — plan uses SortExec above the aggregate
+statement ok
+set datafusion.optimizer.enable_topk_aggregation = false;
+
+query TT
+explain select url, count(*) from hits group by url order by count(*) desc limit 3;
+----
+logical_plan
+01)Sort: count(*) DESC NULLS FIRST, fetch=3
+02)--Projection: hits.url, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[hits.url]], aggr=[[count(Int64(1))]]
+04)------TableScan: hits projection=[url]
+physical_plan
+01)SortPreservingMergeExec: [count(*)@1 DESC], fetch=3
+02)--ProjectionExec: expr=[url@0 as url, count(Int64(1))@1 as count(*)]
+03)----SortExec: TopK(fetch=3), expr=[count(Int64(1))@1 DESC], preserve_partitioning=[true]
+04)------AggregateExec: mode=FinalPartitioned, gby=[url@0 as url], aggr=[count(Int64(1))]
+05)--------RepartitionExec: partitioning=Hash([url@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[url@0 as url], aggr=[count(Int64(1))]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# baseline result
+query TI
+select url, count(*) from hits group by url order by count(*) desc limit 3;
+----
+a 5
+c 4
+b 3
+
+statement ok
+set datafusion.optimizer.enable_topk_aggregation = true;
+
+# with the optimizer enabled, the FinalPartitioned aggregate is marked lim=[3]
+# so the count-topk stream can select K without the parent SortExec doing so.
+# The physical shape still contains SortPreservingMerge / SortExec because
+# the plan-level rewrite preserves them; the aggregate itself now shortcuts.
+query TT
+explain select url, count(*) from hits group by url order by count(*) desc limit 3;
+----
+logical_plan
+01)Sort: count(*) DESC NULLS FIRST, fetch=3
+02)--Projection: hits.url, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[hits.url]], aggr=[[count(Int64(1))]]
+04)------TableScan: hits projection=[url]
+physical_plan
+01)SortPreservingMergeExec: [count(*)@1 DESC], fetch=3
+02)--ProjectionExec: expr=[url@0 as url, count(Int64(1))@1 as count(*)]
+03)----SortExec: TopK(fetch=3), expr=[count(Int64(1))@1 DESC], preserve_partitioning=[true]
+04)------AggregateExec: mode=FinalPartitioned, gby=[url@0 as url], aggr=[count(Int64(1))], lim=[3]
+05)--------RepartitionExec: partitioning=Hash([url@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[url@0 as url], aggr=[count(Int64(1))]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# same result with the optimizer enabled
+query TI
+select url, count(*) from hits group by url order by count(*) desc limit 3;
+----
+a 5
+c 4
+b 3
+
+# ORDER BY count ASC LIMIT K — pick the K smallest
+query TI
+select url, count(*) from hits group by url order by count(*) asc limit 3;
+----
+NULL 1
+e 1
+d 2
+
+# LIMIT > number of distinct groups: emit all groups, still ordered by count.
+# Secondary ORDER BY url so the two groups with count=1 sort deterministically.
+query TI
+select url, count(*) from hits group by url order by count(*) desc, url asc nulls last limit 100;
+----
+a 5
+c 4
+b 3
+d 2
+e 1
+NULL 1
+
+# count(col) — NULL rows in `ts` should NOT contribute to the count.
+# 'a' has 5 non-NULL ts, 'b' 3, ... same as count(*) here because our data
+# has no NULL ts for the non-NULL urls.
+query TI
+select url, count(ts) from hits group by url order by count(ts) desc limit 3;
+----
+a 5
+c 4
+b 3
+
+# DISTINCT count is NOT eligible for this optimization; verify it still
+# works (falls through to standard hash aggregate + SortExec)
+query TI
+select url, count(distinct ts) from hits group by url order by count(distinct ts) desc limit 3;
+----
+a 5
+c 4
+b 3
+
+statement ok
+drop table hits;
+
 statement ok
 drop table traces;

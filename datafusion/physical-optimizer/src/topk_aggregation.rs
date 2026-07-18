@@ -25,8 +25,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::aggregates::LimitOptions;
-use datafusion_physical_plan::aggregates::{AggregateExec, topk_types_supported};
+use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode, LimitOptions};
+use datafusion_physical_plan::aggregates::{is_topk_count_pattern, topk_types_supported};
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -52,43 +52,52 @@ impl TopKAggregation {
         let (group_key, group_key_alias) =
             aggr.group_expr().expr().iter().exactly_one().ok()?;
         let kt = group_key.data_type(&aggr.input().schema()).ok()?;
-        let vt = if let Some((field, _)) = aggr.get_minmax_desc() {
-            field.data_type().clone()
-        } else {
-            kt.clone()
-        };
-        if !topk_types_supported(&kt, &vt) {
-            return None;
-        }
+
         if aggr.filter_expr().iter().any(|e| e.is_some()) {
             return None;
         }
 
-        // Check if this is ordering by an aggregate function (MIN/MAX)
-        if let Some((field, desc)) = aggr.get_minmax_desc() {
-            // ensure the sort direction matches aggregate function
+        // Three supported shapes:
+        //   1. MIN/MAX single-aggregate: ORDER BY MIN(x) / MAX(x)
+        //   2. GROUP-BY-only distinct-like: no aggregates, ORDER BY the group key
+        //   3. count(*)/count(col): ORDER BY count(...)  (Final/Single mode only)
+        let limit_options = if let Some((field, desc)) = aggr.get_minmax_desc() {
+            let vt = field.data_type().clone();
+            if !topk_types_supported(&kt, &vt) {
+                return None;
+            }
             if desc != order_desc {
                 return None;
             }
-            // ensure the sort is on the same field as the aggregate output
             if order_by != field.name() {
                 return None;
             }
+            LimitOptions::new_with_order(limit, order_desc)
         } else if aggr.aggr_expr().is_empty() {
-            // This is a GROUP BY without aggregates, check if ordering is on the group key itself
+            if !topk_types_supported(&kt, &kt) {
+                return None;
+            }
             if order_by != group_key_alias {
                 return None;
             }
+            LimitOptions::new_with_order(limit, order_desc)
+        } else if let Some(count_field) = is_topk_count_pattern(aggr)
+            && matches!(
+                aggr.mode(),
+                AggregateMode::Final
+                    | AggregateMode::FinalPartitioned
+                    | AggregateMode::Single
+                    | AggregateMode::SinglePartitioned
+            )
+            && order_by == count_field.name()
+        {
+            LimitOptions::new_count(limit, order_desc)
         } else {
-            // Has aggregates but not MIN/MAX, or doesn't DISTINCT
             return None;
-        }
+        };
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = AggregateExec::with_new_limit_options(
-            aggr,
-            Some(LimitOptions::new_with_order(limit, order_desc)),
-        );
+        let new_aggr = AggregateExec::with_new_limit_options(aggr, Some(limit_options));
         Some(Arc::new(new_aggr))
     }
 

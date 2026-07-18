@@ -149,6 +149,7 @@ use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
     aggregate_stream::AggregateStream,
     grouped_hash_stream::GroupedHashAggregateStream,
+    grouped_topk_count_stream::GroupedTopKCountAggregateStream,
     grouped_topk_stream::GroupedTopKAggregateStream,
     hash_stream::{FinalHashAggregateStream, PartialHashAggregateStream},
     ordered_final_stream::OrderedFinalAggregateStream,
@@ -205,6 +206,7 @@ mod aggregate_hash_table;
 mod aggregate_stream;
 pub mod group_values;
 mod grouped_hash_stream;
+mod grouped_topk_count_stream;
 mod grouped_topk_stream;
 mod hash_stream;
 pub mod order;
@@ -224,6 +226,13 @@ mod topk;
 /// ```text
 pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
     is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
+}
+
+/// Free-function alias for [`AggregateExec::get_count_topk_field`] used by
+/// the physical optimizer. Returns the output field of a non-distinct
+/// `count(*)`/`count(col)` aggregate that is a candidate for TopK.
+pub fn is_topk_count_pattern(agg: &AggregateExec) -> Option<FieldRef> {
+    agg.get_count_topk_field()
 }
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
@@ -688,6 +697,11 @@ enum StreamType {
     /// Used for grouped aggregation with LIMIT / ordering, where the stream keeps
     /// only the top groups required by the query.
     GroupedPriorityQueue(GroupedTopKAggregateStream),
+    /// Grouped TopK aggregate stream specialized for `count(*)` / `count(col)`.
+    /// Wraps the standard hash aggregate to preserve correctness for
+    /// additive aggregates while emitting only the top-K rows and applying a
+    /// new-group insertion gate. See [`GroupedTopKCountAggregateStream`].
+    GroupedTopKCount(GroupedTopKCountAggregateStream),
 }
 
 impl From<StreamType> for SendableRecordBatchStream {
@@ -702,6 +716,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
+            StreamType::GroupedTopKCount(stream) => Box::pin(stream),
         }
     }
 }
@@ -788,6 +803,28 @@ enum DynamicFilterAggregateType {
     Max,
 }
 
+/// Which flavour of TopK aggregation the plan is asking for.
+///
+/// This drives stream selection inside [`AggregateExec::execute_typed`]:
+/// - [`TopKKind::MinMaxOrDistinct`] uses the capacity-K [`PriorityMap`] path
+///   (safe because MIN/MAX are idempotent under partition merge and DISTINCT
+///   has no accumulator state to lose)
+/// - [`TopKKind::Count`] requires an unbounded hash table (COUNT is additive
+///   so a group we drop today may accumulate more rows tomorrow) with a
+///   separate bookkeeping heap for emit-time top-K selection
+///
+/// [`PriorityMap`]: crate::aggregates::topk::priority_map::PriorityMap
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TopKKind {
+    /// MIN/MAX aggregate over a single column, or GROUP-BY-only DISTINCT.
+    /// Handled by [`GroupedTopKAggregateStream`].
+    #[default]
+    MinMaxOrDistinct,
+    /// `count(*)`/`count(col)` aggregate. Handled by
+    /// [`GroupedTopKCountAggregateStream`], only enabled at Final/Single mode.
+    Count,
+}
+
 /// Configuration for limit-based optimizations in aggregation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LimitOptions {
@@ -796,6 +833,8 @@ pub struct LimitOptions {
     /// Optional ordering direction (true = descending, false = ascending)
     /// This is used for TopK aggregation to maintain a priority queue with the correct ordering
     pub descending: Option<bool>,
+    /// Which TopK stream flavour to use. See [`TopKKind`].
+    pub kind: TopKKind,
 }
 
 impl LimitOptions {
@@ -804,6 +843,7 @@ impl LimitOptions {
         Self {
             limit,
             descending: None,
+            kind: TopKKind::MinMaxOrDistinct,
         }
     }
 
@@ -812,6 +852,17 @@ impl LimitOptions {
         Self {
             limit,
             descending: Some(descending),
+            kind: TopKKind::MinMaxOrDistinct,
+        }
+    }
+
+    /// Create a new LimitOptions for `count(*)`/`count(col)` TopK aggregation.
+    /// Only valid at Final/Single aggregate mode; see [`TopKKind::Count`].
+    pub fn new_count(limit: usize, descending: bool) -> Self {
+        Self {
+            limit,
+            descending: Some(descending),
+            kind: TopKKind::Count,
         }
     }
 
@@ -821,6 +872,10 @@ impl LimitOptions {
 
     pub fn descending(&self) -> Option<bool> {
         self.descending
+    }
+
+    pub fn kind(&self) -> TopKKind {
+        self.kind
     }
 }
 
@@ -1155,9 +1210,48 @@ impl AggregateExec {
         if let Some(config) = self.limit_options
             && !self.is_unordered_unfiltered_group_by_distinct()
         {
-            return Ok(StreamType::GroupedPriorityQueue(
-                GroupedTopKAggregateStream::new(self, context, partition, config.limit)?,
-            ));
+            match config.kind {
+                TopKKind::MinMaxOrDistinct => {
+                    return Ok(StreamType::GroupedPriorityQueue(
+                        GroupedTopKAggregateStream::new(
+                            self,
+                            context,
+                            partition,
+                            config.limit,
+                        )?,
+                    ));
+                }
+                TopKKind::Count => {
+                    // COUNT is additive under partition merge, so the capacity-K
+                    // `PriorityMap` is unsafe here (a group dropped early can
+                    // still accumulate enough rows to reach top-K).
+                    //
+                    // The dedicated [`GroupedTopKCountAggregateStream`] wires an
+                    // unbounded hash aggregate to a top-K bookkeeping heap and
+                    // gates new-group insertion on a `remaining < heap.min`
+                    // check. It handles Final/Single mode; other modes fall
+                    // through to the standard hash path (the optimizer only
+                    // marks Final/Single, so this branch is a safety net).
+                    if matches!(
+                        self.mode,
+                        AggregateMode::Final
+                            | AggregateMode::FinalPartitioned
+                            | AggregateMode::Single
+                            | AggregateMode::SinglePartitioned
+                    ) {
+                        return Ok(StreamType::GroupedTopKCount(
+                            GroupedTopKCountAggregateStream::new(
+                                self,
+                                context,
+                                partition,
+                                config.limit,
+                                config.descending.unwrap_or(true),
+                            )?,
+                        ));
+                    }
+                    // fallthrough to standard path
+                }
+            }
         }
 
         // Select the stream type based on the query shape and configuration.
@@ -1315,6 +1409,33 @@ impl AggregateExec {
     pub fn get_minmax_desc(&self) -> Option<(FieldRef, bool)> {
         let agg_expr = self.aggr_expr.iter().exactly_one().ok()?;
         agg_expr.get_minmax_desc()
+    }
+
+    /// If this aggregate is a single, non-distinct `count(*)` or `count(col)`
+    /// call, return the output [`FieldRef`] of that count aggregate. Otherwise
+    /// return `None`.
+    ///
+    /// Used by the `TopKAggregation` optimizer to detect the pattern
+    /// `SELECT g, count(*) FROM t GROUP BY g ORDER BY count(*) DESC LIMIT K`.
+    pub fn get_count_topk_field(&self) -> Option<FieldRef> {
+        let agg_expr = self.aggr_expr.iter().exactly_one().ok()?;
+        if agg_expr.is_distinct() {
+            return None;
+        }
+        // Reject filtered aggregates: `count(x) FILTER (WHERE …)` cannot be
+        // pruned with the same monotonic-count reasoning
+        if self
+            .filter_expr
+            .iter()
+            .any(|f| f.as_ref().map(|_| true).unwrap_or(false))
+        {
+            return None;
+        }
+        if agg_expr.fun().name().eq_ignore_ascii_case("count") {
+            Some(agg_expr.field())
+        } else {
+            None
+        }
     }
 
     /// true, if this Aggregate has a group-by with no required or explicit ordering,
