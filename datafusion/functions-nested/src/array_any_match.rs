@@ -252,7 +252,7 @@ mod tests {
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
         Expr, HigherOrderReturnFieldArgs, HigherOrderUDFImpl, ValueOrLambda, col,
-        execution_props::{ExecutionProps, SubqueryContext},
+        execution_props::{ExecutionProps, PhysicalPlanningContext},
         expr::{HigherOrderFunction, LambdaVariable},
         lambda, lit,
     };
@@ -290,7 +290,7 @@ mod tests {
             )),
             &schema,
             &ExecutionProps::new(),
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         )?
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),
@@ -324,7 +324,7 @@ mod tests {
             )),
             &schema,
             &ExecutionProps::new(),
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         )?
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),

@@ -161,30 +161,34 @@ impl ExecutionProps {
     }
 }
 
-/// Per-plan context used by the physical planner when creating physical
+/// Context used while converting a logical plan subtree into a physical plan.
+///
+/// Unlike [`ExecutionProps`], which applies to the overall planning and
+/// execution of a query, this context can differ between recursively planned
+/// subtrees. It currently carries the state needed to create physical
 /// expressions for [`Expr::ScalarSubquery`] nodes that read from a shared
 /// [`ScalarSubqueryResults`] container.
 ///
-/// The physical planner builds this from the set of uncorrelated scalar
-/// subqueries it has scheduled for execution. It is then passed explicitly
+/// The physical planner builds this context from the set of uncorrelated scalar
+/// subqueries it has scheduled for a subtree. It is then passed explicitly
 /// through `create_physical_expr` so that function can find the slot index for
 /// each [`Subquery`].
 ///
-/// An empty [`SubqueryContext`] (the [`Default`]) is what every
+/// An empty [`PhysicalPlanningContext`] (the [`Default`]) is what every
 /// non-physical-planner caller passes; if such a caller encounters a scalar
 /// subquery, `create_physical_expr` returns a `not_impl_err`.
 ///
 /// [`Expr::ScalarSubquery`]: crate::Expr::ScalarSubquery
 /// [`Subquery`]: crate::logical_plan::Subquery
 #[derive(Clone, Debug, Default)]
-pub struct SubqueryContext {
+pub struct PhysicalPlanningContext {
     indexes: HashMap<crate::logical_plan::Subquery, SubqueryIndex>,
     results: ScalarSubqueryResults,
 }
 
-impl SubqueryContext {
-    /// Create a [`SubqueryContext`] from an index map and a shared results
-    /// container. The index map must use the same indices as slots in
+impl PhysicalPlanningContext {
+    /// Create a [`PhysicalPlanningContext`] from an index map and a shared
+    /// results container. The index map must use the same indices as slots in
     /// `results`.
     pub fn new(
         indexes: HashMap<crate::logical_plan::Subquery, SubqueryIndex>,

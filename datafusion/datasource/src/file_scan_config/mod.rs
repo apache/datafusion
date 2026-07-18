@@ -1655,7 +1655,7 @@ mod tests {
     fn test_split_groups_by_statistics() -> Result<()> {
         use chrono::TimeZone;
         use datafusion_common::DFSchema;
-        use datafusion_expr::execution_props::{ExecutionProps, SubqueryContext};
+        use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
         use object_store::{ObjectMeta, path::Path};
 
         struct File {
@@ -1869,7 +1869,7 @@ mod tests {
                             &expr,
                             &DFSchema::try_from(Arc::clone(&table_schema))?,
                             &ExecutionProps::default(),
-                            &SubqueryContext::default(),
+                            &PhysicalPlanningContext::default(),
                         )
                     })
                     .collect::<Result<Vec<_>>>()?,
@@ -2238,7 +2238,7 @@ mod tests {
         use datafusion_common::DFSchema;
         use datafusion_expr::{
             col,
-            execution_props::{ExecutionProps, SubqueryContext},
+            execution_props::{ExecutionProps, PhysicalPlanningContext},
         };
 
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -2257,7 +2257,7 @@ mod tests {
                     &expr,
                     &df_schema,
                     &exec_props,
-                    &SubqueryContext::default(),
+                    &PhysicalPlanningContext::default(),
                 )
                 .unwrap()
             })

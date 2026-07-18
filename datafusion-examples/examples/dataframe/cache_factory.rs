@@ -29,7 +29,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::session_state::CacheFactory;
 use datafusion::execution::{SessionState, SessionStateBuilder};
-use datafusion::logical_expr::execution_props::SubqueryContext;
+use datafusion::logical_expr::execution_props::PhysicalPlanningContext;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };
@@ -147,7 +147,7 @@ impl ExtensionPlanner for CacheNodePlanner {
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
-        _subquery_ctx: &SubqueryContext,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(cache_node) = node.as_any().downcast_ref::<CacheNode>() {
             assert_eq!(logical_inputs.len(), 1, "Inconsistent number of inputs");

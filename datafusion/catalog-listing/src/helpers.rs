@@ -33,7 +33,7 @@ use arrow::{
     datatypes::{DataType, Field},
     record_batch::RecordBatch,
 };
-use datafusion_expr::execution_props::{ExecutionProps, SubqueryContext};
+use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use log::{debug, trace};
@@ -328,8 +328,12 @@ pub fn filter_partitioned_file(
 
     let filter = utils::conjunction(filters.iter().cloned()).unwrap_or_else(|| lit(true));
     let props = ExecutionProps::new();
-    let expr =
-        create_physical_expr(&filter, df_schema, &props, &SubqueryContext::default())?;
+    let expr = create_physical_expr(
+        &filter,
+        df_schema,
+        &props,
+        &PhysicalPlanningContext::default(),
+    )?;
 
     // Since we're only operating on a single file, our batch and resulting "array" holds only one
     // value indicating if the input file matches the provided filters

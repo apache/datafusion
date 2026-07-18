@@ -81,7 +81,7 @@ use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::execution_props::{
-    ScalarSubqueryResults, SubqueryContext, SubqueryIndex,
+    PhysicalPlanningContext, ScalarSubqueryResults, SubqueryIndex,
 };
 use datafusion_expr::expr::{
     Alias, GroupingSet, NullTreatment, WindowFunction, WindowFunctionParams,
@@ -138,18 +138,18 @@ pub trait PhysicalPlanner: Send + Sync {
     ///
     /// `input_dfschema`: the logical plan schema for evaluating `expr`
     ///
-    /// `subquery_ctx`: the [`SubqueryContext`] used to resolve
+    /// `planning_ctx`: the [`PhysicalPlanningContext`] used to resolve
     /// `Expr::ScalarSubquery` nodes. During physical planning the planner
     /// threads the context of the plan currently being converted to a physical
     /// plan (for example into [`ExtensionPlanner::plan_extension`], which
     /// should forward it here). Callers creating physical expressions outside
-    /// of a plan should pass `&SubqueryContext::default()`.
+    /// of a plan should pass `&PhysicalPlanningContext::default()`.
     fn create_physical_expr(
         &self,
         expr: &Expr,
         input_dfschema: &DFSchema,
         session_state: &SessionState,
-        subquery_ctx: &SubqueryContext,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Arc<dyn PhysicalExpr>>;
 }
 
@@ -167,8 +167,8 @@ pub trait ExtensionPlanner {
     /// `node` and wants to delegate the planning to another
     /// [`ExtensionPlanner`].
     ///
-    /// `subquery_ctx` is the [`SubqueryContext`] of the plan currently being
-    /// converted to a physical plan. Forward it to
+    /// `planning_ctx` is the [`PhysicalPlanningContext`] of the plan subtree
+    /// currently being converted to a physical plan. Forward it to
     /// [`PhysicalPlanner::create_physical_expr`] when creating this node's
     /// physical expressions so that scalar subqueries resolve against the same
     /// subquery state as the rest of the plan.
@@ -179,7 +179,7 @@ pub trait ExtensionPlanner {
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
-        subquery_ctx: &SubqueryContext,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
 
     /// Create a physical plan for a [`LogicalPlan::TableScan`].
@@ -219,7 +219,7 @@ pub trait ExtensionPlanner {
     ///         _logical_inputs: &[&LogicalPlan],
     ///         _physical_inputs: &[Arc<dyn ExecutionPlan>],
     ///         _session_state: &SessionState,
-    ///         _subquery_ctx: &SubqueryContext,
+    ///         _planning_ctx: &PhysicalPlanningContext,
     ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     ///         Ok(None)
     ///     }
@@ -229,7 +229,7 @@ pub trait ExtensionPlanner {
     ///         _planner: &dyn PhysicalPlanner,
     ///         scan: &TableScan,
     ///         _session_state: &SessionState,
-    ///         _subquery_ctx: &SubqueryContext,
+    ///         _planning_ctx: &PhysicalPlanningContext,
     ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     ///         // Check if this is your custom table source
     ///         if scan.source.is::<MyCustomTableSource>() {
@@ -254,7 +254,7 @@ pub trait ExtensionPlanner {
         _planner: &dyn PhysicalPlanner,
         _scan: &TableScan,
         _session_state: &SessionState,
-        _subquery_ctx: &SubqueryContext,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(None)
     }
@@ -315,13 +315,13 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
         expr: &Expr,
         input_dfschema: &DFSchema,
         session_state: &SessionState,
-        subquery_ctx: &SubqueryContext,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         create_physical_expr(
             expr,
             input_dfschema,
             session_state.execution_props(),
-            subquery_ctx,
+            planning_ctx,
         )
     }
 }
@@ -443,9 +443,9 @@ impl DefaultPhysicalPlanner {
     /// collected, planned as separate physical plans, and each assigned an
     /// index in a shared [`ScalarSubqueryResults`] container that will hold its
     /// result at execution time. The index map and shared results container are
-    /// registered in [`ExecutionProps`] so that [`create_physical_expr`] can
-    /// convert `Expr::ScalarSubquery` into [`ScalarSubqueryExpr`] nodes that
-    /// read from that container.
+    /// stored in a [`PhysicalPlanningContext`] and passed explicitly to
+    /// [`create_physical_expr`] so it can convert `Expr::ScalarSubquery` into
+    /// [`ScalarSubqueryExpr`] nodes that read from that container.
     ///
     /// The resulting physical plan is wrapped in a [`ScalarSubqueryExec`] node
     /// that executes those subquery plans before any data flows through the
@@ -487,22 +487,22 @@ impl DefaultPhysicalPlanner {
                     .create_initial_plan_inner(
                         logical_plan,
                         session_state,
-                        &SubqueryContext::default(),
+                        &PhysicalPlanningContext::default(),
                     )
                     .await;
             }
 
-            // Build a `SubqueryContext` that carries the index map and shared
-            // results container into calls that create physical expressions.
-            // The context is threaded explicitly through physical planning
-            // rather than being stashed in `ExecutionProps`, so that the planner does not need
-            // a mutable `SessionState` and external callers of
-            // `create_physical_expr` are unaffected.
+            // Build a `PhysicalPlanningContext` that carries the index map and
+            // shared results container into calls that create physical expressions.
+            // The context is threaded explicitly through physical planning rather
+            // than being stashed in `ExecutionProps`, so the planner does not need
+            // a mutable `SessionState` and each recursively planned subtree receives
+            // the correct context.
             let results = ScalarSubqueryResults::new(links.len());
-            let subquery_ctx = SubqueryContext::new(index_map, results.clone());
+            let planning_ctx = PhysicalPlanningContext::new(index_map, results.clone());
 
             let plan = self
-                .create_initial_plan_inner(logical_plan, session_state, &subquery_ctx)
+                .create_initial_plan_inner(logical_plan, session_state, &planning_ctx)
                 .await?;
             Ok(Arc::new(ScalarSubqueryExec::new(plan, links, results)))
         })
@@ -514,7 +514,7 @@ impl DefaultPhysicalPlanner {
         &self,
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
-        subquery_ctx: &SubqueryContext,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // DFS the tree to flatten it into a Vec.
         // This will allow us to build the Physical Plan from the leaves up
@@ -566,7 +566,7 @@ impl DefaultPhysicalPlanner {
 
         // Spawning tasks which will traverse leaf up to the root.
         let tasks = flat_tree_leaf_indices.into_iter().map(|index| {
-            self.task_helper(index, Arc::clone(&flat_tree), session_state, subquery_ctx)
+            self.task_helper(index, Arc::clone(&flat_tree), session_state, planning_ctx)
         });
         let mut outputs = futures::stream::iter(tasks)
             .buffer_unordered(max_concurrency)
@@ -595,7 +595,7 @@ impl DefaultPhysicalPlanner {
         leaf_starter_index: usize,
         flat_tree: Arc<Vec<LogicalNode<'a>>>,
         session_state: &'a SessionState,
-        subquery_ctx: &'a SubqueryContext,
+        planning_ctx: &'a PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // We always start with a leaf, so can ignore status and pass empty children
         let mut node = flat_tree.get(leaf_starter_index).ok_or_else(|| {
@@ -607,7 +607,7 @@ impl DefaultPhysicalPlanner {
             .map_logical_node_to_physical(
                 node.node,
                 session_state,
-                subquery_ctx,
+                planning_ctx,
                 ChildrenContainer::None,
             )
             .await?;
@@ -625,7 +625,7 @@ impl DefaultPhysicalPlanner {
                         .map_logical_node_to_physical(
                             node.node,
                             session_state,
-                            subquery_ctx,
+                            planning_ctx,
                             ChildrenContainer::One(plan),
                         )
                         .await?;
@@ -665,7 +665,7 @@ impl DefaultPhysicalPlanner {
                         .map_logical_node_to_physical(
                             node.node,
                             session_state,
-                            subquery_ctx,
+                            planning_ctx,
                             children,
                         )
                         .await?;
@@ -682,7 +682,7 @@ impl DefaultPhysicalPlanner {
         &self,
         node: &LogicalPlan,
         session_state: &SessionState,
-        subquery_ctx: &SubqueryContext,
+        planning_ctx: &PhysicalPlanningContext,
         children: ChildrenContainer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let execution_props = session_state.execution_props();
@@ -722,7 +722,7 @@ impl DefaultPhysicalPlanner {
                         }
 
                         maybe_plan = planner
-                            .plan_table_scan(self, scan, session_state, subquery_ctx)
+                            .plan_table_scan(self, scan, session_state, planning_ctx)
                             .await?;
                     }
 
@@ -753,7 +753,7 @@ impl DefaultPhysicalPlanner {
                                     expr,
                                     schema,
                                     execution_props,
-                                    subquery_ctx,
+                                    planning_ctx,
                                 )
                             })
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
@@ -1018,7 +1018,7 @@ impl DefaultPhysicalPlanner {
                             e,
                             logical_schema,
                             execution_props,
-                            subquery_ctx,
+                            planning_ctx,
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -1126,7 +1126,7 @@ impl DefaultPhysicalPlanner {
                     logical_input_schema,
                     &physical_input_schema,
                     execution_props,
-                    subquery_ctx,
+                    planning_ctx,
                 )?;
 
                 let agg_filter = aggr_expr
@@ -1137,7 +1137,7 @@ impl DefaultPhysicalPlanner {
                             logical_input_schema,
                             &physical_input_schema,
                             execution_props,
-                            subquery_ctx,
+                            planning_ctx,
                         )
                         .build()
                         .map(lowered_aggregate_to_tuple)
@@ -1235,7 +1235,7 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Projection(Projection { input, expr, .. }) => self
                 .create_project_physical_exec_with_props(
                     execution_props,
-                    subquery_ctx,
+                    planning_ctx,
                     children.one()?,
                     input,
                     expr,
@@ -1249,7 +1249,7 @@ impl DefaultPhysicalPlanner {
                     predicate,
                     input_dfschema,
                     execution_props,
-                    subquery_ctx,
+                    planning_ctx,
                 )?;
 
                 let input_schema = input.schema();
@@ -1312,7 +1312,7 @@ impl DefaultPhysicalPlanner {
                     partitioning_scheme,
                     input_dfschema,
                     execution_props,
-                    subquery_ctx,
+                    planning_ctx,
                 )?;
                 Arc::new(RepartitionExec::try_new(
                     physical_input,
@@ -1328,7 +1328,7 @@ impl DefaultPhysicalPlanner {
                     expr,
                     input_dfschema,
                     execution_props,
-                    subquery_ctx,
+                    planning_ctx,
                 )?;
                 let Some(ordering) = LexOrdering::new(sort_exprs) else {
                     return internal_err!(
@@ -1458,7 +1458,7 @@ impl DefaultPhysicalPlanner {
                             LogicalPlan::Projection(Projection { input, expr, .. }),
                         ) => self.create_project_physical_exec_with_props(
                             execution_props,
-                            subquery_ctx,
+                            planning_ctx,
                             physical_left,
                             input,
                             expr,
@@ -1472,7 +1472,7 @@ impl DefaultPhysicalPlanner {
                             LogicalPlan::Projection(Projection { input, expr, .. }),
                         ) => self.create_project_physical_exec_with_props(
                             execution_props,
-                            subquery_ctx,
+                            planning_ctx,
                             physical_right,
                             input,
                             expr,
@@ -1544,13 +1544,13 @@ impl DefaultPhysicalPlanner {
                             l,
                             left_df_schema,
                             execution_props,
-                            subquery_ctx,
+                            planning_ctx,
                         )?;
                         let r = create_physical_expr(
                             r,
                             right_df_schema,
                             execution_props,
-                            subquery_ctx,
+                            planning_ctx,
                         )?;
                         Ok((l, r))
                     })
@@ -1652,7 +1652,7 @@ impl DefaultPhysicalPlanner {
                             expr,
                             &filter_df_schema,
                             execution_props,
-                            subquery_ctx,
+                            planning_ctx,
                         )?;
                         let column_indices = join_utils::JoinFilter::build_column_indices(
                             left_field_indices,
@@ -1773,13 +1773,13 @@ impl DefaultPhysicalPlanner {
                             lhs_logical,
                             left_df_schema,
                             execution_props,
-                            subquery_ctx,
+                            planning_ctx,
                         )?;
                         let on_right = create_physical_expr(
                             rhs_logical,
                             right_df_schema,
                             execution_props,
-                            subquery_ctx,
+                            planning_ctx,
                         )?;
 
                         Arc::new(PiecewiseMergeJoinExec::try_new(
@@ -1851,7 +1851,7 @@ impl DefaultPhysicalPlanner {
                 if let Some((input, expr)) = new_project {
                     self.create_project_physical_exec_with_props(
                         execution_props,
-                        subquery_ctx,
+                        planning_ctx,
                         join,
                         input,
                         expr,
@@ -1894,7 +1894,7 @@ impl DefaultPhysicalPlanner {
                             &logical_input,
                             &children,
                             session_state,
-                            subquery_ctx,
+                            planning_ctx,
                         )
                         .await?;
                 }
@@ -1957,7 +1957,7 @@ impl DefaultPhysicalPlanner {
         input_dfschema: &DFSchema,
         input_schema: &Schema,
         execution_props: &ExecutionProps,
-        subquery_ctx: &SubqueryContext,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> Result<PhysicalGroupBy> {
         if group_expr.len() == 1 {
             match &group_expr[0] {
@@ -1967,7 +1967,7 @@ impl DefaultPhysicalPlanner {
                         input_dfschema,
                         input_schema,
                         execution_props,
-                        subquery_ctx,
+                        planning_ctx,
                     )
                 }
                 Expr::GroupingSet(GroupingSet::Cube(exprs)) => create_cube_physical_expr(
@@ -1975,7 +1975,7 @@ impl DefaultPhysicalPlanner {
                     input_dfschema,
                     input_schema,
                     execution_props,
-                    subquery_ctx,
+                    planning_ctx,
                 ),
                 Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
                     create_rollup_physical_expr(
@@ -1983,7 +1983,7 @@ impl DefaultPhysicalPlanner {
                         input_dfschema,
                         input_schema,
                         execution_props,
-                        subquery_ctx,
+                        planning_ctx,
                     )
                 }
                 expr => Ok(PhysicalGroupBy::new_single(vec![tuple_err((
@@ -1991,7 +1991,7 @@ impl DefaultPhysicalPlanner {
                         expr,
                         input_dfschema,
                         execution_props,
-                        subquery_ctx,
+                        planning_ctx,
                     ),
                     physical_name(expr),
                 ))?])),
@@ -2010,7 +2010,7 @@ impl DefaultPhysicalPlanner {
                                 e,
                                 input_dfschema,
                                 execution_props,
-                                subquery_ctx,
+                                planning_ctx,
                             ),
                             physical_name(e),
                         ))
@@ -2036,7 +2036,7 @@ fn merge_grouping_set_physical_expr(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     execution_props: &ExecutionProps,
-    subquery_ctx: &SubqueryContext,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<PhysicalGroupBy> {
     let num_groups = grouping_sets.len();
     let mut all_exprs: Vec<Expr> = vec![];
@@ -2051,7 +2051,7 @@ fn merge_grouping_set_physical_expr(
                 expr,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?);
 
             null_exprs.push(get_null_physical_expr_pair(
@@ -2059,7 +2059,7 @@ fn merge_grouping_set_physical_expr(
                 input_dfschema,
                 input_schema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?);
         }
     }
@@ -2090,7 +2090,7 @@ fn create_cube_physical_expr(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     execution_props: &ExecutionProps,
-    subquery_ctx: &SubqueryContext,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<PhysicalGroupBy> {
     let num_of_exprs = exprs.len();
     let num_groups = num_of_exprs * num_of_exprs;
@@ -2106,14 +2106,14 @@ fn create_cube_physical_expr(
             input_dfschema,
             input_schema,
             execution_props,
-            subquery_ctx,
+            planning_ctx,
         )?);
 
         all_exprs.push(get_physical_expr_pair(
             expr,
             input_dfschema,
             execution_props,
-            subquery_ctx,
+            planning_ctx,
         )?)
     }
 
@@ -2139,7 +2139,7 @@ fn create_rollup_physical_expr(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     execution_props: &ExecutionProps,
-    subquery_ctx: &SubqueryContext,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<PhysicalGroupBy> {
     let num_of_exprs = exprs.len();
 
@@ -2156,14 +2156,14 @@ fn create_rollup_physical_expr(
             input_dfschema,
             input_schema,
             execution_props,
-            subquery_ctx,
+            planning_ctx,
         )?);
 
         all_exprs.push(get_physical_expr_pair(
             expr,
             input_dfschema,
             execution_props,
-            subquery_ctx,
+            planning_ctx,
         )?)
     }
 
@@ -2190,10 +2190,10 @@ fn get_null_physical_expr_pair(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     execution_props: &ExecutionProps,
-    subquery_ctx: &SubqueryContext,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
     let physical_expr =
-        create_physical_expr(expr, input_dfschema, execution_props, subquery_ctx)?;
+        create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?;
     let physical_name = physical_name(&expr.clone())?;
 
     let data_type = physical_expr.data_type(input_schema)?;
@@ -2263,10 +2263,10 @@ fn get_physical_expr_pair(
     expr: &Expr,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
-    subquery_ctx: &SubqueryContext,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
     let physical_expr =
-        create_physical_expr(expr, input_dfschema, execution_props, subquery_ctx)?;
+        create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?;
     let physical_name = physical_name(expr)?;
     Ok((physical_expr, physical_name))
 }
@@ -2520,13 +2520,13 @@ pub fn is_window_frame_bound_valid(window_frame: &WindowFrame) -> bool {
 
 /// Create a window expression with a name from a logical expression
 ///
-/// See [`create_physical_expr`] for details on the `subquery_ctx` argument.
+/// See [`create_physical_expr`] for details on the `planning_ctx` argument.
 pub fn create_window_expr_with_name(
     e: &Expr,
     name: impl Into<String>,
     logical_schema: &DFSchema,
     execution_props: &ExecutionProps,
-    subquery_ctx: &SubqueryContext,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<Arc<dyn WindowExpr>> {
     let name = name.into();
     let physical_schema = Arc::clone(logical_schema.inner());
@@ -2549,19 +2549,19 @@ pub fn create_window_expr_with_name(
                 args,
                 logical_schema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
             let partition_by = create_physical_exprs(
                 partition_by,
                 logical_schema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
             let order_by = create_physical_sort_exprs(
                 order_by,
                 logical_schema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
 
             if !is_window_frame_bound_valid(window_frame) {
@@ -2578,7 +2578,7 @@ pub fn create_window_expr_with_name(
             let physical_filter = filter
                 .as_ref()
                 .map(|f| {
-                    create_physical_expr(f, logical_schema, execution_props, subquery_ctx)
+                    create_physical_expr(f, logical_schema, execution_props, planning_ctx)
                 })
                 .transpose()?;
 
@@ -2601,12 +2601,12 @@ pub fn create_window_expr_with_name(
 
 /// Create a window expression from a logical expression or an alias
 ///
-/// See [`create_physical_expr`] for details on the `subquery_ctx` argument.
+/// See [`create_physical_expr`] for details on the `planning_ctx` argument.
 pub fn create_window_expr(
     e: &Expr,
     logical_schema: &DFSchema,
     execution_props: &ExecutionProps,
-    subquery_ctx: &SubqueryContext,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
@@ -2616,7 +2616,7 @@ pub fn create_window_expr(
         ),
         _ => (e.schema_name().to_string(), e.clone()),
     };
-    create_window_expr_with_name(&e, name, logical_schema, execution_props, subquery_ctx)
+    create_window_expr_with_name(&e, name, logical_schema, execution_props, planning_ctx)
 }
 
 type AggregateExprWithOptionalArgs = (
@@ -2637,13 +2637,13 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
-    let subquery_ctx = SubqueryContext::default();
+    let planning_ctx = PhysicalPlanningContext::default();
     let mut builder = LoweredAggregateBuilder::new(
         e,
         logical_input_schema,
         physical_input_schema,
         execution_props,
-        &subquery_ctx,
+        &planning_ctx,
     )
     .with_human_display(human_display);
 
@@ -2678,13 +2678,13 @@ pub fn create_aggregate_expr_and_maybe_filter(
         _ => (None, String::default(), e.clone()),
     };
 
-    let subquery_ctx = SubqueryContext::default();
+    let planning_ctx = PhysicalPlanningContext::default();
     let mut builder = LoweredAggregateBuilder::new(
         &e,
         logical_input_schema,
         physical_input_schema,
         execution_props,
-        &subquery_ctx,
+        &planning_ctx,
     )
     .with_human_display(human_display);
 
@@ -3079,7 +3079,7 @@ impl DefaultPhysicalPlanner {
     fn create_project_physical_exec_with_props(
         &self,
         execution_props: &ExecutionProps,
-        subquery_ctx: &SubqueryContext,
+        planning_ctx: &PhysicalPlanningContext,
         input_exec: Arc<dyn ExecutionPlan>,
         input: &Arc<LogicalPlan>,
         expr: &[Expr],
@@ -3121,7 +3121,7 @@ impl DefaultPhysicalPlanner {
                     e,
                     input_logical_schema,
                     execution_props,
-                    subquery_ctx,
+                    planning_ctx,
                 );
 
                 tuple_err((physical_expr, physical_name))
@@ -3493,7 +3493,7 @@ mod tests {
             &expr,
             &logical_schema,
             &ExecutionProps::new(),
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         )?;
 
         assert_eq!(window_expr.name(), "window_alias");
@@ -3749,7 +3749,7 @@ mod tests {
             logical_input_schema,
             physical_input_schema,
             session_state.execution_props(),
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         );
 
         insta::assert_debug_snapshot!(cube, @r#"
@@ -3881,7 +3881,7 @@ mod tests {
             logical_input_schema,
             physical_input_schema,
             session_state.execution_props(),
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         );
 
         insta::assert_debug_snapshot!(rollup, @r#"
@@ -3986,7 +3986,7 @@ mod tests {
             &col("a").not(),
             &dfschema,
             &make_session_state(),
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         )?;
         let expected = expressions::not(expressions::col("a", &schema)?)?;
 
@@ -4558,7 +4558,7 @@ mod tests {
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
-            _subquery_ctx: &SubqueryContext,
+            _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             internal_err!("BOOM")
         }
@@ -4719,14 +4719,14 @@ mod tests {
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             session_state: &SessionState,
-            subquery_ctx: &SubqueryContext,
+            planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             for expr in node.expressions() {
                 planner.create_physical_expr(
                     &expr,
                     node.schema(),
                     session_state,
-                    subquery_ctx,
+                    planning_ctx,
                 )?;
             }
             Ok(Some(Arc::new(NoOpExecutionPlan::new(Arc::clone(
@@ -4749,7 +4749,7 @@ mod tests {
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
-            _subquery_ctx: &SubqueryContext,
+            _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             Ok(Some(Arc::new(NoOpExecutionPlan::new(SchemaRef::new(
                 Schema::new(vec![Field::new("b", DataType::Int32, false)]),
@@ -5383,7 +5383,7 @@ digraph {
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
-            _subquery_ctx: &SubqueryContext,
+            _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             Ok(None)
         }
@@ -5393,7 +5393,7 @@ digraph {
             _planner: &dyn PhysicalPlanner,
             scan: &TableScan,
             _session_state: &SessionState,
-            _subquery_ctx: &SubqueryContext,
+            _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             if scan.source.is::<MockTableSource>() {
                 Ok(Some(Arc::new(EmptyExec::new(Arc::clone(

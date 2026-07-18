@@ -28,7 +28,7 @@ use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::datasource::physical_plan::ParquetSource;
 use crate::error::Result;
-use crate::logical_expr::execution_props::{ExecutionProps, SubqueryContext};
+use crate::logical_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
 use crate::logical_expr::simplify::SimplifyContext;
 use crate::optimizer::simplify_expressions::ExprSimplifier;
 use crate::physical_expr::create_physical_expr;
@@ -176,7 +176,7 @@ impl TestParquetFile {
                 &filter,
                 &df_schema,
                 &ExecutionProps::default(),
-                &SubqueryContext::default(),
+                &PhysicalPlanningContext::default(),
             )?;
 
             let source = Arc::new(

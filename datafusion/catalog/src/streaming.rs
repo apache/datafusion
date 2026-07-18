@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, Result, plan_err};
-use datafusion_expr::execution_props::SubqueryContext;
+use datafusion_expr::execution_props::PhysicalPlanningContext;
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::equivalence::project_ordering;
 use datafusion_physical_expr::projection::ProjectionMapping;
@@ -136,7 +136,7 @@ impl TableProvider for StreamingTable {
                 &self.sort_order,
                 &df_schema,
                 eqp,
-                &SubqueryContext::default(),
+                &PhysicalPlanningContext::default(),
             )?;
 
             if let Some(p) = projection {

@@ -300,7 +300,7 @@ mod test {
     use datafusion_common::{DFSchema, ScalarValue, config::ConfigOptions};
     use datafusion_expr::{
         Expr, ScalarUDF, col,
-        execution_props::{ExecutionProps, SubqueryContext},
+        execution_props::{ExecutionProps, PhysicalPlanningContext},
     };
     use datafusion_functions::core::input_file_name::InputFileNameFunc;
     use datafusion_physical_expr::{
@@ -332,7 +332,7 @@ mod test {
             exprs,
             &df_schema,
             &ExecutionProps::default(),
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         )
         .unwrap();
         let projection_exprs = physical_exprs

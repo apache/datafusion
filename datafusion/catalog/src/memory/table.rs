@@ -36,7 +36,7 @@ use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::execution_props::SubqueryContext;
+use datafusion_expr::execution_props::PhysicalPlanningContext;
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::{
     LexOrdering, PhysicalExpr, create_physical_expr, create_physical_sort_exprs,
@@ -214,7 +214,7 @@ impl TableProvider for MemTable {
                     sort_exprs,
                     &df_schema,
                     eqp,
-                    &SubqueryContext::default(),
+                    &PhysicalPlanningContext::default(),
                 )?;
                 file_sort_order.extend(LexOrdering::new(physical_exprs));
             }
@@ -365,7 +365,7 @@ impl TableProvider for MemTable {
                     expr,
                     &df_schema,
                     state.execution_props(),
-                    &SubqueryContext::default(),
+                    &PhysicalPlanningContext::default(),
                 )?;
                 Ok((name.clone(), physical_expr))
             })
@@ -483,7 +483,7 @@ fn evaluate_filters_to_mask(
             filter_expr,
             df_schema,
             execution_props,
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         )?;
 
         let result = physical_expr.evaluate(batch)?;

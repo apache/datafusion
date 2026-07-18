@@ -47,7 +47,7 @@ use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, internal_err, not_impl_err,
 };
-use datafusion_expr::execution_props::{ExecutionProps, SubqueryContext};
+use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
 use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, NullTreatment, physical_name,
 };
@@ -423,7 +423,7 @@ pub struct LoweredAggregateBuilder<'a> {
     logical_input_schema: &'a DFSchema,
     physical_input_schema: &'a Schema,
     execution_props: &'a ExecutionProps,
-    subquery_ctx: &'a SubqueryContext,
+    planning_ctx: &'a PhysicalPlanningContext,
 }
 
 impl<'a> LoweredAggregateBuilder<'a> {
@@ -431,17 +431,17 @@ impl<'a> LoweredAggregateBuilder<'a> {
     ///
     /// `logical_input_schema` is used to resolve logical expressions such as
     /// columns, while `physical_input_schema` is the input schema used by the
-    /// physical aggregate expression. `subquery_ctx` is used when creating
+    /// physical aggregate expression. `planning_ctx` is used when creating
     /// physical expressions that reference uncorrelated scalar subqueries.
     /// Callers creating physical aggregates outside of physical planning should
-    /// pass `&SubqueryContext::default()`, in which case converting a
+    /// pass `&PhysicalPlanningContext::default()`, in which case converting a
     /// scalar-subquery expression returns a planning error.
     pub fn new(
         expr: &'a Expr,
         logical_input_schema: &'a DFSchema,
         physical_input_schema: &'a Schema,
         execution_props: &'a ExecutionProps,
-        subquery_ctx: &'a SubqueryContext,
+        planning_ctx: &'a PhysicalPlanningContext,
     ) -> Self {
         Self {
             expr,
@@ -452,7 +452,7 @@ impl<'a> LoweredAggregateBuilder<'a> {
             logical_input_schema,
             physical_input_schema,
             execution_props,
-            subquery_ctx,
+            planning_ctx,
         }
     }
 
@@ -491,7 +491,7 @@ impl<'a> LoweredAggregateBuilder<'a> {
             logical_input_schema,
             physical_input_schema,
             execution_props,
-            subquery_ctx,
+            planning_ctx,
         } = self;
 
         let (name, human_display, output_metadata, expr) = lower_aggregate_display(
@@ -527,7 +527,7 @@ impl<'a> LoweredAggregateBuilder<'a> {
             args,
             logical_input_schema,
             execution_props,
-            subquery_ctx,
+            planning_ctx,
         )?;
         let filter = filter
             .as_ref()
@@ -536,7 +536,7 @@ impl<'a> LoweredAggregateBuilder<'a> {
                     filter,
                     logical_input_schema,
                     execution_props,
-                    subquery_ctx,
+                    planning_ctx,
                 )
             })
             .transpose()?;
@@ -544,7 +544,7 @@ impl<'a> LoweredAggregateBuilder<'a> {
             order_by,
             logical_input_schema,
             execution_props,
-            subquery_ctx,
+            planning_ctx,
         )?;
         let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
             == NullTreatment::IgnoreNulls;
@@ -1183,7 +1183,7 @@ mod tests {
             &logical_schema,
             &schema,
             &ExecutionProps::new(),
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         )
         .build()?;
 
@@ -1207,7 +1207,7 @@ mod tests {
             &logical_schema,
             &schema,
             &ExecutionProps::new(),
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         )
         .with_human_display(expr.human_display().to_string())
         .build()?;

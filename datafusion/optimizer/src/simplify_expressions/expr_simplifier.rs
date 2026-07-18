@@ -39,7 +39,7 @@ use datafusion_common::{
     metadata::FieldMetadata,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
-use datafusion_expr::execution_props::SubqueryContext;
+use datafusion_expr::execution_props::PhysicalPlanningContext;
 use datafusion_expr::expr::HigherOrderFunction;
 use datafusion_expr::{
     BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator, Volatility,
@@ -712,7 +712,7 @@ impl ConstEvaluator {
             &expr,
             &DUMMY_DF_SCHEMA,
             &self.execution_props,
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         ) {
             Ok(e) => e,
             Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),

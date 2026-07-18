@@ -38,7 +38,7 @@ use datafusion_expr::{Expr, col, lit};
 use datafusion_physical_expr::create_physical_expr;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_expr::execution_props::SubqueryContext;
+use datafusion_expr::execution_props::PhysicalPlanningContext;
 use futures::StreamExt;
 use object_store::ObjectMeta;
 use object_store::path::Path;
@@ -79,7 +79,7 @@ async fn get_parquet_exec(
         &filter,
         &df_schema,
         &execution_props,
-        &SubqueryContext::default(),
+        &PhysicalPlanningContext::default(),
     )
     .unwrap();
 

@@ -350,7 +350,7 @@ mod tests {
     use datafusion_common::{DFSchema, ScalarValue, assert_contains, stats::Precision};
     use datafusion_expr::{
         Expr, col,
-        execution_props::{ExecutionProps, SubqueryContext},
+        execution_props::{ExecutionProps, PhysicalPlanningContext},
         interval_arithmetic::Interval,
         lit,
     };
@@ -419,7 +419,7 @@ mod tests {
                 &expr,
                 &df_schema,
                 &ExecutionProps::new(),
-                &SubqueryContext::default(),
+                &PhysicalPlanningContext::default(),
             )
             .unwrap();
             let analysis_result = analyze(
@@ -465,7 +465,7 @@ mod tests {
                 &expr,
                 &df_schema,
                 &ExecutionProps::new(),
-                &SubqueryContext::default(),
+                &PhysicalPlanningContext::default(),
             )
             .unwrap();
             let analysis_result = analyze(
@@ -492,7 +492,7 @@ mod tests {
             &expr,
             &df_schema,
             &ExecutionProps::new(),
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         )
         .unwrap();
         let analysis_error = analyze(

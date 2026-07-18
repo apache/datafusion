@@ -32,7 +32,7 @@ use datafusion_common::{
     DFSchema, Result, ScalarValue, TableReference, ToDFSchema, exec_err,
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
 };
-use datafusion_expr::execution_props::{ExecutionProps, SubqueryContext};
+use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
 use datafusion_expr::expr::{
     Alias, Cast, HigherOrderFunction, InList, Lambda, LambdaVariable, Placeholder,
     ScalarFunction,
@@ -62,7 +62,7 @@ use datafusion_expr::{
 /// # use datafusion_common::DFSchema;
 /// # use datafusion_expr::{Expr, col, lit};
 /// # use datafusion_physical_expr::create_physical_expr;
-/// # use datafusion_expr::execution_props::{ExecutionProps, SubqueryContext};
+/// # use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
 /// // For a logical expression `a = 1`, we can create a physical expression
 /// let expr = col("a").eq(lit(1));
 /// // To create a PhysicalExpr we need 1. a schema
@@ -71,9 +71,9 @@ use datafusion_expr::{
 /// // 2. ExecutionProps
 /// let props = ExecutionProps::new();
 /// // We can now create a PhysicalExpr. Expressions with no scalar
-/// // subqueries use an empty `SubqueryContext`:
+/// // subqueries use an empty `PhysicalPlanningContext`:
 /// let physical_expr =
-///     create_physical_expr(&expr, &df_schema, &props, &SubqueryContext::default())
+///     create_physical_expr(&expr, &df_schema, &props, &PhysicalPlanningContext::default())
 ///         .unwrap();
 /// ```
 ///
@@ -85,14 +85,14 @@ use datafusion_expr::{
 /// # use datafusion_common::{assert_batches_eq, DFSchema};
 /// # use datafusion_expr::{Expr, col, lit, ColumnarValue};
 /// # use datafusion_physical_expr::create_physical_expr;
-/// # use datafusion_expr::execution_props::{ExecutionProps, SubqueryContext};
+/// # use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
 /// # let expr = col("a").eq(lit(1));
 /// # let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
 /// # let df_schema = DFSchema::try_from(schema.clone()).unwrap();
 /// # let props = ExecutionProps::new();
 /// // Given a PhysicalExpr, for `a = 1` we can evaluate it against a RecordBatch like this:
 /// let physical_expr =
-///     create_physical_expr(&expr, &df_schema, &props, &SubqueryContext::default())
+///     create_physical_expr(&expr, &df_schema, &props, &PhysicalPlanningContext::default())
 ///         .unwrap();
 /// // Input of [1,2,3]
 /// let input_batch = RecordBatch::try_from_iter(vec![
@@ -117,19 +117,19 @@ use datafusion_expr::{
 /// * `input_dfschema` - The DataFusion schema for the input, used to resolve `Column` references
 ///   to qualified or unqualified fields by name.
 /// * `execution_props` - Per-execution properties such as the query start time.
-/// * `subquery_ctx` - The [`SubqueryContext`] used to resolve
+/// * `planning_ctx` - The [`PhysicalPlanningContext`] used to resolve
 ///   `Expr::ScalarSubquery` nodes. The physical planner threads the subquery
 ///   index map and shared results container from its `ScalarSubqueryExec`
 ///   construction into calls to `create_physical_expr`. Callers creating
 ///   physical expressions outside of physical planning should pass
-///   `&SubqueryContext::default()`; converting a scalar subquery then returns a
+///   `&PhysicalPlanningContext::default()`; converting a scalar subquery then returns a
 ///   planning error.
 #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 pub fn create_physical_expr(
     e: &Expr,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
-    subquery_ctx: &SubqueryContext,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let input_schema = input_dfschema.as_arrow();
 
@@ -149,7 +149,7 @@ pub fn create_physical_expr(
                     expr,
                     input_dfschema,
                     execution_props,
-                    subquery_ctx,
+                    planning_ctx,
                 )?)
             }
         }
@@ -190,7 +190,7 @@ pub fn create_physical_expr(
                 &binary_op,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )
         }
         Expr::IsNotTrue(expr) => {
@@ -200,7 +200,7 @@ pub fn create_physical_expr(
                 &binary_op,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )
         }
         Expr::IsFalse(expr) => {
@@ -213,7 +213,7 @@ pub fn create_physical_expr(
                 &binary_op,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )
         }
         Expr::IsNotFalse(expr) => {
@@ -223,7 +223,7 @@ pub fn create_physical_expr(
                 &binary_op,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )
         }
         Expr::IsUnknown(expr) => {
@@ -236,7 +236,7 @@ pub fn create_physical_expr(
                 &binary_op,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )
         }
         Expr::IsNotUnknown(expr) => {
@@ -249,7 +249,7 @@ pub fn create_physical_expr(
                 &binary_op,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )
         }
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
@@ -258,13 +258,13 @@ pub fn create_physical_expr(
                 left,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
             let rhs = create_physical_expr(
                 right,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
             // Note that the logical planner is responsible
             // for type coercion on the arguments (e.g. if one
@@ -292,13 +292,13 @@ pub fn create_physical_expr(
                 expr,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
             let physical_pattern = create_physical_expr(
                 pattern,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
             like(
                 *negated,
@@ -322,13 +322,13 @@ pub fn create_physical_expr(
                 expr,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
             let physical_pattern = create_physical_expr(
                 pattern,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
             similar_to(*negated, *case_insensitive, physical_expr, physical_pattern)
         }
@@ -338,7 +338,7 @@ pub fn create_physical_expr(
                     e.as_ref(),
                     input_dfschema,
                     execution_props,
-                    subquery_ctx,
+                    planning_ctx,
                 )?)
             } else {
                 None
@@ -352,13 +352,13 @@ pub fn create_physical_expr(
                 when_expr,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
             let then_expr = create_physical_exprs(
                 then_expr,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
             let when_then_expr: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> =
                 when_expr
@@ -372,7 +372,7 @@ pub fn create_physical_expr(
                         e.as_ref(),
                         input_dfschema,
                         execution_props,
-                        subquery_ctx,
+                        planning_ctx,
                     )?)
                 } else {
                     None
@@ -380,7 +380,7 @@ pub fn create_physical_expr(
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
         Expr::Cast(Cast { expr, field }) => expressions::cast_with_target_field(
-            create_physical_expr(expr, input_dfschema, execution_props, subquery_ctx)?,
+            create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?,
             input_schema,
             Arc::clone(field),
             None,
@@ -403,7 +403,7 @@ pub fn create_physical_expr(
                     expr,
                     input_dfschema,
                     execution_props,
-                    subquery_ctx,
+                    planning_ctx,
                 )?,
                 input_schema,
                 field.data_type().clone(),
@@ -413,30 +413,30 @@ pub fn create_physical_expr(
             expr,
             input_dfschema,
             execution_props,
-            subquery_ctx,
+            planning_ctx,
         )?),
         Expr::Negative(expr) => expressions::negative(
-            create_physical_expr(expr, input_dfschema, execution_props, subquery_ctx)?,
+            create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?,
             input_schema,
         ),
         Expr::IsNull(expr) => expressions::is_null(create_physical_expr(
             expr,
             input_dfschema,
             execution_props,
-            subquery_ctx,
+            planning_ctx,
         )?),
         Expr::IsNotNull(expr) => expressions::is_not_null(create_physical_expr(
             expr,
             input_dfschema,
             execution_props,
-            subquery_ctx,
+            planning_ctx,
         )?),
         Expr::ScalarFunction(ScalarFunction { func, args }) => {
             let physical_args = create_physical_exprs(
                 args,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
             let config_options = match execution_props.config_options.as_ref() {
                 Some(config_options) => Arc::clone(config_options),
@@ -460,15 +460,15 @@ pub fn create_physical_expr(
                 expr,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
             let low_expr =
-                create_physical_expr(low, input_dfschema, execution_props, subquery_ctx)?;
+                create_physical_expr(low, input_dfschema, execution_props, planning_ctx)?;
             let high_expr = create_physical_expr(
                 high,
                 input_dfschema,
                 execution_props,
-                subquery_ctx,
+                planning_ctx,
             )?;
 
             // rewrite the between into the two binary operators
@@ -508,20 +508,20 @@ pub fn create_physical_expr(
                     expr,
                     input_dfschema,
                     execution_props,
-                    subquery_ctx,
+                    planning_ctx,
                 )?;
 
                 let list_exprs = create_physical_exprs(
                     list,
                     input_dfschema,
                     execution_props,
-                    subquery_ctx,
+                    planning_ctx,
                 )?;
                 expressions::in_list(value_expr, list_exprs, negated, input_schema)
             }
         },
         Expr::ScalarSubquery(sq) => {
-            match subquery_ctx.index_of(sq) {
+            match planning_ctx.index_of(sq) {
                 Some(index) => {
                     let schema = sq.subquery.schema();
                     if schema.fields().len() != 1 {
@@ -536,7 +536,7 @@ pub fn create_physical_expr(
                         dt,
                         nullable,
                         index,
-                        subquery_ctx.results().clone(),
+                        planning_ctx.results().clone(),
                     )))
                 }
                 None => {
@@ -617,14 +617,14 @@ pub fn create_physical_expr(
                             arg,
                             &lambda_schema,
                             &execution_props,
-                            subquery_ctx,
+                            planning_ctx,
                         )
                     }
                     _ => create_physical_expr(
                         arg,
                         input_dfschema,
                         execution_props,
-                        subquery_ctx,
+                        planning_ctx,
                     ),
                 })
                 .collect::<Result<_>>()?;
@@ -643,7 +643,7 @@ pub fn create_physical_expr(
         }
         Expr::Lambda(Lambda { params, body }) => expressions::lambda(
             params,
-            create_physical_expr(body, input_dfschema, execution_props, subquery_ctx)?,
+            create_physical_expr(body, input_dfschema, execution_props, planning_ctx)?,
         ),
         Expr::LambdaVariable(LambdaVariable {
             name,
@@ -701,12 +701,12 @@ pub fn create_physical_expr(
 
 /// Create vector of Physical Expression from a vector of logical expression
 ///
-/// See [`create_physical_expr`] for details on the `subquery_ctx` argument.
+/// See [`create_physical_expr`] for details on the `planning_ctx` argument.
 pub fn create_physical_exprs<'a, I>(
     exprs: I,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
-    subquery_ctx: &SubqueryContext,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<Vec<Arc<dyn PhysicalExpr>>>
 where
     I: IntoIterator<Item = &'a Expr>,
@@ -714,7 +714,7 @@ where
     exprs
         .into_iter()
         .map(|expr| {
-            create_physical_expr(expr, input_dfschema, execution_props, subquery_ctx)
+            create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)
         })
         .collect()
 }
@@ -728,7 +728,7 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
         expr,
         &df_schema,
         &execution_props,
-        &SubqueryContext::default(),
+        &PhysicalPlanningContext::default(),
     )
     .unwrap()
 }
@@ -751,7 +751,7 @@ mod tests {
             expr,
             &df_schema,
             &ExecutionProps::new(),
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         )
     }
 
@@ -771,7 +771,7 @@ mod tests {
             &expr,
             &df_schema,
             &ExecutionProps::new(),
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         )?;
 
         let batch = RecordBatch::try_new(
@@ -881,7 +881,7 @@ mod tests {
             &expr,
             &df_schema,
             &ExecutionProps::new(),
-            &SubqueryContext::default(),
+            &PhysicalPlanningContext::default(),
         )?;
 
         Ok(())

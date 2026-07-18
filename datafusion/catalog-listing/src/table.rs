@@ -43,7 +43,7 @@ use datafusion_execution::cache::cache_manager::{
     CachedFileMetadata, FileStatisticsCache, SchemaFingerprint, TableScopedPath,
 };
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::execution_props::{ExecutionProps, SubqueryContext};
+use datafusion_expr::execution_props::{ExecutionProps, PhysicalPlanningContext};
 use datafusion_expr::{
     Expr, Partitioning as LogicalPartitioning, TableProviderFilterPushDown, TableType,
 };
@@ -614,7 +614,7 @@ impl TableProvider for ListingTable {
                         output_partitioning,
                         &df_schema,
                         state.execution_props(),
-                        &SubqueryContext::default(),
+                        &PhysicalPlanningContext::default(),
                     )?
                 }
             };

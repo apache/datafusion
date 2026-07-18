@@ -99,7 +99,7 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
 use datafusion_common::cast::as_string_view_array;
-use datafusion_expr::execution_props::SubqueryContext;
+use datafusion_expr::execution_props::PhysicalPlanningContext;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -631,7 +631,7 @@ impl ExtensionPlanner for TopKPlanner {
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
-        _subquery_ctx: &SubqueryContext,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(
             if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
