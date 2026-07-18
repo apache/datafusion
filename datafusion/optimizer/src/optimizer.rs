@@ -41,6 +41,7 @@ use datafusion_expr::{
     Window,
 };
 
+use crate::coalesce_first_last::CoalesceFirstLast;
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
@@ -312,6 +313,7 @@ impl Optimizer {
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules
             Arc::new(EliminateGroupByConstant::new()),
+            Arc::new(CoalesceFirstLast::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(ExtractLeafExpressions::new()),
             Arc::new(PushDownLeafProjections::new()),

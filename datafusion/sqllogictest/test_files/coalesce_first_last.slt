@@ -1,0 +1,84 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Data with multiple groups, NULL value cells, and a unique ORDER BY key.
+statement ok
+CREATE TABLE t(p int, a int, b int, o int) AS VALUES
+(1, 10, 100, 1),
+(1, NULL, 200, 2),
+(1, 30, NULL, 3),
+(2, 40, 400, 4),
+(2, 50, 500, 5),
+(3, NULL, NULL, 1);
+
+# Baseline: rule disabled
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = false;
+
+query IIIII
+SELECT p,
+       first_value(a ORDER BY o ASC) AS fa,
+       first_value(b ORDER BY o ASC) AS fb,
+       last_value(a ORDER BY o ASC) AS la,
+       last_value(b ORDER BY o ASC) AS lb
+FROM t GROUP BY p ORDER BY p;
+----
+1 10 100 30 NULL
+2 40 400 50 500
+3 NULL NULL NULL NULL
+
+# Same query with the rule enabled: results must be identical to the baseline.
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = true;
+
+query IIIII
+SELECT p,
+       first_value(a ORDER BY o ASC) AS fa,
+       first_value(b ORDER BY o ASC) AS fb,
+       last_value(a ORDER BY o ASC) AS la,
+       last_value(b ORDER BY o ASC) AS lb
+FROM t GROUP BY p ORDER BY p;
+----
+1 10 100 30 NULL
+2 40 400 50 500
+3 NULL NULL NULL NULL
+
+# The coalesced plan scans once: a single struct-valued first_value feeds a
+# projection that unpacks the fields with get_field.
+query TT
+EXPLAIN SELECT p,
+       first_value(a ORDER BY o ASC) AS fa,
+       first_value(b ORDER BY o ASC) AS fb
+FROM t GROUP BY p;
+----
+logical_plan
+01)Projection: t.p, get_field(__coalesce_first_last_1, Utf8("c0")) AS fa, get_field(__coalesce_first_last_1, Utf8("c1")) AS fb
+02)--Aggregate: groupBy=[[t.p]], aggr=[[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o ASC NULLS LAST] AS __coalesce_first_last_1]]
+03)----TableScan: t projection=[p, a, b, o]
+physical_plan
+01)ProjectionExec: expr=[p@0 as p, get_field(__coalesce_first_last_1@1, c0) as fa, get_field(__coalesce_first_last_1@1, c1) as fb]
+02)--AggregateExec: mode=FinalPartitioned, gby=[p@0 as p], aggr=[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o ASC NULLS LAST] as __coalesce_first_last_1]
+03)----RepartitionExec: partitioning=Hash([p@0], 4), input_partitions=1
+04)------AggregateExec: mode=Partial, gby=[p@0 as p], aggr=[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o ASC NULLS LAST] as __coalesce_first_last_1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Restore the default so the harness sees no leaked configuration.
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = false;
+
+statement ok
+DROP TABLE t;
