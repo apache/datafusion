@@ -301,7 +301,6 @@ incremental = false
 # bump object_store to 0.14.1") so their `parquet` depends on the same
 # object_store 0.14.1 rather than 0.13.x from crates.io.
 [patch.crates-io]
-object_store = { path = "/Users/ovoievodin/dev/prj/apple/ovoievodin/rust/arrow-rs-object-store" }
 arrow = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
 arrow-arith = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
 arrow-array = { git = "https://github.com/comphead/arrow-rs.git", rev = "30ae8d3ef84207ee184d1f6207d1f6485d02a276" }
