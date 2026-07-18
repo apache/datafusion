@@ -98,15 +98,15 @@ c 4
 a 1
 
 query TT
-explain select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
+explain select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc nulls last limit 4;
 ----
 logical_plan
-01)Sort: max(traces.timestamp) DESC NULLS FIRST, fetch=4
+01)Sort: max(traces.timestamp) DESC NULLS LAST, fetch=4
 02)--Aggregate: groupBy=[[traces.trace_id]], aggr=[[max(traces.timestamp)]]
 03)----TableScan: traces projection=[trace_id, timestamp]
 physical_plan
-01)SortPreservingMergeExec: [max(traces.timestamp)@1 DESC], fetch=4
-02)--SortExec: TopK(fetch=4), expr=[max(traces.timestamp)@1 DESC], preserve_partitioning=[true]
+01)SortPreservingMergeExec: [max(traces.timestamp)@1 DESC NULLS LAST], fetch=4
+02)--SortExec: TopK(fetch=4), expr=[max(traces.timestamp)@1 DESC NULLS LAST], preserve_partitioning=[true]
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], lim=[4]
 04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
 05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], lim=[4]
@@ -218,17 +218,17 @@ x zebra
 z mango
 
 query TT
-explain select category, max(val) max_val from string_topk group by category order by max_val desc limit 2;
+explain select category, max(val) max_val from string_topk group by category order by max_val desc nulls last limit 2;
 ----
 logical_plan
-01)Sort: max_val DESC NULLS FIRST, fetch=2
+01)Sort: max_val DESC NULLS LAST, fetch=2
 02)--Projection: string_topk.category, max(string_topk.val) AS max_val
 03)----Aggregate: groupBy=[[string_topk.category]], aggr=[[max(string_topk.val)]]
 04)------TableScan: string_topk projection=[category, val]
 physical_plan
-01)SortPreservingMergeExec: [max_val@1 DESC], fetch=2
+01)SortPreservingMergeExec: [max_val@1 DESC NULLS LAST], fetch=2
 02)--ProjectionExec: expr=[category@0 as category, max(string_topk.val)@1 as max_val]
-03)----SortExec: TopK(fetch=2), expr=[max(string_topk.val)@1 DESC], preserve_partitioning=[true]
+03)----SortExec: TopK(fetch=2), expr=[max(string_topk.val)@1 DESC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[max(string_topk.val)], lim=[2]
 05)--------RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
 06)----------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(string_topk.val)], lim=[2]
@@ -241,19 +241,19 @@ x zebra
 z mango
 
 query TT
-explain select category, max(val) max_val from string_topk_view group by category order by max_val desc limit 2;
+explain select category, max(val) max_val from string_topk_view group by category order by max_val desc nulls last limit 2;
 ----
 logical_plan
-01)Sort: max_val DESC NULLS FIRST, fetch=2
+01)Sort: max_val DESC NULLS LAST, fetch=2
 02)--Projection: string_topk_view.category, max(string_topk_view.val) AS max_val
 03)----Aggregate: groupBy=[[string_topk_view.category]], aggr=[[max(string_topk_view.val)]]
 04)------SubqueryAlias: string_topk_view
 05)--------Projection: string_topk.category AS category, string_topk.val AS val
 06)----------TableScan: string_topk projection=[category, val]
 physical_plan
-01)SortPreservingMergeExec: [max_val@1 DESC], fetch=2
+01)SortPreservingMergeExec: [max_val@1 DESC NULLS LAST], fetch=2
 02)--ProjectionExec: expr=[category@0 as category, max(string_topk_view.val)@1 as max_val]
-03)----SortExec: TopK(fetch=2), expr=[max(string_topk_view.val)@1 DESC], preserve_partitioning=[true]
+03)----SortExec: TopK(fetch=2), expr=[max(string_topk_view.val)@1 DESC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[max(string_topk_view.val)], lim=[2]
 05)--------RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
 06)----------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(string_topk_view.val)], lim=[2]
@@ -268,11 +268,13 @@ NULL 0 0
 c 1 2
 
 # Regression tests for string max with ORDER BY ... LIMIT to ensure schema stability
+# Note: the NULL group has an all-NULL trace_id, so its max is NULL and ranks
+# first under DESC NULLS FIRST (previously the group was dropped: issue #23440)
 query TT
 select trace_id, max(trace_id) as max_trace from traces group by trace_id order by max_trace desc limit 2;
 ----
+NULL NULL
 c c
-b b
 
 query TT
 explain select trace_id, max(trace_id) as max_trace from traces group by trace_id order by max_trace desc limit 2;
@@ -286,9 +288,9 @@ physical_plan
 01)SortPreservingMergeExec: [max_trace@1 DESC], fetch=2
 02)--ProjectionExec: expr=[trace_id@0 as trace_id, max(traces.trace_id)@1 as max_trace]
 03)----SortExec: TopK(fetch=2), expr=[max(traces.trace_id)@1 DESC], preserve_partitioning=[true]
-04)------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.trace_id)], lim=[2]
+04)------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.trace_id)]
 05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.trace_id)], lim=[2]
+06)----------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.trace_id)]
 07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -303,15 +305,15 @@ AS SELECT
 FROM traces;
 
 query TT
-explain select trace_id, MAX(timestamp) from traces_utf8view group by trace_id order by MAX(timestamp) desc limit 4;
+explain select trace_id, MAX(timestamp) from traces_utf8view group by trace_id order by MAX(timestamp) desc nulls last limit 4;
 ----
 logical_plan
-01)Sort: max(traces_utf8view.timestamp) DESC NULLS FIRST, fetch=4
+01)Sort: max(traces_utf8view.timestamp) DESC NULLS LAST, fetch=4
 02)--Aggregate: groupBy=[[traces_utf8view.trace_id]], aggr=[[max(traces_utf8view.timestamp)]]
 03)----TableScan: traces_utf8view projection=[trace_id, timestamp]
 physical_plan
-01)SortPreservingMergeExec: [max(traces_utf8view.timestamp)@1 DESC], fetch=4
-02)--SortExec: TopK(fetch=4), expr=[max(traces_utf8view.timestamp)@1 DESC], preserve_partitioning=[true]
+01)SortPreservingMergeExec: [max(traces_utf8view.timestamp)@1 DESC NULLS LAST], fetch=4
+02)--SortExec: TopK(fetch=4), expr=[max(traces_utf8view.timestamp)@1 DESC NULLS LAST], preserve_partitioning=[true]
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces_utf8view.timestamp)], lim=[4]
 04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
 05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces_utf8view.timestamp)], lim=[4]
@@ -329,15 +331,15 @@ AS SELECT
 FROM traces;
 
 query TT
-explain select trace_id, MAX(timestamp) from traces_largeutf8 group by trace_id order by MAX(timestamp) desc limit 4;
+explain select trace_id, MAX(timestamp) from traces_largeutf8 group by trace_id order by MAX(timestamp) desc nulls last limit 4;
 ----
 logical_plan
-01)Sort: max(traces_largeutf8.timestamp) DESC NULLS FIRST, fetch=4
+01)Sort: max(traces_largeutf8.timestamp) DESC NULLS LAST, fetch=4
 02)--Aggregate: groupBy=[[traces_largeutf8.trace_id]], aggr=[[max(traces_largeutf8.timestamp)]]
 03)----TableScan: traces_largeutf8 projection=[trace_id, timestamp]
 physical_plan
-01)SortPreservingMergeExec: [max(traces_largeutf8.timestamp)@1 DESC], fetch=4
-02)--SortExec: TopK(fetch=4), expr=[max(traces_largeutf8.timestamp)@1 DESC], preserve_partitioning=[true]
+01)SortPreservingMergeExec: [max(traces_largeutf8.timestamp)@1 DESC NULLS LAST], fetch=4
+02)--SortExec: TopK(fetch=4), expr=[max(traces_largeutf8.timestamp)@1 DESC NULLS LAST], preserve_partitioning=[true]
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces_largeutf8.timestamp)], lim=[4]
 04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
 05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces_largeutf8.timestamp)], lim=[4]
@@ -585,3 +587,191 @@ drop table ids;
 
 statement ok
 drop table traces;
+
+#######
+# Regression tests for all-NULL groups in TopK aggregation (issues #23440, #22190):
+# a group whose aggregate inputs are all NULL must be emitted with a NULL
+# aggregate value instead of disappearing from the result
+#######
+statement ok
+CREATE TABLE t0 AS SELECT * FROM (VALUES ('gamma', CAST(NULL AS DOUBLE))) v(s, y);
+
+# MIN/MAX with NULLS FIRST must use regular aggregation because a group's
+# aggregate can transition from NULL to non-NULL and worsen its rank.
+query TT
+explain select s, max(y) as max_y from t0 group by s order by max_y desc nulls first limit 3;
+----
+logical_plan
+01)Sort: max_y DESC NULLS FIRST, fetch=3
+02)--Projection: t0.s, max(t0.y) AS max_y
+03)----Aggregate: groupBy=[[t0.s]], aggr=[[max(t0.y)]]
+04)------TableScan: t0 projection=[s, y]
+physical_plan
+01)ProjectionExec: expr=[s@0 as s, max(t0.y)@1 as max_y]
+02)--SortExec: TopK(fetch=3), expr=[max(t0.y)@1 DESC], preserve_partitioning=[false]
+03)----AggregateExec: mode=SinglePartitioned, gby=[s@0 as s], aggr=[max(t0.y)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# issue #23440: single all-NULL group, MAX DESC NULLS FIRST LIMIT 3
+query R
+SELECT max_y FROM (SELECT s, MAX(y) AS max_y FROM t0 GROUP BY s) ORDER BY max_y DESC NULLS FIRST LIMIT 3;
+----
+NULL
+
+# issue #22190: single all-NULL group, MIN ASC NULLS LAST LIMIT 20
+query R
+SELECT min_y FROM (SELECT s, MIN(y) AS min_y FROM t0 GROUP BY s) ORDER BY min_y ASC NULLS LAST LIMIT 20;
+----
+NULL
+
+# one all-NULL group and one valued group, limit larger than the group count:
+# both rows must be present
+statement ok
+CREATE TABLE topk_two_groups(s varchar, y bigint) AS VALUES
+('a', CAST(NULL AS BIGINT)),
+('b', 10),
+('b', 20);
+
+query TI
+select s, max_y from (select s, max(y) as max_y from topk_two_groups group by s) order by max_y desc nulls first limit 10;
+----
+a NULL
+b 20
+
+# 5 all-NULL groups with LIMIT 2: exactly 2 rows survive
+statement ok
+CREATE TABLE topk_five_nulls(s varchar, y bigint) AS VALUES
+('g1', CAST(NULL AS BIGINT)),
+('g2', CAST(NULL AS BIGINT)),
+('g3', CAST(NULL AS BIGINT)),
+('g4', CAST(NULL AS BIGINT)),
+('g5', CAST(NULL AS BIGINT));
+
+query I
+select max_y from (select s, max(y) as max_y from topk_five_nulls group by s) order by max_y desc nulls first limit 2;
+----
+NULL
+NULL
+
+# 2 all-NULL groups and 3 valued groups with LIMIT 4
+statement ok
+CREATE TABLE topk_mixed(s varchar, y bigint) AS VALUES
+('n1', CAST(NULL AS BIGINT)),
+('n2', CAST(NULL AS BIGINT)),
+('v1', 10),
+('v2', 20),
+('v3', 30);
+
+# DESC NULLS FIRST: both NULL groups rank before all values
+query I
+select max_y from (select s, max(y) as max_y from topk_mixed group by s) order by max_y desc nulls first limit 4;
+----
+NULL
+NULL
+30
+20
+
+# DESC NULLS LAST: NULL groups rank after all values
+query I
+select max_y from (select s, max(y) as max_y from topk_mixed group by s) order by max_y desc nulls last limit 4;
+----
+30
+20
+10
+NULL
+
+# an all-NULL group that later produces a value losing to the current top-k
+# must not be emitted with a NULL value
+statement ok
+CREATE TABLE topk_null_then_value(s varchar, y bigint) AS VALUES
+('g1', CAST(NULL AS BIGINT)),
+('g2', 10),
+('g1', 5);
+
+query I
+select max_y from (select s, max(y) as max_y from topk_null_then_value group by s) order by max_y desc nulls first limit 1;
+----
+10
+
+# single-row batches force NULL and non-NULL rows of the same group into
+# different batches: a -> 7, b -> 5, c -> NULL
+statement ok
+set datafusion.execution.batch_size = 1;
+
+statement ok
+CREATE TABLE topk_batches(s varchar, y bigint) AS VALUES
+('a', CAST(NULL AS BIGINT)),
+('b', 5),
+('a', 3),
+('c', CAST(NULL AS BIGINT)),
+('b', CAST(NULL AS BIGINT)),
+('a', 7);
+
+query TI
+select s, max_y from (select s, max(y) as max_y from topk_batches group by s) order by max_y desc nulls first limit 3;
+----
+c NULL
+a 7
+b 5
+
+# NULLS FIRST is not monotonic for MIN/MAX aggregation: a group initially
+# registered as NULL can later become valued, so a bounded TopK cannot safely
+# discard other NULL candidates. This must fall back to regular aggregation.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE topk_null_backfill(s varchar, y bigint) AS VALUES
+('a', CAST(NULL AS BIGINT)),
+('b', CAST(NULL AS BIGINT)),
+('c', CAST(NULL AS BIGINT)),
+('a', 5);
+
+query I
+select max_y from (select s, max(y) as max_y from topk_null_backfill group by s) order by max_y desc nulls first limit 2;
+----
+NULL
+NULL
+
+# An evicted valued group must not be re-registered and emitted as all-NULL.
+statement ok
+CREATE TABLE topk_evicted_then_null(s varchar, y bigint) AS VALUES
+('a', 10),
+('b', 20),
+('a', CAST(NULL AS BIGINT)),
+('c', CAST(NULL AS BIGINT));
+
+query TI
+select s, max_y from (select s, max(y) as max_y from topk_evicted_then_null group by s) order by max_y desc nulls first limit 1;
+----
+c NULL
+
+statement ok
+set datafusion.execution.batch_size = 8192;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+drop table topk_batches;
+
+statement ok
+drop table topk_evicted_then_null;
+
+statement ok
+drop table topk_null_backfill;
+
+statement ok
+drop table topk_null_then_value;
+
+statement ok
+drop table topk_mixed;
+
+statement ok
+drop table topk_five_nulls;
+
+statement ok
+drop table topk_two_groups;
+
+statement ok
+drop table t0;
