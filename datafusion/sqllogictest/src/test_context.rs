@@ -720,6 +720,10 @@ fn register_async_abs_udf(ctx: &SessionContext) {
 }
 
 fn register_multi_arg_lambda_udf(ctx: &SessionContext) {
+    // In 54 release, all built-in higher-order functions are single-parameter, but the public higher-order trait supports
+    // user defined functions with multi-parameter lambdas. To test the lambda handling of multiple parameters, we create
+    // a dummy udf that provides every value argument it receives as a parameter to it's lambda, the last argument:
+    // multi_arg_higher_order_udf([..value_args], ([..value_args_as_params]) -> ...)
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct MultiArgHigherOrderUdf {
         signature: HigherOrderSignature,
