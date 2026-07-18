@@ -677,7 +677,27 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // counter) across all right-side partitions via
         // [`FallbackCoordinator`], so left-side tracking is coordinated
         // exactly as in the single-pass path.
-        let spill_state = if context.runtime_env().disk_manager.tmp_files_enabled() {
+        //
+        // That coordination assumes all right partitions run in the same
+        // process. Distributed engines run each partition as an independent
+        // task with its own coordinator, so the shared probe-thread counter
+        // would never reach zero and the fallback would stall. When
+        // `enable_nlj_coordinated_fallback` is disabled, such engines opt
+        // out of the coordinated fallback for the affected join types
+        // (left-emitting joins with a multi-partition right side); those cases
+        // use `SpillState::Disabled` and fail with resource exhaustion under
+        // memory pressure instead of deadlocking. Single-partition and
+        // non-left-emitting joins are always safe and keep the fallback.
+        let coordinated_fallback_disabled = !context
+            .session_config()
+            .options()
+            .execution
+            .enable_nlj_coordinated_fallback
+            && need_produce_result_in_final(self.join_type)
+            && right_partition_count > 1;
+        let spill_state = if context.runtime_env().disk_manager.tmp_files_enabled()
+            && !coordinated_fallback_disabled
+        {
             SpillState::Pending {
                 left_plan: Arc::clone(&self.left),
                 task_context: Arc::clone(&context),
@@ -4786,6 +4806,113 @@ pub(crate) mod tests {
         | 9  | 8  | 90  |    |    |     |
         +----+----+-----+----+----+-----+
         "));
+        Ok(())
+    }
+
+    /// Like `task_ctx_with_memory_limit`, but also disables the coordinated
+    /// memory-limited fallback via `enable_nlj_coordinated_fallback = false`
+    /// (the opt-out a distributed engine would use).
+    fn task_ctx_with_memory_limit_no_coordinated_fallback(
+        memory_limit: usize,
+        batch_size: usize,
+    ) -> Result<Arc<TaskContext>> {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(memory_limit, 1.0)
+            .build_arc()?;
+        let mut cfg = TaskContext::default()
+            .session_config()
+            .clone()
+            .with_batch_size(batch_size);
+        cfg.options_mut().execution.enable_nlj_coordinated_fallback = false;
+        let task_ctx = TaskContext::default()
+            .with_runtime(runtime)
+            .with_session_config(cfg);
+        Ok(Arc::new(task_ctx))
+    }
+
+    /// Collect a multi-partition NLJ under a tight memory limit and return the
+    /// first error, if any. Used to assert that disabling the coordinated
+    /// fallback makes a left-emitting multi-partition join fail with resource
+    /// exhaustion (rather than spill, or — in a distributed setting — hang).
+    async fn multi_partition_join_collect_err(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        join_type: &JoinType,
+        join_filter: Option<JoinFilter>,
+        context: Arc<TaskContext>,
+    ) -> Result<()> {
+        let partition_count = 4;
+        let right = Arc::new(RepartitionExec::try_new(
+            right,
+            Partitioning::RoundRobinBatch(partition_count),
+        )?) as Arc<dyn ExecutionPlan>;
+        let nested_loop_join = Arc::new(NestedLoopJoinExec::try_new(
+            left,
+            right,
+            join_filter,
+            join_type,
+            None,
+        )?);
+
+        let mut handles = vec![];
+        for i in 0..partition_count {
+            let stream = nested_loop_join.execute(i, Arc::clone(&context))?;
+            handles.push(SpawnedTask::spawn(
+                async move { common::collect(stream).await },
+            ));
+        }
+        for handle in handles {
+            handle.join().await.expect("partition task panicked")?;
+        }
+        Ok(())
+    }
+
+    /// When `enable_nlj_coordinated_fallback` is disabled, a LEFT join with
+    /// a multi-partition right side must NOT take the coordinated fallback: it
+    /// fails with resource exhaustion under a tight memory limit instead. This
+    /// is the distributed-safe opt-out (the coordinated fallback would
+    /// otherwise deadlock across processes).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nlj_memory_limited_fallback_disabled_left_join_oom() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit_no_coordinated_fallback(50, 16)?;
+        let left = build_left_table_multi_chunk();
+        let right = build_right_table_one_batch_per_row();
+        let filter = prepare_join_filter();
+
+        let err = multi_partition_join_collect_err(
+            left,
+            right,
+            &JoinType::Left,
+            Some(filter),
+            task_ctx,
+        )
+        .await
+        .unwrap_err();
+        assert_contains!(err.to_string(), "Resources exhausted");
+        Ok(())
+    }
+
+    /// FULL join counterpart of the above: the opt-out disables the coordinated
+    /// fallback for FULL (also a left-emitting join) with a multi-partition
+    /// right side, so it fails with resource exhaustion rather than
+    /// coordinating.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nlj_memory_limited_fallback_disabled_full_join_oom() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit_no_coordinated_fallback(50, 16)?;
+        let left = build_left_table_multi_chunk();
+        let right = build_right_table_one_batch_per_row();
+        let filter = prepare_join_filter();
+
+        let err = multi_partition_join_collect_err(
+            left,
+            right,
+            &JoinType::Full,
+            Some(filter),
+            task_ctx,
+        )
+        .await
+        .unwrap_err();
+        assert_contains!(err.to_string(), "Resources exhausted");
         Ok(())
     }
 }
