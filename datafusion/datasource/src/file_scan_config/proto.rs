@@ -19,8 +19,11 @@
 //!
 //! This is the relocated body of `datafusion-proto`'s
 //! `serialize_file_scan_config` / `parse_protobuf_file_scan_config`, ported to
-//! ride the [`ExecutionPlanEncodeCtx`] / [`ExecutionPlanDecodeCtx`] instead of
-//! the raw `PhysicalExtensionCodec` + `PhysicalProtoConverterExtension`. Every
+//! ride the
+//! [`ExecutionPlanEncodeCtx`](datafusion_physical_plan::proto::ExecutionPlanEncodeCtx) /
+//! [`ExecutionPlanDecodeCtx`](datafusion_physical_plan::proto::ExecutionPlanDecodeCtx)
+//! instead of the raw `PhysicalExtensionCodec` +
+//! `PhysicalProtoConverterExtension`. Every
 //! `FileSource::try_to_proto` hook (CSV, JSON, Arrow, Parquet, Avro) builds its
 //! `*ScanExecNode` around [`FileScanConfig::to_proto_conf`] and decodes with
 //! [`FileScanConfig::from_proto_conf`], keeping a single copy of the shared
