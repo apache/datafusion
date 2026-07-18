@@ -48,20 +48,25 @@ impl TopKAggregation {
         order_desc: bool,
         limit: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
-        // Current only support single group key
-        let (group_key, group_key_alias) =
-            aggr.group_expr().expr().iter().exactly_one().ok()?;
-        let kt = group_key.data_type(&aggr.input().schema()).ok()?;
-
         if aggr.filter_expr().iter().any(|e| e.is_some()) {
             return None;
         }
+
+        // MIN/MAX / distinct paths only support a single group key (their
+        // stream, `GroupedTopKAggregateStream`, is single-column). The
+        // count path uses `GroupValues` which handles any group-column
+        // combination, so `single_group` is checked only for the first two
+        // shapes and skipped for shape #3.
+        let single_group = aggr.group_expr().expr().iter().exactly_one().ok();
 
         // Three supported shapes:
         //   1. MIN/MAX single-aggregate: ORDER BY MIN(x) / MAX(x)
         //   2. GROUP-BY-only distinct-like: no aggregates, ORDER BY the group key
         //   3. count(*)/count(col): ORDER BY count(...)  (Final/Single mode only)
+        //      — supports single OR multi-column GROUP BY
         let limit_options = if let Some((field, desc)) = aggr.get_minmax_desc() {
+            let (group_key, _) = single_group?;
+            let kt = group_key.data_type(&aggr.input().schema()).ok()?;
             let vt = field.data_type().clone();
             if !topk_types_supported(&kt, &vt) {
                 return None;
@@ -74,6 +79,8 @@ impl TopKAggregation {
             }
             LimitOptions::new_with_order(limit, order_desc)
         } else if aggr.aggr_expr().is_empty() {
+            let (group_key, group_key_alias) = single_group?;
+            let kt = group_key.data_type(&aggr.input().schema()).ok()?;
             if !topk_types_supported(&kt, &kt) {
                 return None;
             }

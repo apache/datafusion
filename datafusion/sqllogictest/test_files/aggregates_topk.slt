@@ -700,6 +700,39 @@ a 5
 c 4
 b 3
 
+##
+## Multi-column GROUP BY with count(*) — covers ClickBench Q14/Q34/Q35.
+##
+## The count-topk stream uses `GroupValues` for hashing so any group-
+## column combination works; the optimizer no longer requires
+## `exactly_one` group expression for this path.
+##
+
+query TII
+select url, ts, count(*) from hits group by url, ts order by count(*) desc limit 3;
+----
+a 5 1
+a 3 1
+a 4 1
+
+# EXPLAIN: the multi-column FinalPartitioned aggregate now carries lim=[3]
+query TT
+explain select url, ts, count(*) from hits group by url, ts order by count(*) desc limit 3;
+----
+logical_plan
+01)Sort: count(*) DESC NULLS FIRST, fetch=3
+02)--Projection: hits.url, hits.ts, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[hits.url, hits.ts]], aggr=[[count(Int64(1))]]
+04)------TableScan: hits projection=[url, ts]
+physical_plan
+01)SortPreservingMergeExec: [count(*)@2 DESC], fetch=3
+02)--ProjectionExec: expr=[url@0 as url, ts@1 as ts, count(Int64(1))@2 as count(*)]
+03)----SortExec: TopK(fetch=3), expr=[count(Int64(1))@2 DESC], preserve_partitioning=[true]
+04)------AggregateExec: mode=FinalPartitioned, gby=[url@0 as url, ts@1 as ts], aggr=[count(Int64(1))], lim=[3]
+05)--------RepartitionExec: partitioning=Hash([url@0, ts@1], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[url@0 as url, ts@1 as ts], aggr=[count(Int64(1))]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
 statement ok
 drop table hits;
 

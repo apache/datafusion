@@ -468,10 +468,10 @@ impl GroupedTopKCountAggregateStream {
             // `publish` overwrites the slot, so a stray empty publish
             // would erase this partition's earlier contribution — hence
             // the guard.
-            if !local.is_empty() {
-                if let Some(t) = shared.publish(self.partition, &local) {
-                    return Some(t);
-                }
+            if !local.is_empty()
+                && let Some(t) = shared.publish(self.partition, &local)
+            {
+                return Some(t);
             }
             return shared.threshold();
         }
