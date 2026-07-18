@@ -34,8 +34,12 @@
 //! 3. **physically_narrow**: a file that only contains the narrow columns —
 //!    the floor
 //!
-//! At setup the benchmark prints the `bytes_scanned` metric for (1) and (2)
-//! so the IO pattern is visible in addition to wall time.
+//! At setup the benchmark reads the parquet scan's `bytes_scanned` metric for
+//! (1), (2) and (3) so the IO pattern is visible in addition to wall time, and
+//! asserts the current baseline: today a narrow declared schema scans the same
+//! bytes as the full schema. When nested projection pruning lands, that
+//! assertion is expected to fail, which is the signal to flip it to
+//! `narrow < full` (see [`assert_scan_baseline`]).
 
 use arrow::array::{
     ArrayRef, Int32Array, Int64Array, ListArray, StringArray, StructArray,
@@ -43,11 +47,12 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow::util::pretty::pretty_format_batches;
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt,
 };
+use datafusion::physical_plan::metrics::MetricsSet;
+use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::SessionContext;
 use datafusion_datasource::ListingTableUrl;
 use parquet::arrow::ArrowWriter;
@@ -75,11 +80,15 @@ fn narrow_item_fields() -> Fields {
 
 /// The wide item fields as written to the file: the narrow fields plus
 /// `NUM_PAD_FIELDS` fat string fields the table schema does not mention.
+///
+/// Derived from [`narrow_item_fields`] so the shared columns (`x`, `y`) match
+/// by construction — same names, types and nullability — and only the extra
+/// pad fields distinguish the two.
 fn wide_item_fields() -> Fields {
-    let mut fields = vec![
-        Field::new("x", DataType::Int64, false),
-        Field::new("y", DataType::Utf8, true),
-    ];
+    let mut fields: Vec<Field> = narrow_item_fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect();
     for i in 0..NUM_PAD_FIELDS {
         fields.push(Field::new(format!("pad_{i}"), DataType::Utf8, false));
     }
@@ -122,7 +131,11 @@ fn item_columns(fields: &Fields, count: usize, seed: usize) -> Vec<ArrayRef> {
             "y" => Arc::new(StringArray::from_iter_values(
                 (0..count).map(|j| format!("y-{}", seed + j)),
             )) as ArrayRef,
-            _ => pad_values(count, seed * (i + 1)),
+            // `seed + i` keeps each pad column's values distinct from the
+            // others (and matches the additive seeding used above); a
+            // multiplier like `seed * (i + 1)` collapses to the same seed for
+            // every column when `seed == 0` (the first batch).
+            _ => pad_values(count, seed + i),
         })
         .collect()
 }
@@ -221,26 +234,70 @@ fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     black_box(rt.block_on(df.collect()).unwrap());
 }
 
-/// Print the parquet scan's `bytes_scanned` for a query so the IO pattern is
-/// visible alongside the wall-time measurements.
-fn report_bytes_scanned(ctx: &SessionContext, rt: &Runtime, label: &str, sql: &str) {
-    let df = rt
-        .block_on(ctx.sql(&format!("EXPLAIN ANALYZE {sql}")))
-        .unwrap();
-    let batches = rt.block_on(df.collect()).unwrap();
-    let text = pretty_format_batches(&batches).unwrap().to_string();
-    let bytes_scanned = text
-        .split("bytes_scanned=")
-        .nth(1)
-        .map(|rest| {
-            rest.split([',', ']'])
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string()
-        })
-        .unwrap_or_else(|| "<not found>".to_string());
-    println!("{label}: bytes_scanned={bytes_scanned}  ({sql})");
+/// Recursively collect the metrics of every node in `plan` into `out`.
+fn gather_metrics(plan: &Arc<dyn ExecutionPlan>, out: &mut MetricsSet) {
+    if let Some(metrics) = plan.metrics() {
+        for metric in metrics.iter() {
+            out.push(Arc::clone(metric));
+        }
+    }
+    for child in plan.children() {
+        gather_metrics(child, out);
+    }
+}
+
+/// Execute `sql` and return the parquet scan's `bytes_scanned` metric, read
+/// from the typed metrics API rather than scraped from display output (which
+/// would silently break if the format ever changed).
+fn scan_bytes(ctx: &SessionContext, rt: &Runtime, sql: &str) -> usize {
+    let df = rt.block_on(ctx.sql(sql)).unwrap();
+    let plan = rt.block_on(df.create_physical_plan()).unwrap();
+    // Fully drive the plan so the scan populates its metrics.
+    black_box(
+        rt.block_on(collect(Arc::clone(&plan), ctx.task_ctx()))
+            .unwrap(),
+    );
+
+    let mut metrics = MetricsSet::new();
+    gather_metrics(&plan, &mut metrics);
+    metrics
+        .aggregate_by_name()
+        .sum_by_name("bytes_scanned")
+        .map(|v| v.as_usize())
+        .expect("parquet scan should report a bytes_scanned metric")
+}
+
+/// Report and assert the `bytes_scanned` baseline for one dataset shape.
+///
+/// `narrow` selects from a wide file through a narrow declared schema, `full`
+/// through the full schema, and `floor` from a physically-narrow file. Today
+/// the extra leaves are fetched and discarded, so `narrow == full`; that
+/// equality is the checked-in baseline. When nested projection pruning lands,
+/// `narrow` should drop toward `floor` and this assertion is expected to fail —
+/// the signal to flip it to `assert!(narrow < full)`.
+fn assert_scan_baseline(
+    ctx: &SessionContext,
+    rt: &Runtime,
+    label: &str,
+    narrow_sql: &str,
+    full_sql: &str,
+    floor_sql: &str,
+) {
+    let narrow = scan_bytes(ctx, rt, narrow_sql);
+    let full = scan_bytes(ctx, rt, full_sql);
+    let floor = scan_bytes(ctx, rt, floor_sql);
+    println!(
+        "{label}: bytes_scanned narrow_schema={narrow} full_schema={full} \
+         physically_narrow={floor}"
+    );
+    assert_eq!(
+        narrow, full,
+        "{label}: narrow declared schema scanned {narrow} bytes vs {full} for \
+         the full schema. The baseline is that a narrow schema still reads \
+         every leaf, so these should be equal; if narrow is now smaller, \
+         nested projection pruning has likely landed — flip this to \
+         `assert!(narrow < full)`."
+    );
 }
 
 struct Fixture {
@@ -306,13 +363,14 @@ fn list_struct_benchmarks(c: &mut Criterion) {
     let f = setup("list_struct", list_schema, list_batch);
     let (ctx, rt) = (&f.ctx, &f.rt);
 
-    for table in [
-        "list_struct_narrow_schema",
-        "list_struct_full_schema",
-        "list_struct_physically_narrow",
-    ] {
-        report_bytes_scanned(ctx, rt, table, &format!("SELECT events FROM {table}"));
-    }
+    assert_scan_baseline(
+        ctx,
+        rt,
+        "list_struct",
+        "SELECT events FROM list_struct_narrow_schema",
+        "SELECT events FROM list_struct_full_schema",
+        "SELECT events FROM list_struct_physically_narrow",
+    );
 
     let mut group = c.benchmark_group("list_struct");
     group.sample_size(10);
@@ -352,13 +410,14 @@ fn top_level_struct_benchmarks(c: &mut Criterion) {
     let f = setup("struct", struct_schema, struct_batch);
     let (ctx, rt) = (&f.ctx, &f.rt);
 
-    for table in [
-        "struct_narrow_schema",
-        "struct_full_schema",
-        "struct_physically_narrow",
-    ] {
-        report_bytes_scanned(ctx, rt, table, &format!("SELECT s FROM {table}"));
-    }
+    assert_scan_baseline(
+        ctx,
+        rt,
+        "top_level_struct",
+        "SELECT s FROM struct_narrow_schema",
+        "SELECT s FROM struct_full_schema",
+        "SELECT s FROM struct_physically_narrow",
+    );
 
     let mut group = c.benchmark_group("top_level_struct");
     group.sample_size(10);
