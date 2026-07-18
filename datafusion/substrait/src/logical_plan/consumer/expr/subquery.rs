@@ -69,11 +69,11 @@ pub async fn from_subquery(
                                     .consume_expression(needle_expr, input_schema)
                                     .await?,
                             ),
-                            subquery: Subquery {
-                                subquery: Arc::new(haystack_expr),
-                                outer_ref_columns: outer_refs,
-                                spans: Spans::new(),
-                            },
+                            subquery: Subquery::new(
+                                Arc::new(haystack_expr),
+                                outer_refs,
+                                Spans::new(),
+                            ),
                             negated: false,
                         }))
                     } else {
@@ -91,11 +91,11 @@ pub async fn from_subquery(
                 )
                 .await?;
                 let outer_ref_columns = plan.all_out_ref_exprs();
-                Ok(Expr::ScalarSubquery(Subquery {
-                    subquery: Arc::new(plan),
+                Ok(Expr::ScalarSubquery(Subquery::new(
+                    Arc::new(plan),
                     outer_ref_columns,
-                    spans: Spans::new(),
-                }))
+                    Spans::new(),
+                )))
             }
             SubqueryType::SetPredicate(predicate) => {
                 match predicate.predicate_op() {
@@ -110,11 +110,11 @@ pub async fn from_subquery(
                         .await?;
                         let outer_ref_columns = plan.all_out_ref_exprs();
                         Ok(Expr::Exists(Exists::new(
-                            Subquery {
-                                subquery: Arc::new(plan),
+                            Subquery::new(
+                                Arc::new(plan),
                                 outer_ref_columns,
-                                spans: Spans::new(),
-                            },
+                                Spans::new(),
+                            ),
                             false,
                         )))
                     }
@@ -162,11 +162,7 @@ pub async fn from_subquery(
 
                 Ok(Expr::SetComparison(SetComparison::new(
                     Box::new(left_expr),
-                    Subquery {
-                        subquery: Arc::new(plan),
-                        outer_ref_columns,
-                        spans: Spans::new(),
-                    },
+                    Subquery::new(Arc::new(plan), outer_ref_columns, Spans::new()),
                     comparison_op,
                     reduction_op,
                 )))

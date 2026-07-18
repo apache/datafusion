@@ -50,6 +50,7 @@ use crate::{
     WindowFunctionDefinition, build_join_schema, expr_vec_fmt, requalify_sides_if_needed,
 };
 
+use crate::execution_props::SubqueryIndex;
 use crate::statistics::StatisticsRequest;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
@@ -420,6 +421,15 @@ impl LogicalPlan {
         // closure always returns OK
         .unwrap();
         exprs
+    }
+
+    /// Returns `true` if any expression in this plan contains a volatile
+    /// function.
+    ///
+    /// This descends into subquery expressions, but does not model volatility
+    /// of table providers or external state.
+    pub fn contains_volatile_expr(&self) -> bool {
+        plan_contains_volatile(self)
     }
 
     /// Returns all the out reference(correlated) expressions (recursively) in the current
@@ -988,6 +998,7 @@ impl LogicalPlan {
             LogicalPlan::Subquery(Subquery {
                 outer_ref_columns,
                 spans,
+                scalar_subquery_index,
                 ..
             }) => {
                 self.assert_no_expressions(expr)?;
@@ -997,6 +1008,7 @@ impl LogicalPlan {
                     subquery: Arc::new(subquery),
                     outer_ref_columns: outer_ref_columns.clone(),
                     spans: spans.clone(),
+                    scalar_subquery_index: *scalar_subquery_index,
                 }))
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
@@ -4396,6 +4408,8 @@ pub struct Subquery {
     pub outer_ref_columns: Vec<Expr>,
     /// Span information for subquery projection columns
     pub spans: Spans,
+    /// Index assigned by the physical planner for uncorrelated scalar subqueries.
+    pub scalar_subquery_index: Option<SubqueryIndex>,
 }
 
 impl Normalizeable for Subquery {
@@ -4414,10 +4428,25 @@ impl NormalizeEq for Subquery {
                 .iter()
                 .zip(other.outer_ref_columns.iter())
                 .all(|(a, b)| a.normalize_eq(b))
+            && self.scalar_subquery_index == other.scalar_subquery_index
     }
 }
 
 impl Subquery {
+    /// Creates a subquery without a physical planner index.
+    pub fn new(
+        subquery: Arc<LogicalPlan>,
+        outer_ref_columns: Vec<Expr>,
+        spans: Spans,
+    ) -> Self {
+        Self {
+            subquery,
+            outer_ref_columns,
+            spans,
+            scalar_subquery_index: None,
+        }
+    }
+
     pub fn try_from_expr(plan: &Expr) -> Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),
@@ -4431,8 +4460,49 @@ impl Subquery {
             subquery: plan,
             outer_ref_columns: self.outer_ref_columns.clone(),
             spans: Spans::new(),
+            scalar_subquery_index: self.scalar_subquery_index,
         }
     }
+
+    pub fn with_scalar_subquery_index(&self, index: SubqueryIndex) -> Subquery {
+        Subquery {
+            subquery: Arc::clone(&self.subquery),
+            outer_ref_columns: self.outer_ref_columns.clone(),
+            spans: self.spans.clone(),
+            scalar_subquery_index: Some(index),
+        }
+    }
+
+    pub fn without_scalar_subquery_index(&self) -> Subquery {
+        Subquery {
+            subquery: Arc::clone(&self.subquery),
+            outer_ref_columns: self.outer_ref_columns.clone(),
+            spans: self.spans.clone(),
+            scalar_subquery_index: None,
+        }
+    }
+
+    /// Returns `true` if this subquery's plan contains a volatile expression.
+    pub fn is_volatile(&self) -> bool {
+        self.subquery.contains_volatile_expr()
+    }
+}
+
+/// Returns `true` if any expression in `plan` is volatile.
+fn plan_contains_volatile(plan: &LogicalPlan) -> bool {
+    plan.exists(|node| {
+        let mut found = false;
+        node.apply_expressions(|expr| {
+            if expr.is_volatile_including_subqueries() {
+                found = true;
+                Ok(TreeNodeRecursion::Stop)
+            } else {
+                Ok(TreeNodeRecursion::Continue)
+            }
+        })?;
+        Ok(found)
+    })
+    .expect("infallible")
 }
 
 impl Debug for Subquery {
@@ -4886,8 +4956,8 @@ mod tests {
     use crate::select_expr::SelectExpr;
     use crate::test::function_stub::{count, count_udaf};
     use crate::{
-        GroupingSet, binary_expr, col, exists, in_subquery, lit, placeholder,
-        scalar_subquery,
+        ColumnarValue, GroupingSet, Volatility, binary_expr, col, create_udf, exists,
+        in_subquery, lit, placeholder, scalar_subquery,
     };
     use datafusion_common::metadata::ScalarAndMetadata;
     use datafusion_common::tree_node::{
@@ -5164,6 +5234,37 @@ mod tests {
         Ok(Arc::new(
             table_scan(Some(name), &Schema::new(fields), None)?.build()?,
         ))
+    }
+
+    fn volatile_expr() -> Expr {
+        create_udf(
+            "volatile_udf",
+            vec![],
+            DataType::Int64,
+            Volatility::Volatile,
+            Arc::new(|_| Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(0))))),
+        )
+        .call(vec![])
+    }
+
+    #[test]
+    fn contains_volatile_expr_detects_plan_expressions() -> Result<()> {
+        let stable_plan = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(1i64)])?
+            .build()?;
+        assert!(!stable_plan.contains_volatile_expr());
+
+        let volatile_plan = LogicalPlanBuilder::empty(true)
+            .project(vec![volatile_expr()])?
+            .build()?;
+        assert!(volatile_plan.contains_volatile_expr());
+
+        let nested_plan = LogicalPlanBuilder::empty(true)
+            .project(vec![scalar_subquery(Arc::new(volatile_plan))])?
+            .build()?;
+        assert!(nested_plan.contains_volatile_expr());
+
+        Ok(())
     }
 
     #[test]

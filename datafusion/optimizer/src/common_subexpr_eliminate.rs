@@ -30,7 +30,9 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::cse::{CSE, CSEController, FoundCommonNodes};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, qualified_name};
-use datafusion_expr::expr::{Alias, HigherOrderFunction, ScalarFunction};
+use datafusion_expr::expr::{
+    Alias, Exists, HigherOrderFunction, InSubquery, ScalarFunction, SetComparison,
+};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
@@ -699,7 +701,18 @@ impl CSEController for ExprCSEController<'_> {
     }
 
     fn is_valid(node: &Expr) -> bool {
+        let subquery_is_volatile = match node {
+            Expr::ScalarSubquery(subquery)
+            | Expr::Exists(Exists { subquery, .. })
+            | Expr::InSubquery(InSubquery { subquery, .. })
+            | Expr::SetComparison(SetComparison { subquery, .. }) => {
+                subquery.is_volatile()
+            }
+            _ => false,
+        };
+
         !node.is_volatile_node()
+            && !subquery_is_volatile
             && !matches!(node, Expr::Lambda(_) | Expr::LambdaVariable(_))
     }
 

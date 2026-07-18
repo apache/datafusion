@@ -150,6 +150,7 @@ fn exists_subquery(subquery: &Subquery, filter: Expr) -> Result<Expr> {
             subquery: Arc::new(plan),
             outer_ref_columns,
             spans: subquery.spans.clone(),
+            scalar_subquery_index: subquery.scalar_subquery_index,
         },
         negated: false,
     }))

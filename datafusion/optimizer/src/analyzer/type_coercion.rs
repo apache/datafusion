@@ -456,6 +456,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 subquery,
                 outer_ref_columns,
                 spans,
+                scalar_subquery_index,
             }) => {
                 let new_plan =
                     analyze_internal(self.schema, Arc::unwrap_or_clone(subquery))?.data;
@@ -463,6 +464,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
                     spans,
+                    scalar_subquery_index,
                 })))
             }
             Expr::Exists(Exists { subquery, negated }) => {
@@ -476,6 +478,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         subquery: Arc::new(new_plan),
                         outer_ref_columns: subquery.outer_ref_columns,
                         spans: subquery.spans,
+                        scalar_subquery_index: subquery.scalar_subquery_index,
                     },
                     negated,
                 })))
@@ -501,6 +504,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
                     spans: subquery.spans,
+                    scalar_subquery_index: subquery.scalar_subquery_index,
                 };
                 Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
                     Box::new(expr.cast_to(&common_type, self.schema)?),
@@ -537,6 +541,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
                     spans: subquery.spans,
+                    scalar_subquery_index: subquery.scalar_subquery_index,
                 };
                 Ok(Transformed::yes(Expr::SetComparison(SetComparison::new(
                     Box::new(expr.cast_to(&common_type, self.schema)?),
@@ -2788,11 +2793,7 @@ mod test {
 
         let in_subquery_expr = Expr::InSubquery(InSubquery::new(
             Box::new(col("a")),
-            Subquery {
-                subquery: empty_int32,
-                outer_ref_columns: vec![],
-                spans: Spans::new(),
-            },
+            Subquery::new(empty_int32, vec![], Spans::new()),
             false,
         ));
         let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_int64)?);
@@ -2817,11 +2818,7 @@ mod test {
 
         let in_subquery_expr = Expr::InSubquery(InSubquery::new(
             Box::new(col("a")),
-            Subquery {
-                subquery: empty_int64,
-                outer_ref_columns: vec![],
-                spans: Spans::new(),
-            },
+            Subquery::new(empty_int64, vec![], Spans::new()),
             false,
         ));
         let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_int32)?);
@@ -2845,11 +2842,7 @@ mod test {
 
         let in_subquery_expr = Expr::InSubquery(InSubquery::new(
             Box::new(col("a")),
-            Subquery {
-                subquery: empty_inside,
-                outer_ref_columns: vec![],
-                spans: Spans::new(),
-            },
+            Subquery::new(empty_inside, vec![], Spans::new()),
             false,
         ));
         let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_outside)?);

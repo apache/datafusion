@@ -157,11 +157,13 @@ impl TreeNode for LogicalPlan {
                 subquery,
                 outer_ref_columns,
                 spans,
+                scalar_subquery_index,
             }) => subquery.map_elements(f)?.update_data(|subquery| {
                 LogicalPlan::Subquery(Subquery {
                     subquery,
                     outer_ref_columns,
                     spans,
+                    scalar_subquery_index,
                 })
             }),
             LogicalPlan::SubqueryAlias(SubqueryAlias {

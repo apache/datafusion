@@ -319,7 +319,7 @@ fn align_plan_to_schema(
 }
 
 fn is_mergeable_predicate(expr: &Expr) -> bool {
-    !expr.is_volatile() && !expr_contains_subquery(expr)
+    !expr.is_volatile_including_subqueries() && !expr_contains_subquery(expr)
 }
 
 /// Returns `true` when every projection expression in `wrappers` is both
@@ -333,7 +333,7 @@ fn wrapper_projections_are_safe(wrappers: &[Wrapper]) -> bool {
     wrappers.iter().all(|w| match w {
         Wrapper::Projection { expr, .. } => expr
             .iter()
-            .all(|e| !e.is_volatile() && !expr_contains_subquery(e)),
+            .all(|e| !e.is_volatile_including_subqueries() && !expr_contains_subquery(e)),
         Wrapper::SubqueryAlias { .. } => true,
     })
 }
