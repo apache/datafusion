@@ -414,7 +414,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// Advances the actual cursor. If it reaches its end, update the
     /// previous cursor with it.
     ///
-    /// If the given partition is not exhausted, the function returns `true`.
+    /// If the given partition batch is exhausted, return `true` to signal a poll is needed
     fn advance_cursors(&mut self, stream_idx: usize) -> bool {
         if let Some(cursor) = &mut self.cursors[stream_idx] {
             let _ = cursor.advance();
