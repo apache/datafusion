@@ -441,6 +441,8 @@ pub(super) struct AggregateHashTableBuffer {
     pub(super) batch_group_indices: Vec<usize>,
 
     /// Hashes retained for the internal hash column when output requires it.
+    /// If this field is `None`, it means that the output does not require to emit
+    /// intermediate hashes.
     pub(super) group_hash_tracker: Option<GroupHashTracker>,
 
     /// Computes group hashes when the input has no reusable hash column.
