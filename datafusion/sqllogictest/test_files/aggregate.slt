@@ -2268,6 +2268,37 @@ statement ok
 DROP TABLE approx_distinct_duration_test;
 
 
+# GROUP BY over Duration group keys. Duration columns route through the
+# GroupValuesColumn column-wise fast path, so a Duration key no longer forces
+# the row-encoded fallback. Assert equal durations collapse and a Duration key
+# groups alongside a primitive on the multi-column path.
+statement ok
+CREATE TABLE duration_group_test AS VALUES
+  (1, arrow_cast(5, 'Duration(Second)')),
+  (1, arrow_cast(5, 'Duration(Second)')),
+  (1, arrow_cast(7, 'Duration(Second)')),
+  (2, arrow_cast(5, 'Duration(Second)'));
+
+# Single Duration group key: {5s, 7s}, with 5s appearing three times.
+query ?I
+SELECT column2, count(*) FROM duration_group_test GROUP BY column2 ORDER BY column2;
+----
+0 days 0 hours 0 mins 5 secs 3
+0 days 0 hours 0 mins 7 secs 1
+
+# Multi-column GROUP BY: a primitive key and a Duration key on the same path.
+query I?I
+SELECT column1, column2, count(*)
+FROM duration_group_test GROUP BY column1, column2 ORDER BY column1, column2;
+----
+1 0 days 0 hours 0 mins 5 secs 2
+1 0 days 0 hours 0 mins 7 secs 1
+2 0 days 0 hours 0 mins 5 secs 1
+
+statement ok
+DROP TABLE duration_group_test;
+
+
 # This test runs approx_distinct over the intervals YearMonth,
 # DayTime, MonthDayNano for the scalar and the grouped path.
 statement ok
