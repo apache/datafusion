@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
+#![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Session management for DataFusion query execution environment
@@ -27,6 +30,9 @@
 //! Key components:
 //! * [`Session`] - Manages query execution context, including configurations,
 //!   catalogs, and runtime state
+//! * [`CatalogProviderList`], [`CatalogProvider`], and [`SchemaProvider`] -
+//!   Describe catalog hierarchies
+//! * [`TableProvider`] - Provides data for query planning and execution
 //! * [`SessionStore`] - Handles session persistence and retrieval
 //!
 //! The session system enables:
@@ -36,6 +42,17 @@
 //! * Runtime environment configuration
 //! * Query state persistence
 
+pub mod catalog;
+pub mod schema;
 pub mod session;
+pub mod table;
 
+pub use crate::catalog::{
+    CatalogProvider, CatalogProviderList, EmptyCatalogProviderList,
+};
+pub use crate::schema::SchemaProvider;
 pub use crate::session::{Session, SessionStore};
+pub use crate::table::{
+    ScanArgs, ScanResult, TableFunction, TableFunctionArgs, TableFunctionImpl,
+    TableProvider, TableProviderFactory,
+};

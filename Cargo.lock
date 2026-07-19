@@ -2581,6 +2581,7 @@ dependencies = [
 name = "datafusion-session"
 version = "54.0.0"
 dependencies = [
+ "arrow-schema",
  "async-trait",
  "datafusion-common",
  "datafusion-execution",

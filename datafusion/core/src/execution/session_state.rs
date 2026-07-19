@@ -269,6 +269,10 @@ impl Session for SessionState {
         self.config()
     }
 
+    fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
+        Arc::clone(self.catalog_list())
+    }
+
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -2366,6 +2370,7 @@ mod tests {
     use datafusion_optimizer::Optimizer;
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_physical_plan::display::DisplayableExecutionPlan;
+    use datafusion_session::Session;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -2457,6 +2462,9 @@ mod tests {
         let session_state = SessionStateBuilder::new()
             .with_catalog_list(Arc::new(MemoryCatalogProviderList::new()))
             .build();
+        let session_catalogs = Session::catalog_list(&session_state);
+        assert!(Arc::ptr_eq(&session_catalogs, session_state.catalog_list()));
+
         let table_ref = session_state.resolve_table_ref("employee").to_string();
         session_state
             .schema_for_ref(&table_ref)?

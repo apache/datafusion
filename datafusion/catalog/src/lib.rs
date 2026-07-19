@@ -57,8 +57,3 @@ pub use memory::{
 };
 pub use schema::*;
 pub use table::*;
-
-// For backwards compatibility,
-mod session {
-    pub use datafusion_session::Session;
-}

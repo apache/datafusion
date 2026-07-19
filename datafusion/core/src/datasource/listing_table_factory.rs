@@ -555,6 +555,7 @@ mod tests {
         use datafusion_execution::config::SessionConfig;
         use datafusion_physical_expr::PhysicalExpr;
         use datafusion_physical_plan::ExecutionPlan;
+        use datafusion_session::{CatalogProviderList, EmptyCatalogProviderList};
         use std::any::Any;
         use std::collections::HashMap;
 
@@ -569,6 +570,9 @@ mod tests {
             }
             fn config(&self) -> &SessionConfig {
                 unimplemented!()
+            }
+            fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
+                Arc::new(EmptyCatalogProviderList)
             }
             async fn create_physical_plan(
                 &self,
