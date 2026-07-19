@@ -1985,16 +1985,20 @@ impl ContextProvider for SessionContextProvider<'_> {
             .build();
         let simplifier = ExprSimplifier::new(simplify_context);
         let schema = DFSchema::empty();
+        let raw_args = args.clone();
         let args = args
             .into_iter()
             .map(|arg| {
+                let backup = arg.clone();
                 simplifier
                     .coerce(arg, &schema)
                     .and_then(|e| simplifier.simplify(e))
+                    .unwrap_or(backup)
             })
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
-        let provider = tbl_func
-            .create_table_provider_with_args(TableFunctionArgs::new(&args, self.state))?;
+            .collect::<Vec<_>>();
+        let provider = tbl_func.create_table_provider_with_args(
+            TableFunctionArgs::new_with_raw(&args, &raw_args, self.state),
+        )?;
 
         Ok(provider_as_source(provider))
     }
