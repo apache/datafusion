@@ -1407,10 +1407,20 @@ impl RowGroupsPrunedParquetOpen {
             // through to post-scan.
             row_filter_generator.rejected_conjuncts().to_vec()
         } else if let Some(predicate) = prepared.predicate.as_ref() {
-            // Pushdown disabled: the whole predicate runs post-scan (in-scan
-            // equivalent of a FilterExec).
+            // Pushdown disabled: static conjuncts run post-scan (in-scan
+            // equivalent of a FilterExec). Dynamic filters are *dropped* here
+            // — they stay in `prepared.predicate` for the RowGroupPruner
+            // below (#22450 dynamic RG-level pruning), so their contribution
+            // survives. Applying them per-batch here is redundant with the
+            // downstream operator that already exact-matches on the same
+            // key (HashJoin hash lookup / TopK sort heap) and, for
+            // Partitioned HashJoin's `CASE hash(col) % N WHEN pid THEN
+            // bounds ELSE lit(false) END`, expensive.
             datafusion_physical_expr::split_conjunction(predicate)
                 .into_iter()
+                .filter(|conjunct| {
+                    !DynamicFilterTracking::classify(conjunct).contains_dynamic_filter()
+                })
                 .cloned()
                 .collect()
         } else {
