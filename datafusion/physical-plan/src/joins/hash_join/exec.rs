@@ -1388,6 +1388,11 @@ impl ExecutionPlan for HashJoinExec {
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
         // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
         let repartition_random_state = REPARTITION_RANDOM_STATE;
+        let enable_membership_filter = context
+            .session_config()
+            .options()
+            .optimizer
+            .enable_hash_join_dynamic_membership_filter;
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
@@ -1406,6 +1411,7 @@ impl ExecutionPlan for HashJoinExec {
                             on_right,
                             repartition_random_state,
                             self.null_aware,
+                            enable_membership_filter,
                         ))
                     })))
                 })

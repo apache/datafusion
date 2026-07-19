@@ -258,6 +258,11 @@ pub(crate) struct SharedBuildAccumulator {
     /// Null-aware anti join (`NOT IN`). A probe-side NULL must reach the join so its
     /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
     null_aware: bool,
+    /// When `false`, [`create_membership_predicate`] is skipped and only the
+    /// bounds portion of the dynamic filter is published. Controlled by
+    /// `datafusion.optimizer.enable_hash_join_dynamic_membership_filter`;
+    /// see the config docs for the tradeoff.
+    enable_membership_filter: bool,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -354,6 +359,7 @@ impl SharedBuildAccumulator {
     /// We cannot build a partial filter from some partitions - it would incorrectly eliminate
     /// valid join results. We must wait until we have complete information from ALL
     /// relevant partitions before updating the dynamic filter.
+    #[expect(clippy::too_many_arguments, reason = "shared build coordinator")]
     pub(crate) fn new_from_partition_mode(
         partition_mode: PartitionMode,
         left_child: &dyn ExecutionPlan,
@@ -362,6 +368,7 @@ impl SharedBuildAccumulator {
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
         null_aware: bool,
+        enable_membership_filter: bool,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -409,6 +416,7 @@ impl SharedBuildAccumulator {
             repartition_random_state,
             probe_schema: right_child.schema(),
             null_aware,
+            enable_membership_filter,
         }
     }
 
@@ -572,12 +580,18 @@ impl SharedBuildAccumulator {
         match finalize_input {
             FinalizeInput::CollectLeft(partition) => match partition {
                 PartitionStatus::Reported(partition_data) => {
-                    let membership_expr = create_membership_predicate(
-                        &self.on_right,
-                        partition_data.pushdown.clone(),
-                        &HASH_JOIN_SEED,
-                        self.probe_schema.as_ref(),
-                    )?;
+                    // Skip the membership branch entirely when the config
+                    // gate is off; only the bounds portion is published.
+                    let membership_expr = if self.enable_membership_filter {
+                        create_membership_predicate(
+                            &self.on_right,
+                            partition_data.pushdown.clone(),
+                            &HASH_JOIN_SEED,
+                            self.probe_schema.as_ref(),
+                        )?
+                    } else {
+                        None
+                    };
                     let bounds_expr =
                         create_bounds_predicate(&self.on_right, &partition_data.bounds);
 
@@ -625,12 +639,19 @@ impl SharedBuildAccumulator {
                             empty_partition_ids.push(partition_id);
                         }
                         PartitionStatus::Reported(partition) => {
-                            let membership_expr = create_membership_predicate(
-                                &self.on_right,
-                                partition.pushdown.clone(),
-                                &HASH_JOIN_SEED,
-                                self.probe_schema.as_ref(),
-                            )?;
+                            // Skip the membership branch entirely when the
+                            // config gate is off; only the bounds portion is
+                            // published in this partition's CASE branch.
+                            let membership_expr = if self.enable_membership_filter {
+                                create_membership_predicate(
+                                    &self.on_right,
+                                    partition.pushdown.clone(),
+                                    &HASH_JOIN_SEED,
+                                    self.probe_schema.as_ref(),
+                                )?
+                            } else {
+                                None
+                            };
                             let bounds_expr = create_bounds_predicate(
                                 &self.on_right,
                                 &partition.bounds,
@@ -757,6 +778,10 @@ pub(super) fn make_partitioned_accumulator_for_test(
         repartition_random_state: SeededRandomState::with_seed(1),
         probe_schema,
         null_aware: false,
+        // Tests intentionally exercise the historical always-on membership
+        // path so existing coverage isn't lost when the production default
+        // flips to bounds-only.
+        enable_membership_filter: true,
     }
 }
 
@@ -814,6 +839,10 @@ mod tests {
             repartition_random_state: SeededRandomState::with_seed(1),
             probe_schema: test_probe_schema(),
             null_aware: false,
+            // Tests intentionally exercise the historical always-on membership
+            // path so existing coverage isn't lost when the production default
+            // flips to bounds-only.
+            enable_membership_filter: true,
         }
     }
 
@@ -1052,6 +1081,95 @@ mod tests {
             "late cancel must not overwrite a prior Reported status"
         );
         assert_eq!(completed, 1, "late cancel must not double-count completion");
+    }
+
+    /// Build an accumulator with the membership branch disabled — the
+    /// production default. Mirrors [`make_collect_left_accumulator_for_test`]
+    /// except for the gate bit.
+    fn make_collect_left_accumulator_bounds_only() -> SharedBuildAccumulator {
+        let on_right = test_on_right();
+        let dynamic_filter = test_dynamic_filter(&on_right);
+        SharedBuildAccumulator {
+            inner: Mutex::new(AccumulatorState {
+                data: AccumulatedBuildData::CollectLeft {
+                    data: PartitionStatus::Pending,
+                    reported_count: 0,
+                    expected_reports: 1,
+                },
+                completion: CompletionState::Pending,
+            }),
+            completion_notify: Notify::new(),
+            dynamic_filter,
+            on_right,
+            repartition_random_state: SeededRandomState::with_seed(1),
+            probe_schema: test_probe_schema(),
+            null_aware: false,
+            enable_membership_filter: false,
+        }
+    }
+
+    /// Drive the accumulator to `Ready` by storing a single-partition
+    /// `CollectLeft` report and running the finalize path synchronously.
+    /// Bypasses the async `report_build_data` so the test doesn't need a
+    /// tokio runtime.
+    fn finalize_collect_left(
+        acc: &SharedBuildAccumulator,
+        pushdown: PushdownStrategy,
+        bounds: PartitionBounds,
+    ) {
+        let finalize_input = {
+            let mut guard = acc.inner.lock();
+            acc.store_build_data(
+                &mut guard,
+                PartitionBuildData::CollectLeft { pushdown, bounds },
+            )
+            .unwrap();
+            acc.take_finalize_input_if_ready(&mut guard)
+                .expect("single-partition CollectLeft should be ready to finalize")
+        };
+        acc.finish(finalize_input);
+    }
+
+    /// When the membership gate is off, the published dynamic filter must be
+    /// the bounds portion only — not the historical `bounds AND membership`
+    /// composite. This is the invariant the tactical fix depends on: without
+    /// it, the per-row hash-lookup / list-lookup cost still runs and the
+    /// regression from #22384 is not addressed.
+    #[test]
+    fn collect_left_with_gate_off_publishes_bounds_only() {
+        let acc = make_collect_left_accumulator_bounds_only();
+        finalize_collect_left(&acc, in_list(&[1, 2, 3]), bounds(1, 3));
+
+        let expr = current_expr(&acc);
+        // With the gate off, the combined expression should NOT contain
+        // an `InListExpr` anywhere — the whole point of the gate is to keep
+        // that off the per-row hot path.
+        let debug_repr = format!("{expr:?}");
+        assert!(
+            !debug_repr.contains("InListExpr"),
+            "membership gate is off: published filter must not contain \
+             InListExpr, but got: {debug_repr}"
+        );
+        // The remaining shape is `col >= min AND col <= max` — a binary
+        // `AND` at the top, both sides bounds comparisons.
+        assert_top_binary_op(&expr, Operator::And);
+    }
+
+    /// Sanity check the inverse: when the gate is on (historical default in
+    /// the test helpers), the published filter still contains membership.
+    /// Guards against accidentally regressing the gate wiring.
+    #[test]
+    fn collect_left_with_gate_on_publishes_bounds_and_membership() {
+        let acc = make_collect_left_accumulator_for_test();
+        finalize_collect_left(&acc, in_list(&[1, 2, 3]), bounds(1, 3));
+
+        let expr = current_expr(&acc);
+        let debug_repr = format!("{expr:?}");
+        assert!(
+            debug_repr.contains("InListExpr"),
+            "membership gate is on: published filter must contain InListExpr, \
+             but got: {debug_repr}"
+        );
     }
 
     // Drop from the `NotReported` (or first-poll-never-ran) state must

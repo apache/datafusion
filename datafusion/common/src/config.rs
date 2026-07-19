@@ -1419,6 +1419,23 @@ config_namespace! {
         /// into the file scan phase.
         pub enable_join_dynamic_filter_pushdown: bool, default = true
 
+        /// When set to true, HashJoinExec includes the (expensive) membership
+        /// filter — an `InListExpr` over the build-side join keys, or a hash
+        /// table lookup for large builds — as part of the dynamic filter
+        /// pushed down to the probe scan.
+        ///
+        /// Defaults to `false`: only the cheap bounds portion
+        /// (`col >= min AND col <= max`) is pushed. This avoids the per-row
+        /// hash / list-lookup cost on multi-join queries where the join has a
+        /// high match rate — the membership check costs 50–100ns/row and
+        /// dominates the coordination overhead without a meaningful
+        /// selectivity win. Bounds alone still drive row-group / statistics
+        /// pruning, so the pushdown continues to earn its keep in the common
+        /// case; users who want the historical always-on behavior (e.g. for
+        /// highly-selective joins with big build sides that used to see 2–3×
+        /// wins from membership pruning) can flip this to `true`.
+        pub enable_hash_join_dynamic_membership_filter: bool, default = false
+
         /// When set to true, the optimizer will attempt to push down Aggregate dynamic filters
         /// into the file scan phase.
         pub enable_aggregate_dynamic_filter_pushdown: bool, default = true
