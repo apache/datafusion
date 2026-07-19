@@ -265,7 +265,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
             let elapsed_compute = self.metrics.elapsed_compute().clone();
             let mut timer = elapsed_compute.timer();
-            let fetch = self.fetch;
 
             // 2. Init loser tree
             self.init_loser_tree();
@@ -277,9 +276,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 self.in_progress.push_row(winner_stream);
 
                 // 3.2. If the new row reached the limit
-                if fetch
-                    .is_some_and(|fetch| fetch <= self.produced + self.in_progress.len())
-                {
+                if self.is_fetch_reached() {
                     break;
                 }
 
@@ -406,6 +403,12 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 self.num_of_polled_with_same_value[partition_idx] = 0;
             }
         }
+    }
+
+    fn fetch_reached(&mut self) -> bool {
+        self.fetch
+          .map(|fetch| self.produced + self.in_progress.len() >= fetch)
+          .unwrap_or(false)
     }
 
     /// Advances the actual cursor. If it reaches its end, update the
