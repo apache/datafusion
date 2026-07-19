@@ -32,12 +32,12 @@ use crate::aggregates::group_values::multi_group_by::{
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::compute::cast;
 use arrow::datatypes::{
-    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Field, Float32Type,
-    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema, SchemaRef,
-    StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
-    UInt64Type,
+    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Field, Float16Type,
+    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema,
+    SchemaRef, StringViewType, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
@@ -933,6 +933,7 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64
+            | DataType::Float16
             | DataType::Float32
             | DataType::Float64
             | DataType::Decimal128(_, _)
@@ -986,6 +987,9 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
         DataType::UInt16 => instantiate_primitive!(v, nullable, UInt16Type, data_type),
         DataType::UInt32 => instantiate_primitive!(v, nullable, UInt32Type, data_type),
         DataType::UInt64 => instantiate_primitive!(v, nullable, UInt64Type, data_type),
+        DataType::Float16 => {
+            instantiate_primitive!(v, nullable, Float16Type, data_type)
+        }
         DataType::Float32 => {
             instantiate_primitive!(v, nullable, Float32Type, data_type)
         }
@@ -1259,7 +1263,10 @@ enum Nulls {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray};
+    use arrow::array::{
+        Array, ArrayRef, Float16Array, Int64Array, RecordBatch, StringArray,
+        StringViewArray,
+    };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
     use datafusion_common::utils::proxy::HashTableAllocExt;
@@ -1283,7 +1290,7 @@ mod tests {
     ///
     /// This test fuzzes a representative cross-section of types and asserts
     /// both directions of the biconditional. When a new specialization is
-    /// added (`Float16`, `FixedSizeList`, `Struct`, ...) it should be added
+    /// added (`FixedSizeList`, `Struct`, `Decimal256`, ...) it should be added
     /// to the supported_cases vector; when a type is intentionally rejected
     /// it should be added to unsupported_cases.
     #[test]
@@ -1294,6 +1301,7 @@ mod tests {
             DataType::UInt64,
             DataType::Float32,
             DataType::Float64,
+            DataType::Float16,
             DataType::Decimal128(38, 10),
             DataType::Utf8,
             DataType::LargeUtf8,
@@ -1325,7 +1333,6 @@ mod tests {
         }
 
         let unsupported_cases: Vec<DataType> = vec![
-            DataType::Float16,
             DataType::Decimal256(76, 10),
             // Invalid Time-unit combinations: Time32 is defined only for
             // Second / Millisecond and Time64 only for Microsecond /
@@ -1352,14 +1359,65 @@ mod tests {
         }
     }
 
+    /// End-to-end coverage for `Float16` group keys. Beyond routing through the
+    /// column-wise `GroupValuesColumn` fast path, this exercises the float
+    /// canonicalization the builder relies on (shared with Float32 / Float64 via
+    /// `HashValue`): `-0.0` and `+0.0` collapse into one group stored as `+0.0`,
+    /// and equal `NaN`s collapse into a single group.
+    #[test]
+    fn test_group_values_column_float16() {
+        use half::f16;
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("f", DataType::Float16, true)]));
+        assert!(supported_schema(&schema));
+        let mut group_values =
+            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+        // Rows: 1.0, -0.0, +0.0, NaN, 1.0, NaN, null, null.
+        // First-seen groups: 1.0 -> 0, -0.0/+0.0 -> 1, NaN -> 2, null -> 3.
+        let input: ArrayRef = Arc::new(Float16Array::from(vec![
+            Some(f16::from_f32(1.0)),
+            Some(f16::from_f32(-0.0)),
+            Some(f16::from_f32(0.0)),
+            Some(f16::NAN),
+            Some(f16::from_f32(1.0)),
+            Some(f16::NAN),
+            None,
+            None,
+        ]));
+        let mut groups = Vec::new();
+        group_values.intern(&[input], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1, 1, 2, 0, 2, 3, 3]);
+
+        let emitted = group_values.emit(EmitTo::All).unwrap();
+        assert_eq!(emitted.len(), 1);
+        assert_eq!(emitted[0].data_type(), &DataType::Float16);
+        let actual = emitted[0]
+            .as_any()
+            .downcast_ref::<Float16Array>()
+            .expect("emitted column should be a Float16Array");
+        assert_eq!(actual.len(), 4);
+        assert_eq!(actual.value(0), f16::from_f32(1.0));
+        // The ±0.0 group is stored canonically as +0.0 (not -0.0).
+        assert_eq!(actual.value(1).to_bits(), f16::from_f32(0.0).to_bits());
+        assert!(actual.value(2).is_nan());
+        assert!(actual.is_null(3));
+    }
+
     #[test]
     fn supported_schema_rejects_mix_of_supported_and_unsupported() {
-        // One Float16 column among supported columns flips the whole
-        // schema to GroupValuesRows fallback.
+        // One permanently-unsupported column flips the whole schema to the
+        // GroupValuesRows fallback. Use an invalid Arrow unit combo
+        // (Time64(Second)) so this stays stable as new primitive builders land.
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Float16, true),
+            Field::new(
+                "c",
+                DataType::Time64(arrow::datatypes::TimeUnit::Second),
+                true,
+            ),
         ]);
         assert!(!supported_schema(&schema));
 
@@ -1378,8 +1436,11 @@ mod tests {
         // rejected at construction time rather than at first `intern`.
         // `GroupValuesColumn` doesn't implement `Debug`, so explicit match
         // instead of `unwrap_err`.
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("x", DataType::Float16, true)]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Time64(arrow::datatypes::TimeUnit::Second),
+            true,
+        )]));
         match GroupValuesColumn::<false>::try_new(schema) {
             Ok(_) => panic!("expected NotImpl error, but try_new succeeded"),
             Err(e) => {
