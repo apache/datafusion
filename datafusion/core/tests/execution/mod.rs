@@ -17,5 +17,6 @@
 
 mod coop;
 mod datasource_split;
+mod hash_reuse;
 mod logical_plan;
 mod register_arrow;
