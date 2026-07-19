@@ -919,6 +919,10 @@ fn range_right_semi_hash_join_rehashes_incompatible_sort_options() -> Result<()>
         [10, 20, 30],
         SortOptions::default(),
     )?);
+    // A descending Range requires descending-ordered split points (the constructor rejects
+    // ascending points under a descending sort), so [30, 20, 10] DESC encodes the same
+    // partition boundaries as the left's [10, 20, 30] ASC -- only the sort direction differs,
+    // which is the incompatibility under test.
     let right = parquet_exec_with_output_partitioning(range_partitioning(
         "a",
         [30, 20, 10],
