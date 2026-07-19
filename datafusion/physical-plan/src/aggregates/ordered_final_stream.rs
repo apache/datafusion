@@ -335,6 +335,7 @@ impl OrderedFinalAggregateStream {
             agg,
             &input_schema,
             Arc::clone(&schema),
+            partition,
             batch_size,
             input_order_mode,
             group_by_metrics,

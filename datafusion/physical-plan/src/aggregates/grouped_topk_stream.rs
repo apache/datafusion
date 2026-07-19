@@ -23,9 +23,10 @@ use crate::aggregates::topk::priority_map::PriorityMap;
 use crate::aggregates::topk_types_supported;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
-    evaluate_many,
+    evaluate_many, outputs_group_hashes,
 };
 use crate::metrics::BaselineMetrics;
+use crate::repartition::{ExpressionHasher, HashMetrics};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch, new_null_array};
@@ -55,6 +56,8 @@ pub struct GroupedTopKAggregateStream {
     aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     group_by: Arc<PhysicalGroupBy>,
     priority_map: PriorityMap,
+    output_hasher: ExpressionHasher,
+    output_group_hashes: bool,
     /// Whether a NULL group key has been seen for a group-by-only aggregation.
     null_group_seen: bool,
 }
@@ -109,6 +112,11 @@ impl GroupedTopKAggregateStream {
         // Note: Null values in aggregate columns are filtered by the aggregation layer
         // before reaching the heap, so the heap implementations don't need explicit null handling.
         let priority_map = PriorityMap::new(kt, vt, limit, desc)?;
+        let output_group_hashes = outputs_group_hashes(aggr.mode, &group_by);
+        let output_hasher = ExpressionHasher::new_with_metrics(
+            group_by.output_exprs(),
+            HashMetrics::new(&aggr.metrics, partition),
+        );
 
         Ok(GroupedTopKAggregateStream {
             partition,
@@ -122,6 +130,8 @@ impl GroupedTopKAggregateStream {
             aggregate_arguments,
             group_by,
             priority_map,
+            output_hasher,
+            output_group_hashes,
             null_group_seen: false,
         })
     }
@@ -173,6 +183,11 @@ impl GroupedTopKAggregateStream {
             if self.null_group_seen {
                 self.append_null_group(&mut cols)?;
             }
+        }
+
+        if self.output_group_hashes {
+            let hashes = self.output_hasher.compute_hashes(&cols[..1])?.to_vec();
+            cols.push(Arc::new(arrow::array::UInt64Array::from(hashes)));
         }
 
         Ok(cols)

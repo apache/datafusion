@@ -866,6 +866,12 @@ impl PgJsonExecutionPlanVisitor<'_> {
             metrics
         };
 
+        let metrics = if let Some(names) = self.metric_names {
+            metrics.filter_by_names(names)
+        } else {
+            metrics
+        };
+
         // Build the Extras bucket, while extracting PG-canonical keys to the
         // top level.
         let mut extras = serde_json::Map::new();

@@ -34,9 +34,10 @@ use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_val
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
-    AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
-    evaluate_group_by,
+    AggregateExec, AggregateMode, GroupHashTracker, PhysicalGroupBy,
+    aggregate_expressions, evaluate_group_by, outputs_group_hashes,
 };
+use crate::repartition::{ExpressionHasher, HashMetrics};
 
 use super::common::{AggregateAccumulator, EvaluatedAggregateBatch};
 
@@ -118,6 +119,12 @@ pub(super) struct OrderedAggregateTableBuffer {
     /// Scratch group id vector for the current input batch.
     pub(super) group_indices: Vec<usize>,
 
+    /// Hashes retained for the internal hash column when output requires it.
+    pub(super) group_hash_tracker: Option<GroupHashTracker>,
+
+    /// Computes group hashes when the input has no reusable hash column.
+    pub(super) hasher: ExpressionHasher,
+
     /// One item per aggregate expression.
     ///
     /// Example: `COUNT(x), SUM(y)` creates two items. Each item owns the input
@@ -136,6 +143,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         input_schema: &SchemaRef,
         output_schema: SchemaRef,
         state_schema: SchemaRef,
+        partition: usize,
         batch_size: usize,
         input_order_mode: &InputOrderMode,
         aggregate_mode: &AggregateMode,
@@ -181,6 +189,12 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                 group_ordering,
                 group_values,
                 group_indices: vec![],
+                group_hash_tracker: outputs_group_hashes(*aggregate_mode, &agg.group_by)
+                    .then(GroupHashTracker::default),
+                hasher: ExpressionHasher::new_with_metrics(
+                    agg.group_by.input_exprs(),
+                    HashMetrics::new(&agg.metrics, partition),
+                ),
                 accumulators,
             },
             _mode: PhantomData,
@@ -191,10 +205,10 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     ///
     /// e.g., `select k+1, sum(v*v) from t group by (k+1)`, this function
     /// evaluates `k+1`, `v*v`.
-    pub(super) fn evaluate_batch(
+    pub(super) fn evaluate_batch<'a>(
         &self,
-        batch: &RecordBatch,
-    ) -> Result<EvaluatedAggregateBatch> {
+        batch: &'a RecordBatch,
+    ) -> Result<EvaluatedAggregateBatch<'a>> {
         let timer = self.group_by_metrics.time_calculating_group_ids.timer();
         let grouping_set_args = evaluate_group_by(&self.buffer.group_by, batch)?;
         drop(timer);
@@ -211,6 +225,10 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         Ok(EvaluatedAggregateBatch {
             grouping_set_args,
             accumulator_args,
+            precomputed_group_hashes: self
+                .buffer
+                .hasher
+                .precomputed_group_by(&self.buffer.group_by, batch),
         })
     }
 
@@ -248,6 +266,12 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             + self.buffer.group_values.size()
             + self.buffer.group_ordering.size()
             + self.buffer.group_indices.allocated_size()
+            + self
+                .buffer
+                .group_hash_tracker
+                .as_ref()
+                .map_or(0, |v| v.allocated_size())
+            + self.buffer.hasher.allocated_size()
     }
 
     pub(in crate::aggregates) fn group_by_metrics(&self) -> GroupByMetrics {
@@ -314,15 +338,29 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     /// - `false`: update aggregate states from raw input for partial aggregation.
     pub(super) fn aggregate_evaluated_batch(
         &mut self,
-        evaluated_batch: &EvaluatedAggregateBatch,
+        evaluated_batch: &EvaluatedAggregateBatch<'_>,
         is_final: bool,
     ) -> Result<()> {
         for group_values in &evaluated_batch.grouping_set_args {
             let starting_num_groups = self.buffer.group_values.len();
-            self.buffer
-                .group_values
-                .intern(group_values, &mut self.buffer.group_indices)?;
+            let hashes = match evaluated_batch.precomputed_group_hashes {
+                Some(hashes) => hashes,
+                None => self.buffer.hasher.compute_hashes(group_values)?,
+            };
+            self.buffer.group_values.intern(
+                group_values,
+                &mut self.buffer.group_indices,
+                hashes,
+            )?;
             let total_num_groups = self.buffer.group_values.len();
+            if let Some(group_hash_tracker) = &mut self.buffer.group_hash_tracker {
+                group_hash_tracker.record_new_groups(
+                    starting_num_groups,
+                    total_num_groups,
+                    &self.buffer.group_indices,
+                    hashes,
+                );
+            }
             if total_num_groups > starting_num_groups {
                 self.buffer.group_ordering.new_groups(
                     group_values,
@@ -399,6 +437,9 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             } else {
                 output.extend(acc.state(emit_to)?);
             }
+        }
+        if let Some(group_hash_tracker) = &mut self.buffer.group_hash_tracker {
+            output.push(group_hash_tracker.emit(emit_to))
         }
         drop(timer);
 

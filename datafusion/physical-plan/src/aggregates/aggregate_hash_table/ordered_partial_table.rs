@@ -66,6 +66,7 @@ impl OrderedAggregateTable<PartialMarker> {
             &input_schema,
             output_schema,
             state_schema,
+            partition,
             batch_size,
             &agg.input_order_mode,
             &AggregateMode::Partial,

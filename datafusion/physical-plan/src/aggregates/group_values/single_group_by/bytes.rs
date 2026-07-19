@@ -45,15 +45,21 @@ impl<O: OffsetSizeTrait> GroupValuesBytes<O> {
 }
 
 impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hashes: &[u64],
+    ) -> Result<()> {
         assert_eq!(cols.len(), 1);
 
         // look up / add entries in the table
         let arr = &cols[0];
 
         groups.clear();
-        self.map.insert_if_new(
+        self.map.insert_if_new_with_hashes(
             arr,
+            hashes,
             // called for each new group
             |_value| {
                 // assign new group index on each insert
@@ -108,7 +114,10 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
 
                 self.num_groups = 0;
                 let mut group_indexes = vec![];
-                self.intern(&[remaining_group_values], &mut group_indexes)?;
+                let cols = [remaining_group_values];
+                let mut hasher = crate::repartition::ExpressionHasher::new(vec![]);
+                let hashes = hasher.compute_hashes(&cols)?;
+                self.intern(&cols, &mut group_indexes, hashes)?;
 
                 // Verify that the group indexes were assigned in the correct order
                 assert_eq!(0, group_indexes[0]);

@@ -42,8 +42,14 @@ impl GroupValuesBoolean {
 }
 
 impl GroupValues for GroupValuesBoolean {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hashes: &[u64],
+    ) -> Result<()> {
         let array = cols[0].as_boolean();
+        assert_eq!(array.len(), hashes.len());
         groups.clear();
 
         for value in array.iter() {
