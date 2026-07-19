@@ -90,6 +90,105 @@ fn flatten_expr_groups(expr_groups: Vec<Vec<Expr>>) -> Vec<Expr> {
     expr_groups.into_iter().flatten().collect()
 }
 
+fn rebase_and_validate_post_aggregate_exprs(
+    exprs: &[Expr],
+    aggr_projection_exprs: &[Expr],
+    input: &LogicalPlan,
+    valid_column_exprs: &[Expr],
+    purpose: CheckColumnsMustReferenceAggregatePurpose,
+) -> Result<Vec<Expr>> {
+    let rebased_exprs = exprs
+        .iter()
+        .map(|expr| rebase_expr(expr, aggr_projection_exprs, input))
+        .collect::<Result<Vec<_>>>()?;
+
+    check_columns_satisfy_exprs(
+        valid_column_exprs,
+        &rebased_exprs,
+        CheckColumnsSatisfyExprsPurpose::Aggregate(purpose),
+    )?;
+
+    Ok(rebased_exprs)
+}
+
+fn rebase_and_validate_optional_post_aggregate_expr(
+    expr: Option<&Expr>,
+    aggr_projection_exprs: &[Expr],
+    input: &LogicalPlan,
+    valid_column_exprs: &[Expr],
+    purpose: CheckColumnsMustReferenceAggregatePurpose,
+) -> Result<Option<Expr>> {
+    let Some(expr) = expr else {
+        return Ok(None);
+    };
+
+    let rebased_expr = rebase_and_validate_post_aggregate_exprs(
+        std::slice::from_ref(expr),
+        aggr_projection_exprs,
+        input,
+        valid_column_exprs,
+        purpose,
+    )?
+    .into_iter()
+    .next()
+    .expect("single input expression returns one rebased expression");
+
+    Ok(Some(rebased_expr))
+}
+
+fn order_by_select_alias_expr(
+    rewritten_expr: &Expr,
+    select_exprs_post_aggr: &[Expr],
+) -> Option<Expr> {
+    select_exprs_post_aggr.iter().find_map(|select_expr| {
+        let Expr::Alias(alias) = select_expr else {
+            return None;
+        };
+
+        let rewritten_unaliased = match rewritten_expr {
+            Expr::Alias(a) => a.expr.as_ref(),
+            other => other,
+        };
+
+        (alias.expr.as_ref() == rewritten_unaliased)
+            .then(|| Expr::Column(Column::new_unqualified(alias.name.clone())))
+    })
+}
+
+fn rebase_and_validate_post_aggregate_sort_exprs(
+    sort_exprs: &[SortExpr],
+    select_exprs_post_aggr: &[Expr],
+    aggr_projection_exprs: &[Expr],
+    input: &LogicalPlan,
+    valid_exprs: &[Expr],
+) -> Result<Vec<SortExpr>> {
+    let order_by_post_aggr = sort_exprs
+        .iter()
+        .map(|sort_expr| {
+            let rewritten_expr =
+                rebase_expr(&sort_expr.expr, aggr_projection_exprs, input)?;
+
+            let final_expr =
+                order_by_select_alias_expr(&rewritten_expr, select_exprs_post_aggr)
+                    .unwrap_or(rewritten_expr);
+
+            Ok(sort_expr.with_expr(final_expr))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let order_by_exprs_only: Vec<Expr> =
+        order_by_post_aggr.iter().map(|s| s.expr.clone()).collect();
+    check_columns_satisfy_exprs(
+        valid_exprs,
+        &order_by_exprs_only,
+        CheckColumnsSatisfyExprsPurpose::Aggregate(
+            CheckColumnsMustReferenceAggregatePurpose::OrderBy,
+        ),
+    )?;
+
+    Ok(order_by_post_aggr)
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logic plan from an SQL select
     pub(super) fn select_to_plan(
@@ -1232,130 +1331,67 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|expr| expr_as_column_expr(expr, input))
             .collect::<Result<Vec<Expr>>>()?;
 
-        // next we re-write the projection
-        let select_exprs_post_aggr = select_exprs
-            .iter()
-            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
-            .collect::<Result<Vec<Expr>>>()?;
-
-        // finally, we have some validation that the re-written projection can be resolved
-        // from the aggregate output columns
-        check_columns_satisfy_exprs(
+        // Rewrite the projection to use the columns produced by the
+        // aggregation, and validate that it can be resolved from the
+        // aggregate output columns.
+        let select_exprs_post_aggr = rebase_and_validate_post_aggregate_exprs(
+            select_exprs,
+            &aggr_projection_exprs,
+            input,
             &column_exprs_post_aggr,
-            &select_exprs_post_aggr,
-            CheckColumnsSatisfyExprsPurpose::Aggregate(
-                CheckColumnsMustReferenceAggregatePurpose::Projection,
-            ),
+            CheckColumnsMustReferenceAggregatePurpose::Projection,
         )?;
 
-        // Rewrite the HAVING expression to use the columns produced by the
-        // aggregation.
-        let having_expr_post_aggr = if let Some(having_expr) = having_expr_opt {
-            let having_expr_post_aggr =
-                rebase_expr(having_expr, &aggr_projection_exprs, input)?;
+        // Rewrite HAVING and QUALIFY to use the columns produced by the
+        // aggregation, and validate that they can be resolved from the
+        // aggregate output columns.
+        let having_expr_post_aggr = rebase_and_validate_optional_post_aggregate_expr(
+            having_expr_opt,
+            &aggr_projection_exprs,
+            input,
+            &column_exprs_post_aggr,
+            CheckColumnsMustReferenceAggregatePurpose::Having,
+        )?;
 
-            check_columns_satisfy_exprs(
-                &column_exprs_post_aggr,
-                std::slice::from_ref(&having_expr_post_aggr),
-                CheckColumnsSatisfyExprsPurpose::Aggregate(
-                    CheckColumnsMustReferenceAggregatePurpose::Having,
-                ),
-            )?;
-
-            Some(having_expr_post_aggr)
-        } else {
-            None
-        };
-
-        // Rewrite the QUALIFY expression to use the columns produced by the
-        // aggregation.
-        let qualify_expr_post_aggr = if let Some(qualify_expr) = qualify_expr_opt {
-            let qualify_expr_post_aggr =
-                rebase_expr(qualify_expr, &aggr_projection_exprs, input)?;
-
-            check_columns_satisfy_exprs(
-                &column_exprs_post_aggr,
-                std::slice::from_ref(&qualify_expr_post_aggr),
-                CheckColumnsSatisfyExprsPurpose::Aggregate(
-                    CheckColumnsMustReferenceAggregatePurpose::Qualify,
-                ),
-            )?;
-
-            Some(qualify_expr_post_aggr)
-        } else {
-            None
-        };
-
-        // Rewrite the ORDER BY expressions to use the columns produced by the
-        // aggregation. If an ORDER BY expression matches a SELECT expression
-        // (ignoring aliases), use the SELECT's output column name to avoid
-        // duplication when the SELECT expression has an alias.
-        let order_by_post_aggr = order_by_exprs
-            .iter()
-            .map(|sort_expr| {
-                let rewritten_expr =
-                    rebase_expr(&sort_expr.expr, &aggr_projection_exprs, input)?;
-
-                // Check if this ORDER BY expression matches any aliased SELECT expression
-                // If so, use the SELECT's alias instead of the raw expression
-                let final_expr = select_exprs_post_aggr
-                    .iter()
-                    .find_map(|select_expr| {
-                        // Only consider aliased expressions
-                        if let Expr::Alias(alias) = select_expr {
-                            let rewritten_unaliased = match &rewritten_expr {
-                                Expr::Alias(a) => a.expr.as_ref(),
-                                other => other,
-                            };
-                            if alias.expr.as_ref() == rewritten_unaliased {
-                                return Some(Expr::Column(Column::new_unqualified(
-                                    alias.name.clone(),
-                                )));
-                            }
-                        }
-                        None
-                    })
-                    .unwrap_or(rewritten_expr);
-
-                Ok(sort_expr.with_expr(final_expr))
-            })
-            .collect::<Result<Vec<SortExpr>>>()?;
+        let qualify_expr_post_aggr = rebase_and_validate_optional_post_aggregate_expr(
+            qualify_expr_opt,
+            &aggr_projection_exprs,
+            input,
+            &column_exprs_post_aggr,
+            CheckColumnsMustReferenceAggregatePurpose::Qualify,
+        )?;
 
         let all_valid_exprs: Vec<Expr> = column_exprs_post_aggr
             .iter()
             .cloned()
-            .chain(select_exprs_post_aggr.iter().filter_map(|e| {
-                if let Expr::Alias(alias) = e {
+            .chain(select_exprs_post_aggr.iter().filter_map(|expr| match expr {
+                Expr::Alias(alias) => {
                     Some(Expr::Column(Column::new_unqualified(alias.name.clone())))
-                } else {
-                    None
                 }
+                _ => None,
             }))
             .collect();
 
-        let order_by_exprs_only: Vec<Expr> =
-            order_by_post_aggr.iter().map(|s| s.expr.clone()).collect();
-        check_columns_satisfy_exprs(
+        // Preserve ORDER BY SELECT-alias remapping and validate against
+        // aggregate outputs plus SELECT aliases.
+        let order_by_post_aggr = rebase_and_validate_post_aggregate_sort_exprs(
+            order_by_exprs,
+            &select_exprs_post_aggr,
+            &aggr_projection_exprs,
+            input,
             &all_valid_exprs,
-            &order_by_exprs_only,
-            CheckColumnsSatisfyExprsPurpose::Aggregate(
-                CheckColumnsMustReferenceAggregatePurpose::OrderBy,
-            ),
         )?;
 
-        // Rewrite the DISTINCT ON expressions to use the columns produced by
-        // the aggregation. Same shape as ORDER BY rewriting so a hidden
-        // grouping column or a raw aggregate expression in ON is resolved.
-        let on_exprs_post_aggr = on_exprs
-            .iter()
-            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
-            .collect::<Result<Vec<Expr>>>()?;
-        check_columns_satisfy_exprs(
+        // Rewrite DISTINCT ON expressions to use the columns produced by the
+        // aggregation. Validate against aggregate outputs plus SELECT aliases
+        // so a hidden grouping column, raw aggregate expression, or allowed
+        // top-level SELECT alias in ON is resolved.
+        let on_exprs_post_aggr = rebase_and_validate_post_aggregate_exprs(
+            on_exprs,
+            &aggr_projection_exprs,
+            input,
             &all_valid_exprs,
-            &on_exprs_post_aggr,
-            CheckColumnsSatisfyExprsPurpose::Aggregate(
-                CheckColumnsMustReferenceAggregatePurpose::DistinctOn,
-            ),
+            CheckColumnsMustReferenceAggregatePurpose::DistinctOn,
         )?;
 
         Ok(AggregatePlanResult {
