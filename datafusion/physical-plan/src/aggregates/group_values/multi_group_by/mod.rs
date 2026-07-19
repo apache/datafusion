@@ -32,12 +32,12 @@ use crate::aggregates::group_values::multi_group_by::{
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::compute::cast;
 use arrow::datatypes::{
-    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Field, Float32Type,
-    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema, SchemaRef,
-    StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
-    UInt64Type,
+    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+    Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema,
+    SchemaRef, StringViewType, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
@@ -936,6 +936,7 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Float32
             | DataType::Float64
             | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Binary
@@ -1033,6 +1034,9 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
         },
         DataType::Decimal128(_, _) => {
             instantiate_primitive!(v, nullable, Decimal128Type, data_type)
+        }
+        DataType::Decimal256(_, _) => {
+            instantiate_primitive!(v, nullable, Decimal256Type, data_type)
         }
         DataType::Utf8 => {
             v.push(Box::new(ByteGroupValueBuilder::<i32>::new(
@@ -1295,6 +1299,7 @@ mod tests {
             DataType::Float32,
             DataType::Float64,
             DataType::Decimal128(38, 10),
+            DataType::Decimal256(76, 10),
             DataType::Utf8,
             DataType::LargeUtf8,
             DataType::Utf8View,
@@ -1326,7 +1331,6 @@ mod tests {
 
         let unsupported_cases: Vec<DataType> = vec![
             DataType::Float16,
-            DataType::Decimal256(76, 10),
             // Invalid Time-unit combinations: Time32 is defined only for
             // Second / Millisecond and Time64 only for Microsecond /
             // Nanosecond. The TimeUnit enum allows constructing the other
