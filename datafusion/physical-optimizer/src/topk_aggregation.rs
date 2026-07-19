@@ -108,30 +108,10 @@ impl TopKAggregation {
         // We found what we want: clone, copy the limit down, and return modified node
         let new_aggr = AggregateExec::with_new_limit_options(aggr, Some(limit_options));
 
-        // For the Count path, also mark the upstream Partial aggregate
-        // (if there is one) with the SAME shared state, so its stream
-        // can gate rows against the partial-threshold hint that Final
-        // will publish once running.
-        let new_aggr = if limit_options.kind == TopKKind::Count
-            && matches!(
-                new_aggr.mode(),
-                AggregateMode::Final | AggregateMode::FinalPartitioned
-            ) {
-            let Some(shared) = new_aggr.count_topk_shared().cloned() else {
-                return Some(Arc::new(new_aggr));
-            };
-            let new_input =
-                mark_upstream_partial(new_aggr.input(), &shared, limit_options);
-            let new_aggr_arc: Arc<dyn ExecutionPlan> = Arc::new(new_aggr);
-            if let Some(new_input) = new_input {
-                new_aggr_arc.with_new_children(vec![new_input]).ok()?
-            } else {
-                new_aggr_arc
-            }
-        } else {
-            Arc::new(new_aggr)
-        };
-        Some(new_aggr)
+        // Partial-side CA temporarily disabled for correctness
+        // investigation (see PR discussion). Only mark the Final
+        // aggregate; the standard hash path handles Partial.
+        Some(Arc::new(new_aggr))
     }
 
     fn transform_sort(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {

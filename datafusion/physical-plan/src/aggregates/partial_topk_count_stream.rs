@@ -344,7 +344,8 @@ impl PartialTopKCountAggregateStream {
             return Ok(RecordBatch::new_empty(Arc::clone(&self.output_schema)));
         }
 
-        // Live indices only.
+        // Live indices only — skip groups whose bucket has been marked
+        // dead by the sweep. `Vec::extend` iterates once.
         let mut live_indices: Vec<u32> = Vec::with_capacity(self.counts.len());
         for i in 0..self.counts.len() {
             let bkt = self.bucket_of_group[i] as usize;

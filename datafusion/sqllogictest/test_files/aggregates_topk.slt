@@ -650,7 +650,7 @@ physical_plan
 03)----SortExec: TopK(fetch=3), expr=[count(Int64(1))@1 DESC], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[url@0 as url], aggr=[count(Int64(1))], lim=[3]
 05)--------RepartitionExec: partitioning=Hash([url@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[url@0 as url], aggr=[count(Int64(1))], lim=[3]
+06)----------AggregateExec: mode=Partial, gby=[url@0 as url], aggr=[count(Int64(1))]
 07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # same result with the optimizer enabled
@@ -733,7 +733,7 @@ physical_plan
 03)----SortExec: TopK(fetch=3), expr=[count(Int64(1))@2 DESC], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[url@0 as url, ts@1 as ts], aggr=[count(Int64(1))], lim=[3]
 05)--------RepartitionExec: partitioning=Hash([url@0, ts@1], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[url@0 as url, ts@1 as ts], aggr=[count(Int64(1))], lim=[3]
+06)----------AggregateExec: mode=Partial, gby=[url@0 as url, ts@1 as ts], aggr=[count(Int64(1))]
 07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok

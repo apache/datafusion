@@ -1507,21 +1507,17 @@ impl AggregateExec {
                             )?,
                         ));
                     }
-                    // Partial side of the same optimization — gate rows
-                    // in dead buckets before they reach the hash
-                    // aggregation. Only fires when the optimizer has
-                    // attached a `TopKCountSharedState` to this
-                    // AggregateExec (i.e. the walk from Final found
-                    // this Partial).
-                    if matches!(self.mode, AggregateMode::Partial)
-                        && self.count_topk_shared.is_some()
-                    {
-                        return Ok(StreamType::PartialTopKCount(
-                            PartialTopKCountAggregateStream::new(
-                                self, context, partition,
-                            )?,
-                        ));
-                    }
+                    // Partial side of the same optimization — TEMPORARILY
+                    // DISABLED to isolate correctness bug.
+                    // if matches!(self.mode, AggregateMode::Partial)
+                    //     && self.count_topk_shared.is_some()
+                    // {
+                    //     return Ok(StreamType::PartialTopKCount(
+                    //         PartialTopKCountAggregateStream::new(
+                    //             self, context, partition,
+                    //         )?,
+                    //     ));
+                    // }
                     // fallthrough to standard path
                 }
             }

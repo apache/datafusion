@@ -322,50 +322,18 @@ impl GroupedTopKCountAggregateStream {
             if group_idx >= self.counts.len() {
                 debug_assert_eq!(group_idx, self.counts.len());
                 self.groups_seen.add(1);
-                // ⛔ new-group gate — only armed after warmup and only
-                //    when we can bound remaining rows.
-                // Read the cached threshold — never recompute per row.
-                // The cache is refreshed only during `sweep()`, so a
-                // stale value here is an UPPER bound on the true global
-                // K-th and is therefore safe (we err on the side of
-                // admitting groups, never rejecting a true top-K
-                // candidate).
-                if self.pruning_armed()
-                    && let Some(threshold) = self.cached_threshold
-                {
-                    let contrib = per_row_contrib.contribution_at(row);
-                    // remaining bound uses rows_seen so far, which does
-                    // NOT include this batch's rows yet. This is loose
-                    // (upper bound) — safe.
-                    let remaining = self.remaining_rows_upper();
-                    let remaining_i64 = if remaining > i64::MAX as u64 {
-                        i64::MAX
-                    } else {
-                        remaining as i64
-                    };
-                    // For DESC: keep large counts → threshold = heap.min.
-                    //   Reject if contrib + remaining < threshold. Admit
-                    //   ties (>= threshold) — the group MIGHT tie-break
-                    //   into the K survivors.
-                    // For ASC: keep small counts → reject only when
-                    //   contrib is strictly > K-th smallest, since
-                    //   remaining rows only push count up.
-                    let can_reach = if self.descending {
-                        contrib.saturating_add(remaining_i64) >= threshold
-                    } else {
-                        contrib <= threshold
-                    };
-                    if !can_reach {
-                        // Gate rejects this row. `GroupValues::intern`
-                        // has no rollback, so allocate the count slot
-                        // but mark it dead — sweep and emit skip dead
-                        // slots.
-                        self.counts.push(0);
-                        self.dead.push(true);
-                        self.groups_gated.add(1);
-                        continue;
-                    }
-                }
+                // New-group gate REMOVED. The first-arrival check
+                // `contrib + remaining >= threshold` was unsafe because
+                // at Final the same group arrives from N Partials in
+                // sequence and the FIRST partial's `contrib` alone
+                // cannot represent the group's global potential — a hot
+                // URL whose earliest-arriving Partial contributed only
+                // e.g. 100 rows would be rejected forever, even if the
+                // remaining N-1 Partials had 200 K each. Correctness on
+                // ClickBench Q33 required removing this gate. Sweep-
+                // based cleanup (below) still runs and safely marks
+                // dead any group whose *actual accumulated* count plus
+                // remaining rows cannot reach the threshold.
                 self.counts.push(0);
                 self.dead.push(false);
             }
