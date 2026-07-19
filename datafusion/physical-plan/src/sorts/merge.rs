@@ -32,9 +32,9 @@ use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
-use datafusion_execution::async_try_stream;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_execution::{TryEmitter, async_try_stream};
 use futures::Stream;
 
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
@@ -146,6 +146,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         reservation: MemoryReservation,
         enable_round_robin_tie_breaker: bool,
     ) -> Self {
+        assert_ne!(batch_size, 0, "batch size cannot be 0");
+        assert_ne!(fetch, Some(0), "fetch must not be Some(0)");
+
         let stream_count = streams.partitions();
 
         Self {
@@ -173,7 +176,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         let schema_clone = Arc::clone(self.in_progress.schema());
 
         let cloned_metrics = self.metrics.clone();
-
         let stream = Box::pin(RecordBatchStreamAdapter::new(
             schema_clone,
             self.create_stream(),
@@ -212,77 +214,123 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         result
     }
 
+    async fn flush_in_progress(
+        &mut self,
+        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        if !self.in_progress.is_empty() {
+            return Ok(());
+        }
+
+        let elapsed_compute = self.metrics.elapsed_compute().clone();
+        let mut timer = elapsed_compute.timer();
+
+        // When `build_record_batch()` hits an i32 offset overflow (e.g.
+        // combined string offsets exceed 2 GB), it emits a partial batch
+        // and keeps the remaining rows in `self.in_progress.indices`.
+        // Drain those leftover rows before terminating the stream,
+        // otherwise they would be silently dropped.
+        // Repeated overflows are fine — each poll emits another partial
+        // batch until `in_progress` is fully drained.
+        while let Some(batch) = self.emit_in_progress_batch()? {
+            drop(timer);
+            emitter.emit(batch).await;
+            timer = elapsed_compute.timer();
+        }
+
+        Ok(())
+    }
+
     fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
         async_try_stream(|mut emitter| async move {
-            // This vector contains the indices of the partitions that have not started emitting yet.
-            let mut uninitiated_partitions =
-                (0..self.streams.partitions()).collect::<Vec<_>>();
+            assert!(
+                self.fetch.is_none_or(|fetch| fetch != 0),
+                "fetch {:?} must not be 0",
+                self.fetch
+            );
 
-            poll_fn(|cx| self.initialize_all_partitions(&mut uninitiated_partitions, cx))
+            // 1. Make sure we have data from each stream so we can initialize the loser tree
+            {
+                // This vector contains the indices of the partitions that have not started emitting yet.
+                let mut uninitiated_partitions =
+                    (0..self.streams.partitions()).collect::<Vec<_>>();
+
+                poll_fn(|cx| {
+                    self.initialize_all_partitions(&mut uninitiated_partitions, cx)
+                })
                 .await?;
 
-            assert_eq!(uninitiated_partitions.len(), 0);
+                assert_eq!(uninitiated_partitions.len(), 0);
+            }
 
-            // If there are no more uninitiated partitions, set up the loser tree and continue
-            // to the next phase.
-
-            // Claim the memory for the uninitiated partitions
-            drop(uninitiated_partitions);
-            self.init_loser_tree();
-
-            // NB timer records time taken on drop, so there are no
-            // calls to `timer.done()` below.
             let elapsed_compute = self.metrics.elapsed_compute().clone();
             let mut timer = elapsed_compute.timer();
+            let fetch = self.fetch;
 
-            loop {
-                let stream_idx = self.loser_tree[0];
-                if !self.advance_cursors(stream_idx) {
-                    break;
-                }
-                self.in_progress.push_row(stream_idx);
+            // 2. Init loser tree
+            self.init_loser_tree();
 
-                // stop sorting if fetch has been reached
-                if self.fetch_reached() {
-                    break;
-                }
+            // 3. loop until all streams have been exhausted
+            while !self.is_exhausted() {
+                // 3.1. add loser_tree[0] (minimum) stream to pending record batch
+                let winner_stream = self.loser_tree[0];
+                self.in_progress.push_row(winner_stream);
 
-                if self.in_progress.len() >= self.batch_size
-                    && let Some(batch) = self.emit_in_progress_batch()?
+                // 3.2. If the new row reached the limit
+                if fetch
+                    .is_some_and(|fetch| fetch <= self.produced + self.in_progress.len())
                 {
+                    break;
+                }
+
+                // 3.3. if there is enough to emit for a full record batch
+                if self.in_progress.len() >= self.batch_size {
+                    // 3.3.1 build pending record batch and reset builder
+                    let Some(batch) = self.emit_in_progress_batch()? else {
+                        unreachable!("must have batch in progress to emit")
+                    };
+
+                    // 3.3.2 emit pending record batch
                     drop(timer);
                     emitter.emit(batch).await;
                     timer = elapsed_compute.timer();
                 }
 
-                let winner = self.loser_tree[0];
-                // Fast path: skip the `maybe_poll_stream` call (and its `Poll`
-                // plumbing) unless the winner's cursor is exhausted and needs a
-                // fresh batch — it is live for almost every row.
-                if self.cursors[winner].is_none() {
-                    drop(timer);
-                    poll_fn(|cx| self.maybe_poll_stream(cx, winner)).await?;
-                    timer = elapsed_compute.timer();
+                // 3.4. advance cursor for the winner stream
+                {
+                    let should_poll_next_batch_for_stream =
+                        self.advance_cursors(winner_stream);
+
+                    // Fast path: skip the `maybe_poll_stream` call (and its `Poll`
+                    // plumbing) unless the winner's cursor is exhausted and needs a
+                    // fresh batch — it is live for almost every row.
+                    if should_poll_next_batch_for_stream {
+                        assert!(
+                            self.cursors[winner_stream].is_none(),
+                            "cursor should be exhausted"
+                        );
+
+                        drop(timer);
+                        poll_fn(|cx| self.maybe_poll_stream(cx, winner_stream)).await?;
+                        timer = elapsed_compute.timer();
+                    }
                 }
 
-                // Adjusting the loser tree if necessary
+                // 3.5. Adjusting the loser tree if necessary
                 self.update_loser_tree();
             }
 
-            drop(timer);
+            // 4. Flush any remaining rows in `self.in_progress`
+            self.flush_in_progress(emitter).await?;
 
-            // When `build_record_batch()` hits an i32 offset overflow (e.g.
-            // combined string offsets exceed 2 GB), it emits a partial batch
-            // and keeps the remaining rows in `self.in_progress.indices`.
-            // Drain those leftover rows before terminating the stream,
-            // otherwise they would be silently dropped.
-            // Repeated overflows are fine — each poll emits another partial
-            // batch until `in_progress` is fully drained.
-            while let Some(batch) = self.emit_in_progress_batch()? {
-                emitter.emit(batch).await;
-            }
             Ok(())
         })
+    }
+
+    fn is_exhausted(&self) -> bool {
+        let winner = self.loser_tree[0];
+
+        self.cursors[winner].is_none()
     }
 
     /// Initialize all partitions, return `Poll::Pending` if any partition returns `Poll::Pending`
@@ -360,12 +408,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
     }
 
-    fn fetch_reached(&mut self) -> bool {
-        self.fetch
-            .map(|fetch| self.produced + self.in_progress.len() >= fetch)
-            .unwrap_or(false)
-    }
-
     /// Advances the actual cursor. If it reaches its end, update the
     /// previous cursor with it.
     ///
@@ -373,14 +415,17 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     fn advance_cursors(&mut self, stream_idx: usize) -> bool {
         if let Some(cursor) = &mut self.cursors[stream_idx] {
             let _ = cursor.advance();
-            if cursor.is_finished() {
+            return if !cursor.is_finished() {
                 // Take the current cursor, leaving `None` in its place
                 self.prev_cursors[stream_idx] = self.cursors[stream_idx].take();
-            }
-            true
-        } else {
-            false
+
+                true
+            } else {
+                false
+            };
         }
+
+        true
     }
 
     /// Returns `true` if the cursor at index `a` is greater than at index `b`.

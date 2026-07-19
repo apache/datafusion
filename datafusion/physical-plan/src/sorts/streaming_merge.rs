@@ -24,7 +24,7 @@ use crate::sorts::{
     merge::SortPreservingMergeStream,
     stream::{FieldCursorStream, RowCursorStream},
 };
-use crate::{SendableRecordBatchStream, SpillManager};
+use crate::{EmptyRecordBatchStream, SendableRecordBatchStream, SpillManager};
 use arrow::array::*;
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::human_readable_size;
@@ -195,13 +195,22 @@ impl<'a> StreamingMergeBuilder<'a> {
         let Some(expressions) = expressions else {
             return internal_err!("Sort expressions cannot be empty for streaming merge");
         };
+        let schema = schema.expect("Schema cannot be empty for streaming merge");
+
+        if fetch.is_some_and(|fetch| fetch == 0) {
+            return Ok(Box::pin(EmptyRecordBatchStream::new(schema)));
+        }
+
+        let batch_size =
+            batch_size.expect("Batch size cannot be empty for streaming merge");
+
+        if batch_size == 0 {
+            return internal_err!("Batch size cannot be zero for streaming merge");
+        }
 
         if !sorted_spill_files.is_empty() {
             // Unwrapping mandatory fields
-            let schema = schema.expect("Schema cannot be empty for streaming merge");
             let metrics = metrics.expect("Metrics cannot be empty for streaming merge");
-            let batch_size =
-                batch_size.expect("Batch size cannot be empty for streaming merge");
             let reservation =
                 reservation.expect("Reservation cannot be empty for streaming merge");
 
@@ -227,10 +236,7 @@ impl<'a> StreamingMergeBuilder<'a> {
         );
 
         // Unwrapping mandatory fields
-        let schema = schema.expect("Schema cannot be empty for streaming merge");
         let metrics = metrics.expect("Metrics cannot be empty for streaming merge");
-        let batch_size =
-            batch_size.expect("Batch size cannot be empty for streaming merge");
         let reservation =
             reservation.expect("Reservation cannot be empty for streaming merge");
 
