@@ -68,6 +68,16 @@ impl LimitedBatchCoalescer {
         }
     }
 
+    /// Override the default Biggest Coalesce Batch Size
+    pub fn with_biggest_coalesce_batch_size(
+        mut self,
+        biggest_coalesce_batch_size: Option<usize>,
+    ) -> Self {
+        self.inner = self.inner.with_biggest_coalesce_batch_size(biggest_coalesce_batch_size);
+
+        self
+    }
+
     /// Return the schema of the output batches
     pub fn schema(&self) -> SchemaRef {
         self.inner.schema()
