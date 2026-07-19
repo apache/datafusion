@@ -88,9 +88,9 @@ use datafusion::physical_plan::windows::{
     create_udwf_window_expr,
 };
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
-    PhysicalExpr, PlanProperties, RangePartitioning, SendableRecordBatchStream,
-    SplitPoint, Statistics, displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
+    Partitioning, PhysicalExpr, PlanProperties, RangePartitioning,
+    SendableRecordBatchStream, SplitPoint, Statistics, displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -235,6 +235,58 @@ fn roundtrip_empty() -> Result<()> {
     roundtrip_test(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))))
 }
 
+#[test]
+fn roundtrip_empty_with_partitions() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let plan = Arc::new(EmptyExec::new(Arc::new(Schema::empty())).with_partitions(4));
+    let plan = roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
+    assert_eq!(plan.output_partitioning().partition_count(), 4);
+    Ok(())
+}
+
+#[test]
+fn roundtrip_placeholder_row_with_partitions() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let plan =
+        Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty())).with_partitions(4));
+    let plan = roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
+    assert_eq!(plan.output_partitioning().partition_count(), 4);
+    Ok(())
+}
+
+/// Plans encoded before `partitions` was added carry no value for it, which
+/// decodes as zero and must be treated as the previous default of one.
+#[test]
+fn decode_empty_and_placeholder_row_without_partitions() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let schema: protobuf::Schema = (&Schema::empty()).try_into()?;
+
+    for physical_plan_type in [
+        protobuf::physical_plan_node::PhysicalPlanType::Empty(protobuf::EmptyExecNode {
+            schema: Some(schema.clone()),
+            partitions: 0,
+        }),
+        protobuf::physical_plan_node::PhysicalPlanType::PlaceholderRow(
+            protobuf::PlaceholderRowExecNode {
+                schema: Some(schema.clone()),
+                partitions: 0,
+            },
+        ),
+    ] {
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(physical_plan_type),
+        };
+        let plan = node.try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)?;
+        assert_eq!(plan.output_partitioning().partition_count(), 1);
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct DowncastDelegatingExec {
     inner: Arc<dyn ExecutionPlan>,
@@ -298,6 +350,35 @@ fn serialize_uses_downcast_delegate() -> Result<()> {
     assert!(matches!(
         proto.physical_plan_type,
         Some(protobuf::physical_plan_node::PhysicalPlanType::Empty(_))
+    ));
+
+    Ok(())
+}
+
+/// A wrapper delegating to a plan that serializes itself via the
+/// `try_to_proto` hook must serialize as its delegate: the wrapper's default
+/// hook returns `Ok(None)` and the delegate has no downcast-chain fallback.
+#[test]
+fn serialize_uses_downcast_delegate_for_self_serializing_plan() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
+    let inner: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: col("a", &schema)?,
+            alias: "a".to_string(),
+        }],
+        input,
+    )?);
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(DowncastDelegatingExec::new(inner));
+    let codec = DefaultPhysicalExtensionCodec {};
+
+    let proto = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+
+    assert!(matches!(
+        proto.physical_plan_type,
+        Some(protobuf::physical_plan_node::PhysicalPlanType::Projection(
+            _
+        ))
     ));
 
     Ok(())

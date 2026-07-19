@@ -41,6 +41,10 @@ mod plan_datafusion_err {
 }
 
 mod record_batch {
+    #![expect(
+        deprecated,
+        reason = "exercising hygiene of the deprecated `datafusion_common::record_batch!` while it is still exported"
+    )]
     // NO other imports!
     use datafusion_common::record_batch;
 
