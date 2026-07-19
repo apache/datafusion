@@ -33,7 +33,8 @@ use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Field, Float32Type,
-    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema, SchemaRef,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, Schema, SchemaRef,
     StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
@@ -952,6 +953,7 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Time64(TimeUnit::Microsecond)
             | DataType::Time64(TimeUnit::Nanosecond)
             | DataType::Timestamp(_, _)
+            | DataType::Interval(_)
             | DataType::Utf8View
             | DataType::BinaryView
             | DataType::Boolean
@@ -1029,6 +1031,19 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
             }
             TimeUnit::Nanosecond => {
                 instantiate_primitive!(v, nullable, TimestampNanosecondType, data_type)
+            }
+        },
+        // `IntervalUnit` has exactly three variants, so this match is exhaustive
+        // with no fallback arm (unlike Time32 / Time64).
+        DataType::Interval(u) => match u {
+            IntervalUnit::YearMonth => {
+                instantiate_primitive!(v, nullable, IntervalYearMonthType, data_type)
+            }
+            IntervalUnit::DayTime => {
+                instantiate_primitive!(v, nullable, IntervalDayTimeType, data_type)
+            }
+            IntervalUnit::MonthDayNano => {
+                instantiate_primitive!(v, nullable, IntervalMonthDayNanoType, data_type)
             }
         },
         DataType::Decimal128(_, _) => {
@@ -1259,7 +1274,10 @@ enum Nulls {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray};
+    use arrow::array::{
+        Array, ArrayRef, Int64Array, IntervalMonthDayNanoArray, RecordBatch, StringArray,
+        StringViewArray,
+    };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
     use datafusion_common::utils::proxy::HashTableAllocExt;
@@ -1309,6 +1327,9 @@ mod tests {
             DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
             DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth),
+            DataType::Interval(arrow::datatypes::IntervalUnit::DayTime),
+            DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
         ];
 
         for dt in &supported_cases {
@@ -1350,6 +1371,56 @@ mod tests {
                 "group_column_supported_type rejected {dt:?} but make_group_column accepted it"
             );
         }
+    }
+
+    /// Interval GROUP BY on the column-wise fast path: dedups (incl. nulls),
+    /// keeps "1 month" and "30 days" distinct (field-wise compare, no cross-unit
+    /// folding), and preserves the Interval output type. One unit exercises the
+    /// shared builder; the fuzz above covers routing for all three.
+    #[test]
+    fn test_group_values_column_interval() {
+        use arrow::datatypes::{IntervalMonthDayNano, IntervalUnit};
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "i",
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            true,
+        )]));
+        assert!(supported_schema(&schema));
+        let mut group_values =
+            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+        // "1 month" and "30 days" are distinct Interval values, not folded
+        // together. Row 3 repeats row 0, row 4 repeats the null of row 1.
+        let one_month = IntervalMonthDayNano::new(1, 0, 0);
+        let thirty_days = IntervalMonthDayNano::new(0, 30, 0);
+        let input: ArrayRef = Arc::new(IntervalMonthDayNanoArray::from(vec![
+            Some(one_month),
+            None,
+            Some(thirty_days),
+            Some(one_month),
+            None,
+        ]));
+        let mut groups = Vec::new();
+        group_values.intern(&[input], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1, 2, 0, 1]);
+
+        let emitted = group_values.emit(EmitTo::All).unwrap();
+        assert_eq!(emitted.len(), 1);
+        // The emitted key keeps its Interval type, not the bare native.
+        assert_eq!(
+            emitted[0].data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        let actual = emitted[0]
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .expect("emitted column should be an IntervalMonthDayNanoArray");
+        // Three groups in first-seen order: 1 month, null, 30 days.
+        assert_eq!(actual.len(), 3);
+        assert_eq!(actual.value(0), one_month);
+        assert!(actual.is_null(1));
+        assert_eq!(actual.value(2), thirty_days);
     }
 
     #[test]
