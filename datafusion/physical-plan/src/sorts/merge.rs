@@ -218,7 +218,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         &mut self,
         mut emitter: TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
-        if !self.in_progress.is_empty() {
+        if self.in_progress.is_empty() {
             return Ok(());
         }
 
