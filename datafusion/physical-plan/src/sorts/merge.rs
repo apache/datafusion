@@ -276,7 +276,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 self.in_progress.push_row(winner_stream);
 
                 // 3.2. If the new row reached the limit
-                if self.is_fetch_reached() {
+                if self.fetch_reached() {
                     break;
                 }
 
@@ -407,8 +407,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
     fn fetch_reached(&mut self) -> bool {
         self.fetch
-          .map(|fetch| self.produced + self.in_progress.len() >= fetch)
-          .unwrap_or(false)
+            .map(|fetch| self.produced + self.in_progress.len() >= fetch)
+            .unwrap_or(false)
     }
 
     /// Advances the actual cursor. If it reaches its end, update the
