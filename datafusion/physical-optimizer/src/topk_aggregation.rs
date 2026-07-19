@@ -25,7 +25,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode, LimitOptions};
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateMode, LimitOptions, TopKCountSharedState, TopKKind,
+};
 use datafusion_physical_plan::aggregates::{is_topk_count_pattern, topk_types_supported};
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -105,7 +107,31 @@ impl TopKAggregation {
 
         // We found what we want: clone, copy the limit down, and return modified node
         let new_aggr = AggregateExec::with_new_limit_options(aggr, Some(limit_options));
-        Some(Arc::new(new_aggr))
+
+        // For the Count path, also mark the upstream Partial aggregate
+        // (if there is one) with the SAME shared state, so its stream
+        // can gate rows against the partial-threshold hint that Final
+        // will publish once running.
+        let new_aggr = if limit_options.kind == TopKKind::Count
+            && matches!(
+                new_aggr.mode(),
+                AggregateMode::Final | AggregateMode::FinalPartitioned
+            ) {
+            let Some(shared) = new_aggr.count_topk_shared().cloned() else {
+                return Some(Arc::new(new_aggr));
+            };
+            let new_input =
+                mark_upstream_partial(new_aggr.input(), &shared, limit_options);
+            let new_aggr_arc: Arc<dyn ExecutionPlan> = Arc::new(new_aggr);
+            if let Some(new_input) = new_input {
+                new_aggr_arc.with_new_children(vec![new_input]).ok()?
+            } else {
+                new_aggr_arc
+            }
+        } else {
+            Arc::new(new_aggr)
+        };
+        Some(new_aggr)
     }
 
     fn transform_sort(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -158,6 +184,42 @@ impl TopKAggregation {
             .with_preserve_partitioning(sort.preserve_partitioning());
         Some(Arc::new(sort))
     }
+}
+
+/// Walk `input` down through `RepartitionExec` / `CoalesceBatchesExec`
+/// (or any node that preserves cardinality of a single input) and
+/// re-attach the matching Partial `AggregateExec` with the same
+/// `shared` state and a `Partial`-mode `LimitOptions`. Returns
+/// `Some(rewritten_input)` if a Partial was found and rewritten, else
+/// `None` (in which case the caller keeps the original input untouched).
+///
+/// Kept intentionally small: only rewrite the FIRST Partial we find on
+/// the direct child chain. `Final ← Coalesce ← Repartition ← Partial`
+/// is the canonical plan shape produced by the physical planner for
+/// this aggregate pattern.
+fn mark_upstream_partial(
+    input: &Arc<dyn ExecutionPlan>,
+    shared: &Arc<TopKCountSharedState>,
+    final_limit_options: LimitOptions,
+) -> Option<Arc<dyn ExecutionPlan>> {
+    if let Some(partial_agg) = input.downcast_ref::<AggregateExec>()
+        && matches!(partial_agg.mode(), AggregateMode::Partial)
+    {
+        let partial_options = LimitOptions::new_count(final_limit_options.limit(), true);
+        let rewritten =
+            partial_agg.with_count_topk_shared(Some(partial_options), Arc::clone(shared));
+        return Some(Arc::new(rewritten));
+    }
+
+    // Otherwise, walk into the single-child chain (Coalesce, Repartition,
+    // Projection, Filter, ...). Bail on multi-child nodes and joins.
+    let children = input.children();
+    if children.len() != 1 {
+        return None;
+    }
+    let child = children[0];
+    let rewritten_child = mark_upstream_partial(child, shared, final_limit_options)?;
+    input.clone().with_new_children(vec![rewritten_child]).ok()
 }
 
 impl Default for TopKAggregation {

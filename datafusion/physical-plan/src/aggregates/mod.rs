@@ -155,6 +155,7 @@ use crate::aggregates::{
     ordered_final_stream::OrderedFinalAggregateStream,
     ordered_partial_stream::OrderedPartialAggregateStream,
     partial_reduce_stream::PartialReduceHashAggregateStream,
+    partial_topk_count_stream::PartialTopKCountAggregateStream,
     single_stream::SingleHashAggregateStream,
 };
 use crate::execution_plan::{CardinalityEffect, EmissionType};
@@ -213,6 +214,7 @@ pub mod order;
 mod ordered_final_stream;
 mod ordered_partial_stream;
 mod partial_reduce_stream;
+mod partial_topk_count_stream;
 mod single_stream;
 mod skip_partial;
 mod topk;
@@ -266,6 +268,25 @@ pub fn is_topk_count_pattern(agg: &AggregateExec) -> Option<FieldRef> {
 /// the threshold above any other partition's real counts.
 ///
 /// [zippy]: https://www.vldb.org/pvldb/vol17/p644-siddiqui.pdf
+/// Number of coarse buckets used for the Partial-side CA (Coarse
+/// Aggregate) structure. Group keys hash into `hash(key) % CA_BUCKETS`
+/// and per-bucket `max_count` gives an upper bound for any specific
+/// group's count in that bucket. Sized so a full state (8K × ~24 bytes
+/// per bucket ≈ 200 KB) fits comfortably in L2 across the workers.
+pub const CA_BUCKETS: usize = 8192;
+
+/// Sentinel meaning "no partial-threshold hint published yet". Loaded
+/// via [`std::sync::atomic::AtomicI64::load`] as the fast path in Partial
+/// so we do not gate anything until Final has done some work.
+const PARTIAL_THRESHOLD_UNSET: i64 = i64::MIN;
+
+/// Extra divisor applied to `final_threshold / partial_partition_count`
+/// before publishing to Partial. Larger = more conservative (fewer
+/// buckets die, safer but less pruning). 8 is a compromise that
+/// tolerates a `final_threshold` that grows by up to 8× after Partial
+/// has committed to a bucket-dead decision.
+const PARTIAL_HINT_SAFETY_DIVISOR: i64 = 8;
+
 #[derive(Debug)]
 pub struct TopKCountSharedState {
     /// `slots[i]` is partition `i`'s most-recently-published local top-K
@@ -273,20 +294,42 @@ pub struct TopKCountSharedState {
     slots: std::sync::Mutex<Vec<Vec<i64>>>,
     limit: usize,
     descending: bool,
+    /// Threshold hint published by the Final aggregate for the Partial
+    /// aggregate to use in its per-bucket dead-set. Equals
+    /// `final_threshold / partial_partition_count` so any local Partial
+    /// contribution below this bound cannot make the group globally
+    /// top-K. `PARTIAL_THRESHOLD_UNSET` until Final has computed at
+    /// least one threshold.
+    partial_threshold: std::sync::atomic::AtomicI64,
+    /// How many Partial partitions upstream of Final(s) — the divisor
+    /// used to translate the global Final threshold into a per-Partial
+    /// safe bound. Set at construction from the physical plan.
+    partial_partition_count: usize,
 }
 
 impl TopKCountSharedState {
-    pub fn new(limit: usize, descending: bool, num_partitions: usize) -> Self {
+    pub fn new(
+        limit: usize,
+        descending: bool,
+        num_final_partitions: usize,
+        partial_partition_count: usize,
+    ) -> Self {
         Self {
-            slots: std::sync::Mutex::new(vec![Vec::new(); num_partitions]),
+            slots: std::sync::Mutex::new(vec![Vec::new(); num_final_partitions]),
             limit,
             descending,
+            partial_threshold: std::sync::atomic::AtomicI64::new(PARTIAL_THRESHOLD_UNSET),
+            partial_partition_count: partial_partition_count.max(1),
         }
     }
 
     /// Overwrite partition `partition_idx`'s slot with the given local
     /// top-K counts, then return the resulting global K-th value if the
     /// merged concatenation has ≥ `limit` counts; otherwise `None`.
+    ///
+    /// If a threshold results, also publish the derived
+    /// `partial_threshold` hint (see [`Self::partial_threshold_hint`])
+    /// so any Partial aggregate can pick it up cheaply.
     pub fn publish(&self, partition_idx: usize, local_top_counts: &[i64]) -> Option<i64> {
         let mut slots = self.slots.lock().ok()?;
         if partition_idx >= slots.len() {
@@ -294,7 +337,11 @@ impl TopKCountSharedState {
         }
         slots[partition_idx].clear();
         slots[partition_idx].extend_from_slice(local_top_counts);
-        self.compute_threshold(&slots)
+        let t = self.compute_threshold(&slots);
+        if let Some(threshold) = t {
+            self.store_partial_hint(threshold);
+        }
+        t
     }
 
     /// Snapshot the current global K-th value (`None` if fewer than
@@ -319,6 +366,55 @@ impl TopKCountSharedState {
             all.select_nth_unstable_by(k, |a, b| a.cmp(b))
         };
         Some(*kth)
+    }
+
+    /// Publish the Partial-usable threshold hint derived from a Final
+    /// global threshold.
+    ///
+    /// # Correctness margin
+    ///
+    /// A naive `hint = final_threshold / partial_partition_count` looks
+    /// correct on paper: if every Partial has `max_count + remaining <
+    /// hint`, the sum across N Partials is `< N × hint = final_threshold`,
+    /// so any group in a dead bucket cannot be globally top-K. BUT the
+    /// Final threshold grows as more data arrives, so a bucket that
+    /// looked dead against `hint = 100` early may LATER be alive against
+    /// `hint = 24000`, and the intervening rows are already lost.
+    ///
+    /// A large safety divisor keeps the hint conservative: bucket death
+    /// is rare early, common late. `PARTIAL_HINT_SAFETY_DIVISOR` (default
+    /// 8) gives a `hint = final_threshold / (N × 8)` — with 12 Partials
+    /// and threshold 289K, hint is 3000, so a bucket dies only when its
+    /// max stays below 3000 (for hot URLs, never; for tail URLs, easily
+    /// once remaining shrinks near end of scan).
+    fn store_partial_hint(&self, final_threshold: i64) {
+        if !self.descending {
+            // ASC: Partial gate is disabled (see partial_threshold_hint).
+            return;
+        }
+        let divisor = (self.partial_partition_count as i64)
+            .saturating_mul(PARTIAL_HINT_SAFETY_DIVISOR)
+            .max(1);
+        let candidate = (final_threshold / divisor).max(1);
+        // Monotonic: later publishes must not *lower* the hint. Partial
+        // may already have acted on a smaller value and marked buckets
+        // dead irrevocably.
+        self.partial_threshold
+            .fetch_max(candidate, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Read the current partial-threshold hint. Returns `None` while no
+    /// threshold has been published (`PARTIAL_THRESHOLD_UNSET`), or the
+    /// query direction is ASC (Partial gating is disabled for ASC —
+    /// see [`Self::store_partial_hint`]).
+    pub fn partial_threshold_hint(&self) -> Option<i64> {
+        if !self.descending {
+            return None;
+        }
+        let v = self
+            .partial_threshold
+            .load(std::sync::atomic::Ordering::Relaxed);
+        (v != PARTIAL_THRESHOLD_UNSET).then_some(v)
     }
 }
 
@@ -789,6 +885,11 @@ enum StreamType {
     /// additive aggregates while emitting only the top-K rows and applying a
     /// new-group insertion gate. See [`GroupedTopKCountAggregateStream`].
     GroupedTopKCount(GroupedTopKCountAggregateStream),
+    /// Partial-side stream for the count-TopK optimization. Uses a
+    /// Coarse Aggregate structure to skip rows in "dead" buckets once
+    /// the Final side has published a threshold hint. See
+    /// [`PartialTopKCountAggregateStream`].
+    PartialTopKCount(PartialTopKCountAggregateStream),
 }
 
 impl From<StreamType> for SendableRecordBatchStream {
@@ -804,6 +905,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
             StreamType::GroupedTopKCount(stream) => Box::pin(stream),
+            StreamType::PartialTopKCount(stream) => Box::pin(stream),
         }
     }
 }
@@ -1044,6 +1146,34 @@ impl AggregateExec {
         }
     }
 
+    /// Clone this exec with a specific `limit_options` **and** an
+    /// externally-supplied [`TopKCountSharedState`]. Used by the
+    /// optimizer to attach the Partial side of a count-TopK to the
+    /// same shared state that the Final side already owns, so both
+    /// sides publish/read the same partial-threshold hint.
+    pub fn with_count_topk_shared(
+        &self,
+        limit_options: Option<LimitOptions>,
+        shared: Arc<TopKCountSharedState>,
+    ) -> Self {
+        Self {
+            limit_options,
+            required_input_ordering: self.required_input_ordering.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            input_order_mode: self.input_order_mode.clone(),
+            cache: Arc::clone(&self.cache),
+            mode: self.mode,
+            group_by: Arc::clone(&self.group_by),
+            aggr_expr: Arc::clone(&self.aggr_expr),
+            filter_expr: Arc::clone(&self.filter_expr),
+            input: Arc::clone(&self.input),
+            schema: Arc::clone(&self.schema),
+            input_schema: Arc::clone(&self.input_schema),
+            dynamic_filter: self.dynamic_filter.clone(),
+            count_topk_shared: Some(shared),
+        }
+    }
+
     /// Clone this exec, overriding only the limit hint.
     ///
     /// If the new `limit_options` marks a `TopKKind::Count` aggregate and
@@ -1053,12 +1183,24 @@ impl AggregateExec {
     pub fn with_new_limit_options(&self, limit_options: Option<LimitOptions>) -> Self {
         let count_topk_shared = match (limit_options, self.count_topk_shared.as_ref()) {
             (Some(opts), None) if opts.kind == TopKKind::Count => {
-                let num_partitions =
+                // Final side: `cache.output_partitioning` gives the
+                // partition count for the top-K slot vector. The
+                // upstream Partial partition count (used for the
+                // `partial_threshold` divisor) comes from the input
+                // partitioning — Partial preserves its input's
+                // partition count.
+                let num_final_partitions =
                     self.cache.output_partitioning().partition_count().max(1);
+                let partial_partition_count = self
+                    .input
+                    .output_partitioning()
+                    .partition_count()
+                    .max(num_final_partitions);
                 Some(Arc::new(TopKCountSharedState::new(
                     opts.limit,
                     opts.descending.unwrap_or(true),
-                    num_partitions,
+                    num_final_partitions,
+                    partial_partition_count,
                 )))
             }
             (_, prev) => prev.cloned(),
@@ -1362,6 +1504,21 @@ impl AggregateExec {
                                 partition,
                                 config.limit,
                                 config.descending.unwrap_or(true),
+                            )?,
+                        ));
+                    }
+                    // Partial side of the same optimization — gate rows
+                    // in dead buckets before they reach the hash
+                    // aggregation. Only fires when the optimizer has
+                    // attached a `TopKCountSharedState` to this
+                    // AggregateExec (i.e. the walk from Final found
+                    // this Partial).
+                    if matches!(self.mode, AggregateMode::Partial)
+                        && self.count_topk_shared.is_some()
+                    {
+                        return Ok(StreamType::PartialTopKCount(
+                            PartialTopKCountAggregateStream::new(
+                                self, context, partition,
                             )?,
                         ));
                     }
