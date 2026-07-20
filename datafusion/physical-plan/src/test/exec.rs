@@ -282,7 +282,6 @@ impl ExecutionPlan for MockExec {
 pub struct KeyPartitioningRequirementExec {
     input: Arc<dyn ExecutionPlan>,
     partition_keys: Vec<Arc<dyn PhysicalExpr>>,
-    cache: Arc<PlanProperties>,
 }
 
 impl KeyPartitioningRequirementExec {
@@ -291,11 +290,9 @@ impl KeyPartitioningRequirementExec {
         input: Arc<dyn ExecutionPlan>,
         partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Self {
-        let cache = Arc::clone(input.properties());
         Self {
             input,
             partition_keys,
-            cache,
         }
     }
 }
@@ -321,7 +318,7 @@ impl ExecutionPlan for KeyPartitioningRequirementExec {
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
-        &self.cache
+        self.input.properties()
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

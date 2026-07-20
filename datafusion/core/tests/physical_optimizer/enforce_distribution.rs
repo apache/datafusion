@@ -771,6 +771,23 @@ impl ThresholdState {
 }
 
 #[derive(Debug, Clone, Copy)]
+enum PreserveFileState {
+    Disabled,
+    Met,
+    NotMet,
+}
+
+impl PreserveFileState {
+    fn value(self, input_partitions: usize) -> usize {
+        match self {
+            Self::Disabled => 0,
+            Self::Met => input_partitions,
+            Self::NotMet => input_partitions + 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 enum TargetPartitions {
     Equal,
     Greater,
@@ -794,70 +811,51 @@ enum ExpectedPlan {
 #[derive(Debug, Clone, Copy)]
 struct RangeSatisfactionConfigCase {
     subset_threshold: ThresholdState,
-    preserve_threshold: ThresholdState,
+    preserve_file_partitions: PreserveFileState,
     target_partitions: TargetPartitions,
     // Expected plans for Exact, Subset, and Incompatible keys, respectively.
     expected_plans: [ExpectedPlan; 3],
+}
+
+impl RangeSatisfactionConfigCase {
+    fn new(
+        subset_threshold: ThresholdState,
+        preserve_file_partitions: PreserveFileState,
+        target_partitions: TargetPartitions,
+        expected_plans: [ExpectedPlan; 3],
+    ) -> Self {
+        Self {
+            subset_threshold,
+            preserve_file_partitions,
+            target_partitions,
+            expected_plans,
+        }
+    }
 }
 
 #[test]
 fn range_satisfaction_config_matrix() -> Result<()> {
     const INPUT_PARTITIONS: usize = 4;
     use ExpectedPlan::{Hash, Reuse};
+    use PreserveFileState::{Disabled, Met as FileMet, NotMet as FileNotMet};
     use RangeKeyMatch::{Exact, Incompatible, Subset};
     use TargetPartitions::{Equal, Greater};
     use ThresholdState::{Met, NotMet};
 
     let config_cases = [
-        // subset  preserve  target     exact  subset  incompatible
-        RangeSatisfactionConfigCase {
-            subset_threshold: NotMet,
-            preserve_threshold: NotMet,
-            target_partitions: Equal,
-            expected_plans: [Reuse, Hash, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_threshold: NotMet,
-            preserve_threshold: NotMet,
-            target_partitions: Greater,
-            expected_plans: [Hash, Hash, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_threshold: NotMet,
-            preserve_threshold: Met,
-            target_partitions: Equal,
-            expected_plans: [Reuse, Hash, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_threshold: NotMet,
-            preserve_threshold: Met,
-            target_partitions: Greater,
-            expected_plans: [Reuse, Reuse, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_threshold: Met,
-            preserve_threshold: NotMet,
-            target_partitions: Equal,
-            expected_plans: [Reuse, Reuse, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_threshold: Met,
-            preserve_threshold: NotMet,
-            target_partitions: Greater,
-            expected_plans: [Reuse, Reuse, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_threshold: Met,
-            preserve_threshold: Met,
-            target_partitions: Equal,
-            expected_plans: [Reuse, Reuse, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_threshold: Met,
-            preserve_threshold: Met,
-            target_partitions: Greater,
-            expected_plans: [Reuse, Reuse, Hash],
-        },
+        // subset  preserve      target     exact  subset  incompatible
+        RangeSatisfactionConfigCase::new(NotMet, Disabled, Equal, [Reuse, Hash, Hash]),
+        RangeSatisfactionConfigCase::new(NotMet, Disabled, Greater, [Hash, Hash, Hash]),
+        RangeSatisfactionConfigCase::new(NotMet, FileNotMet, Equal, [Reuse, Hash, Hash]),
+        RangeSatisfactionConfigCase::new(NotMet, FileNotMet, Greater, [Hash, Hash, Hash]),
+        RangeSatisfactionConfigCase::new(NotMet, FileMet, Equal, [Reuse, Hash, Hash]),
+        RangeSatisfactionConfigCase::new(NotMet, FileMet, Greater, [Reuse, Reuse, Hash]),
+        RangeSatisfactionConfigCase::new(Met, Disabled, Equal, [Reuse, Reuse, Hash]),
+        RangeSatisfactionConfigCase::new(Met, Disabled, Greater, [Reuse, Reuse, Hash]),
+        RangeSatisfactionConfigCase::new(Met, FileNotMet, Equal, [Reuse, Reuse, Hash]),
+        RangeSatisfactionConfigCase::new(Met, FileNotMet, Greater, [Reuse, Reuse, Hash]),
+        RangeSatisfactionConfigCase::new(Met, FileMet, Equal, [Reuse, Reuse, Hash]),
+        RangeSatisfactionConfigCase::new(Met, FileMet, Greater, [Reuse, Reuse, Hash]),
     ];
     for config_case in config_cases {
         for (key_match, expected_plan) in [Exact, Subset, Incompatible]
@@ -883,16 +881,24 @@ fn range_satisfaction_config_matrix() -> Result<()> {
             config.config.optimizer.subset_repartition_threshold =
                 config_case.subset_threshold.value(INPUT_PARTITIONS);
             config.config.optimizer.preserve_file_partitions =
-                config_case.preserve_threshold.value(INPUT_PARTITIONS);
+                config_case.preserve_file_partitions.value(INPUT_PARTITIONS);
 
             let plan = config.to_plan(requirement, &DISTRIB_DISTRIB_SORT);
             let plan = displayable(plan.as_ref()).indent(true).to_string();
-            let has_hash_repartition =
-                plan.contains("RepartitionExec: partitioning=Hash");
+            let repartitions = plan
+                .lines()
+                .filter(|line| line.contains("RepartitionExec:"))
+                .collect::<Vec<_>>();
 
-            assert_eq!(
-                has_hash_repartition,
-                matches!(expected_plan, Hash),
+            let matches_expected = match expected_plan {
+                Reuse => repartitions.is_empty(),
+                Hash => matches!(
+                    repartitions.as_slice(),
+                    [repartition] if repartition.contains("partitioning=Hash")
+                ),
+            };
+            assert!(
+                matches_expected,
                 "unexpected optimized plan for key_match={key_match:?}, \
                  config={config_case:?}:\n{plan}"
             );
