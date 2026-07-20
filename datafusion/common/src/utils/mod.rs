@@ -50,6 +50,7 @@ use std::collections::HashSet;
 use std::iter::repeat_n;
 use std::num::NonZero;
 use std::ops::Range;
+use std::ptr::copy_nonoverlapping;
 use std::sync::{Arc, LazyLock};
 use std::thread::available_parallelism;
 
@@ -408,6 +409,52 @@ pub fn split_vec_min_alloc<T>(vec: &mut Vec<T>, n: usize) -> Vec<T> {
     } else {
         let remaining = vec.split_off(n);
         std::mem::replace(vec, remaining)
+    }
+}
+
+/// Splits a vector of offsets at index `n`, returning a vector with
+/// `[offsets[0], ..., offsets[n]]` and leaving the remaining offsets in shifted
+/// `offsets`, adjusted to start at 0. This function assumes monotonicity of the
+/// `offsets` elements, so the `offsets[n]` cut-off value is subtracted from
+/// the remaining offset values with no overflow checks, except those enabled
+/// in debug builds.
+///
+/// Allocates for whichever side is smaller, so the new allocation is
+/// `min(n + 1, vec.len() - n)`. This matters when the split emits a prefix
+/// under memory pressure, where `n` can be close to `vec.len()`.
+pub fn take_n_offsets<O>(offsets: &mut Vec<O>, n: usize) -> Vec<O>
+where
+    O: OffsetSizeTrait,
+{
+    let cut_offset = offsets[n];
+    if n.saturating_mul(2) < offsets.len() {
+        let mut prefix = Vec::<O>::with_capacity(n + 1);
+        // SAFETY: copying to a newly allocated vector with sufficient capacity.
+        // The length of `offsets` is checked to exceed n.
+        unsafe {
+            copy_nonoverlapping(offsets.as_ptr(), prefix.as_mut_ptr(), n);
+            *prefix.as_mut_ptr().add(n) = cut_offset;
+            prefix.set_len(n + 1);
+        }
+        // Shift the remaining offsets in place so that the first offset is 0.
+        let dst = offsets.as_mut_ptr();
+        for (i, &offset) in offsets[n..].iter().enumerate() {
+            // SAFETY: the range of iteration is within `offsets.len()`.
+            // In the overlapping region, the destination element is overwritten
+            // only after it is read from.
+            unsafe {
+                *dst.add(i) = offset - cut_offset;
+            }
+        }
+        offsets.truncate(offsets.len() - n);
+        prefix
+    } else {
+        let remaining = offsets[n..]
+            .iter()
+            .map(|&offset| offset - cut_offset)
+            .collect::<Vec<O>>();
+        offsets.truncate(n + 1);
+        std::mem::replace(offsets, remaining)
     }
 }
 
