@@ -74,6 +74,9 @@ impl CoalesceFirstLast {
 
 /// `(function name, ORDER BY key, null treatment)` — peers may be coalesced only
 /// when all three match.
+// Peers are bucketed by (function name, ORDER BY, null treatment). Using the
+// function *name* is safe because a session resolves one canonical UDF per
+// name, so same-keyed members share an implementation.
 type BucketKey = (String, Vec<Sort>, Option<NullTreatment>);
 
 struct Coalesceable {
@@ -83,7 +86,14 @@ struct Coalesceable {
 }
 
 fn classify(expr: &Expr) -> Option<Coalesceable> {
-    let Expr::AggregateFunction(AggregateFunction { func, params }) = expr else {
+    // `Aggregate::aggr_expr` entries are documented to be either an
+    // `AggregateFunction` or an `Alias` wrapping one (e.g. built via the
+    // DataFrame API); unwrap the alias so aliased peers are coalesced too.
+    let inner = match expr {
+        Expr::Alias(alias) => alias.expr.as_ref(),
+        other => other,
+    };
+    let Expr::AggregateFunction(AggregateFunction { func, params }) = inner else {
         return None;
     };
     let name = func.name();
@@ -139,9 +149,9 @@ impl OptimizerRule for CoalesceFirstLast {
             return Ok(Transformed::no(plan));
         };
 
-        // Grouping sets expand the group columns (plus an internal grouping id)
-        // beyond `group_expr.len()`, which the schema slicing below assumes; skip
-        // them (consistent with the other cases this rule declines to coalesce).
+        // Grouping sets add an internal grouping-id column and distinct
+        // group-by semantics; this rule declines to coalesce them (consistent
+        // with the other cases it skips).
         if matches!(aggregate.group_expr.as_slice(), [Expr::GroupingSet(_)]) {
             return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
         }
@@ -171,7 +181,11 @@ impl OptimizerRule for CoalesceFirstLast {
             return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
         };
 
-        let group_len = aggregate.group_expr.len();
+        // Use `group_expr_len()` (deduplicated count, matching how
+        // `Aggregate::try_new` builds the schema) rather than `group_expr.len()`,
+        // which over-counts duplicate group exprs (e.g. `GROUP BY p, p`) and would
+        // misalign the group/aggregate split of `orig_columns` below.
+        let group_len = aggregate.group_expr_len()?;
         let orig_columns = aggregate.schema.columns();
 
         // Original aggregate index -> (struct alias, struct field position).
@@ -511,6 +525,133 @@ mod tests {
             .build()?;
         assert_coalesced!(TestConfig::new(), plan, @ "
         Aggregate: groupBy=[[CUBE (t.p)]], aggr=[[first_value(t.a) ORDER BY [t.o DESC NULLS LAST], first_value(t.b) ORDER BY [t.o DESC NULLS LAST]]]
+          TableScan: t
+        ")
+    }
+
+    #[test]
+    fn coalesces_duplicate_group_by() -> Result<()> {
+        // Regression: `GROUP BY p, p` stores two group exprs, but the schema
+        // deduplicates them to one group column. The rule must split group vs
+        // aggregate columns by the deduplicated count (`group_expr_len`), not
+        // `group_expr.len()`, or the projection references a non-existent column.
+        let plan = LogicalPlanBuilder::from(scan()?)
+            .aggregate(
+                vec![col("p"), col("p")],
+                vec![
+                    first_value(col("a"), order_by_o(), false),
+                    first_value(col("b"), order_by_o(), false),
+                ],
+            )?
+            .build()?;
+        assert_coalesced!(TestConfig::new(), plan, @ r#"
+        Projection: t.p, get_field(__coalesce_first_last_1, Utf8("c0")) AS first_value(t.a) ORDER BY [t.o DESC NULLS LAST], get_field(__coalesce_first_last_1, Utf8("c1")) AS first_value(t.b) ORDER BY [t.o DESC NULLS LAST]
+          Aggregate: groupBy=[[t.p, t.p]], aggr=[[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o DESC NULLS LAST] AS __coalesce_first_last_1]]
+            TableScan: t
+        "#)
+    }
+
+    #[test]
+    fn coalesces_aliased_peers() -> Result<()> {
+        // Aliased first_value peers (e.g. from the DataFrame API) still coalesce.
+        let plan = LogicalPlanBuilder::from(scan()?)
+            .aggregate(
+                vec![col("p")],
+                vec![
+                    first_value(col("a"), order_by_o(), false).alias("fa"),
+                    first_value(col("b"), order_by_o(), false).alias("fb"),
+                ],
+            )?
+            .build()?;
+        assert_coalesced!(TestConfig::new(), plan, @ r#"
+        Projection: t.p, get_field(__coalesce_first_last_1, Utf8("c0")) AS fa, get_field(__coalesce_first_last_1, Utf8("c1")) AS fb
+          Aggregate: groupBy=[[t.p]], aggr=[[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o DESC NULLS LAST] AS __coalesce_first_last_1]]
+            TableScan: t
+        "#)
+    }
+
+    #[test]
+    fn coalesces_three_peers() -> Result<()> {
+        // A bucket with three members packs into c0 / c1 / c2.
+        let plan = LogicalPlanBuilder::from(scan()?)
+            .aggregate(
+                vec![col("p")],
+                vec![
+                    first_value(col("a"), order_by_o(), false),
+                    first_value(col("b"), order_by_o(), false),
+                    first_value(col("o"), order_by_o(), false),
+                ],
+            )?
+            .build()?;
+        assert_coalesced!(TestConfig::new(), plan, @ r#"
+        Projection: t.p, get_field(__coalesce_first_last_1, Utf8("c0")) AS first_value(t.a) ORDER BY [t.o DESC NULLS LAST], get_field(__coalesce_first_last_1, Utf8("c1")) AS first_value(t.b) ORDER BY [t.o DESC NULLS LAST], get_field(__coalesce_first_last_1, Utf8("c2")) AS first_value(t.o) ORDER BY [t.o DESC NULLS LAST]
+          Aggregate: groupBy=[[t.p]], aggr=[[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b, Utf8("c2"), t.o)) ORDER BY [t.o DESC NULLS LAST] AS __coalesce_first_last_1]]
+            TableScan: t
+        "#)
+    }
+
+    #[test]
+    fn no_op_different_order_by() -> Result<()> {
+        // Different ORDER BY => not peers => must not coalesce.
+        let plan = LogicalPlanBuilder::from(scan()?)
+            .aggregate(
+                vec![col("p")],
+                vec![
+                    first_value(col("a"), order_by_o(), false),
+                    first_value(col("b"), vec![Sort::new(col("o"), true, true)], false),
+                ],
+            )?
+            .build()?;
+        assert_coalesced!(TestConfig::new(), plan, @ "
+        Aggregate: groupBy=[[t.p]], aggr=[[first_value(t.a) ORDER BY [t.o DESC NULLS LAST], first_value(t.b) ORDER BY [t.o ASC NULLS FIRST]]]
+          TableScan: t
+        ")
+    }
+
+    #[test]
+    fn no_op_filter() -> Result<()> {
+        // A FILTER on a peer can't share the single struct scan => not coalesced.
+        let filtered = Expr::AggregateFunction(AggregateFunction::new_udf(
+            first_value_udaf(),
+            vec![col("a")],
+            false,
+            Some(Box::new(col("a").gt(lit(0u32)))),
+            order_by_o(),
+            None,
+        ));
+        let plan = LogicalPlanBuilder::from(scan()?)
+            .aggregate(
+                vec![col("p")],
+                vec![filtered, first_value(col("b"), order_by_o(), false)],
+            )?
+            .build()?;
+        assert_coalesced!(TestConfig::new(), plan, @ "
+        Aggregate: groupBy=[[t.p]], aggr=[[first_value(t.a) FILTER (WHERE t.a > UInt32(0)) ORDER BY [t.o DESC NULLS LAST], first_value(t.b) ORDER BY [t.o DESC NULLS LAST]]]
+          TableScan: t
+        ")
+    }
+
+    #[test]
+    fn no_op_ignore_nulls() -> Result<()> {
+        // IGNORE NULLS can't be reproduced through a single struct => not coalesced.
+        let ignore_nulls = |arg: Expr| {
+            Expr::AggregateFunction(AggregateFunction::new_udf(
+                first_value_udaf(),
+                vec![arg],
+                false,
+                None,
+                order_by_o(),
+                Some(NullTreatment::IgnoreNulls),
+            ))
+        };
+        let plan = LogicalPlanBuilder::from(scan()?)
+            .aggregate(
+                vec![col("p")],
+                vec![ignore_nulls(col("a")), ignore_nulls(col("b"))],
+            )?
+            .build()?;
+        assert_coalesced!(TestConfig::new(), plan, @ "
+        Aggregate: groupBy=[[t.p]], aggr=[[first_value(t.a) IGNORE NULLS ORDER BY [t.o DESC NULLS LAST], first_value(t.b) IGNORE NULLS ORDER BY [t.o DESC NULLS LAST]]]
           TableScan: t
         ")
     }
