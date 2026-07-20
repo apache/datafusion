@@ -1315,7 +1315,9 @@ impl ExecutionPlan for HashJoinExec {
             ]),
         };
 
-        if self.mode == PartitionMode::Partitioned && self.join_type == JoinType::Inner {
+        if self.mode == PartitionMode::Partitioned
+            && matches!(self.join_type, JoinType::Inner | JoinType::Full)
+        {
             requirements.allow_range_satisfaction_for_key_partitioning()
         } else {
             requirements
