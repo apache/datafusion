@@ -1,0 +1,74 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Facade crate that preserves the `datafusion` crate name and API while allowing
+# `datafusion-core` to be linked either statically (default) or dynamically via
+# the `dynamic` feature. See datafusion-dylib for details.
+
+[package]
+name = "datafusion"
+description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
+keywords = ["arrow", "query", "sql"]
+readme = "../../README.md"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+# Forward all features to `datafusion-core`. The only feature this facade
+# owns is `dynamic`, which enables the shared-library linking for faster
+# incremental link times during development.
+[features]
+dynamic = ["dep:datafusion-dylib"]
+
+default = ["datafusion-core/default"]
+array_expressions = ["datafusion-core/array_expressions"]
+avro = ["datafusion-core/avro"]
+backtrace = ["datafusion-core/backtrace"]
+compression = ["datafusion-core/compression"]
+crypto_expressions = ["datafusion-core/crypto_expressions"]
+datetime_expressions = ["datafusion-core/datetime_expressions"]
+encoding_expressions = ["datafusion-core/encoding_expressions"]
+extended_tests = ["datafusion-core/extended_tests"]
+force_hash_collisions = ["datafusion-core/force_hash_collisions"]
+math_expressions = ["datafusion-core/math_expressions"]
+nested_expressions = ["datafusion-core/nested_expressions"]
+parquet = ["datafusion-core/parquet"]
+parquet_encryption = ["datafusion-core/parquet_encryption"]
+recursive_protection = ["datafusion-core/recursive_protection"]
+regex_expressions = ["datafusion-core/regex_expressions"]
+serde = ["datafusion-core/serde"]
+sql = ["datafusion-core/sql"]
+string_expressions = ["datafusion-core/string_expressions"]
+unicode_expressions = ["datafusion-core/unicode_expressions"]
+
+
+# We can't use `workspace = true` here because we need to rename the extern
+# name (the core crate's lib name is `datafusion`, which collides with this
+# facade's own package name). Reference the local path directly instead.
+[dependencies]
+datafusion-core = { workspace = true, default-features = false }
+datafusion-dylib = { workspace = true, optional = true }
