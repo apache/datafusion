@@ -255,6 +255,7 @@ mod tests {
         execution_props::ExecutionProps,
         expr::{HigherOrderFunction, LambdaVariable},
         lambda, lit,
+        physical_planning_context::PhysicalPlanningContext,
     };
     use datafusion_physical_expr::create_physical_expr;
 
@@ -290,6 +291,7 @@ mod tests {
             )),
             &schema,
             &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
         )?
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),
@@ -323,6 +325,7 @@ mod tests {
             )),
             &schema,
             &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
         )?
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),
