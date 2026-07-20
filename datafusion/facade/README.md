@@ -1,0 +1,27 @@
+<!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+
+<!--
+  Note the main crates.io landing page https://crates.io/crates/datafusion
+  uses the workspace README.md file, not this file
+-->
+
+# Apache DataFusion Facade
+
+This crate wraps and delegates all features to `datafusion-core`. Its sole purpose is to provide the `dylib` feature that allows users to link Datafusion as a shared library (see [`datafusion-dylib`](../dylib/README.md) readme for details).

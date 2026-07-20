@@ -26,10 +26,10 @@ use std::{
     time::Duration,
 };
 
-use arrow::array::{ArrayRef, RecordBatch, StringArray};
-use arrow::util::pretty::pretty_format_batches;
 use async_trait::async_trait;
 use chrono::Utc;
+use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray};
+use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::{
     common::{HashMap, instant::Instant},
     error::DataFusionError,

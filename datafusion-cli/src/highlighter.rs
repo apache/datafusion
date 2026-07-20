@@ -22,12 +22,12 @@ use std::{
     fmt::Display,
 };
 
+use datafusion::config;
 use datafusion::sql::sqlparser::{
     dialect::{Dialect, GenericDialect, dialect_from_str},
     keywords::Keyword,
     tokenizer::{Token, Tokenizer},
 };
-use datafusion_common::config;
 use rustyline::highlight::{CmdKind, Highlighter};
 
 /// The syntax highlighter.

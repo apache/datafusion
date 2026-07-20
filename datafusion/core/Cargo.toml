@@ -16,7 +16,7 @@
 # under the License.
 
 [package]
-name = "datafusion"
+name = "datafusion-core"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
 keywords = ["arrow", "query", "sql"]
 include = ["benches/*.rs", "src/**/*.md", "src/**/*.rs", "Cargo.toml", "LICENSE.txt", "NOTICE.txt"]
@@ -28,6 +28,11 @@ repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
+
+[lib]
+# Allows crate's own tests and benches to use it as `use datafusion::*`
+# and makes core crate interchangeable with the facade
+name = "datafusion"
 
 [package.metadata.docs.rs]
 all-features = true
