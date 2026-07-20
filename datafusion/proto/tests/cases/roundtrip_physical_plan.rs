@@ -60,6 +60,7 @@ use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
 use datafusion::physical_plan::analyze::AnalyzeExec;
+use datafusion::physical_plan::buffer::BufferExec;
 #[expect(deprecated)]
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -1130,6 +1131,23 @@ fn roundtrip_cooperative() -> Result<()> {
     roundtrip_test(Arc::new(CooperativeExec::new(Arc::new(EmptyExec::new(
         schema,
     )))))
+}
+
+#[test]
+fn roundtrip_buffer() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let result = roundtrip_test_and_return(
+        Arc::new(BufferExec::new(Arc::new(EmptyExec::new(schema)), 4096)),
+        &ctx,
+        &codec,
+        &proto_converter,
+    )?;
+    let result = result.downcast_ref::<BufferExec>().unwrap();
+    assert_eq!(result.capacity(), 4096);
+    Ok(())
 }
 
 #[test]

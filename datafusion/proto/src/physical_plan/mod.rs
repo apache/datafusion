@@ -860,8 +860,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::AsyncFunc(async_func) => {
                 self.try_into_async_func_physical_plan(async_func, ctx, proto_converter)
             }
-            PhysicalPlanType::Buffer(buffer) => {
-                self.try_into_buffer_physical_plan(buffer, ctx, proto_converter)
+            PhysicalPlanType::Buffer(_) => {
+                BufferExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::ScalarSubquery(sq) => {
                 self.try_into_scalar_subquery_physical_plan(sq, ctx, proto_converter)
@@ -1084,14 +1084,6 @@ pub trait PhysicalPlanNodeExt: Sized {
 
         if let Some(exec) = plan.downcast_ref::<AsyncFuncExec>() {
             return protobuf::PhysicalPlanNode::try_from_async_func_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<BufferExec>() {
-            return protobuf::PhysicalPlanNode::try_from_buffer_exec(
                 exec,
                 codec,
                 proto_converter,
@@ -2809,6 +2801,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(AsyncFuncExec::try_new(async_exprs, input)?))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `BufferExec` deserializes itself via `BufferExec::try_from_proto`"
+    )]
     fn try_into_buffer_physical_plan(
         &self,
         buffer: &protobuf::BufferExecNode,
@@ -4301,6 +4297,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `BufferExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_buffer_exec(
         exec: &BufferExec,
         extension_codec: &dyn PhysicalExtensionCodec,
