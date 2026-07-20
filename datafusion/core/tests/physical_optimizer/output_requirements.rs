@@ -57,6 +57,30 @@ fn add_mode_is_idempotent_on_sorted_plan() {
     assert_add_mode_idempotent(plan);
 }
 
+#[test]
+fn add_mode_is_idempotent_on_scalar_subquery() {
+    // Exercises the below-root case: the wrapper carrying the ordering lands
+    // under the `ScalarSubqueryExec`, so the root guard in `require_top_ordering`
+    // does not fire on the second pass. Without treating the existing wrapper as
+    // already-handled, the second pass would stamp a redundant empty wrapper on
+    // top of the subquery.
+    let s = schema();
+    let ordering: LexOrdering = [sort_expr("a", &s)].into();
+    let sort = sort_exec(ordering, parquet_exec(Arc::clone(&s)));
+
+    let subqueries = vec![ScalarSubqueryLink {
+        plan: parquet_exec(Arc::clone(&s)),
+        index: SubqueryIndex::new(0),
+    }];
+    let plan = Arc::new(ScalarSubqueryExec::new(
+        sort,
+        subqueries,
+        ScalarSubqueryResults::new(1),
+    )) as Arc<dyn ExecutionPlan>;
+
+    assert_add_mode_idempotent(plan);
+}
+
 fn assert_add_mode_idempotent(plan: Arc<dyn ExecutionPlan>) {
     let config = ConfigOptions::new();
     let rule = OutputRequirements::new_add_mode();

@@ -351,10 +351,10 @@ impl PhysicalOptimizerRule for OutputRequirements {
 /// This functions adds ancillary `OutputRequirementExec` to the physical plan, so that
 /// global requirements are not lost during optimization.
 ///
-/// Idempotent: if the plan is already topped by an `OutputRequirementExec`, it
-/// is returned unchanged so that re-running this rule (as adaptive execution
-/// in datafusion-ballista AQE does after every completed stage, see
-/// datafusion-ballista#1359) does not stack wrappers.
+/// Idempotent: re-running this rule (as adaptive execution in datafusion-ballista
+/// AQE does after every completed stage, see datafusion-ballista#1359) does not
+/// stack wrappers, whether the previously-added `OutputRequirementExec` sits at
+/// the root (handled here) or below it (handled in `require_top_ordering_helper`).
 fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     if plan.downcast_ref::<OutputRequirementExec>().is_some() {
         return Ok(plan);
@@ -396,6 +396,12 @@ fn output_requirement_child(plan: &dyn ExecutionPlan) -> Option<usize> {
 fn require_top_ordering_helper(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
+    // A previous run of this rule already captured the ordering requirement at
+    // this node. Report it as already handled.
+    if plan.downcast_ref::<OutputRequirementExec>().is_some() {
+        return Ok((plan, true));
+    }
+
     // Global ordering defines desired ordering in the final result.
     if let Some(sort_exec) = plan.downcast_ref::<SortExec>() {
         // In case of constant columns, output ordering of the `SortExec` would
