@@ -529,7 +529,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 | JoinType::LeftMark
                 | JoinType::RightMark
         ) {
-            Ok(Box::pin(BitwiseSortMergeJoinStream::try_new(
+            Ok(BitwiseSortMergeJoinStream::try_new(
                 Arc::clone(&self.schema),
                 self.sort_options.clone(),
                 self.null_equality,
@@ -545,7 +545,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 reservation,
                 spill_manager,
                 context.runtime_env(),
-            )?))
+            )?.into_stream())
         } else {
             Ok(Box::pin(MaterializingSortMergeJoinStream::try_new(
                 Arc::clone(&self.schema),
