@@ -294,3 +294,20 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+## Temporary arrow-rs patch to test https://github.com/apache/arrow-rs/pull/10288
+
+[patch.crates-io]
+arrow = { git = "https://github.com/hhhizzz/arrow-rs.git", branch = "fix/parquet-mask-sparse-pages" }
+arrow-array = { git = "https://github.com/hhhizzz/arrow-rs.git", branch = "fix/parquet-mask-sparse-pages" }
+arrow-avro = { git = "https://github.com/hhhizzz/arrow-rs.git", branch = "fix/parquet-mask-sparse-pages" }
+arrow-buffer = { git = "https://github.com/hhhizzz/arrow-rs.git", branch = "fix/parquet-mask-sparse-pages" }
+arrow-cast = { git = "https://github.com/hhhizzz/arrow-rs.git", branch = "fix/parquet-mask-sparse-pages" }
+arrow-data = { git = "https://github.com/hhhizzz/arrow-rs.git", branch = "fix/parquet-mask-sparse-pages" }
+arrow-ipc = { git = "https://github.com/hhhizzz/arrow-rs.git", branch = "fix/parquet-mask-sparse-pages" }
+arrow-schema = { git = "https://github.com/hhhizzz/arrow-rs.git", branch = "fix/parquet-mask-sparse-pages" }
+arrow-select = { git = "https://github.com/hhhizzz/arrow-rs.git", branch = "fix/parquet-mask-sparse-pages" }
+arrow-string = { git = "https://github.com/hhhizzz/arrow-rs.git", branch = "fix/parquet-mask-sparse-pages" }
+arrow-ord = { git = "https://github.com/hhhizzz/arrow-rs.git", branch = "fix/parquet-mask-sparse-pages" }
+arrow-flight = { git = "https://github.com/hhhizzz/arrow-rs.git", branch = "fix/parquet-mask-sparse-pages" }
+parquet = { git = "https://github.com/hhhizzz/arrow-rs.git", branch = "fix/parquet-mask-sparse-pages" }
