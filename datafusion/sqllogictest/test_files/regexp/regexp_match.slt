@@ -199,3 +199,22 @@ query B
 select null !~* 'abc';
 ----
 NULL
+
+
+# Test for Issue 23709: regex_match_dyn with Dictionary encoded patterns
+statement ok
+CREATE TABLE dict_regex_t AS SELECT * FROM (VALUES ('user auth failed')) v(s);
+
+statement ok
+CREATE TABLE dict_regex_p AS SELECT * FROM (VALUES ('(auth|login)')) v(pat);
+
+query B
+SELECT arrow_cast(dict_regex_t.s, 'Dictionary(Int32, Utf8)') SIMILAR TO dict_regex_p.pat FROM dict_regex_t CROSS JOIN dict_regex_p;
+----
+true
+
+statement ok
+DROP TABLE dict_regex_t;
+
+statement ok
+DROP TABLE dict_regex_p;
