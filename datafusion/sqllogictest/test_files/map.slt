@@ -642,6 +642,12 @@ select map_extract(MAP {1: 1, 2: 2, 3:3}, '1'), map_extract(MAP {1: 1, 2: 2, 3:3
 ----
 [1] [1] [1] [NULL] [1]
 
+# null arg
+query ?
+select map_extract(NULL, 'a');
+----
+NULL
+
 # map_extract with columns
 query ???
 select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7) from map_array_table_1;

@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use datafusion_common::{Result, ScalarValue, Statistics, exec_err, internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
+use datafusion_expr::physical_planning_context::{ScalarSubqueryResults, SubqueryIndex};
 
 use crate::execution_plan::{CardinalityEffect, ExecutionPlan, PlanProperties};
 use crate::joins::utils::{OnceAsync, OnceFut};
@@ -202,9 +202,9 @@ impl ExecutionPlan for ScalarSubqueryExec {
     ) -> Result<SendableRecordBatchStream> {
         let subqueries = self.subqueries.clone();
         let results = self.results.clone();
-        let subquery_ctx = Arc::clone(&context);
+        let planning_ctx = Arc::clone(&context);
         let mut subquery_future = self.subquery_future.try_once(move || {
-            Ok(async move { execute_subqueries(subqueries, results, subquery_ctx).await })
+            Ok(async move { execute_subqueries(subqueries, results, planning_ctx).await })
         })?;
         let input = Arc::clone(&self.input);
         let schema = self.schema();

@@ -1297,6 +1297,7 @@ impl ExecutionPlan for HashJoinExec {
             && matches!(
                 self.join_type,
                 JoinType::Inner
+                    | JoinType::Full
                     | JoinType::Right
                     | JoinType::RightSemi
                     | JoinType::RightAnti
@@ -1414,6 +1415,7 @@ impl ExecutionPlan for HashJoinExec {
                             filter,
                             on_right,
                             repartition_random_state,
+                            self.null_aware,
                         ))
                     })))
                 })
