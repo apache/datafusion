@@ -31,7 +31,9 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
-use crate::aggregates::{PartitionRun, append_subpartition_column, subpartition_schema};
+use crate::aggregates::{
+    relative_partition, relative_partition_schema, with_relative_partition,
+};
 use crate::coalesce::LimitedBatchCoalescer;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::hash_utils::create_hashes;
@@ -146,7 +148,7 @@ enum RepartitionBatch {
     /// The actual batch can be retrieved by reading from the SpillPoolStream.
     /// This variant contains no data itself - it's just a signal to the reader
     /// to fetch the next batch from the spill stream.
-    Spilled,
+    Spilled { relative_partition: Option<usize> },
 }
 
 type MaybeBatch = Option<Result<RepartitionBatch>>;
@@ -181,6 +183,10 @@ impl OutputChannel {
     /// Used after [`OutputChannel::coalesce`] for performance purposes.
     async fn send(&mut self, batch: RecordBatch) -> Result<(), SendError<MaybeBatch>> {
         let size = batch.get_array_memory_size();
+        let relative_partition = match relative_partition(batch.schema_ref()) {
+            Ok(relative_partition) => relative_partition,
+            Err(err) => return self.sender.send(Some(Err(err))).await,
+        };
 
         // Decide the payload outside of any await: never hold a MutexGuard
         // across an await point.
@@ -188,7 +194,9 @@ impl OutputChannel {
             match self.reservation.try_grow(size) {
                 Ok(_) => (Ok(RepartitionBatch::Memory(batch)), true),
                 Err(_) => match self.spill_writer.push_batch(&batch) {
-                    Ok(()) => (Ok(RepartitionBatch::Spilled), false),
+                    Ok(()) => {
+                        (Ok(RepartitionBatch::Spilled { relative_partition }), false)
+                    }
                     Err(err) => (Err(err), false),
                 },
             }
@@ -217,7 +225,7 @@ impl OutputChannel {
 /// A producer-side coalescer shared across all input tasks targeting a
 /// single output partition.
 ///
-/// Bundles the [`LimitedBatchCoalescer`] (behind a [`Mutex`]) with the
+/// Bundles the [`BatchCoalescer`] (behind a [`Mutex`]) with the
 /// active-sender counter that tracks how many input tasks may still push
 /// into it. The last task to call [`Self::finalize`] is the one that
 /// finalizes the coalescer and ships the residual batch.
@@ -225,18 +233,32 @@ impl OutputChannel {
 /// Cheap to [`Clone`]: both fields are [`Arc`]s.
 #[derive(Clone)]
 struct SharedCoalescer {
-    inner: Arc<Mutex<LimitedBatchCoalescer>>,
+    inner: Arc<Mutex<BatchCoalescer>>,
     active_senders: Arc<AtomicUsize>,
 }
 
 impl SharedCoalescer {
-    fn new(schema: &SchemaRef, target_batch_size: usize, num_senders: usize) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(LimitedBatchCoalescer::new(
+    fn new(
+        schema: &SchemaRef,
+        target_batch_size: usize,
+        num_senders: usize,
+        num_relative_partitions: usize,
+    ) -> Self {
+        let coalescer = if num_relative_partitions > 1 {
+            BatchCoalescer::Partitioned(PartitionedLimitedBatchCoalescer::new(
+                schema,
+                target_batch_size,
+                num_relative_partitions,
+            ))
+        } else {
+            BatchCoalescer::Single(LimitedBatchCoalescer::new(
                 Arc::clone(schema),
                 target_batch_size,
                 None,
-            ))),
+            ))
+        };
+        Self {
+            inner: Arc::new(Mutex::new(coalescer)),
             active_senders: Arc::new(AtomicUsize::new(num_senders)),
         }
     }
@@ -268,6 +290,91 @@ impl SharedCoalescer {
             acc.push(batch);
         }
         Ok(acc)
+    }
+}
+
+enum BatchCoalescer {
+    Single(LimitedBatchCoalescer),
+    Partitioned(PartitionedLimitedBatchCoalescer),
+}
+
+impl BatchCoalescer {
+    fn push_batch(&mut self, batch: RecordBatch) -> Result<()> {
+        match self {
+            Self::Single(coalescer) => {
+                coalescer.push_batch(batch)?;
+            }
+            Self::Partitioned(coalescer) => coalescer.push_batch(batch)?,
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        match self {
+            Self::Single(coalescer) => coalescer.finish(),
+            Self::Partitioned(coalescer) => coalescer.finish(),
+        }
+    }
+
+    fn next_completed_batch(&mut self) -> Option<RecordBatch> {
+        match self {
+            Self::Single(coalescer) => coalescer.next_completed_batch(),
+            Self::Partitioned(coalescer) => coalescer.next_completed_batch(),
+        }
+    }
+}
+
+struct PartitionedLimitedBatchCoalescer {
+    coalescers: Vec<LimitedBatchCoalescer>,
+}
+
+impl PartitionedLimitedBatchCoalescer {
+    fn new(
+        schema: &SchemaRef,
+        target_batch_size: usize,
+        num_relative_partitions: usize,
+    ) -> Self {
+        let coalescers = (0..num_relative_partitions)
+            .map(|relative_partition| {
+                LimitedBatchCoalescer::new(
+                    relative_partition_schema(schema, relative_partition),
+                    target_batch_size,
+                    None,
+                )
+            })
+            .collect();
+        Self { coalescers }
+    }
+
+    fn push_batch(&mut self, batch: RecordBatch) -> Result<()> {
+        let relative_partition =
+            relative_partition(batch.schema_ref())?.ok_or_else(|| {
+                DataFusionError::Internal(
+                "Missing relative partition metadata for partitioned batch coalescing"
+                    .to_string(),
+            )
+            })?;
+        let num_relative_partitions = self.coalescers.len();
+        let coalescer = self.coalescers.get_mut(relative_partition).ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Relative partition {relative_partition} exceeds configured partition count {num_relative_partitions}"
+            ))
+        })?;
+        coalescer.push_batch(batch)?;
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        for coalescer in &mut self.coalescers {
+            coalescer.finish()?;
+        }
+        Ok(())
+    }
+
+    fn next_completed_batch(&mut self) -> Option<RecordBatch> {
+        self.coalescers
+            .iter_mut()
+            .find_map(LimitedBatchCoalescer::next_completed_batch)
     }
 }
 
@@ -477,16 +584,12 @@ impl RepartitionExecState {
             // the consumer never sees the per-input-task small batches.
             // Skip in preserve-order mode: each input has its own dedicated
             // channel and `StreamingMergeBuilder` handles batching.
-            let coalesce_schema = if max_aggr_partition_factor > 1 {
-                subpartition_schema(&input.schema())
-            } else {
-                input.schema()
-            };
             let shared_coalescer = (!preserve_order).then(|| {
                 SharedCoalescer::new(
-                    &coalesce_schema,
+                    &input.schema(),
                     context.session_config().batch_size(),
                     num_input_partitions,
+                    max_aggr_partition_factor,
                 )
             });
 
@@ -1010,89 +1113,12 @@ impl BatchPartitioner {
 
         partition_timer.done();
 
-        Self::partition_hash_aggregate_grouped_take(
-            batch,
-            indices,
-            timer,
-            max_aggr_partition_factor,
-        )
-    }
-
-    fn partition_hash_aggregate_grouped_take(
-        batch: &RecordBatch,
-        indices: &mut [Vec<u32>],
-        timer: &metrics::Time,
-        max_aggr_partition_factor: usize,
-    ) -> Result<Vec<Result<(usize, usize, RecordBatch)>>> {
-        let mut output_ranges = Vec::with_capacity(indices.len());
-        let mut reordered_indices = Vec::with_capacity(batch.num_rows());
-
-        for (aggr_partition, p_indices) in indices.iter_mut().enumerate() {
-            if p_indices.is_empty() {
-                continue;
-            }
-
-            let start = reordered_indices.len();
-            reordered_indices.extend_from_slice(p_indices);
-            output_ranges.push((
+        Self::partition_grouped_take(batch, indices, timer, |aggr_partition| {
+            (
                 aggr_partition / max_aggr_partition_factor,
-                PartitionRun::new(
-                    aggr_partition % max_aggr_partition_factor,
-                    p_indices.len(),
-                )?,
-                start,
-            ));
-            p_indices.clear();
-        }
-
-        if reordered_indices.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let batches = {
-            let _timer = timer.timer();
-            let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.into();
-            let columns = take_arrays(batch.columns(), &indices_array, None)?;
-
-            let mut options = RecordBatchOptions::new();
-            options = options.with_row_count(Some(indices_array.len()));
-            let reordered_batch =
-                RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
-
-            let mut output_batches = Vec::new();
-            let mut current_output_partition = None;
-            let mut current_start = 0;
-            let mut current_len = 0;
-            let mut current_runs = Vec::new();
-
-            for (output_partition, run, start) in output_ranges {
-                if current_output_partition != Some(output_partition) {
-                    if let Some(partition) = current_output_partition {
-                        let batch = reordered_batch.slice(current_start, current_len);
-                        let batch = append_subpartition_column(&batch, &current_runs)?;
-                        output_batches.push(Ok((partition, 0, batch)));
-                    }
-
-                    current_output_partition = Some(output_partition);
-                    current_start = start;
-                    current_len = 0;
-                    current_runs.clear();
-                }
-
-                current_len += run.len;
-                current_runs.push(run);
-            }
-
-            if let Some(partition) = current_output_partition {
-                let batch = reordered_batch.slice(current_start, current_len);
-                let batch = append_subpartition_column(&batch, &current_runs)?;
-                output_batches.push(Ok((partition, 0, batch)));
-            }
-
-            output_batches
-        };
-
-        Ok(batches)
+                aggr_partition % max_aggr_partition_factor,
+            )
+        })
     }
 
     fn partition_grouped_take(
@@ -1217,7 +1243,10 @@ impl BatchPartitioner {
 /// batches adhere to the configured `datafusion.execution.batch_size` for efficient operations,
 /// and for that, it will automatically coalesce batches right after repartitioning.
 ///
-/// For this, one shared [`LimitedBatchCoalescer`] per output partition is used:
+/// For this, one shared [`BatchCoalescer`] per output partition is used. Hash
+/// aggregate repartitioning uses one inner [`LimitedBatchCoalescer`] per relative
+/// aggregate partition so rows from different relative partitions are never
+/// coalesced together:
 ///
 /// ```text
 ///                         ┌───┐                           ┌───┐
@@ -1505,15 +1534,10 @@ impl ExecutionPlan for RepartitionExec {
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
 
-        let spill_schema = if max_aggr_partition_factor > 1 {
-            subpartition_schema(&input.schema())
-        } else {
-            input.schema()
-        };
         let spill_manager = SpillManager::new(
             Arc::clone(&context.runtime_env()),
             spill_metrics,
-            spill_schema,
+            input.schema(),
         );
 
         // Get existing ordering to use for merging
@@ -1999,7 +2023,12 @@ impl RepartitionExec {
             }
 
             for res in partitioner.partition_iter_with_relative_partition(batch)? {
-                let (partition, _relative_partition, batch) = res?;
+                let (partition, relative_partition, batch) = res?;
+                let batch = if max_aggr_partition_factor > 1 {
+                    with_relative_partition(batch, relative_partition)
+                } else {
+                    batch
+                };
 
                 let timer = metrics.send_time[partition].timer();
                 // if there is still a receiver, send to it
@@ -2148,7 +2177,7 @@ enum StreamState {
     ReadingMemory,
     /// Waiting for a spilled batch from the spill stream.
     /// Must not poll channel until spilled batch is received to preserve ordering.
-    ReadingSpilled,
+    ReadingSpilled { relative_partition: Option<usize> },
 }
 
 /// This struct converts a receiver to a stream.
@@ -2233,11 +2262,12 @@ impl PerPartitionStream {
                                 self.reservation.shrink(batch.get_array_memory_size());
                                 return Poll::Ready(Some(Ok(batch)));
                             }
-                            Ok(RepartitionBatch::Spilled) => {
+                            Ok(RepartitionBatch::Spilled { relative_partition }) => {
                                 // Batch was spilled, transition to reading from spill stream
                                 // We must block on spill stream until we get the batch
                                 // to preserve ordering
-                                self.state = StreamState::ReadingSpilled;
+                                self.state =
+                                    StreamState::ReadingSpilled { relative_partition };
                                 continue;
                             }
                             Err(e) => {
@@ -2260,11 +2290,17 @@ impl PerPartitionStream {
                         }
                     }
                 }
-                StreamState::ReadingSpilled => {
+                StreamState::ReadingSpilled { relative_partition } => {
                     // Poll spill stream for the spilled batch
                     match self.spill_stream.poll_next_unpin(cx) {
                         Poll::Ready(Some(Ok(batch))) => {
                             self.state = StreamState::ReadingMemory;
+                            let batch = match relative_partition {
+                                Some(partition) => {
+                                    with_relative_partition(batch, partition)
+                                }
+                                None => batch,
+                            };
                             return Poll::Ready(Some(Ok(batch)));
                         }
                         Poll::Ready(Some(Err(e))) => {
@@ -2342,12 +2378,41 @@ mod tests {
     use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning, SplitPoint};
     use insta::assert_snapshot;
 
-    // Covers hash aggregate partitioning mapping multiple aggregate partitions
-    // back to one output partition through an internal subpartition column.
-    // Example: with 2 output partitions and factor 4, each output batch has
-    // visible data plus one internal subpartition column.
     #[test]
-    fn test_hash_aggregate_partitioner_appends_subpartition_column() -> Result<()> {
+    fn partitioned_coalescer_keeps_relative_partitions_separate() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
+        let make_batch = |relative_partition, values: Vec<u32>| {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(UInt32Array::from(values))],
+            )?;
+            Ok::<_, DataFusionError>(with_relative_partition(batch, relative_partition))
+        };
+        let mut coalescer = PartitionedLimitedBatchCoalescer::new(&schema, 4, 2);
+
+        coalescer.push_batch(make_batch(0, vec![0, 1])?)?;
+        coalescer.push_batch(make_batch(1, vec![10, 11])?)?;
+        coalescer.push_batch(make_batch(0, vec![2, 3])?)?;
+
+        let partition_zero = coalescer.next_completed_batch().unwrap();
+        assert_eq!(partition_zero.num_rows(), 4);
+        assert_eq!(relative_partition(partition_zero.schema_ref())?, Some(0));
+        assert!(coalescer.next_completed_batch().is_none());
+
+        coalescer.finish()?;
+        let partition_one = coalescer.next_completed_batch().unwrap();
+        assert_eq!(partition_one.num_rows(), 2);
+        assert_eq!(relative_partition(partition_one.schema_ref())?, Some(1));
+        assert!(coalescer.next_completed_batch().is_none());
+        Ok(())
+    }
+
+    // Covers hash aggregate partitioning mapping multiple aggregate partitions
+    // back to one output partition while returning each relative partition as
+    // its own batch.
+    #[test]
+    fn test_hash_aggregate_partitioner_returns_relative_partitions() -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
         let batch = RecordBatch::try_new(
@@ -2367,21 +2432,10 @@ mod tests {
         for result in partitioner.partition_iter_with_relative_partition(batch)? {
             let (partition, relative_partition, batch) = result?;
             assert!(partition < 2);
-            assert_eq!(relative_partition, 0);
-            assert_eq!(batch.num_columns(), 2);
+            assert!(relative_partition < 4);
+            assert_eq!(batch.num_columns(), 1);
             num_rows += batch.num_rows();
-
-            let subpartitions = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<UInt32Array>()
-                .expect("subpartition column should be UInt32");
-            for value in subpartitions.iter() {
-                let value =
-                    value.expect("subpartition value should not be null") as usize;
-                assert!(value < 4);
-                seen[partition][value] = true;
-            }
+            seen[partition][relative_partition] = true;
         }
 
         assert_eq!(num_rows, 128);

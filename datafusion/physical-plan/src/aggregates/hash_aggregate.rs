@@ -42,9 +42,7 @@ use super::aggregate_hash_table::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialSkipMarker,
 };
 use super::skip_partial::SkipAggregationProbe;
-use super::{
-    AggregateExec, SubpartitionReorderBuffer, partition_runs, reorder_by_subpartition,
-};
+use super::{AggregateExec, relative_partition};
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
@@ -79,7 +77,6 @@ struct FinalPartitionRunState {
     total_runs_size: usize,
     replaying_run_size: usize,
     is_draining: bool,
-    subpartition_reorder_buffer: SubpartitionReorderBuffer,
 }
 
 impl FinalPartitionRunState {
@@ -90,7 +87,6 @@ impl FinalPartitionRunState {
             total_runs_size: 0,
             replaying_run_size: 0,
             is_draining: false,
-            subpartition_reorder_buffer: SubpartitionReorderBuffer::new(),
         }
     }
 
@@ -895,23 +891,7 @@ impl FinalHashAggregateStream {
     }
 
     fn stage_partition_runs(&mut self, batch: &RecordBatch) -> Result<Option<usize>> {
-        if let Some(state) = self.partition_run_state.as_mut()
-            && let Some(batch) =
-                reorder_by_subpartition(batch, &mut state.subpartition_reorder_buffer)?
-        {
-            let mut offset = 0;
-            let mut staged_memory = 0;
-            let num_runs = state.subpartition_reorder_buffer.runs().len();
-            for run_idx in 0..num_runs {
-                let run = state.subpartition_reorder_buffer.runs()[run_idx];
-                let run_batch = batch.slice(offset, run.len);
-                offset += run.len;
-                staged_memory += state.stage_batch(run_batch, run.relative_partition);
-            }
-            return Ok(Some(staged_memory));
-        }
-
-        let Some(runs) = partition_runs(batch.schema_ref())? else {
+        let Some(partition_id) = relative_partition(batch.schema_ref())? else {
             if self
                 .partition_run_state
                 .as_ref()
@@ -924,18 +904,10 @@ impl FinalHashAggregateStream {
             return Ok(None);
         };
 
-        let mut offset = 0;
-        let mut staged_memory = 0;
-        for run in runs {
-            let run_batch = batch.slice(offset, run.len);
-            offset += run.len;
-            staged_memory += self
-                .partition_run_state
-                .as_mut()
-                .map(|state| state.stage_batch(run_batch, run.relative_partition))
-                .unwrap_or(0);
-        }
-        Ok(Some(staged_memory))
+        Ok(self
+            .partition_run_state
+            .as_mut()
+            .map(|state| state.stage_batch(batch.clone(), partition_id)))
     }
 
     fn reserve_staged_partition_runs(
@@ -1070,27 +1042,27 @@ impl FinalHashAggregateStream {
         hash_table.start_output()
     }
 
-    // FinalPartitioned inputs may arrive as coalesced batches with partition run
-    // metadata. The rows are already grouped by relative aggregate partition inside
-    // each batch, but multiple relative partitions can share the same output stream.
+    // FinalPartitioned inputs arrive with one relative aggregate partition per
+    // coalesced batch. Multiple relative partitions can share the same output stream.
     //
     // Original input stream:
     //
-    //   batch A rows: [ p0 ][ p1 ]       metadata: [(p0, len), (p1, len)]
-    //   batch B rows: [ p0 ][ p1 ]       metadata: [(p0, len), (p1, len)]
+    //   batch A rows: [ p0 ]             metadata: p0
+    //   batch B rows: [ p1 ]             metadata: p1
+    //   batch C rows: [ p0 ]             metadata: p0
     //
     // Buffer by relative aggregate partition while reading the original stream:
     //
     //   FinalPartitionRunState.runs
     //   +----+-----------------------------+
-    //   | p0 | [ A.p0 slice, B.p0 slice ]  |
-    //   | p1 | [ A.p1 slice, B.p1 slice ]  |
+    //   | p0 | [ batch A, batch C ]         |
+    //   | p1 | [ batch B ]                  |
     //   +----+-----------------------------+
     //
     // Replay after the original stream ends:
     //
-    //   p0 slices -> fresh final hash table -> output p0 groups
-    //   p1 slices -> fresh final hash table -> output p1 groups
+    //   p0 batches -> fresh final hash table -> output p0 groups
+    //   p1 batches -> fresh final hash table -> output p1 groups
     //
     // This keeps equal group keys from different relative aggregate partitions from
     // being merged together, while still merging the same group key within one
@@ -1099,7 +1071,7 @@ impl FinalHashAggregateStream {
     // State transitions:
     //
     //   Reading original input
-    //     + metadata    -> buffer slices, keep ReadingInput
+    //     + metadata    -> buffer batch, keep ReadingInput
     //     + no metadata -> normal aggregate_batch path
     //     + input done  -> begin_partition_run_replay(...)
     //
@@ -1375,9 +1347,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::aggregates::{
-        AggregateMode, PartitionRun, PhysicalGroupBy, set_partition_runs_metadata,
-    };
+    use crate::aggregates::{AggregateMode, PhysicalGroupBy, with_relative_partition};
     use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
 
@@ -1412,14 +1382,10 @@ mod tests {
         };
 
         let input_batches = vec![
-            set_partition_runs_metadata(
-                make_batch(vec![1, 2, 1], vec![2, 5, 11])?,
-                &[PartitionRun::new(0, 2)?, PartitionRun::new(1, 1)?],
-            )?,
-            set_partition_runs_metadata(
-                make_batch(vec![1, 3, 1, 3], vec![3, 7, 1, 9])?,
-                &[PartitionRun::new(0, 2)?, PartitionRun::new(1, 2)?],
-            )?,
+            with_relative_partition(make_batch(vec![1, 2], vec![2, 5])?, 0),
+            with_relative_partition(make_batch(vec![1], vec![11])?, 1),
+            with_relative_partition(make_batch(vec![1, 3], vec![3, 7])?, 0),
+            with_relative_partition(make_batch(vec![1, 3], vec![1, 9])?, 1),
         ];
 
         let input =
