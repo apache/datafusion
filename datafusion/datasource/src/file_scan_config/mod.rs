@@ -625,23 +625,29 @@ fn project_output_partitioning(
     }
 }
 
-/// Returns `true` if merging `outer` into `inner` would duplicate a volatile
-/// expression; the caller should then decline the merge.
+/// Returns `true` if merging `outer` into `inner` would duplicate a volatile or
+/// non-trivial expression that CSE deduplicated; the caller should then decline
+/// the merge.
 ///
-/// `inner` is the scan's current projection and `outer` the projection being
-/// pushed into it; merging substitutes each `inner` expression into every
-/// `outer` reference to it. If a volatile `inner` expression (e.g. `random()`,
-/// `uuid()`) is referenced more than once, that single value gets inlined at
-/// each site and re-evaluated independently, so references meant to share a
-/// "locked-in" value diverge. This is the volatility guard the physical
-/// `ProjectionPushdown` and `FilterPushdown` rules already apply (see
-/// `datafusion_physical_expr_common::physical_expr::is_volatile`).
+/// Merging substitutes each `inner` expression into every `outer` reference to
+/// it. Since the logical optimizer extracts a repeated expression into a single
+/// `inner` entry referenced by column, re-inlining it at more than one
+/// reference site undoes that deduplication. An `inner` expression referenced
+/// more than once is therefore blocked when it is either:
 ///
-/// References are counted with multiplicity by walking each `outer` expression
-/// (as `try_collapse_projection_chain` does), so a self-duplicating expression
-/// such as `r + r` counts as two references. A volatile expression referenced
-/// exactly once has nothing to duplicate and is left to merge.
-fn would_duplicate_volatile_exprs(
+/// - **volatile** (e.g. `random()`) — evaluating it independently at each site
+///   makes references that should share one "locked-in" value diverge (the
+///   correctness guard the physical `ProjectionPushdown` and `FilterPushdown`
+///   rules also apply via
+///   `datafusion_physical_expr_common::physical_expr::is_volatile`); or
+/// - **not cheap to recompute** — its placement is not push-to-leaves
+///   (`KeepInPlace`: arithmetic, casts, most scalar functions). Leaf-pushable
+///   expressions (columns, `get_field`, `input_file_name`) still merge. This
+///   matches `try_collapse_projection_chain`.
+///
+/// References are counted with multiplicity, so `r + r` counts as two; an
+/// expression referenced exactly once has nothing to duplicate.
+fn would_duplicate_costly_exprs(
     inner: &ProjectionExprs,
     outer: &ProjectionExprs,
 ) -> bool {
@@ -664,10 +670,10 @@ fn would_duplicate_volatile_exprs(
             .expect("infallible closure should not fail");
     }
 
-    ref_counts
-        .iter()
-        .enumerate()
-        .any(|(idx, &count)| count > 1 && is_volatile(&inner_exprs[idx].expr))
+    ref_counts.iter().enumerate().any(|(idx, &count)| {
+        let expr = &inner_exprs[idx].expr;
+        count > 1 && (is_volatile(expr) || !expr.placement().should_push_to_leaves())
+    })
 }
 
 impl DataSource for FileScanConfig {
@@ -957,11 +963,13 @@ impl DataSource for FileScanConfig {
         projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn DataSource>>> {
         // Don't merge a projection into the scan if it would inline a volatile
-        // expression that the outer projection references, which would turn a
-        // single "locked-in" value (e.g. `random()` aliased in a subquery) into
-        // multiple independent evaluations. See #23220.
+        // or expensive expression referenced more than once. For a volatile
+        // expression (e.g. `random()` aliased in a subquery) this would turn a
+        // single "locked-in" value into multiple independent evaluations (see
+        // #23220); for an expensive scalar function it would undo CSE and
+        // re-evaluate the expression at every reference site.
         if let Some(inner) = self.file_source.projection()
-            && would_duplicate_volatile_exprs(inner, projection)
+            && would_duplicate_costly_exprs(inner, projection)
         {
             return Ok(None);
         }
@@ -3398,6 +3406,45 @@ mod tests {
         ))
     }
 
+    /// Helper: create a deterministic but expensive scalar-function
+    /// expression, e.g. `abs(<arg>)`.
+    fn make_udf_expr(args: Vec<Arc<dyn PhysicalExpr>>) -> Arc<dyn PhysicalExpr> {
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::ScalarUDF;
+        use datafusion_functions::math::abs::AbsFunc;
+        use datafusion_physical_expr::ScalarFunctionExpr;
+
+        Arc::new(ScalarFunctionExpr::new(
+            "abs",
+            Arc::new(ScalarUDF::from(AbsFunc::new())),
+            args,
+            Arc::new(Field::new("abs", DataType::Int32, false)),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
+    /// Helper: create a cheap, leaf-pushable scalar function — struct field
+    /// access `get_field(s, 'x')`, whose placement is `MoveTowardsLeafNodes`
+    /// when the base is a column and the key is a literal.
+    fn make_leaf_pushable_expr() -> Arc<dyn PhysicalExpr> {
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::ScalarUDF;
+        use datafusion_functions::core::getfield::GetFieldFunc;
+        use datafusion_physical_expr::ScalarFunctionExpr;
+        use datafusion_physical_expr::expressions::Literal;
+
+        Arc::new(ScalarFunctionExpr::new(
+            "get_field",
+            Arc::new(ScalarUDF::from(GetFieldFunc::new())),
+            vec![
+                Arc::new(Column::new("s", 0)),
+                Arc::new(Literal::new(ScalarValue::Utf8(Some("x".to_string())))),
+            ],
+            Arc::new(Field::new("x", DataType::Int32, true)),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
     /// Column-only inner projections always merge safely, even when
     /// the outer projection references them multiple times.
     #[test]
@@ -3414,16 +3461,16 @@ mod tests {
             (Arc::new(Column::new("a", 0)), "y"),
         ]);
 
-        assert!(!would_duplicate_volatile_exprs(&inner, &outer));
+        assert!(!would_duplicate_costly_exprs(&inner, &outer));
     }
 
-    /// Deterministic computed expressions (arithmetic) referenced multiple
-    /// times are allowed to merge — only volatile expressions are protected.
+    /// A non-trivial computed expression (arithmetic, `KeepInPlace`) referenced
+    /// multiple times blocks the merge — recomputing it per site is wasteful.
     #[test]
-    fn test_would_duplicate_allows_deterministic_computed_multi_ref() {
+    fn test_would_duplicate_blocks_computed_multi_ref() {
         let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
         let col_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 1));
-        // Inner: [a + b, b]  (index 0 is deterministic computed)
+        // Inner: [a + b, b]  (index 0 is a non-trivial computed expression)
         let inner = make_projection(vec![
             (
                 Arc::new(BinaryExpr::new(
@@ -3442,8 +3489,7 @@ mod tests {
             (Arc::new(Column::new("sum", 0)), "y"),
         ]);
 
-        // Deterministic arithmetic → allow merge even though duplicated
-        assert!(!would_duplicate_volatile_exprs(&inner, &outer));
+        assert!(would_duplicate_costly_exprs(&inner, &outer));
     }
 
     /// A volatile expression the outer projection does not reference is
@@ -3458,7 +3504,7 @@ mod tests {
         // Outer references only index 1 (the column), not the volatile expr
         let outer = make_projection(vec![(Arc::new(Column::new("a", 1)), "a")]);
 
-        assert!(!would_duplicate_volatile_exprs(&inner, &outer));
+        assert!(!would_duplicate_costly_exprs(&inner, &outer));
     }
 
     /// A volatile expression referenced multiple times must block merge:
@@ -3475,7 +3521,7 @@ mod tests {
             (Arc::new(Column::new("r", 0)), "y"),
         ]);
 
-        assert!(would_duplicate_volatile_exprs(&inner, &outer));
+        assert!(would_duplicate_costly_exprs(&inner, &outer));
     }
 
     /// A volatile expression referenced exactly once has nothing to duplicate,
@@ -3493,7 +3539,7 @@ mod tests {
             (Arc::new(Column::new("a", 1)), "a"),
         ]);
 
-        assert!(!would_duplicate_volatile_exprs(&inner, &outer));
+        assert!(!would_duplicate_costly_exprs(&inner, &outer));
     }
 
     /// References are counted with multiplicity, so a single outer expression
@@ -3513,7 +3559,7 @@ mod tests {
             "x",
         )]);
 
-        assert!(would_duplicate_volatile_exprs(&inner, &outer));
+        assert!(would_duplicate_costly_exprs(&inner, &outer));
     }
 
     /// A volatile expression buried inside a larger expression (e.g.
@@ -3536,7 +3582,7 @@ mod tests {
             (Arc::new(Column::new("expr", 0)), "y"),
         ]);
 
-        assert!(would_duplicate_volatile_exprs(&inner, &outer));
+        assert!(would_duplicate_costly_exprs(&inner, &outer));
     }
 
     /// Empty projections should not block merging.
@@ -3544,6 +3590,61 @@ mod tests {
     fn test_would_duplicate_empty_projections() {
         let inner = make_projection(vec![]);
         let outer = make_projection(vec![]);
-        assert!(!would_duplicate_volatile_exprs(&inner, &outer));
+        assert!(!would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// An expensive (scalar-function) expression referenced more than once
+    /// must block the merge to preserve CSE.
+    #[test]
+    fn test_would_duplicate_blocks_multi_ref_expensive() {
+        let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        // Inner: [abs(a)]
+        let inner = make_projection(vec![(make_udf_expr(vec![col_a]), "abs_a")]);
+
+        // Outer references index 0 twice
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("abs_a", 0)), "x"),
+            (Arc::new(Column::new("abs_a", 0)), "y"),
+        ]);
+
+        assert!(would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// An expensive expression referenced only once has nothing to duplicate,
+    /// so the merge is allowed.
+    #[test]
+    fn test_would_duplicate_allows_single_ref_expensive() {
+        let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        // Inner: [abs(a), a]
+        let inner = make_projection(vec![
+            (make_udf_expr(vec![Arc::clone(&col_a)]), "abs_a"),
+            (Arc::clone(&col_a), "a"),
+        ]);
+
+        // Outer references each inner column once
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("abs_a", 0)), "out"),
+            (Arc::new(Column::new("a", 1)), "a"),
+        ]);
+
+        assert!(!would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// A cheap, leaf-pushable scalar function (placement
+    /// `MoveTowardsLeafNodes`, e.g. `get_field` / `input_file_name`) still
+    /// merges even when referenced multiple times — it is meant to be pushed
+    /// into the scan, so blocking would defeat that optimization.
+    #[test]
+    fn test_would_duplicate_allows_leaf_pushable_scalar_function() {
+        // Inner: [input_file_name()]
+        let inner = make_projection(vec![(make_leaf_pushable_expr(), "f")]);
+
+        // Outer references index 0 twice
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("f", 0)), "x"),
+            (Arc::new(Column::new("f", 0)), "y"),
+        ]);
+
+        assert!(!would_duplicate_costly_exprs(&inner, &outer));
     }
 }
