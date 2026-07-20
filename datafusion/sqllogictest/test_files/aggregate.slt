@@ -6659,6 +6659,69 @@ GROUP BY g
 ----
 0 0
 
+# first_value_with_group_by_and_nullable_filter
+# Rows whose FILTER predicate evaluates to NULL must be excluded (#22666)
+query II rowsort
+SELECT g, first_value(a ORDER BY a) FILTER (WHERE b < 1) AS fv
+FROM (VALUES (0, 10, CAST(NULL AS INT)), (0, 20, 2)) AS t(g, a, b)
+GROUP BY g
+----
+0 NULL
+
+# last_value_with_group_by_and_nullable_filter
+query II rowsort
+SELECT g, last_value(a ORDER BY a) FILTER (WHERE b < 1) AS lv
+FROM (VALUES (0, 10, CAST(NULL AS INT)), (0, 20, 2)) AS t(g, a, b)
+GROUP BY g
+----
+0 NULL
+
+# first_last_value_with_group_by_and_mixed_filter_results
+# Only rows whose FILTER predicate is TRUE participate: a = 10 (b = 1) and
+# a = 20 (b = 0) in group 0. The NULL-predicate row (a = 5) and the
+# FALSE-predicate row (a = 30) are excluded. No row passes the filter in
+# group 1, so the aggregates return NULL there.
+query III rowsort
+SELECT g,
+  first_value(a ORDER BY a) FILTER (WHERE b < 2) AS fv,
+  last_value(a ORDER BY a) FILTER (WHERE b < 2) AS lv
+FROM (VALUES (0, 5, CAST(NULL AS INT)), (0, 10, 1), (0, 30, 2), (0, 20, 0),
+             (1, 100, CAST(NULL AS INT)), (1, 50, 3)) AS t(g, a, b)
+GROUP BY g
+----
+0 10 20
+1 NULL NULL
+
+# first_last_value_with_group_by_filter_all_true_and_no_filter
+# Behavior is unchanged when every row passes the FILTER or there is no FILTER
+query IIIII rowsort
+SELECT g,
+  first_value(a ORDER BY a) FILTER (WHERE a > 0) AS fv,
+  last_value(a ORDER BY a) FILTER (WHERE a > 0) AS lv,
+  first_value(a ORDER BY a) AS fv_no_filter,
+  last_value(a ORDER BY a) AS lv_no_filter
+FROM (VALUES (0, 5, CAST(NULL AS INT)), (0, 10, 1), (0, 30, 2), (0, 20, 0)) AS t(g, a, b)
+GROUP BY g
+----
+0 5 30 5 30
+
+# first_value_without_group_by_and_nullable_filter
+query I rowsort
+SELECT first_value(a ORDER BY a) FILTER (WHERE b < 1) AS fv
+FROM (VALUES (10, CAST(NULL AS INT)), (20, 2)) AS t(a, b)
+----
+NULL
+
+# first_value_window_function_no_regression
+query II
+SELECT a, first_value(a) OVER (ORDER BY a) AS fv
+FROM (VALUES (10), (20), (5)) AS t(a)
+ORDER BY a
+----
+5 5
+10 5
+20 5
+
 # query_with_untyped_null_filter
 query I
 SELECT count(*) FILTER (WHERE NULL)
