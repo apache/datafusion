@@ -754,12 +754,9 @@ NULL 30 300
 NULL 35 350
 
 ##########
-# TEST 22: Right Join on Composite Key With Range Subset Rehashes
-# The join key (range_key, non_range_key) is a superset of the Range([range_key])
-# partitioning column. Subset satisfaction is disabled for partitioned joins, so
-# both sides Hash repartition on the full key even when subset_repartition_threshold
-# is met -- a narrower Range layout must not let matching rows land in different
-# partitions.
+# TEST 22: Composite-Key Right Join Repartitions
+# Range([range_key]) does not satisfy a partitioned join on
+# (range_key, non_range_key), so both sides repartition on the full key.
 ##########
 
 statement ok
@@ -866,10 +863,9 @@ ORDER BY r.range_key;
 50 35 350
 
 ##########
-# TEST 25: Mark Join Marker Semantics over Range Partitioned Inputs
-# SQL IN subqueries decorrelate to LeftMark joins, which stay on the Hash
-# repartition path. These queries pin the marker semantics -- matched, unmatched,
-# and NULL join keys -- for mark joins over range partitioned inputs.
+# TEST 25: Mark Join Marker Semantics
+# Mark joins preserve matched, unmatched, and NULL-key marker behavior over
+# range-partitioned inputs.
 ##########
 
 query TT

@@ -870,10 +870,6 @@ fn range_inner_hash_join_rehashes_incompatible_range_partitioning() -> Result<()
     Ok(())
 }
 
-// Kept as a unit test: `RightMark` join plans cannot be produced from SQL (they
-// only arise when a statistical swap flips a `LeftMark` join around), so this
-// reuse plan shape has no `range_partitioning.slt` equivalent. The end-to-end
-// mark-join coverage lives in that file's "Mark Join Marker Semantics" case.
 #[test]
 fn range_right_mark_hash_join_reuses_range_partitioning() -> Result<()> {
     let left = parquet_exec_with_output_partitioning(range_partitioning(
@@ -908,24 +904,16 @@ fn range_right_mark_hash_join_reuses_range_partitioning() -> Result<()> {
     Ok(())
 }
 
-// Kept as a unit test: a descending Range input cannot be registered through the
-// sqllogictest fixtures (they only declare ascending Range layouts), so the
-// sort-direction axis of the co-partition check has no `range_partitioning.slt`
-// equivalent. Verifies that opposite sort options force Hash repartitioning.
 #[test]
 fn range_right_semi_hash_join_rehashes_incompatible_sort_options() -> Result<()> {
     let left = parquet_exec_with_output_partitioning(range_partitioning(
         "a",
-        [10, 20, 30],
+        [20],
         SortOptions::default(),
     )?);
-    // A descending Range requires descending-ordered split points (the constructor rejects
-    // ascending points under a descending sort), so [30, 20, 10] DESC encodes the same
-    // partition boundaries as the left's [10, 20, 30] ASC -- only the sort direction differs,
-    // which is the incompatibility under test.
     let right = parquet_exec_with_output_partitioning(range_partitioning(
         "a",
-        [30, 20, 10],
+        [20],
         SortOptions {
             descending: true,
             nulls_first: true,
@@ -945,10 +933,10 @@ fn range_right_semi_hash_join_rehashes_incompatible_sort_options() -> Result<()>
         plan,
         @r"
     HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(a@0, a@0)]
-      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
-        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
-      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
-        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 DESC], [(30), (20), (10)], 4), file_type=parquet
+      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=2
+        DataSourceExec: file_groups={2 groups: [[p0], [p1]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(20)], 2), file_type=parquet
+      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=2
+        DataSourceExec: file_groups={2 groups: [[p0], [p1]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 DESC], [(20)], 2), file_type=parquet
     "
     );
 
