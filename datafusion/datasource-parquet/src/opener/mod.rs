@@ -1855,12 +1855,12 @@ mod test {
         CachedParquetFileReaderFactory, DefaultParquetFileReaderFactory,
         ParquetFileReaderFactory, ParquetRowSelection, RowGroupAccess,
     };
-    use arrow::array::RecordBatch;
+    use arrow::array::{RecordBatch, record_batch};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
         ColumnStatistics, Result, ScalarValue, Statistics, assert_contains,
-        config::ConfigOptions, internal_err, record_batch, stats::Precision,
+        config::ConfigOptions, internal_err, stats::Precision,
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema, TableSchemaBuilder};

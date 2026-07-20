@@ -643,10 +643,11 @@ mod tests {
     use super::*;
     use arrow::array::{
         Array, BooleanArray, GenericListArray, Int32Array, Int64Array, RecordBatch,
-        RecordBatchOptions, StringArray, StringViewArray, StructArray,
+        RecordBatchOptions, StringArray, StringViewArray, StructArray, record_batch,
     };
+    use arrow::datatypes as arrow_schema;
     use arrow::datatypes::{Field, Fields, Schema};
-    use datafusion_common::{assert_contains, record_batch};
+    use datafusion_common::assert_contains;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{Column, Literal, col};
 

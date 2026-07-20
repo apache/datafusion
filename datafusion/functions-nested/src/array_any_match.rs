@@ -37,6 +37,8 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use std::{fmt::Debug, sync::Arc};
 
+use crate::lambda_utils::coerce_single_list_arg;
+
 make_higher_order_function_expr_and_func!(
     ArrayAnyMatch,
     array_any_match,
@@ -120,30 +122,7 @@ impl HigherOrderUDFImpl for ArrayAnyMatch {
     }
 
     fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [list] = arg_types else {
-            return plan_err!(
-                "{} function requires 1 value argument, got {}",
-                self.name(),
-                arg_types.len()
-            );
-        };
-
-        let coerced = match list {
-            DataType::List(_) | DataType::LargeList(_) => list.clone(),
-            DataType::ListView(field) | DataType::FixedSizeList(field, _) => {
-                DataType::List(Arc::clone(field))
-            }
-            DataType::LargeListView(field) => DataType::LargeList(Arc::clone(field)),
-            _ => {
-                return plan_err!(
-                    "{} expected a list as first argument, got {}",
-                    self.name(),
-                    list
-                );
-            }
-        };
-
-        Ok(vec![coerced])
+        coerce_single_list_arg(self.name(), arg_types)
     }
 
     fn lambda_parameters(
