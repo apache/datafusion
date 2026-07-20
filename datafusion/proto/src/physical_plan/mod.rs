@@ -856,8 +856,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::GenerateSeries(generate_series) => {
                 self.try_into_generate_series_physical_plan(generate_series)
             }
-            PhysicalPlanType::SortMergeJoin(sort_join) => {
-                self.try_into_sort_join(sort_join, ctx, proto_converter)
+            PhysicalPlanType::SortMergeJoin(_) => {
+                SortMergeJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::AsyncFunc(async_func) => {
                 self.try_into_async_func_physical_plan(async_func, ctx, proto_converter)
@@ -945,14 +945,6 @@ pub trait PhysicalPlanNodeExt: Sized {
 
         if let Some(exec) = plan.downcast_ref::<SymmetricHashJoinExec>() {
             return protobuf::PhysicalPlanNode::try_from_symmetric_hash_join_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<SortMergeJoinExec>() {
-            return protobuf::PhysicalPlanNode::try_from_sort_merge_join_exec(
                 exec,
                 codec,
                 proto_converter,
@@ -2596,6 +2588,10 @@ pub trait PhysicalPlanNodeExt: Sized {
             protobuf::GenerateSeriesName::GsRange => "range",
         }
     }
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SortMergeJoinExec` deserializes itself via `SortMergeJoinExec::try_from_proto`"
+    )]
     fn try_into_sort_join(
         &self,
         sort_join: &SortMergeJoinExecNode,
@@ -3254,6 +3250,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SortMergeJoinExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_sort_merge_join_exec(
         exec: &SortMergeJoinExec,
         codec: &dyn PhysicalExtensionCodec,
