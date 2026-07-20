@@ -517,6 +517,49 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         probe_size: "60M_count",
         isolate_partitioned_join: true,
     },
+    // Q26: selective order-key build side joined to clustered lineitem probe.
+    //
+    // Build Side: a narrow range of order keys. Probe Side: lineitem. This is
+    // intended to show the best case for Parquet row-group/page pruning because
+    // the dynamic filter lands on stored, clustered l_orderkey values.
+    HashJoinQuery {
+        sql: r###"SELECT count(*)
+        FROM (
+          SELECT o_orderkey AS k
+          FROM orders
+          WHERE o_orderkey BETWEEN 1000000 AND 1001000
+        ) o
+        JOIN (
+          SELECT l_orderkey AS k
+          FROM lineitem
+        ) l ON o.k = l.k"###,
+        density: 1.0,
+        prob_hit: 0.0002,
+        build_size: "orders_key_1K_range",
+        probe_size: "60M_count",
+        isolate_partitioned_join: true,
+    },
+    // Q27: wider order-key build side joined to clustered lineitem probe.
+    //
+    // This keeps the same clustered-key shape as Q26 but expands the build key
+    // range, making pruning less selective while still range-friendly.
+    HashJoinQuery {
+        sql: r###"SELECT count(*)
+        FROM (
+          SELECT o_orderkey AS k
+          FROM orders
+          WHERE o_orderkey BETWEEN 1000000 AND 1500000
+        ) o
+        JOIN (
+          SELECT l_orderkey AS k
+          FROM lineitem
+        ) l ON o.k = l.k"###,
+        density: 1.0,
+        prob_hit: 0.08,
+        build_size: "orders_key_500K_range",
+        probe_size: "60M_count",
+        isolate_partitioned_join: true,
+    },
 ];
 
 impl RunOpt {
