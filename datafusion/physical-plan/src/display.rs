@@ -154,44 +154,31 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways
     pub fn new(inner: &'a dyn ExecutionPlan) -> Self {
-        Self {
-            inner,
-            registry: StatisticsRegistry::new(),
-            show_metrics: ShowMetrics::None,
-            show_statistics: false,
-            show_schema: false,
-            metric_types: Self::default_metric_types(),
-            metric_categories: None,
-            tree_maximum_render_width: 240,
-            summary: None,
-        }
+        Self::with_show_metrics(inner, ShowMetrics::None)
     }
 
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways that also shows aggregated
     /// metrics
     pub fn with_metrics(inner: &'a dyn ExecutionPlan) -> Self {
-        Self {
-            inner,
-            registry: StatisticsRegistry::new(),
-            show_metrics: ShowMetrics::Aggregated,
-            show_statistics: false,
-            show_schema: false,
-            metric_types: Self::default_metric_types(),
-            metric_categories: None,
-            tree_maximum_render_width: 240,
-            summary: None,
-        }
+        Self::with_show_metrics(inner, ShowMetrics::Aggregated)
     }
 
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways that also shows all low
     /// level metrics
     pub fn with_full_metrics(inner: &'a dyn ExecutionPlan) -> Self {
+        Self::with_show_metrics(inner, ShowMetrics::Full)
+    }
+
+    fn with_show_metrics(
+        inner: &'a dyn ExecutionPlan,
+        show_metrics: ShowMetrics,
+    ) -> Self {
         Self {
             inner,
             registry: StatisticsRegistry::new(),
-            show_metrics: ShowMetrics::Full,
+            show_metrics,
             show_statistics: false,
             show_schema: false,
             metric_types: Self::default_metric_types(),

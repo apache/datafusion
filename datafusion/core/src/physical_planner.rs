@@ -2674,6 +2674,15 @@ impl DefaultPhysicalPlanner {
         }
 
         if !config.logical_plan_only && e.logical_optimization_succeeded {
+            let render_indent =
+                |plan: &dyn ExecutionPlan, show_statistics: bool, show_schema: bool| {
+                    displayable(plan)
+                        .set_show_statistics(show_statistics)
+                        .set_statistics_registry(statistics_registry.clone())
+                        .set_show_schema(show_schema)
+                        .indent(e.verbose)
+                        .to_string()
+                };
             match self
                 .create_initial_plan(e.plan.as_ref(), session_state)
                 .await
@@ -2682,12 +2691,11 @@ impl DefaultPhysicalPlanner {
                     // Include statistics / schema if enabled
                     stringified_plans.push(StringifiedPlan::new(
                         InitialPhysicalPlan,
-                        displayable(input.as_ref())
-                            .set_show_statistics(show_statistics)
-                            .set_statistics_registry(statistics_registry.clone())
-                            .set_show_schema(config.show_schema)
-                            .indent(e.verbose)
-                            .to_string(),
+                        render_indent(
+                            input.as_ref(),
+                            show_statistics,
+                            config.show_schema,
+                        ),
                     ));
 
                     // Show statistics + schema in verbose output even if not
@@ -2696,16 +2704,14 @@ impl DefaultPhysicalPlanner {
                         if !show_statistics {
                             stringified_plans.push(StringifiedPlan::new(
                                 InitialPhysicalPlanWithStats,
-                                displayable(input.as_ref())
-                                    .set_show_statistics(true)
-                                    .set_statistics_registry(statistics_registry.clone())
-                                    .indent(e.verbose)
-                                    .to_string(),
+                                render_indent(input.as_ref(), true, false),
                             ));
                         }
                         if !config.show_schema {
                             stringified_plans.push(StringifiedPlan::new(
                                 InitialPhysicalPlanWithSchema,
+                                // Schema only: statistics are off, so this
+                                // renders without the registry.
                                 displayable(input.as_ref())
                                     .set_show_schema(true)
                                     .indent(e.verbose)
@@ -2722,12 +2728,7 @@ impl DefaultPhysicalPlanner {
                             let plan_type = OptimizedPhysicalPlan { optimizer_name };
                             stringified_plans.push(StringifiedPlan::new(
                                 plan_type,
-                                displayable(plan)
-                                    .set_show_statistics(show_statistics)
-                                    .set_statistics_registry(statistics_registry.clone())
-                                    .set_show_schema(config.show_schema)
-                                    .indent(e.verbose)
-                                    .to_string(),
+                                render_indent(plan, show_statistics, config.show_schema),
                             ));
                         },
                     );
@@ -2736,12 +2737,11 @@ impl DefaultPhysicalPlanner {
                             // This plan will includes statistics if show_statistics is on
                             stringified_plans.push(StringifiedPlan::new(
                                 FinalPhysicalPlan,
-                                displayable(input.as_ref())
-                                    .set_show_statistics(show_statistics)
-                                    .set_statistics_registry(statistics_registry.clone())
-                                    .set_show_schema(config.show_schema)
-                                    .indent(e.verbose)
-                                    .to_string(),
+                                render_indent(
+                                    input.as_ref(),
+                                    show_statistics,
+                                    config.show_schema,
+                                ),
                             ));
 
                             // Show statistics + schema in verbose output even if not
@@ -2750,13 +2750,7 @@ impl DefaultPhysicalPlanner {
                                 if !show_statistics {
                                     stringified_plans.push(StringifiedPlan::new(
                                         FinalPhysicalPlanWithStats,
-                                        displayable(input.as_ref())
-                                            .set_show_statistics(true)
-                                            .set_statistics_registry(
-                                                statistics_registry.clone(),
-                                            )
-                                            .indent(e.verbose)
-                                            .to_string(),
+                                        render_indent(input.as_ref(), true, false),
                                     ));
                                 }
                                 if !config.show_schema {
