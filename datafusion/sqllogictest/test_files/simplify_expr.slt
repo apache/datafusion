@@ -228,10 +228,10 @@ explain select id from date_unwrap where arrow_cast(d32, 'Date64') = arrow_cast(
 ----
 logical_plan
 01)Projection: date_unwrap.id
-02)--Filter: CAST(date_unwrap.d32 AS Date64) = Date64("2025-01-01")
+02)--Filter: date_unwrap.d32 = Date32("2025-01-01")
 03)----TableScan: date_unwrap projection=[id, d32]
 physical_plan
-01)FilterExec: CAST(d32@1 AS Date64) = 2025-01-01, projection=[id@0]
+01)FilterExec: d32@1 = 2025-01-01, projection=[id@0]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
@@ -246,10 +246,10 @@ explain select id from date_unwrap where arrow_cast(d32, 'Date64') < arrow_cast(
 ----
 logical_plan
 01)Projection: date_unwrap.id
-02)--Filter: CAST(date_unwrap.d32 AS Date64) < Date64("2025-01-01")
+02)--Filter: date_unwrap.d32 < Date32("2025-01-01")
 03)----TableScan: date_unwrap projection=[id, d32]
 physical_plan
-01)FilterExec: CAST(d32@1 AS Date64) < 2025-01-01, projection=[id@0]
+01)FilterExec: d32@1 < 2025-01-01, projection=[id@0]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
@@ -257,10 +257,10 @@ explain select id from date_unwrap where arrow_cast(d32, 'Date64') >= arrow_cast
 ----
 logical_plan
 01)Projection: date_unwrap.id
-02)--Filter: CAST(date_unwrap.d32 AS Date64) >= Date64("2025-01-01")
+02)--Filter: date_unwrap.d32 >= Date32("2025-01-01")
 03)----TableScan: date_unwrap projection=[id, d32]
 physical_plan
-01)FilterExec: CAST(d32@1 AS Date64) >= 2025-01-01, projection=[id@0]
+01)FilterExec: d32@1 >= 2025-01-01, projection=[id@0]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
@@ -293,10 +293,10 @@ explain select id from date_unwrap where arrow_cast(d32, 'Date64') in (arrow_cas
 ----
 logical_plan
 01)Projection: date_unwrap.id
-02)--Filter: CAST(date_unwrap.d32 AS Date64) IN ([Date64("2025-01-01"), Date64("1969-12-31")])
+02)--Filter: date_unwrap.d32 = Date32("2025-01-01") OR date_unwrap.d32 = Date32("1969-12-31")
 03)----TableScan: date_unwrap projection=[id, d32]
 physical_plan
-01)FilterExec: CAST(d32@1 AS Date64) IN (SET) ([2025-01-01, 1969-12-31]), projection=[id@0]
+01)FilterExec: d32@1 = 2025-01-01 OR d32@1 = 1969-12-31, projection=[id@0]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
