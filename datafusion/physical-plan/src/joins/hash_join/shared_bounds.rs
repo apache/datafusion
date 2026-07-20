@@ -184,6 +184,46 @@ fn create_bounds_predicate(
     }
 }
 
+/// Compute the union of `PartitionBounds` across all non-empty partitions:
+/// per-column min-of-mins and max-of-maxes. Returns `None` if no partition
+/// reported bounds. `PartitionBounds::column_bounds` is aligned by join-key
+/// index across partitions (all report bounds for the same join-key columns
+/// in the same order), so union is a straight element-wise reduce.
+///
+/// Used by [`SharedBuildAccumulator::build_filter`] to emit a single
+/// `col >= min AND col <= max` predicate for `PartitionMode::Partitioned`
+/// (matching `PartitionMode::CollectLeft`'s shape) instead of a per-partition
+/// `CASE hash(col) % N WHEN pid THEN bounds ELSE lit(false) END`. The union
+/// is a strictly-weaker filter — a probe row may pass it and still miss its
+/// specific build partition's hash lookup — but the downstream `HashJoinExec`
+/// hash lookup is exact, so no wrong results. Wins: per-row cost drops from
+/// (hash + modulo + CASE branch + bounds) to a single range check.
+fn union_partition_bounds<'a>(
+    partitions: impl IntoIterator<Item = &'a PartitionBounds>,
+) -> Option<PartitionBounds> {
+    let mut acc: Option<Vec<ColumnBounds>> = None;
+    for p in partitions {
+        let cols = &p.column_bounds;
+        acc = Some(match acc.take() {
+            None => cols.clone(),
+            Some(mut existing) => {
+                // All partitions must agree on the join-key columns.
+                debug_assert_eq!(existing.len(), cols.len());
+                for (slot, other) in existing.iter_mut().zip(cols.iter()) {
+                    if other.min < slot.min {
+                        slot.min = other.min.clone();
+                    }
+                    if other.max > slot.max {
+                        slot.max = other.max.clone();
+                    }
+                }
+                existing
+            }
+        });
+    }
+    acc.map(PartitionBounds::new)
+}
+
 /// Combines a membership predicate and a bounds predicate with logical AND.
 ///
 /// Returns `None` when neither is available; callers decide the fallback (e.g.
@@ -614,6 +654,71 @@ impl SharedBuildAccumulator {
                 }
             },
             FinalizeInput::Partitioned(partitions) => {
+                // Fast path: when per-partition membership is disabled
+                // (the default), emit a single union-of-bounds predicate
+                // across all reported partitions instead of a
+                // `CASE hash(col) % N WHEN pid THEN bounds ELSE lit(false) END`.
+                // The CASE form is exact per partition but pays hash +
+                // modulo + CASE-branch per row on the probe scan — that
+                // dominated the #22384 regression on TPC-H / TPC-DS. The
+                // union bounds are strictly weaker (a probe row may pass
+                // the range and still miss its build partition's hash
+                // lookup), but the downstream hash lookup is exact so
+                // the join is correct. RG-level pruning is *not* weaker
+                // — the pruning predicate uses the same min/max as the
+                // union — so `#22450` dynamic RG-level pruning is
+                // unaffected. See #23701.
+                if !self.enable_membership_filter {
+                    let mut has_canceled_unknown = false;
+                    let mut reported_bounds: Vec<&PartitionBounds> = Vec::new();
+                    for partition in partitions.iter() {
+                        match partition {
+                            PartitionStatus::Reported(pd)
+                                if matches!(pd.pushdown, PushdownStrategy::Empty) =>
+                            {
+                                // Empty partition contributes nothing to
+                                // the union — omit it.
+                            }
+                            PartitionStatus::Reported(pd) => {
+                                reported_bounds.push(&pd.bounds);
+                            }
+                            PartitionStatus::CanceledUnknown => {
+                                has_canceled_unknown = true;
+                            }
+                            PartitionStatus::Pending => {
+                                return datafusion_common::internal_err!(
+                                    "attempted to finalize dynamic filter with pending partition"
+                                );
+                            }
+                        }
+                    }
+
+                    let filter_expr = if has_canceled_unknown {
+                        // Missing info from some partitions — fall back to
+                        // a no-op filter so we don't drop matching rows.
+                        lit(true)
+                    } else if reported_bounds.is_empty() {
+                        // Every partition reported empty build data → no
+                        // probe row can match, filter everything out.
+                        lit(false)
+                    } else {
+                        let union =
+                            union_partition_bounds(reported_bounds.iter().copied());
+                        union
+                            .as_ref()
+                            .and_then(|b| create_bounds_predicate(&self.on_right, b))
+                            .unwrap_or_else(|| lit(true))
+                    };
+
+                    self.dynamic_filter
+                        .update(self.null_aware_filter(filter_expr))?;
+                    return Ok(());
+                }
+
+                // Slow path: membership opt-in retains the historical
+                // per-partition CASE hash-routed form so InListExpr /
+                // HashTableLookupExpr can be applied to the correct
+                // partition's build values.
                 let num_partitions = partitions.len();
                 let routing_hash_expr = Arc::new(HashExpr::new(
                     self.on_right.clone(),
@@ -1190,5 +1295,99 @@ mod tests {
         let (partitions, completed) = partitioned_state(&acc);
         assert!(matches!(partitions[0], PartitionStatus::CanceledUnknown));
         assert_eq!(completed, 1);
+    }
+
+    /// Build a Partitioned accumulator with the membership gate off — the
+    /// production default post #23701 (the "union bounds" path).
+    fn make_partitioned_accumulator_bounds_only(
+        num_partitions: usize,
+    ) -> SharedBuildAccumulator {
+        let on_right = test_on_right();
+        let dynamic_filter = test_dynamic_filter(&on_right);
+        SharedBuildAccumulator {
+            inner: Mutex::new(AccumulatorState {
+                data: AccumulatedBuildData::Partitioned {
+                    partitions: vec![PartitionStatus::Pending; num_partitions],
+                    completed_partitions: 0,
+                },
+                completion: CompletionState::Pending,
+            }),
+            completion_notify: Notify::new(),
+            dynamic_filter,
+            on_right,
+            repartition_random_state: SeededRandomState::with_seed(1),
+            probe_schema: test_probe_schema(),
+            null_aware: false,
+            enable_membership_filter: false,
+        }
+    }
+
+    /// With the membership gate off, Partitioned mode publishes a single
+    /// union-of-bounds predicate — no `CaseExpr`, no `HashExpr`, no per-row
+    /// hash routing. This is the invariant that removes the #22384 CASE
+    /// hash-routed regression on TPC-H / TPC-DS.
+    #[test]
+    fn partitioned_with_gate_off_publishes_union_bounds_no_case() {
+        let acc = make_partitioned_accumulator_bounds_only(2);
+        // Non-`Empty` pushdown (each partition has build data). Bounds
+        // are what actually flow into the filter — the membership gate
+        // is off so the `in_list` is ignored.
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1]), bounds(1, 10)),
+            reported(in_list(&[5]), bounds(5, 20)),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        // No CASE, no HashExpr — just a plain `col >= min AND col <= max`.
+        assert!(
+            expr.downcast_ref::<CaseExpr>().is_none(),
+            "gate-off Partitioned must not emit CaseExpr; got {expr:?}",
+        );
+        assert!(
+            !format!("{expr:?}").contains("hash_repartition"),
+            "gate-off Partitioned must not emit HashExpr; got {expr:?}",
+        );
+        // Union across [1,10] and [5,20] is [1,20]. The predicate shape is
+        // `col >= 1 AND col <= 20` — an `And` at the top.
+        assert_top_binary_op(&expr, Operator::And);
+        // No `InListExpr` reaches the filter — the gate is off.
+        assert!(
+            expr.downcast_ref::<InListExpr>().is_none(),
+            "gate-off must not emit InListExpr; got {expr:?}",
+        );
+    }
+
+    /// All-empty Partitioned build data → union yields no bounds → filter
+    /// resolves to `lit(false)` so no probe row can match. Matches the
+    /// historical CASE form's `real_branches.is_empty()` branch.
+    #[test]
+    fn partitioned_with_gate_off_all_empty_publishes_lit_false() {
+        let acc = make_partitioned_accumulator_bounds_only(2);
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(PushdownStrategy::Empty, no_bounds()),
+            reported(PushdownStrategy::Empty, no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_literal_bool(&expr, false);
+    }
+
+    /// A canceled partition means we lack information from that partition,
+    /// so we must not narrow the filter — a probe row that would have
+    /// matched that partition's build side must still get through. The
+    /// gate-off path falls back to `lit(true)` in this case (permissive).
+    #[test]
+    fn partitioned_with_gate_off_canceled_partition_is_permissive() {
+        let acc = make_partitioned_accumulator_bounds_only(2);
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(PushdownStrategy::Empty, bounds(1, 10)),
+            PartitionStatus::CanceledUnknown,
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_literal_bool(&expr, true);
     }
 }
