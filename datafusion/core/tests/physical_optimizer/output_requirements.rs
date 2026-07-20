@@ -24,7 +24,7 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::SessionContext;
 use datafusion_common::config::ConfigOptions;
-use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
+use datafusion_expr::physical_planning_context::{ScalarSubqueryResults, SubqueryIndex};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
