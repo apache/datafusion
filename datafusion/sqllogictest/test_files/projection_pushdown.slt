@@ -955,7 +955,9 @@ logical_plan
 03)----Filter: simple_struct.id > Int64(2)
 04)------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_2, simple_struct.id
 05)--------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[(id@0 + get_field(s@1, value)) * (id@0 + get_field(s@1, value)) as id_and_value], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
+physical_plan
+01)ProjectionExec: expr=[__common_expr_1@0 * __common_expr_1@0 as id_and_value]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id@0 + get_field(s@1, value) as __common_expr_1], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
 
 
 query TT

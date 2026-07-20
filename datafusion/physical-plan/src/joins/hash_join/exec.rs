@@ -1393,6 +1393,18 @@ impl ExecutionPlan for HashJoinExec {
             .options()
             .optimizer
             .enable_hash_join_dynamic_membership_filter;
+        // Mirror the probe scan's parquet `pushdown_filters` config into the
+        // build coordinator so it can pick the cheap union-of-bounds shape
+        // when the probe scan applies the filter post-decode (Layer 3), and
+        // the historical per-partition CASE hash-routing when the probe
+        // scan applies it via arrow-rs `RowFilter` with lazy decode
+        // (Layer 2). See #23701.
+        let pushdown_filters = context
+            .session_config()
+            .options()
+            .execution
+            .parquet
+            .pushdown_filters;
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
@@ -1412,6 +1424,7 @@ impl ExecutionPlan for HashJoinExec {
                             repartition_random_state,
                             self.null_aware,
                             enable_membership_filter,
+                            pushdown_filters,
                         ))
                     })))
                 })

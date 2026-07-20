@@ -303,6 +303,22 @@ pub(crate) struct SharedBuildAccumulator {
     /// `datafusion.optimizer.enable_hash_join_dynamic_membership_filter`;
     /// see the config docs for the tradeoff.
     enable_membership_filter: bool,
+    /// Mirrors the probe scan's `datafusion.execution.parquet.pushdown_filters`
+    /// so `build_filter` can pick the right shape for the dynamic filter:
+    ///
+    /// * `false` (default) → cheap: `Partitioned` mode emits union-of-bounds
+    ///   (same shape as `CollectLeft`), skipping per-row hash routing and
+    ///   membership. The probe scan applies the filter as a `PostScanFilter`
+    ///   (Layer 3), so per-row cost dominates and expensive per-row
+    ///   evaluation (CASE hash-routing, `HashTableLookupExpr`) does not
+    ///   earn back its cost on high-match-rate joins.
+    /// * `true`  → historical: `Partitioned` mode emits the per-partition
+    ///   `CASE hash(col) % N WHEN pid THEN bounds [AND membership] END`. The
+    ///   probe scan applies this via arrow-rs `RowFilter` (Layer 2), whose
+    ///   lazy decode amortizes the CASE cost by skipping the decode of the
+    ///   remaining columns for filtered rows, so the tighter per-partition
+    ///   selectivity is worth paying for.
+    pushdown_filters: bool,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -409,6 +425,7 @@ impl SharedBuildAccumulator {
         repartition_random_state: SeededRandomState,
         null_aware: bool,
         enable_membership_filter: bool,
+        pushdown_filters: bool,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -457,6 +474,7 @@ impl SharedBuildAccumulator {
             probe_schema: right_child.schema(),
             null_aware,
             enable_membership_filter,
+            pushdown_filters,
         }
     }
 
@@ -617,12 +635,24 @@ impl SharedBuildAccumulator {
     }
 
     fn build_filter(&self, finalize_input: FinalizeInput) -> Result<()> {
+        // Effective gate for the expensive per-row expressions:
+        //   * `pushdown_filters = false` → probe scan applies the filter
+        //     post-decode (`PostScanFilter`), so per-row cost dominates and
+        //     the CASE hash-routing / membership hash-lookup don't earn back
+        //     their cost. Skip both, publish the cheap bounds shape.
+        //   * `pushdown_filters = true` → probe scan applies the filter via
+        //     arrow-rs `RowFilter` (lazy decode amortizes the per-row
+        //     expression cost by skipping the decode of the remaining
+        //     columns for filtered rows), so the tighter CASE + membership
+        //     is worth paying for. Respect the user's opt-in via
+        //     `enable_hash_join_dynamic_membership_filter`.
+        //
+        // See #23701 for the design and benchmarks.
+        let use_membership = self.enable_membership_filter && self.pushdown_filters;
         match finalize_input {
             FinalizeInput::CollectLeft(partition) => match partition {
                 PartitionStatus::Reported(partition_data) => {
-                    // Skip the membership branch entirely when the config
-                    // gate is off; only the bounds portion is published.
-                    let membership_expr = if self.enable_membership_filter {
+                    let membership_expr = if use_membership {
                         create_membership_predicate(
                             &self.on_right,
                             partition_data.pushdown.clone(),
@@ -654,21 +684,28 @@ impl SharedBuildAccumulator {
                 }
             },
             FinalizeInput::Partitioned(partitions) => {
-                // Fast path: when per-partition membership is disabled
-                // (the default), emit a single union-of-bounds predicate
-                // across all reported partitions instead of a
+                // Fast path: when the probe scan does not have parquet
+                // filter pushdown enabled, the filter runs post-decode
+                // (`PostScanFilter`), so per-row cost dominates. Emit a
+                // single union-of-bounds predicate across all reported
+                // partitions instead of the historical
                 // `CASE hash(col) % N WHEN pid THEN bounds ELSE lit(false) END`.
                 // The CASE form is exact per partition but pays hash +
-                // modulo + CASE-branch per row on the probe scan — that
-                // dominated the #22384 regression on TPC-H / TPC-DS. The
-                // union bounds are strictly weaker (a probe row may pass
-                // the range and still miss its build partition's hash
-                // lookup), but the downstream hash lookup is exact so
-                // the join is correct. RG-level pruning is *not* weaker
-                // — the pruning predicate uses the same min/max as the
-                // union — so `#22450` dynamic RG-level pruning is
-                // unaffected. See #23701.
-                if !self.enable_membership_filter {
+                // modulo + CASE-branch per row — that dominated the
+                // #22384 regression on TPC-H / TPC-DS. The union bounds
+                // are strictly weaker (a probe row may pass the range
+                // and still miss its build partition's hash lookup), but
+                // the downstream hash lookup is exact so the join is
+                // correct. RG-level pruning is *not* weaker — the
+                // pruning predicate uses the same min/max as the union
+                // — so `#22450` dynamic RG-level pruning is unaffected.
+                //
+                // When `pushdown_filters=true` we keep the CASE form:
+                // arrow-rs `RowFilter` amortizes the per-row cost via
+                // lazy decode of the remaining columns, and the tighter
+                // per-partition selectivity is worth paying for. See
+                // #23701.
+                if !self.pushdown_filters {
                     let mut has_canceled_unknown = false;
                     let mut reported_bounds: Vec<&PartitionBounds> = Vec::new();
                     for partition in partitions.iter() {
@@ -744,10 +781,7 @@ impl SharedBuildAccumulator {
                             empty_partition_ids.push(partition_id);
                         }
                         PartitionStatus::Reported(partition) => {
-                            // Skip the membership branch entirely when the
-                            // config gate is off; only the bounds portion is
-                            // published in this partition's CASE branch.
-                            let membership_expr = if self.enable_membership_filter {
+                            let membership_expr = if use_membership {
                                 create_membership_predicate(
                                     &self.on_right,
                                     partition.pushdown.clone(),
@@ -887,6 +921,9 @@ pub(super) fn make_partitioned_accumulator_for_test(
         // path so existing coverage isn't lost when the production default
         // flips to bounds-only.
         enable_membership_filter: true,
+        // Simulate `pushdown_filters=true` so the CASE + membership branch
+        // in `build_filter` is exercised (matches historical test behavior).
+        pushdown_filters: true,
     }
 }
 
@@ -948,6 +985,9 @@ mod tests {
             // path so existing coverage isn't lost when the production default
             // flips to bounds-only.
             enable_membership_filter: true,
+            // Simulate `pushdown_filters=true` so the CASE + membership
+            // branch in `build_filter` is exercised.
+            pushdown_filters: true,
         }
     }
 
@@ -1210,6 +1250,10 @@ mod tests {
             probe_schema: test_probe_schema(),
             null_aware: false,
             enable_membership_filter: false,
+            // The gate-off fixture models the production default:
+            // `pushdown_filters=false` + membership off → union-of-bounds
+            // fast path in `build_filter`.
+            pushdown_filters: false,
         }
     }
 
@@ -1319,6 +1363,10 @@ mod tests {
             probe_schema: test_probe_schema(),
             null_aware: false,
             enable_membership_filter: false,
+            // The gate-off fixture models the production default:
+            // `pushdown_filters=false` + membership off → union-of-bounds
+            // fast path in `build_filter`.
+            pushdown_filters: false,
         }
     }
 
@@ -1389,5 +1437,247 @@ mod tests {
 
         let expr = current_expr(&acc);
         assert_literal_bool(&expr, true);
+    }
+
+    /// Extract the `(min, max)` Int32 literals from a bounds expression
+    /// shaped `col >= min AND col <= max`.
+    fn extract_bounds_min_max(expr: &PhysicalExprRef) -> (i32, i32) {
+        let outer = binary_expr(expr);
+        assert_eq!(outer.op(), &Operator::And, "outer op must be AND");
+        let lhs = binary_expr(outer.left());
+        let rhs = binary_expr(outer.right());
+        assert_eq!(
+            lhs.op(),
+            &Operator::GtEq,
+            "left branch must be `col >= min`"
+        );
+        assert_eq!(
+            rhs.op(),
+            &Operator::LtEq,
+            "right branch must be `col <= max`"
+        );
+        let min = lhs
+            .right()
+            .downcast_ref::<Literal>()
+            .expect("min literal")
+            .value()
+            .clone();
+        let max = rhs
+            .right()
+            .downcast_ref::<Literal>()
+            .expect("max literal")
+            .value()
+            .clone();
+        match (min, max) {
+            (ScalarValue::Int32(Some(min)), ScalarValue::Int32(Some(max))) => (min, max),
+            (min, max) => panic!("expected Int32 bounds, got min={min:?} max={max:?}"),
+        }
+    }
+
+    /// Union across two partitions with disjoint (skewed) ranges must
+    /// widen to the global min/max — `[1, 4] ∪ [100, 200] = [1, 200]`.
+    /// This is the case the CASE hash-routed form would filter more
+    /// tightly, but union is still correct (the downstream hash lookup
+    /// drops the false positives).
+    #[test]
+    fn partitioned_with_gate_off_union_covers_skewed_ranges() {
+        let acc = make_partitioned_accumulator_bounds_only(2);
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1]), bounds(1, 4)),
+            reported(in_list(&[100]), bounds(100, 200)),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_eq!(
+            extract_bounds_min_max(&expr),
+            (1, 200),
+            "union of [1,4] and [100,200] must be [1,200]",
+        );
+    }
+
+    /// Empty partitions must contribute nothing to the union: mixing
+    /// `PushdownStrategy::Empty` (no data) with reported partitions
+    /// yields the union across the *reported* partitions only. Regression
+    /// guard for the `PushdownStrategy::Empty` skip branch in `build_filter`.
+    #[test]
+    fn partitioned_with_gate_off_empty_partitions_do_not_widen_union() {
+        let acc = make_partitioned_accumulator_bounds_only(3);
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(PushdownStrategy::Empty, no_bounds()),
+            reported(in_list(&[5]), bounds(5, 10)),
+            reported(PushdownStrategy::Empty, no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_eq!(
+            extract_bounds_min_max(&expr),
+            (5, 10),
+            "empty partitions must contribute no bounds to the union",
+        );
+    }
+
+    /// Build a Partitioned accumulator that simulates
+    /// `pushdown_filters=true` + membership opt-in — the historical CASE
+    /// hash-routed path. Used to guard the coupling introduced by #23701:
+    /// `pushdown_filters=true` should keep the tighter CASE form so
+    /// arrow-rs `RowFilter`'s lazy decode amortizes its per-row cost.
+    fn make_partitioned_accumulator_pushdown_on_and_membership_on(
+        num_partitions: usize,
+    ) -> SharedBuildAccumulator {
+        let on_right = test_on_right();
+        let dynamic_filter = test_dynamic_filter(&on_right);
+        SharedBuildAccumulator {
+            inner: Mutex::new(AccumulatorState {
+                data: AccumulatedBuildData::Partitioned {
+                    partitions: vec![PartitionStatus::Pending; num_partitions],
+                    completed_partitions: 0,
+                },
+                completion: CompletionState::Pending,
+            }),
+            completion_notify: Notify::new(),
+            dynamic_filter,
+            on_right,
+            repartition_random_state: SeededRandomState::with_seed(1),
+            probe_schema: test_probe_schema(),
+            null_aware: false,
+            enable_membership_filter: true,
+            pushdown_filters: true,
+        }
+    }
+
+    /// Build a Partitioned accumulator that simulates
+    /// `pushdown_filters=true` + membership off — this must still emit
+    /// the CASE hash-routed form (without membership), because the CASE
+    /// selectivity is worth paying for when arrow-rs `RowFilter` runs
+    /// with lazy decode.
+    fn make_partitioned_accumulator_pushdown_on_and_membership_off(
+        num_partitions: usize,
+    ) -> SharedBuildAccumulator {
+        let on_right = test_on_right();
+        let dynamic_filter = test_dynamic_filter(&on_right);
+        SharedBuildAccumulator {
+            inner: Mutex::new(AccumulatorState {
+                data: AccumulatedBuildData::Partitioned {
+                    partitions: vec![PartitionStatus::Pending; num_partitions],
+                    completed_partitions: 0,
+                },
+                completion: CompletionState::Pending,
+            }),
+            completion_notify: Notify::new(),
+            dynamic_filter,
+            on_right,
+            repartition_random_state: SeededRandomState::with_seed(1),
+            probe_schema: test_probe_schema(),
+            null_aware: false,
+            enable_membership_filter: false,
+            pushdown_filters: true,
+        }
+    }
+
+    /// The union-bounds fast path must NOT fire when `pushdown_filters=true`,
+    /// even if membership is off — because arrow-rs `RowFilter`'s lazy
+    /// decode amortizes the CASE per-row cost, so keeping the tighter
+    /// per-partition selectivity is worth it. Regression guard for the
+    /// pushdown coupling in `build_filter`.
+    #[test]
+    fn partitioned_pushdown_on_membership_off_still_emits_case_no_membership() {
+        let acc = make_partitioned_accumulator_pushdown_on_and_membership_off(2);
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1]), bounds(1, 10)),
+            reported(in_list(&[5]), bounds(5, 20)),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        // CASE hash-routed shape stays.
+        assert!(
+            expr.downcast_ref::<CaseExpr>().is_some(),
+            "pushdown=true must emit CaseExpr; got {expr:?}",
+        );
+        assert!(
+            format!("{expr:?}").contains("hash_repartition"),
+            "pushdown=true must emit HashExpr; got {expr:?}",
+        );
+        // But no membership — the gate is off, so InList is dropped
+        // from the CASE branches, keeping the tighter bounds check only.
+        assert!(
+            expr.downcast_ref::<InListExpr>().is_none(),
+            "membership-off must not emit InListExpr; got {expr:?}",
+        );
+    }
+
+    /// The CollectLeft path must also honor the coupling: when
+    /// `pushdown_filters=false`, membership is skipped even if the user
+    /// opts in via the config knob. This preserves the fast-path
+    /// invariant that PostScanFilter (Layer 3) never sees the expensive
+    /// per-row membership check.
+    #[test]
+    fn collect_left_pushdown_off_skips_membership_even_with_gate_on() {
+        // Build a CollectLeft accumulator with membership=true but
+        // pushdown_filters=false.
+        let on_right = test_on_right();
+        let dynamic_filter = test_dynamic_filter(&on_right);
+        let acc = SharedBuildAccumulator {
+            inner: Mutex::new(AccumulatorState {
+                data: AccumulatedBuildData::CollectLeft {
+                    data: PartitionStatus::Pending,
+                    reported_count: 0,
+                    expected_reports: 1,
+                },
+                completion: CompletionState::Pending,
+            }),
+            completion_notify: Notify::new(),
+            dynamic_filter,
+            on_right,
+            repartition_random_state: SeededRandomState::with_seed(1),
+            probe_schema: test_probe_schema(),
+            null_aware: false,
+            enable_membership_filter: true,
+            pushdown_filters: false,
+        };
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            in_list(&[1, 2, 3]),
+            bounds(1, 3),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(
+            expr.downcast_ref::<InListExpr>().is_none(),
+            "pushdown=false must skip membership even with gate on; got {expr:?}",
+        );
+        // Bounds-only shape survives.
+        assert_top_binary_op(&expr, Operator::And);
+    }
+
+    /// Regression guard for the opt-in path: with the membership gate
+    /// on, `Partitioned` mode must still emit the historical CASE
+    /// hash-routed form so `InListExpr` / `HashTableLookupExpr` can be
+    /// applied to the correct partition's build values. If this ever
+    /// silently falls back to union bounds when membership is enabled,
+    /// the opt-in behavior is broken.
+    #[test]
+    fn partitioned_with_gate_on_still_emits_case_hash_routed() {
+        let acc = make_partitioned_expr_accumulator_for_test(2);
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1]), bounds(1, 10)),
+            reported(in_list(&[5]), bounds(5, 20)),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        // Membership-on Partitioned mode retains the CASE hash-routed
+        // shape from before #23701.
+        assert!(
+            expr.downcast_ref::<CaseExpr>().is_some(),
+            "gate-on Partitioned must emit CaseExpr; got {expr:?}",
+        );
+        assert!(
+            format!("{expr:?}").contains("hash_repartition"),
+            "gate-on Partitioned must emit HashExpr; got {expr:?}",
+        );
     }
 }
