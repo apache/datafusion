@@ -2589,4 +2589,128 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn distinct_array_agg_utf8_deduplicates() -> Result<()> {
+        use arrow::array::StringArray;
+
+        // 7 rows with 4 distinct values, each duplicate appearing twice.
+        let input: ArrayRef = Arc::new(StringArray::from(vec![
+            "postgres", "mysql", "postgres", "redis", "mysql", "duckdb", "redis",
+        ]));
+
+        let mut acc =
+            DistinctArrayAggAccumulator::try_new(&DataType::Utf8, None, false)?;
+        acc.update_batch(&[input])?;
+
+        let result = acc.evaluate()?;
+        let ScalarValue::List(arr) = &result else {
+            panic!("expected ScalarValue::List, got {result:?}");
+        };
+
+        let inner = arr.value(0);
+        let strings = inner
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("inner array should be StringArray");
+
+        // HashSet ordering is nondeterministic — sort before asserting.
+        let mut values: Vec<&str> =
+            (0..strings.len()).map(|i| strings.value(i)).collect();
+        values.sort_unstable();
+
+        assert_eq!(values, vec!["duckdb", "mysql", "postgres", "redis"]);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_array_agg_int64_deduplicates() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        // 7 rows with 4 distinct values, each duplicate appearing twice.
+        let input: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2, 1, 3, 2, 4, 3]));
+
+        let mut acc =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int64, None, false)?;
+        acc.update_batch(&[input])?;
+
+        let result = acc.evaluate()?;
+        let ScalarValue::List(arr) = &result else {
+            panic!("expected ScalarValue::List, got {result:?}");
+        };
+
+        let inner = arr.value(0);
+        let ints = inner
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("inner array should be Int64Array");
+
+        let mut values: Vec<i64> = (0..ints.len()).map(|i| ints.value(i)).collect();
+        values.sort_unstable();
+
+        assert_eq!(values, vec![1i64, 2, 3, 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_array_agg_float64_deduplicates() -> Result<()> {
+        use arrow::array::Float64Array;
+
+        // 7 rows with 4 distinct values, each duplicate appearing twice.
+        let input: ArrayRef = Arc::new(Float64Array::from(vec![
+            1.0f64, 2.5, 1.0, 3.75, 2.5, 4.0, 3.75,
+        ]));
+
+        let mut acc =
+            DistinctArrayAggAccumulator::try_new(&DataType::Float64, None, false)?;
+        acc.update_batch(&[input])?;
+
+        let result = acc.evaluate()?;
+        let ScalarValue::List(arr) = &result else {
+            panic!("expected ScalarValue::List, got {result:?}");
+        };
+
+        let inner = arr.value(0);
+        let floats = inner
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("inner array should be Float64Array");
+
+        // f64 has no Ord — use total_cmp for a stable sort.
+        let mut values: Vec<f64> = (0..floats.len()).map(|i| floats.value(i)).collect();
+        values.sort_unstable_by(|a, b| a.total_cmp(b));
+
+        assert_eq!(values, vec![1.0f64, 2.5, 3.75, 4.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_array_agg_date32_deduplicates() -> Result<()> {
+        use arrow::array::Date32Array;
+
+        // 7 rows with 4 distinct dates (days since epoch), each duplicate appearing twice.
+        let input: ArrayRef =
+            Arc::new(Date32Array::from(vec![100i32, 200, 100, 300, 200, 400, 300]));
+
+        let mut acc =
+            DistinctArrayAggAccumulator::try_new(&DataType::Date32, None, false)?;
+        acc.update_batch(&[input])?;
+
+        let result = acc.evaluate()?;
+        let ScalarValue::List(arr) = &result else {
+            panic!("expected ScalarValue::List, got {result:?}");
+        };
+
+        let inner = arr.value(0);
+        let dates = inner
+            .as_any()
+            .downcast_ref::<Date32Array>()
+            .expect("inner array should be Date32Array");
+
+        let mut values: Vec<i32> = (0..dates.len()).map(|i| dates.value(i)).collect();
+        values.sort_unstable();
+
+        assert_eq!(values, vec![100i32, 200, 300, 400]);
+        Ok(())
+    }
 }
