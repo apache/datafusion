@@ -892,6 +892,27 @@ impl HashJoinExec {
             return false;
         }
 
+        // Right-Semi / Right-Anti joins already implement the exact
+        // "probe key ∈ build set" (or its complement) as their core
+        // operation via the downstream hash lookup. Applying the
+        // bounds-based dynamic filter to those probe rows is
+        // semantically redundant, and — without arrow-rs RowFilter's
+        // lazy-decode amortization (i.e. `pushdown_filters=false`) —
+        // the per-batch `PostScanFilter` tax typically exceeds the
+        // marginal hash-lookup savings on TPC-H-shaped workloads
+        // (see the #23701 `hj` benchmark: the density=1 Semi/Anti
+        // cases all show 5–35% regression because bounds prune 0 rows
+        // yet the filter still evaluates on every probe row).
+        //
+        // Keep the filter when `pushdown_filters=true` so RowFilter's
+        // two-phase decode can still amortize the cost on selective
+        // Semi/Anti joins.
+        if !config.execution.parquet.pushdown_filters
+            && matches!(self.join_type, JoinType::RightSemi | JoinType::RightAnti)
+        {
+            return false;
+        }
+
         true
     }
 
@@ -6833,6 +6854,100 @@ mod tests {
         )?;
 
         assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        Ok(())
+    }
+
+    /// `RightSemi` + `pushdown_filters=false` must skip the dynamic
+    /// filter — the join's own hash lookup already provides exact
+    /// "in build set" filtering, and without `RowFilter`'s lazy-decode
+    /// amortization the `PostScanFilter` per-batch evaluation is pure
+    /// tax on the probe scan. See #23701 hj benchmark: the density=1
+    /// Semi cases all show 5–35% regression because bounds prune 0
+    /// rows while the filter still evaluates on every probe row.
+    ///
+    /// (`RightAnti` is already excluded by the general `probe_preserved`
+    /// gate — `on_lr_is_preserved` reports `(true, false)` for it — so
+    /// this new gate is redundant for that type.)
+    #[test]
+    fn test_dynamic_filter_pushdown_rejects_right_semi_when_pushdown_off() -> Result<()> {
+        let (_, _, on) = build_schema_and_on()?;
+        let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+        let right = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
+
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = true;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .pushdown_filters = false;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::RightSemi,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        assert!(
+            !join.allow_join_dynamic_filter_pushdown(session_config.options()),
+            "RightSemi + pushdown_filters=false must skip dynamic filter",
+        );
+
+        Ok(())
+    }
+
+    /// `RightSemi` + `pushdown_filters=true` must **keep** the dynamic
+    /// filter — arrow-rs `RowFilter`'s two-phase decode amortizes the
+    /// per-row cost by skipping the decode of non-filter columns for
+    /// filtered rows, which can pay for the bounds check even when the
+    /// join type is Semi.
+    ///
+    /// (`RightAnti` is excluded here because it drops the probe side
+    /// entirely from the output — `on_lr_is_preserved` returns
+    /// `(true, false)`, so the general `probe_preserved` gate already
+    /// disables dynamic filter pushdown for `RightAnti` regardless of
+    /// the new `pushdown_filters=false` check.)
+    #[test]
+    fn test_dynamic_filter_pushdown_keeps_right_semi_when_pushdown_on() -> Result<()> {
+        let (_, _, on) = build_schema_and_on()?;
+        let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+        let right = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
+
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = true;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .pushdown_filters = true;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::RightSemi,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        assert!(
+            join.allow_join_dynamic_filter_pushdown(session_config.options()),
+            "RightSemi + pushdown_filters=true must keep dynamic filter",
+        );
 
         Ok(())
     }
