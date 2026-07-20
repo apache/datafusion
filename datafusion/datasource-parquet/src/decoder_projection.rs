@@ -32,7 +32,6 @@
 //! which calls [`map`](DecoderProjection::map) on every decoded batch.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::filter_record_batch;
@@ -54,20 +53,6 @@ use crate::ParquetFileMetrics;
 use crate::opener::{VirtualColumnsState, append_fields};
 use crate::projection_read_plan::build_projection_read_plan;
 
-/// Number of rows the [`PostScanFilter`] must see before it starts
-/// evaluating its own selectivity — small enough to react to a truly
-/// non-selective filter within a couple of decoded batches, large
-/// enough to smooth out a batch that happens to be atypical.
-const POST_SCAN_FILTER_SAMPLE_ROWS: usize = 65_536;
-
-/// Selectivity threshold below which [`PostScanFilter`] disables itself
-/// for the remainder of the file. `0.02` means: if fewer than 2% of the
-/// sampled rows are being pruned, the per-batch predicate evaluation
-/// cost outweighs the downstream savings and the filter is a net loss —
-/// the downstream operator (HashJoin hash lookup, TopK heap compare)
-/// will do the exact filtering for these rows anyway.
-const POST_SCAN_FILTER_MIN_SELECTIVITY: f64 = 0.02;
-
 /// Predicate applied to decoded record batches inside the parquet scan.
 ///
 /// Semantically identical to a `FilterExec` over the scan: the predicate is
@@ -78,36 +63,12 @@ const POST_SCAN_FILTER_MIN_SELECTIVITY: f64 = 0.02;
 ///
 /// Holds metric handles so per-batch rows-pruned / matched / time accumulate
 /// into [`ParquetFileMetrics`] for `EXPLAIN ANALYZE`.
-///
-/// ## Adaptive selectivity gate
-///
-/// After processing [`POST_SCAN_FILTER_SAMPLE_ROWS`] rows the filter
-/// checks its own selectivity. If it has pruned fewer than
-/// [`POST_SCAN_FILTER_MIN_SELECTIVITY`] of the sampled rows the per-batch
-/// evaluation cost has clearly exceeded the downstream savings and the
-/// filter permanently disables itself for the remainder of the file
-/// (subsequent calls are a batch-clone fast path).
-///
-/// This is a per-file MVP of the adaptive-predicate-evaluation design in
-/// the #22883 EPIC — deliberately small so the cross-scan tracker
-/// (`OptionalFilterPhysicalExpr` / `SelectivityTracker`) from that EPIC
-/// can supersede it later without churn.
-///
-/// Correctness note: `PostScanFilter` is a semantics-preserving
-/// optimization (the downstream `HashJoin` hash lookup / `TopK` heap
-/// compare / etc. does the exact match), so disabling the filter never
-/// produces wrong results — only slightly more work downstream.
 pub(crate) struct PostScanFilter {
     /// Combined predicate, rebased onto the decoder's stream schema.
     predicate: Arc<dyn PhysicalExpr>,
     rows_pruned: Count,
     rows_matched: Count,
     eval_time: Time,
-    /// Once flipped to `true`, [`Self::filter`] short-circuits and
-    /// returns the batch unfiltered. Shared across threads via `Arc`
-    /// because a single `PostScanFilter` instance can be applied to
-    /// multiple decoded streams within a partitioned scan.
-    disabled: Arc<AtomicBool>,
 }
 
 impl PostScanFilter {
@@ -115,13 +76,6 @@ impl PostScanFilter {
     /// return an empty batch — callers should skip empty batches rather than
     /// yield them downstream.
     pub(crate) fn filter(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        // Adaptive fast path: sample said "not selective enough", skip
-        // the whole thing. The downstream operator will do the exact
-        // filtering, so correctness is preserved.
-        if self.disabled.load(Ordering::Relaxed) {
-            return Ok(batch.clone());
-        }
-
         // Scoped timer: stops on drop, so the early-return paths still record.
         let _timer = self.eval_time.timer();
 
@@ -135,23 +89,8 @@ impl PostScanFilter {
         let filtered = filter_record_batch(batch, mask)?;
 
         let kept = filtered.num_rows();
-        let pruned = input_rows - kept;
         self.rows_matched.add(kept);
-        self.rows_pruned.add(pruned);
-
-        // Adaptive decision: once we have seen enough rows, judge whether
-        // the filter is earning its keep. Cheap load — `Count` is backed
-        // by an atomic, `total` is a local u64.
-        let total_matched = self.rows_matched.value();
-        let total_pruned = self.rows_pruned.value();
-        let total = total_matched + total_pruned;
-        if total >= POST_SCAN_FILTER_SAMPLE_ROWS {
-            let selectivity = total_pruned as f64 / total as f64;
-            if selectivity < POST_SCAN_FILTER_MIN_SELECTIVITY {
-                self.disabled.store(true, Ordering::Relaxed);
-            }
-        }
-
+        self.rows_pruned.add(input_rows - kept);
         Ok(filtered)
     }
 }
@@ -292,7 +231,6 @@ impl DecoderProjection {
                 rows_pruned: file_metrics.post_scan_rows_pruned.clone(),
                 rows_matched: file_metrics.post_scan_rows_matched.clone(),
                 eval_time: file_metrics.post_scan_filter_eval_time.clone(),
-                disabled: Arc::new(AtomicBool::new(false)),
             })
         };
 
@@ -343,134 +281,5 @@ impl DecoderProjection {
             arrays,
             &options,
         )?)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use arrow::array::{ArrayRef, Int32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::Operator;
-    use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Column, lit};
-
-    /// Build a `PostScanFilter` that evaluates `predicate` on a single
-    /// `i32` column named "a", with fresh metric handles and the
-    /// adaptive gate armed.
-    fn test_filter(predicate: Arc<dyn PhysicalExpr>) -> PostScanFilter {
-        PostScanFilter {
-            predicate,
-            rows_pruned: Count::new(),
-            rows_matched: Count::new(),
-            eval_time: Time::new(),
-            disabled: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    fn schema() -> SchemaRef {
-        Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]))
-    }
-
-    /// Build a `RecordBatch` with a single `Int32` column named "a",
-    /// filled with `size` copies of `value`.
-    fn batch_of(value: i32, size: usize) -> RecordBatch {
-        let arr: ArrayRef = Arc::new(Int32Array::from(vec![value; size])) as ArrayRef;
-        RecordBatch::try_new(schema(), vec![arr]).unwrap()
-    }
-
-    /// `a = 1` — matches every row when the batch is all-1s
-    /// (selectivity = 0 → adaptive should disable) and matches no row
-    /// when the batch is all-2s (selectivity = 100% → adaptive keeps
-    /// the filter on).
-    fn eq_one() -> Arc<dyn PhysicalExpr> {
-        let schema = schema();
-        Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("a", 0)),
-            Operator::Eq,
-            lit(ScalarValue::Int32(Some(1))),
-        )) as Arc<dyn PhysicalExpr>
-    }
-
-    /// Zero-selectivity filter (`predicate matches every row`): after
-    /// [`POST_SCAN_FILTER_SAMPLE_ROWS`] rows the adaptive gate must
-    /// flip to `disabled = true` and subsequent batches must be
-    /// returned unfiltered as a fast path.
-    #[test]
-    fn adaptive_disables_when_selectivity_is_zero() {
-        let filter = test_filter(eq_one());
-        let batch = batch_of(1, 8192); // predicate matches all → prune 0
-
-        // Feed enough rows to trip the sample threshold.
-        let rounds = POST_SCAN_FILTER_SAMPLE_ROWS.div_ceil(batch.num_rows());
-        for _ in 0..rounds {
-            let out = filter.filter(&batch).unwrap();
-            assert_eq!(out.num_rows(), batch.num_rows());
-        }
-
-        assert!(
-            filter.disabled.load(Ordering::Relaxed),
-            "0% pruning must trip the adaptive gate"
-        );
-    }
-
-    /// High-selectivity filter (`predicate matches no row`): even
-    /// after the sample threshold is exceeded the filter is
-    /// obviously earning its keep and must stay enabled.
-    #[test]
-    fn adaptive_stays_enabled_when_selectivity_is_high() {
-        let filter = test_filter(eq_one());
-        let batch = batch_of(2, 8192); // predicate matches none → prune 100%
-
-        let rounds = POST_SCAN_FILTER_SAMPLE_ROWS.div_ceil(batch.num_rows());
-        for _ in 0..rounds {
-            let out = filter.filter(&batch).unwrap();
-            assert_eq!(out.num_rows(), 0);
-        }
-
-        assert!(
-            !filter.disabled.load(Ordering::Relaxed),
-            "100% pruning must not trip the adaptive gate"
-        );
-    }
-
-    /// Sample size gate: below [`POST_SCAN_FILTER_SAMPLE_ROWS`] the
-    /// decision is deferred, no matter how bad the selectivity looks
-    /// on the tiny sample so far. Prevents a single unlucky early
-    /// batch from taking the filter down for the whole file.
-    #[test]
-    fn adaptive_does_not_disable_before_sample_threshold() {
-        let filter = test_filter(eq_one());
-        // Feed a small amount of "0% selectivity" data — well under
-        // the sample threshold.
-        let batch = batch_of(1, 1024);
-        filter.filter(&batch).unwrap();
-
-        assert!(
-            !filter.disabled.load(Ordering::Relaxed),
-            "must not disable before sampling {POST_SCAN_FILTER_SAMPLE_ROWS} rows",
-        );
-    }
-
-    /// Once disabled, a subsequent call must be a pure fast path:
-    /// the batch flows through unfiltered and — importantly — the
-    /// predicate is never evaluated. Verified indirectly by
-    /// installing a `lit(false)` predicate (which would zero out
-    /// every row if it ran) and asserting the row count survives.
-    #[test]
-    fn adaptive_disable_short_circuits_evaluation() {
-        let filter =
-            test_filter(lit(ScalarValue::Boolean(Some(false))) as Arc<dyn PhysicalExpr>);
-        filter.disabled.store(true, Ordering::Relaxed);
-
-        let batch = batch_of(42, 128);
-        let out = filter.filter(&batch).unwrap();
-        assert_eq!(
-            out.num_rows(),
-            batch.num_rows(),
-            "disabled filter must bypass predicate evaluation"
-        );
     }
 }
