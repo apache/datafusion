@@ -779,8 +779,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::CoalesceBatches(_) => {
                 CoalesceBatchesExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Merge(merge) => {
-                self.try_into_merge_physical_plan(merge, ctx, proto_converter)
+            PhysicalPlanType::Merge(_) => {
+                CoalescePartitionsExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Repartition(repart) => {
                 self.try_into_repartition_physical_plan(repart, ctx, proto_converter)
@@ -991,14 +991,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             )?
         {
             return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<CoalescePartitionsExec>() {
-            return protobuf::PhysicalPlanNode::try_from_coalesce_partitions_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
         }
 
         if let Some(exec) = plan.downcast_ref::<RepartitionExec>() {
@@ -1519,6 +1511,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         ))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CoalescePartitionsExec` deserializes itself via `CoalescePartitionsExec::try_from_proto`"
+    )]
     fn try_into_merge_physical_plan(
         &self,
         merge: &protobuf::CoalescePartitionsExecNode,
@@ -3691,6 +3687,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(None)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CoalescePartitionsExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_coalesce_partitions_exec(
         exec: &CoalescePartitionsExec,
         codec: &dyn PhysicalExtensionCodec,

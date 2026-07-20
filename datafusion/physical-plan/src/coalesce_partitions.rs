@@ -346,6 +346,56 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 }
             })
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Merge(Box::new(
+                    protobuf::CoalescePartitionsExecNode {
+                        input: Some(Box::new(input)),
+                        fetch: self.fetch().map(|f| f as u32),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl CoalescePartitionsExec {
+    /// Reconstruct a [`CoalescePartitionsExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`]. Note the protobuf
+    /// variant is named `Merge` (node [`CoalescePartitionsExecNode`]).
+    ///
+    /// [`CoalescePartitionsExecNode`]: datafusion_proto_models::protobuf::CoalescePartitionsExecNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let merge = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Merge,
+            "CoalescePartitionsExec",
+        );
+        let input = ctx.decode_required_child(
+            merge.input.as_deref(),
+            "CoalescePartitionsExec",
+            "input",
+        )?;
+        Ok(Arc::new(
+            CoalescePartitionsExec::new(input)
+                .with_fetch(merge.fetch.map(|f| f as usize)),
+        ))
+    }
 }
 
 #[cfg(test)]
