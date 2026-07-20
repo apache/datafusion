@@ -151,12 +151,22 @@ mod tests {
     use crate::physical_expr::partitioning::{FFI_Partitioning, FFI_RangePartitioning};
 
     fn range_partitioning() -> Result<Partitioning> {
-        let col_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
-        let sort_expr = PhysicalSortExpr::new(col_expr, SortOptions::default());
-        let ordering = LexOrdering::new([sort_expr]).expect("non-empty ordering");
+        let a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let b = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let ordering = LexOrdering::new([
+            PhysicalSortExpr::new(a, SortOptions::default()),
+            PhysicalSortExpr::new(b, SortOptions::new(true, false)),
+        ])
+        .expect("non-empty ordering");
         let split_points = vec![
-            SplitPoint::new(vec![ScalarValue::Int64(Some(10))]),
-            SplitPoint::new(vec![ScalarValue::Int64(Some(20))]),
+            SplitPoint::new(vec![
+                ScalarValue::Int64(Some(10)),
+                ScalarValue::Utf8(Some("a".to_string())),
+            ]),
+            SplitPoint::new(vec![
+                ScalarValue::Int64(Some(20)),
+                ScalarValue::Utf8(Some("b".to_string())),
+            ]),
         ];
         Ok(Partitioning::Range(RangePartitioning::try_new(
             ordering,
@@ -191,25 +201,7 @@ mod tests {
 
     #[test]
     fn round_trip_ffi_range_partitioning_compound_key() -> Result<()> {
-        let a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
-        let b = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
-        let ordering = LexOrdering::new([
-            PhysicalSortExpr::new(a, SortOptions::default()),
-            PhysicalSortExpr::new(b, SortOptions::new(true, false)),
-        ])
-        .expect("non-empty ordering");
-        let split_points = vec![
-            SplitPoint::new(vec![
-                ScalarValue::Int64(Some(10)),
-                ScalarValue::Utf8(Some("a".to_string())),
-            ]),
-            SplitPoint::new(vec![
-                ScalarValue::Int64(Some(20)),
-                ScalarValue::Utf8(Some("b".to_string())),
-            ]),
-        ];
-        let partitioning =
-            Partitioning::Range(RangePartitioning::try_new(ordering, split_points)?);
+        let partitioning = range_partitioning()?;
 
         let ffi_partitioning: FFI_Partitioning = (&partitioning).into();
         let returned: Partitioning = ffi_partitioning.try_into()?;
