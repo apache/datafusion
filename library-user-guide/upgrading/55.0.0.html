@@ -1027,6 +1027,93 @@ months are ignored, as in PostgreSQL. The result keeps the input time’s unit
 unit is truncated – so <code class="docutils literal notranslate"><span class="pre">time(s)</span> <span class="pre">+</span> <span class="pre">interval</span> <span class="pre">'1</span> <span class="pre">nanosecond'</span></code> is a no-op.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23279">PR #23279</a> for details.</p>
 </section>
+<section id="scalar-subquery-state-moved-to-an-explicit-physicalplanningcontext">
+<h3>Scalar-subquery state moved to an explicit <code class="docutils literal notranslate"><span class="pre">PhysicalPlanningContext</span></code><a class="headerlink" href="#scalar-subquery-state-moved-to-an-explicit-physicalplanningcontext" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">subquery_indexes</span></code> and <code class="docutils literal notranslate"><span class="pre">subquery_results</span></code> public fields on
+<code class="docutils literal notranslate"><span class="pre">datafusion_expr::execution_props::ExecutionProps</span></code> have been removed. They were
+added in <code class="docutils literal notranslate"><span class="pre">54.0.0</span></code> as the channel through which the physical planner passed
+uncorrelated scalar-subquery state to functions that create physical
+<code class="docutils literal notranslate"><span class="pre">Arc&lt;dyn</span> <span class="pre">PhysicalExpr&gt;</span></code> values from logical <code class="docutils literal notranslate"><span class="pre">Expr</span></code> values.</p>
+<p>That state is now carried by a dedicated
+<code class="docutils literal notranslate"><span class="pre">datafusion_expr::physical_planning_context::PhysicalPlanningContext</span></code> passed explicitly
+through functions and planner traits. Unlike <code class="docutils literal notranslate"><span class="pre">ExecutionProps</span></code>, which applies
+throughout the planning of an entire query, this context is scoped to the
+logical plan subtree currently being converted. This removes the need for the
+physical planner to clone and mutate a <code class="docutils literal notranslate"><span class="pre">SessionState</span></code>, is a prerequisite for
+letting the planner take <code class="docutils literal notranslate"><span class="pre">&amp;dyn</span> <span class="pre">Session</span></code>, and lets <code class="docutils literal notranslate"><span class="pre">ExtensionPlanner</span></code>
+implementations create physical
+expressions containing scalar subqueries against the same subquery state as the
+rest of the plan.</p>
+<p>The following functions take a new trailing
+<code class="docutils literal notranslate"><span class="pre">planning_ctx:</span> <span class="pre">&amp;PhysicalPlanningContext</span></code> parameter:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr::create_physical_expr</span></code> / <code class="docutils literal notranslate"><span class="pre">create_physical_exprs</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr::create_physical_sort_expr</span></code> /
+<code class="docutils literal notranslate"><span class="pre">create_physical_sort_exprs</span></code> / <code class="docutils literal notranslate"><span class="pre">create_physical_partitioning</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">datafusion::physical_planner::create_window_expr</span></code> /
+<code class="docutils literal notranslate"><span class="pre">create_window_expr_with_name</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr::aggregate::LoweredAggregateBuilder::new</span></code></p></li>
+</ul>
+<p>The planner traits changed accordingly:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">PhysicalPlanner::create_physical_expr</span></code> takes
+<code class="docutils literal notranslate"><span class="pre">planning_ctx:</span> <span class="pre">&amp;PhysicalPlanningContext</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ExtensionPlanner::plan_extension</span></code> and <code class="docutils literal notranslate"><span class="pre">plan_table_scan</span></code> receive
+<code class="docutils literal notranslate"><span class="pre">planning_ctx:</span> <span class="pre">&amp;PhysicalPlanningContext</span></code> and should forward it to
+<code class="docutils literal notranslate"><span class="pre">PhysicalPlanner::create_physical_expr</span></code> when creating physical expressions</p></li>
+</ul>
+<p>Convenience methods such as <code class="docutils literal notranslate"><span class="pre">SessionContext::create_physical_expr</span></code> and
+<code class="docutils literal notranslate"><span class="pre">SessionState::create_physical_expr</span></code> are unchanged.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Code calling the functions above: pass
+<code class="docutils literal notranslate"><span class="pre">&amp;PhysicalPlanningContext::default()</span></code> unless you are creating physical
+expressions as part of a physical plan that contains uncorrelated scalar
+subqueries.</p></li>
+<li><p>Custom <code class="docutils literal notranslate"><span class="pre">PhysicalPlanner</span></code> or <code class="docutils literal notranslate"><span class="pre">ExtensionPlanner</span></code> implementations: add the new
+parameter and forward it.</p></li>
+<li><p>Code that read or wrote <code class="docutils literal notranslate"><span class="pre">execution_props.subquery_indexes</span></code> /
+<code class="docutils literal notranslate"><span class="pre">execution_props.subquery_results</span></code>: build a <code class="docutils literal notranslate"><span class="pre">PhysicalPlanningContext</span></code> instead.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>When creating a physical expression outside of physical planning, pass an empty
+context:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_expr</span><span class="p">::</span><span class="n">physical_planning_context</span><span class="p">::</span><span class="n">PhysicalPlanningContext</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion_physical_expr</span><span class="p">::</span><span class="n">create_physical_expr</span><span class="p">;</span>
+
+<span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">phys</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_physical_expr</span><span class="p">(</span><span class="o">&amp;</span><span class="n">expr</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">schema</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">props</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">phys</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_physical_expr</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">expr</span><span class="p">,</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">schema</span><span class="p">,</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">props</span><span class="p">,</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">PhysicalPlanningContext</span><span class="p">::</span><span class="n">default</span><span class="p">(),</span>
+<span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>For <code class="docutils literal notranslate"><span class="pre">ExtensionPlanner</span></code> implementations, accept and forward the context:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">plan_extension</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">planner</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">PhysicalPlanner</span><span class="p">,</span>
+<span class="w">    </span><span class="n">node</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">UserDefinedLogicalNode</span><span class="p">,</span>
+<span class="w">    </span><span class="n">logical_inputs</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="o">&amp;</span><span class="n">LogicalPlan</span><span class="p">],</span>
+<span class="w">    </span><span class="n">physical_inputs</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ExecutionPlan</span><span class="o">&gt;</span><span class="p">],</span>
+<span class="w">    </span><span class="n">session_state</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">SessionState</span><span class="p">,</span>
+<span class="w">    </span><span class="n">planning_ctx</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">PhysicalPlanningContext</span><span class="p">,</span><span class="w"> </span><span class="c1">// new parameter</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ExecutionPlan</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">node</span><span class="p">.</span><span class="n">expressions</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Forward the context so scalar subqueries in this node&#39;s</span>
+<span class="w">        </span><span class="c1">// expressions resolve against the plan&#39;s subquery state</span>
+<span class="w">        </span><span class="n">planner</span><span class="p">.</span><span class="n">create_physical_expr</span><span class="p">(</span><span class="o">&amp;</span><span class="n">expr</span><span class="p">,</span><span class="w"> </span><span class="n">node</span><span class="p">.</span><span class="n">schema</span><span class="p">(),</span><span class="w"> </span><span class="n">session_state</span><span class="p">,</span><span class="w"> </span><span class="n">planning_ctx</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23649">PR #23649</a> for details.</p>
+</section>
 </section>
 </section>
 
@@ -1098,6 +1185,7 @@ unit is truncated – so <code class="docutils literal notranslate"><span class=
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cachedfilemetadata-now-validates-file-schema"><code class="docutils literal notranslate"><span class="pre">CachedFileMetadata</span></code> now validates file schema</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#emptyexecnode-and-placeholderrowexecnode-gained-a-partitions-field"><code class="docutils literal notranslate"><span class="pre">EmptyExecNode</span></code> and <code class="docutils literal notranslate"><span class="pre">PlaceholderRowExecNode</span></code> gained a <code class="docutils literal notranslate"><span class="pre">partitions</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#time-interval-now-returns-a-time-instead-of-an-interval"><code class="docutils literal notranslate"><span class="pre">time</span> <span class="pre">±</span> <span class="pre">interval</span></code> now returns a <code class="docutils literal notranslate"><span class="pre">time</span></code> instead of an <code class="docutils literal notranslate"><span class="pre">interval</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#scalar-subquery-state-moved-to-an-explicit-physicalplanningcontext">Scalar-subquery state moved to an explicit <code class="docutils literal notranslate"><span class="pre">PhysicalPlanningContext</span></code></a></li>
 </ul>
 </li>
 </ul>
