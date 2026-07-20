@@ -1275,7 +1275,12 @@ NULL NULL
 # --------------------------------------
 
 query IIII
-select bit_length(ascii_1), bit_length(ascii_2), bit_length(unicode_1), bit_length(unicode_2) from test_basic_operator;
+select
+  arrow_cast(bit_length(ascii_1), 'Int64'),
+  arrow_cast(bit_length(ascii_2), 'Int64'),
+  arrow_cast(bit_length(unicode_1), 'Int64'),
+  arrow_cast(bit_length(unicode_2), 'Int64')
+from test_basic_operator;
 ----
 48 8 144 32
 72 72 176 176

@@ -15,13 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::utils::transform_leaf_type_preserving_encoding;
 use arrow::array::{ArrayRef, AsArray, Int32Array, StringArrayType};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, internal_err};
-use datafusion_expr::{ColumnarValue, Documentation, TypeSignatureClass};
+use datafusion_expr::{
+    ColumnarValue, Documentation, EncodingPreservation, TypeSignatureClass,
+};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
@@ -63,9 +66,10 @@ impl AsciiFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Native(
-                    logical_string(),
-                ))],
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+                        .with_encoding_preservation(EncodingPreservation::dictionary()),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -81,8 +85,8 @@ impl ScalarUDFImpl for AsciiFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int32)
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        transform_leaf_type_preserving_encoding(&arg_types[0], &|_| Ok(DataType::Int32))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -90,31 +94,32 @@ impl ScalarUDFImpl for AsciiFunc {
 
         match arg {
             ColumnarValue::Scalar(scalar) => {
-                if scalar.is_null() {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Int32(None)));
-                }
-
-                match scalar {
-                    ScalarValue::Utf8(Some(s))
-                    | ScalarValue::LargeUtf8(Some(s))
-                    | ScalarValue::Utf8View(Some(s)) => {
-                        let result = first_char_code(&s);
-                        Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(result))))
-                    }
-                    _ => {
-                        internal_err!(
-                            "Unexpected data type {:?} for function ascii",
-                            scalar.data_type()
-                        )
-                    }
-                }
+                Ok(ColumnarValue::Scalar(ascii_scalar(&scalar)?))
             }
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(ascii(&[array])?)),
+            ColumnarValue::Array(array1) => Ok(ColumnarValue::Array(ascii(&[array])?)),
         }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+fn ascii_scalar(scalar: &ScalarValue) -> Result<ScalarValue> {
+    match scalar {
+        ScalarValue::Utf8(value)
+        | ScalarValue::LargeUtf8(value)
+        | ScalarValue::Utf8View(value) => {
+            Ok(ScalarValue::Int32(value.as_deref().map(first_char_code)))
+        }
+        ScalarValue::Dictionary(key_type, value) => Ok(ScalarValue::Dictionary(
+            key_type.clone(),
+            Box::new(ascii_scalar(value)?),
+        )),
+        _ => internal_err!(
+            "Unexpected data type {:?} for function ascii",
+            scalar.data_type()
+        ),
     }
 }
 
@@ -183,6 +188,11 @@ pub fn ascii(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
             Ok(calculate_ascii(&string_array)?)
+        }
+        DataType::Dictionary(_, _) => {
+            let dictionary = args[0].as_any_dictionary();
+            let converted = ascii(&[dictionary.values().clone()])?;
+            Ok(dictionary.with_values(converted))
         }
         _ => internal_err!("Unsupported data type"),
     }
