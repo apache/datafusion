@@ -775,12 +775,10 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::ArrowScan(scan) => {
                 self.try_into_arrow_scan_physical_plan(scan, ctx, proto_converter)
             }
-            PhysicalPlanType::CoalesceBatches(coalesce_batches) => self
-                .try_into_coalesce_batches_physical_plan(
-                    coalesce_batches,
-                    ctx,
-                    proto_converter,
-                ),
+            #[expect(deprecated)]
+            PhysicalPlanType::CoalesceBatches(_) => {
+                CoalesceBatchesExec::try_from_proto(self.node(), &decode_ctx)
+            }
             PhysicalPlanType::Merge(merge) => {
                 self.try_into_merge_physical_plan(merge, ctx, proto_converter)
             }
@@ -982,15 +980,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         if let Some(empty) = plan.downcast_ref::<PlaceholderRowExec>() {
             return protobuf::PhysicalPlanNode::try_from_placeholder_row_exec(
                 empty, codec,
-            );
-        }
-
-        #[expect(deprecated)]
-        if let Some(coalesce_batches) = plan.downcast_ref::<CoalesceBatchesExec>() {
-            return protobuf::PhysicalPlanNode::try_from_coalesce_batches_exec(
-                coalesce_batches,
-                codec,
-                proto_converter,
             );
         }
 
@@ -1511,6 +1500,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(DataSourceExec::from_data_source(source))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CoalesceBatchesExec` deserializes itself via `CoalesceBatchesExec::try_from_proto`"
+    )]
     fn try_into_coalesce_batches_physical_plan(
         &self,
         coalesce_batches: &protobuf::CoalesceBatchesExecNode,
@@ -3500,6 +3493,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CoalesceBatchesExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     #[expect(deprecated)]
     fn try_from_coalesce_batches_exec(
         coalesce_batches: &CoalesceBatchesExec,
