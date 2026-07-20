@@ -428,7 +428,9 @@ where
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
         handle_dictionary!(self, v, negated);
 
-        if v.data_type() != &self.expected_data_type {
+        // Arrow compatibility ignores timestamp timezone and decimal precision/scale
+        // while still requiring the same primitive representation.
+        if !PrimitiveArray::<T>::is_compatible(v.data_type()) {
             return Err(exec_datafusion_err!(
                 "BranchlessFilter: expected {} array, got {}",
                 self.expected_data_type,
@@ -665,8 +667,8 @@ mod tests {
 
     use arrow::array::{
         Decimal128Array, DictionaryArray, Float16Array, Float32Array, Float64Array,
-        Int8Array, Int16Array, IntervalMonthDayNanoArray, TimestampNanosecondArray,
-        UInt8Array, UInt16Array,
+        Int8Array, Int16Array, IntervalMonthDayNanoArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, UInt8Array, UInt16Array,
     };
     use half::f16;
 
@@ -932,7 +934,7 @@ mod tests {
     }
 
     #[test]
-    fn branchless_filter_timestamp_preserves_exact_timezone() -> Result<()> {
+    fn branchless_filter_timestamp_uses_physical_compatibility() -> Result<()> {
         let haystack: ArrayRef = Arc::new(
             TimestampNanosecondArray::from(vec![Some(1), Some(3)]).with_timezone("UTC"),
         );
@@ -942,15 +944,17 @@ mod tests {
 
         assert_contains(&filter, &needles, vec![Some(true), Some(false), None])?;
 
-        let different_timezone =
-            TimestampNanosecondArray::from(vec![Some(1)]).with_timezone("Europe/Paris");
+        let different_timezone = TimestampNanosecondArray::from(vec![Some(1), Some(2)])
+            .with_timezone("Europe/Paris");
+        assert_contains(&filter, &different_timezone, vec![Some(true), Some(false)])?;
+
+        let different_unit = TimestampMillisecondArray::from(vec![Some(1)]);
         let err = filter
-            .contains(&different_timezone, false)
+            .contains(&different_unit, false)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("expected Timestamp"), "{err}");
-        assert!(err.contains("UTC"), "{err}");
-        assert!(err.contains("Europe/Paris"), "{err}");
+        assert!(err.contains("Timestamp(ns"), "{err}");
+        assert!(err.contains("Timestamp(ms"), "{err}");
 
         Ok(())
     }
@@ -972,14 +976,9 @@ mod tests {
             BooleanArray::from(vec![Some(false), None, None, Some(false)])
         );
 
-        let different_scale =
-            Decimal128Array::from(vec![Some(12345)]).with_precision_and_scale(10, 3)?;
-        let err = filter
-            .contains(&different_scale, false)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("expected Decimal128(10, 2) array"), "{err}");
-        assert!(err.contains("got Decimal128(10, 3)"), "{err}");
+        let compatible_metadata =
+            Decimal128Array::from(vec![Some(12345)]).with_precision_and_scale(11, 3)?;
+        assert_contains(&filter, &compatible_metadata, vec![Some(true)])?;
 
         Ok(())
     }
