@@ -63,6 +63,7 @@ use datafusion::physical_plan::analyze::AnalyzeExec;
 #[expect(deprecated)]
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
     BinaryExpr, Column, DynamicFilterPhysicalExpr, NotExpr, PhysicalSortExpr, binary,
@@ -1121,6 +1122,14 @@ fn roundtrip_coalesce_partitions_with_fetch() -> Result<()> {
         CoalescePartitionsExec::new(Arc::new(EmptyExec::new(schema)))
             .with_fetch(Some(10)),
     ))
+}
+
+#[test]
+fn roundtrip_cooperative() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
+    roundtrip_test(Arc::new(CooperativeExec::new(Arc::new(EmptyExec::new(
+        schema,
+    )))))
 }
 
 #[test]

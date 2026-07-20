@@ -848,8 +848,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Unnest(unnest) => {
                 self.try_into_unnest_physical_plan(unnest, ctx, proto_converter)
             }
-            PhysicalPlanType::Cooperative(cooperative) => {
-                self.try_into_cooperative_physical_plan(cooperative, ctx, proto_converter)
+            PhysicalPlanType::Cooperative(_) => {
+                CooperativeExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::GenerateSeries(generate_series) => {
                 self.try_into_generate_series_physical_plan(generate_series)
@@ -1069,14 +1069,6 @@ pub trait PhysicalPlanNodeExt: Sized {
 
         if let Some(exec) = plan.downcast_ref::<UnnestExec>() {
             return protobuf::PhysicalPlanNode::try_from_unnest_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<CooperativeExec>() {
-            return protobuf::PhysicalPlanNode::try_from_cooperative_exec(
                 exec,
                 codec,
                 proto_converter,
@@ -2766,6 +2758,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CooperativeExec` deserializes itself via `CooperativeExec::try_from_proto`"
+    )]
     fn try_into_cooperative_physical_plan(
         &self,
         field_stream: &protobuf::CooperativeExecNode,
@@ -4127,6 +4123,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CooperativeExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_cooperative_exec(
         exec: &CooperativeExec,
         codec: &dyn PhysicalExtensionCodec,
