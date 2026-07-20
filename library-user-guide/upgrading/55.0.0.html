@@ -553,6 +553,33 @@ This function was deprecated in DataFusion <code class="docutils literal notrans
 <p>Use <code class="docutils literal notranslate"><span class="pre">datafusion_physical_plan::spill::SpillManager::spill_record_batch_by_size</span></code>
 instead.</p>
 </section>
+<section id="createexternaltable-supports-multiple-locations">
+<h3><code class="docutils literal notranslate"><span class="pre">CreateExternalTable</span></code> supports multiple locations<a class="headerlink" href="#createexternaltable-supports-multiple-locations" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> now accepts multiple paths in a single <code class="docutils literal notranslate"><span class="pre">LOCATION</span></code>
+clause, which are read together as one table:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">hits</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;file_1.parquet&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;file_2.parquet&#39;</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>To support this, the <code class="docutils literal notranslate"><span class="pre">location</span></code> field of both
+<code class="docutils literal notranslate"><span class="pre">datafusion_expr::CreateExternalTable</span></code> and
+<code class="docutils literal notranslate"><span class="pre">datafusion_sql::parser::CreateExternalTable</span></code> changed from a <code class="docutils literal notranslate"><span class="pre">String</span></code> to a
+<code class="docutils literal notranslate"><span class="pre">Vec&lt;String&gt;</span></code> named <code class="docutils literal notranslate"><span class="pre">locations</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before (54.0.0)</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">location</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_external_table</span><span class="p">.</span><span class="n">location</span><span class="p">;</span>
+
+<span class="c1">// After (55.0.0)</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">locations</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_external_table</span><span class="p">.</span><span class="n">locations</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">CreateExternalTable::builder(name,</span> <span class="pre">location,</span> <span class="pre">file_type,</span> <span class="pre">schema)</span></code>
+constructor is unchanged and still takes a single location; use the new
+<code class="docutils literal notranslate"><span class="pre">CreateExternalTableBuilder::with_locations(Vec&lt;String&gt;)</span></code> to set more than one.
+All listed locations must resolve to the same schema and reside on the same
+object store. A plain string literal remains a single location, so paths that
+contain commas continue to work, for example <code class="docutils literal notranslate"><span class="pre">LOCATION</span> <span class="pre">'path/with,comma.csv'</span></code>.</p>
+</section>
 <section id="decimal-scalar-formatting-uses-human-readable-values">
 <h3>Decimal scalar formatting uses human-readable values<a class="headerlink" href="#decimal-scalar-formatting-uses-human-readable-values" title="Link to this heading">#</a></h3>
 <p>Decimal scalar literals in <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code> output, expression display strings, and
@@ -1056,6 +1083,7 @@ unit is truncated – so <code class="docutils literal notranslate"><span class=
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#user-spillfile-traits-instead-of-refcountedtempfile">User <code class="docutils literal notranslate"><span class="pre">SpillFile</span></code> traits instead of <code class="docutils literal notranslate"><span class="pre">RefCountedTempFile</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dialect-available-replaced-by-dialect-available"><code class="docutils literal notranslate"><span class="pre">Dialect::AVAILABLE</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spill-record-batch-by-size-removed"><code class="docutils literal notranslate"><span class="pre">spill_record_batch_by_size</span></code> removed</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#createexternaltable-supports-multiple-locations"><code class="docutils literal notranslate"><span class="pre">CreateExternalTable</span></code> supports multiple locations</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#decimal-scalar-formatting-uses-human-readable-values">Decimal scalar formatting uses human-readable values</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#coercion-supports-dictionary-encoding-preservation"><code class="docutils literal notranslate"><span class="pre">Coercion</span></code> supports dictionary encoding preservation</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupsaccumulator-merge-batch-no-longer-takes-opt-filter"><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::merge_batch</span></code> no longer takes <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code></a></li>

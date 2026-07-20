@@ -498,6 +498,18 @@ file system or remote object store as a named table which can be queried.</p>
 <p><code class="docutils literal notranslate"><span class="pre">LOCATION</span> <span class="pre">&lt;literal&gt;</span></code> specifies the location to find the data. It can be
 a path to a file or directory of partitioned files locally or on an
 object store.</p>
+<p>Multiple locations can be supplied as a parenthesized list of string literals,
+in which case the files are read together as one table:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">hits</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="s1">&#39;s3://clickhouse-public-datasets/hits_compatible/athena_partitioned/hits_1.parquet&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;s3://clickhouse-public-datasets/hits_compatible/athena_partitioned/hits_2.parquet&#39;</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>All listed locations must reside on the same object store and resolve to data
+with the same schema.</p>
 <section id="example-parquet">
 <h3>Example: Parquet<a class="headerlink" href="#example-parquet" title="Link to this heading">#</a></h3>
 <p>Parquet data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement such as the following. It is not necessary to
