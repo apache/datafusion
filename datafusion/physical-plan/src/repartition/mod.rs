@@ -2725,6 +2725,11 @@ mod tests {
 
                 let range = expect_range_partitioning(pushed.partitioning());
                 assert_eq!(range.ordering()[0].to_string(), "id@0 ASC");
+                assert_eq!(
+                    inner.properties().output_ordering().map(|o| o.to_string()),
+                    Some(ordering.to_string()),
+                    "pushed repartition output ordering should match the requested sort"
+                );
             }
             other => panic!("expected Exact sort pushdown, got {other:?}"),
         }
