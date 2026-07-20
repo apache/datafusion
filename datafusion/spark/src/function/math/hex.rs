@@ -18,8 +18,8 @@
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, NullBufferBuilder, StringArray, StringBuilder};
-use arrow::buffer::{Buffer, OffsetBuffer};
+use arrow::array::{Array, ArrayRef, StringArray, StringBuilder};
+use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer};
 use arrow::datatypes::DataType;
 use arrow::{
     array::{as_dictionary_array, as_largestring_array, as_string_array},
@@ -159,8 +159,13 @@ fn hex_int64(num: i64, buffer: &mut [u8; 16]) -> &[u8] {
 }
 
 /// Generic hex encoding for byte array types
+///
+/// `nulls` is the input array's null buffer. Hex encoding maps rows 1:1 (a
+/// null in maps to a null out), so it is reused for the output array as-is
+/// instead of being rebuilt row by row.
 fn hex_encode_bytes<'a, I, T>(
     iter: I,
+    nulls: Option<NullBuffer>,
     lowercase: bool,
     len: usize,
 ) -> Result<ArrayRef, DataFusionError>
@@ -181,10 +186,11 @@ where
     let mut values: Vec<u8> = Vec::with_capacity(len * 64);
     let mut offsets: Vec<i32> = Vec::with_capacity(len + 1);
     offsets.push(0);
-    let mut nulls = NullBufferBuilder::new(len);
 
-    for v in iter {
-        if let Some(b) = v {
+    if nulls.is_none() {
+        // Fast path: the input has no nulls, so every item is `Some` and the
+        // per-row `Option` check and null bookkeeping can be skipped.
+        for b in iter.flatten() {
             let bytes = b.as_ref();
             let additional = bytes
                 .len()
@@ -198,26 +204,46 @@ where
             for &byte in bytes {
                 values.extend_from_slice(&lookup[byte as usize]);
             }
-            nulls.append_non_null();
-        } else {
-            nulls.append_null();
-        }
-        offsets.push(
-            i32::try_from(values.len()).map_err(|_| {
+            offsets.push(i32::try_from(values.len()).map_err(|_| {
                 exec_datafusion_err!("hex output exceeds i32 offset range")
-            })?,
-        );
+            })?);
+        }
+    } else {
+        for v in iter {
+            if let Some(b) = v {
+                let bytes = b.as_ref();
+                let additional = bytes
+                    .len()
+                    .checked_mul(2)
+                    .ok_or_else(|| exec_datafusion_err!("hex output size overflow"))?;
+                values.try_reserve(additional).map_err(|e| {
+                    exec_datafusion_err!(
+                        "failed to reserve {additional} bytes for hex output: {e}"
+                    )
+                })?;
+                for &byte in bytes {
+                    values.extend_from_slice(&lookup[byte as usize]);
+                }
+            }
+            // For a null slot no hex digits are written, so the row becomes an
+            // empty value; the reused input null buffer marks it as null.
+            offsets.push(i32::try_from(values.len()).map_err(|_| {
+                exec_datafusion_err!("hex output exceeds i32 offset range")
+            })?);
+        }
     }
 
     // SAFETY: the value buffer contains only ASCII hex digits (valid UTF-8) and
     // the offsets are monotonically increasing and end at `values.len()`, so the
     // array invariants hold. This mirrors the previous `from_utf8_unchecked`
     // path and avoids a redundant UTF-8 validation pass over the whole buffer.
+    // The reused null buffer has the input array's length, matching the number
+    // of encoded rows.
     let array = unsafe {
         StringArray::new_unchecked(
             OffsetBuffer::new(offsets.into()),
             Buffer::from_vec(values),
-            nulls.finish(),
+            nulls,
         )
     };
     Ok(Arc::new(array))
@@ -278,6 +304,7 @@ pub fn compute_hex(
                 let array = as_string_array(array);
                 Ok(ColumnarValue::Array(hex_encode_bytes(
                     array.iter(),
+                    array.nulls().cloned(),
                     lowercase,
                     array.len(),
                 )?))
@@ -286,6 +313,7 @@ pub fn compute_hex(
                 let array = as_string_view_array(array)?;
                 Ok(ColumnarValue::Array(hex_encode_bytes(
                     array.iter(),
+                    array.nulls().cloned(),
                     lowercase,
                     array.len(),
                 )?))
@@ -294,6 +322,7 @@ pub fn compute_hex(
                 let array = as_largestring_array(array);
                 Ok(ColumnarValue::Array(hex_encode_bytes(
                     array.iter(),
+                    array.nulls().cloned(),
                     lowercase,
                     array.len(),
                 )?))
@@ -302,6 +331,7 @@ pub fn compute_hex(
                 let array = as_binary_array(array)?;
                 Ok(ColumnarValue::Array(hex_encode_bytes(
                     array.iter(),
+                    array.nulls().cloned(),
                     lowercase,
                     array.len(),
                 )?))
@@ -310,6 +340,7 @@ pub fn compute_hex(
                 let array = as_large_binary_array(array)?;
                 Ok(ColumnarValue::Array(hex_encode_bytes(
                     array.iter(),
+                    array.nulls().cloned(),
                     lowercase,
                     array.len(),
                 )?))
@@ -318,6 +349,7 @@ pub fn compute_hex(
                 let array = as_fixed_size_binary_array(array)?;
                 Ok(ColumnarValue::Array(hex_encode_bytes(
                     array.iter(),
+                    array.nulls().cloned(),
                     lowercase,
                     array.len(),
                 )?))
@@ -340,27 +372,57 @@ pub fn compute_hex(
                     }
                     DataType::Utf8 => {
                         let arr = as_string_array(dict_values);
-                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                        hex_encode_bytes(
+                            arr.iter(),
+                            arr.nulls().cloned(),
+                            lowercase,
+                            arr.len(),
+                        )?
                     }
                     DataType::LargeUtf8 => {
                         let arr = as_largestring_array(dict_values);
-                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                        hex_encode_bytes(
+                            arr.iter(),
+                            arr.nulls().cloned(),
+                            lowercase,
+                            arr.len(),
+                        )?
                     }
                     DataType::Utf8View => {
                         let arr = as_string_view_array(dict_values)?;
-                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                        hex_encode_bytes(
+                            arr.iter(),
+                            arr.nulls().cloned(),
+                            lowercase,
+                            arr.len(),
+                        )?
                     }
                     DataType::Binary => {
                         let arr = as_binary_array(dict_values)?;
-                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                        hex_encode_bytes(
+                            arr.iter(),
+                            arr.nulls().cloned(),
+                            lowercase,
+                            arr.len(),
+                        )?
                     }
                     DataType::LargeBinary => {
                         let arr = as_large_binary_array(dict_values)?;
-                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                        hex_encode_bytes(
+                            arr.iter(),
+                            arr.nulls().cloned(),
+                            lowercase,
+                            arr.len(),
+                        )?
                     }
                     DataType::FixedSizeBinary(_) => {
                         let arr = as_fixed_size_binary_array(dict_values)?;
-                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                        hex_encode_bytes(
+                            arr.iter(),
+                            arr.nulls().cloned(),
+                            lowercase,
+                            arr.len(),
+                        )?
                     }
                     _ => {
                         return exec_err!(
@@ -552,6 +614,26 @@ mod test {
             write!(expected, "{byte:02X}").unwrap();
         }
         assert_eq!(strings.value(0), expected);
+    }
+
+    #[test]
+    fn test_spark_hex_utf8_with_nulls() {
+        // Exercises the has-nulls path: the output must reuse the input's
+        // null buffer and keep values aligned around the null slots.
+        let input =
+            StringArray::from(vec![Some("hi"), None, Some(""), None, Some("rust")]);
+
+        let result = super::spark_hex(&[ColumnarValue::Array(Arc::new(input))]).unwrap();
+        let result = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array"),
+        };
+
+        let string_array = as_string_array(&result);
+        let expected =
+            StringArray::from(vec![Some("6869"), None, Some(""), None, Some("72757374")]);
+
+        assert_eq!(string_array, &expected);
     }
 
     #[test]
