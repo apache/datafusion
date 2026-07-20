@@ -1608,6 +1608,36 @@ mod tests {
         );
     }
 
+    /// Symmetric guard: when both `pushdown_filters=true` *and* the
+    /// membership gate is on, the accumulator must emit the full
+    /// historical CASE-hash-routed form with `InListExpr` inside each
+    /// WHEN branch. This is the arrow-rs `RowFilter` lazy-decode
+    /// scenario where per-partition selectivity + membership is worth
+    /// the per-row cost.
+    #[test]
+    fn partitioned_pushdown_on_membership_on_emits_case_with_membership() {
+        let acc = make_partitioned_accumulator_pushdown_on_and_membership_on(2);
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1]), bounds(1, 10)),
+            reported(in_list(&[5]), bounds(5, 20)),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(
+            expr.downcast_ref::<CaseExpr>().is_some(),
+            "pushdown=true + membership=on must emit CaseExpr; got {expr:?}",
+        );
+        assert!(
+            format!("{expr:?}").contains("hash_repartition"),
+            "must emit HashExpr; got {expr:?}",
+        );
+        assert!(
+            format!("{expr:?}").contains("InList"),
+            "membership=on must emit InListExpr inside CASE; got {expr:?}",
+        );
+    }
+
     /// The CollectLeft path must also honor the coupling: when
     /// `pushdown_filters=false`, membership is skipped even if the user
     /// opts in via the config knob. This preserves the fast-path
