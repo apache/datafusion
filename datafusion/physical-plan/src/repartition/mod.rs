@@ -32,6 +32,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::aggregates::{
+    PartitionRun, append_subpartition_column, partition_runs_from_column,
     relative_partition, relative_partition_schema, with_relative_partition,
 };
 use crate::coalesce::LimitedBatchCoalescer;
@@ -347,20 +348,21 @@ impl PartitionedLimitedBatchCoalescer {
     }
 
     fn push_batch(&mut self, batch: RecordBatch) -> Result<()> {
-        let relative_partition =
-            relative_partition(batch.schema_ref())?.ok_or_else(|| {
-                DataFusionError::Internal(
-                "Missing relative partition metadata for partitioned batch coalescing"
-                    .to_string(),
-            )
-            })?;
+        let (batch, runs) = partition_runs_from_column(batch)?;
         let num_relative_partitions = self.coalescers.len();
-        let coalescer = self.coalescers.get_mut(relative_partition).ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "Relative partition {relative_partition} exceeds configured partition count {num_relative_partitions}"
-            ))
-        })?;
-        coalescer.push_batch(batch)?;
+        let mut offset = 0;
+        for run in runs {
+            let relative_partition = run.relative_partition;
+            let coalescer = self.coalescers.get_mut(relative_partition).ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "Relative partition {relative_partition} exceeds configured partition count {num_relative_partitions}"
+                ))
+            })?;
+            let run_batch =
+                with_relative_partition(batch.slice(offset, run.len), relative_partition);
+            coalescer.push_batch(run_batch)?;
+            offset += run.len;
+        }
         Ok(())
     }
 
@@ -1113,12 +1115,89 @@ impl BatchPartitioner {
 
         partition_timer.done();
 
-        Self::partition_grouped_take(batch, indices, timer, |aggr_partition| {
-            (
+        Self::partition_hash_aggregate_grouped_take(
+            batch,
+            indices,
+            timer,
+            max_aggr_partition_factor,
+        )
+    }
+
+    fn partition_hash_aggregate_grouped_take(
+        batch: &RecordBatch,
+        indices: &mut [Vec<u32>],
+        timer: &metrics::Time,
+        max_aggr_partition_factor: usize,
+    ) -> Result<Vec<Result<(usize, usize, RecordBatch)>>> {
+        let mut output_ranges = Vec::with_capacity(indices.len());
+        let mut reordered_indices = Vec::with_capacity(batch.num_rows());
+
+        for (aggr_partition, p_indices) in indices.iter_mut().enumerate() {
+            if p_indices.is_empty() {
+                continue;
+            }
+
+            let start = reordered_indices.len();
+            reordered_indices.extend_from_slice(p_indices);
+            output_ranges.push((
                 aggr_partition / max_aggr_partition_factor,
-                aggr_partition % max_aggr_partition_factor,
-            )
-        })
+                PartitionRun::new(
+                    aggr_partition % max_aggr_partition_factor,
+                    p_indices.len(),
+                )?,
+                start,
+            ));
+            p_indices.clear();
+        }
+
+        if reordered_indices.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let batches = {
+            let _timer = timer.timer();
+            let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.into();
+            let columns = take_arrays(batch.columns(), &indices_array, None)?;
+
+            let mut options = RecordBatchOptions::new();
+            options = options.with_row_count(Some(indices_array.len()));
+            let reordered_batch =
+                RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
+
+            let mut output_batches = Vec::new();
+            let mut current_output_partition = None;
+            let mut current_start = 0;
+            let mut current_len = 0;
+            let mut current_runs = Vec::new();
+
+            for (output_partition, run, start) in output_ranges {
+                if current_output_partition != Some(output_partition) {
+                    if let Some(partition) = current_output_partition {
+                        let batch = reordered_batch.slice(current_start, current_len);
+                        let batch = append_subpartition_column(&batch, &current_runs)?;
+                        output_batches.push(Ok((partition, 0, batch)));
+                    }
+
+                    current_output_partition = Some(output_partition);
+                    current_start = start;
+                    current_len = 0;
+                    current_runs.clear();
+                }
+
+                current_len += run.len;
+                current_runs.push(run);
+            }
+
+            if let Some(partition) = current_output_partition {
+                let batch = reordered_batch.slice(current_start, current_len);
+                let batch = append_subpartition_column(&batch, &current_runs)?;
+                output_batches.push(Ok((partition, 0, batch)));
+            }
+
+            output_batches
+        };
+
+        Ok(batches)
     }
 
     fn partition_grouped_take(
@@ -2023,12 +2102,7 @@ impl RepartitionExec {
             }
 
             for res in partitioner.partition_iter_with_relative_partition(batch)? {
-                let (partition, relative_partition, batch) = res?;
-                let batch = if max_aggr_partition_factor > 1 {
-                    with_relative_partition(batch, relative_partition)
-                } else {
-                    batch
-                };
+                let (partition, _relative_partition, batch) = res?;
 
                 let timer = metrics.send_time[partition].timer();
                 // if there is still a receiver, send to it
@@ -2382,18 +2456,20 @@ mod tests {
     fn partitioned_coalescer_keeps_relative_partitions_separate() -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
-        let make_batch = |relative_partition, values: Vec<u32>| {
+        let make_batch = |values: Vec<u32>, runs: &[PartitionRun]| {
             let batch = RecordBatch::try_new(
                 Arc::clone(&schema),
                 vec![Arc::new(UInt32Array::from(values))],
             )?;
-            Ok::<_, DataFusionError>(with_relative_partition(batch, relative_partition))
+            append_subpartition_column(&batch, runs)
         };
         let mut coalescer = PartitionedLimitedBatchCoalescer::new(&schema, 4, 2);
 
-        coalescer.push_batch(make_batch(0, vec![0, 1])?)?;
-        coalescer.push_batch(make_batch(1, vec![10, 11])?)?;
-        coalescer.push_batch(make_batch(0, vec![2, 3])?)?;
+        coalescer.push_batch(make_batch(
+            vec![0, 1, 10, 11],
+            &[PartitionRun::new(0, 2)?, PartitionRun::new(1, 2)?],
+        )?)?;
+        coalescer.push_batch(make_batch(vec![2, 3], &[PartitionRun::new(0, 2)?])?)?;
 
         let partition_zero = coalescer.next_completed_batch().unwrap();
         assert_eq!(partition_zero.num_rows(), 4);
@@ -2409,10 +2485,9 @@ mod tests {
     }
 
     // Covers hash aggregate partitioning mapping multiple aggregate partitions
-    // back to one output partition while returning each relative partition as
-    // its own batch.
+    // back to one output partition through an internal subpartition column.
     #[test]
-    fn test_hash_aggregate_partitioner_returns_relative_partitions() -> Result<()> {
+    fn test_hash_aggregate_partitioner_appends_subpartition_column() -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
         let batch = RecordBatch::try_new(
@@ -2432,10 +2507,21 @@ mod tests {
         for result in partitioner.partition_iter_with_relative_partition(batch)? {
             let (partition, relative_partition, batch) = result?;
             assert!(partition < 2);
-            assert!(relative_partition < 4);
-            assert_eq!(batch.num_columns(), 1);
+            assert_eq!(relative_partition, 0);
+            assert_eq!(batch.num_columns(), 2);
             num_rows += batch.num_rows();
-            seen[partition][relative_partition] = true;
+
+            let subpartitions = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .expect("subpartition column should be UInt32");
+            for value in subpartitions.iter() {
+                let value =
+                    value.expect("subpartition value should not be null") as usize;
+                assert!(value < 4);
+                seen[partition][value] = true;
+            }
         }
 
         assert_eq!(num_rows, 128);

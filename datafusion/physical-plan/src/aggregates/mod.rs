@@ -70,6 +70,7 @@ use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
 pub(crate) use partition_runs::{
+    PartitionRun, append_subpartition_column, partition_runs_from_column,
     relative_partition, relative_partition_schema, with_relative_partition,
 };
 use topk::hash_table::is_supported_hash_key_type;
