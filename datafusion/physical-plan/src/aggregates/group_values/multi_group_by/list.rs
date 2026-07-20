@@ -32,6 +32,7 @@ use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 
 use arrow::array::{
     Array, ArrayRef, BooleanBufferBuilder, GenericListArray, OffsetSizeTrait,
+    as_generic_list_array,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::FieldRef;
@@ -58,13 +59,6 @@ impl<O: OffsetSizeTrait> ListGroupValueBuilder<O> {
             outer_nulls: MaybeNullBufferBuilder::new(),
             outer_len: 0,
         }
-    }
-
-    fn list_array(array: &ArrayRef) -> &GenericListArray<O> {
-        array
-            .as_any()
-            .downcast_ref::<GenericListArray<O>>()
-            .expect("ListGroupValueBuilder called with non-List/LargeList array")
     }
 
     fn current_end(&self) -> O {
@@ -143,11 +137,11 @@ impl<O: OffsetSizeTrait> ListGroupValueBuilder<O> {
 
 impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
-        self.equal_to_typed(lhs_row, Self::list_array(array), rhs_row)
+        self.equal_to_typed(lhs_row, as_generic_list_array(array), rhs_row)
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
-        self.append_val_typed(Self::list_array(array), row)
+        self.append_val_typed(as_generic_list_array(array), row)
     }
 
     fn vectorized_equal_to(
@@ -157,7 +151,7 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
         rhs_rows: &[usize],
         equal_to_results: &mut BooleanBufferBuilder,
     ) {
-        let l = Self::list_array(array);
+        let l = as_generic_list_array(array);
         for (idx, (&lhs_row, &rhs_row)) in
             lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
         {
@@ -171,7 +165,7 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
     }
 
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
-        let l = Self::list_array(array);
+        let l = as_generic_list_array(array);
         for &row in rows {
             self.append_val_typed(l, row)?;
         }
