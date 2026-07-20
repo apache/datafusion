@@ -756,8 +756,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Projection(_) => {
                 ProjectionExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Filter(filter) => {
-                self.try_into_filter_physical_plan(filter, ctx, proto_converter)
+            PhysicalPlanType::Filter(_) => {
+                FilterExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::CsvScan(scan) => {
                 self.try_into_csv_scan_physical_plan(scan, ctx, proto_converter)
@@ -907,14 +907,6 @@ pub trait PhysicalPlanNodeExt: Sized {
 
         if let Some(exec) = plan.downcast_ref::<AnalyzeExec>() {
             return protobuf::PhysicalPlanNode::try_from_analyze_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<FilterExec>() {
-            return protobuf::PhysicalPlanNode::try_from_filter_exec(
                 exec,
                 codec,
                 proto_converter,
@@ -1214,6 +1206,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `FilterExec` deserializes itself via `FilterExec::try_from_proto`"
+    )]
     fn try_into_filter_physical_plan(
         &self,
         filter: &protobuf::FilterExecNode,
@@ -2963,6 +2959,10 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `FilterExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_filter_exec(
         exec: &FilterExec,
         codec: &dyn PhysicalExtensionCodec,

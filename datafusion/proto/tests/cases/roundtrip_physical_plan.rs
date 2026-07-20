@@ -1029,6 +1029,39 @@ fn roundtrip_filter_with_fetch() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_filter_projection_states() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Boolean, false),
+        Field::new("b", DataType::Int64, false),
+    ]));
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+
+    for projection in [None, Some(vec![]), Some(vec![0])] {
+        let filter = FilterExecBuilder::new(
+            col("a", &schema)?,
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        )
+        .apply_projection(projection.clone())?
+        .with_default_selectivity(37)
+        .with_batch_size(1024)
+        .with_fetch(Some(5))
+        .build()?;
+
+        let result =
+            roundtrip_test_and_return(Arc::new(filter), &ctx, &codec, &proto_converter)?;
+        let result = result.downcast_ref::<FilterExec>().unwrap();
+        assert_eq!(result.projection().as_deref(), projection.as_deref());
+        assert_eq!(result.default_selectivity(), 37);
+        assert_eq!(result.batch_size(), 1024);
+        assert_eq!(result.fetch(), Some(5));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn roundtrip_sort() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
