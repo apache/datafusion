@@ -198,25 +198,45 @@ fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Resolves the optional `start_from` argument into a `Vec<i64>` of
-/// 0-indexed starting positions.
+/// Resolves the optional `start_from` argument into a `Vec<i64>` of the
+/// original, 1-indexed starting positions. When no offset is supplied the
+/// search starts at the first element (1).
+///
+/// The 1-indexed values are kept as-is here; the conversion to a validated
+/// 0-based index happens per-row in [`zero_based_start`] once the row length
+/// is known, so that out-of-range values (including `i64::MIN`) surface a
+/// clean error instead of overflowing.
 fn resolve_start_from(
     third_arg: Option<&ColumnarValue>,
     num_rows: usize,
 ) -> Result<Vec<i64>> {
     match third_arg {
-        None => Ok(vec![0i64; num_rows]),
+        // No offset supplied: start at the first (1-indexed) element.
+        None => Ok(vec![1i64; num_rows]),
         Some(ColumnarValue::Scalar(ScalarValue::Int64(Some(v)))) => {
-            Ok(vec![v.saturating_sub(1); num_rows])
+            Ok(vec![*v; num_rows])
         }
         Some(ColumnarValue::Scalar(s)) => {
             exec_err!("array_position expected Int64 for start_from, got {s}")
         }
-        Some(ColumnarValue::Array(a)) => Ok(as_int64_array(a)?
-            .values()
-            .iter()
-            .map(|&x| x.saturating_sub(1))
-            .collect()),
+        Some(ColumnarValue::Array(a)) => Ok(as_int64_array(a)?.values().to_vec()),
+    }
+}
+
+/// Converts a 1-indexed `start_from` value into a validated 0-based index
+/// within a row of length `row_len`.
+///
+/// The value is decremented with checked arithmetic and range-checked against
+/// the row length, returning an error rather than panicking for out-of-range
+/// or extreme inputs such as `i64::MIN`.
+fn zero_based_start(start_from: i64, row_len: usize) -> Result<usize> {
+    let zero_based = start_from
+        .checked_sub(1)
+        .and_then(|v| usize::try_from(v).ok())
+        .filter(|&idx| idx <= row_len);
+    match zero_based {
+        Some(idx) => Ok(idx),
+        None => exec_err!("start_from out of bounds: {start_from}"),
     }
 }
 
@@ -228,7 +248,7 @@ fn resolve_start_from(
 fn array_position_scalar<O: OffsetSizeTrait>(
     haystack: &GenericListArray<O>,
     needle: &ArrayRef,
-    arr_from: &[i64], // 0-indexed
+    arr_from: &[i64], // 1-indexed
 ) -> Result<ArrayRef> {
     crate::utils::check_datatypes("array_position", &[haystack.values(), needle])?;
 
@@ -272,12 +292,9 @@ fn array_position_scalar<O: OffsetSizeTrait>(
             continue;
         }
 
-        let from = arr_from[i];
         let row_len = end - start;
-        if !(from >= 0 && (from as usize) <= row_len) {
-            return exec_err!("start_from out of bounds: {}", from.saturating_add(1));
-        }
-        let search_start = start + from as usize;
+        let from = zero_based_start(arr_from[i], row_len)?;
+        let search_start = start + from;
 
         // Advance past matches before search_start
         while matches.peek().is_some_and(|&p| p < search_start) {
@@ -308,20 +325,11 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
     crate::utils::check_datatypes("array_position", &[haystack.values(), needle])?;
 
     let arr_from = if args.len() == 3 {
-        as_int64_array(&args[2])?
-            .values()
-            .iter()
-            .map(|&x| x.saturating_sub(1))
-            .collect::<Vec<_>>()
+        as_int64_array(&args[2])?.values().to_vec()
     } else {
-        vec![0; haystack.len()]
+        // No offset supplied: start at the first (1-indexed) element.
+        vec![1; haystack.len()]
     };
-
-    for (row, &from) in haystack.iter().zip(arr_from.iter()) {
-        if !row.is_none_or(|row| from >= 0 && (from as usize) <= row.len()) {
-            return exec_err!("start_from out of bounds: {}", from.saturating_add(1));
-        }
-    }
 
     generic_position::<O>(haystack, needle, &arr_from)
 }
@@ -329,14 +337,14 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
 fn generic_position<O: OffsetSizeTrait>(
     haystack: &GenericListArray<O>,
     needle: &ArrayRef,
-    arr_from: &[i64], // 0-indexed
+    arr_from: &[i64], // 1-indexed
 ) -> Result<ArrayRef> {
     let mut data = Vec::with_capacity(haystack.len());
 
     for (row_index, (row, &from)) in haystack.iter().zip(arr_from.iter()).enumerate() {
-        let from = from as usize;
-
         if let Some(row) = row {
+            let from = zero_based_start(from, row.len())?;
+
             let eq_array = compare_element_to_list(&row, needle, row_index, true)?;
 
             // Collect `true`s in 1-indexed positions
