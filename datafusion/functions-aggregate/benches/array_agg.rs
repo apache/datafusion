@@ -19,12 +19,12 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, NullBufferBuilder,
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, NullBufferBuilder, StringArray,
 };
-use arrow::datatypes::{Field, Int64Type};
+use arrow::datatypes::{DataType, Field, Int64Type};
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr::Accumulator;
-use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;
+use datafusion_functions_aggregate::array_agg::{ArrayAggAccumulator, DistinctArrayAggAccumulator};
 
 use arrow::buffer::OffsetBuffer;
 use arrow::util::bench_util::create_primitive_array;
@@ -191,5 +191,102 @@ fn array_agg_benchmark(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, array_agg_benchmark);
+/// A realistic pool of database names with variable lengths.
+const DB_NAMES: &[&str] = &[
+    "postgres",
+    "mysql",
+    "oracle",
+    "mssql",
+    "mongodb",
+    "redis",
+    "elasticsearch",
+    "cassandra",
+    "dynamodb",
+    "bigquery",
+    "snowflake",
+    "redshift",
+    "databricks",
+    "clickhouse",
+    "duckdb",
+    "cockroachdb",
+    "tidb",
+    "mariadb",
+    "sqlite",
+    "neo4j",
+    "influxdb",
+    "timescaledb",
+    "yugabytedb",
+    "planetscale",
+    "singlestore",
+];
+
+/// Low-cardinality: every row is drawn uniformly from `DB_NAMES` (~25 distinct
+/// values across 8 192 rows). Exercises the hot duplicate path.
+fn create_string_array_low_cardinality(size: usize) -> StringArray {
+    let mut rng = StdRng::seed_from_u64(42);
+    StringArray::from_iter_values(
+        (0..size).map(|_| DB_NAMES[rng.random_range(0..DB_NAMES.len())]),
+    )
+}
+
+/// High-cardinality: `db_name_pct` fraction of rows are drawn from `DB_NAMES`;
+/// the rest are near-unique random hex strings ("id_XXXXXXXX").
+/// With 8 192 rows and a 32-bit space the collision probability among the
+/// random strings is < 1 %, giving ~7 800 distinct values in total.
+fn create_string_array_high_cardinality(size: usize, db_name_pct: f32) -> StringArray {
+    let mut rng = StdRng::seed_from_u64(42);
+    let strings: Vec<String> = (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < db_name_pct {
+                DB_NAMES[rng.random_range(0..DB_NAMES.len())].to_string()
+            } else {
+                format!("id_{:08x}", rng.random::<u32>())
+            }
+        })
+        .collect();
+    StringArray::from_iter_values(strings.iter().map(String::as_str))
+}
+
+fn distinct_update_batch_bench(
+    c: &mut Criterion,
+    name: &str,
+    values: &ArrayRef,
+    ignore_nulls: bool,
+) {
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            DistinctArrayAggAccumulator::try_new(&DataType::Utf8, None, ignore_nulls)
+                .unwrap()
+                .update_batch(std::slice::from_ref(values))
+                .unwrap()
+        })
+    });
+}
+
+fn distinct_array_agg_benchmark(c: &mut Criterion) {
+    // --- Low cardinality: ~25 distinct DB names in 8 192 rows ---------------
+    // Realistic production scenario: most rows are duplicates, the HashSet
+    // saturates quickly and the rest of the batch is pure dedup overhead.
+    let values = Arc::new(create_string_array_low_cardinality(8192)) as ArrayRef;
+    distinct_update_batch_bench(
+        c,
+        "distinct_array_agg utf8 low cardinality (~25 distinct)",
+        &values,
+        false,
+    );
+
+    // --- High cardinality: ~5 % DB names, ~95 % near-unique random strings --
+    // Worst-case scenario: almost every row is a new distinct value, so the
+    // accumulator pays the full insertion cost for nearly every row.
+    let values =
+        Arc::new(create_string_array_high_cardinality(8192, 0.05)) as ArrayRef;
+    distinct_update_batch_bench(
+        c,
+        "distinct_array_agg utf8 high cardinality (~7800 distinct, 5% db names)",
+        &values,
+        false,
+    );
+}
+
+criterion_group!(benches, array_agg_benchmark, distinct_array_agg_benchmark);
 criterion_main!(benches);
