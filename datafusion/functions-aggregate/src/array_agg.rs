@@ -28,10 +28,12 @@ use arrow::array::{
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::{SortOptions, filter};
-use arrow::row::{Row, RowConverter, Rows, SortField};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use arrow::row::{Row, RowConverter, Rows, SortField};
 
 use datafusion_common::cast::as_list_array;
+use datafusion_common::hash_utils::{RandomState, create_hashes};
+use datafusion_common::utils::proxy::HashTableAllocExt;
 use datafusion_common::utils::{
     SingleRowListArrayBuilder, compare_rows, get_row_at_idx, take_function_args,
 };
@@ -48,11 +50,9 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
-use datafusion_common::hash_utils::{RandomState, create_hashes};
-use datafusion_common::utils::proxy::HashTableAllocExt;
 use datafusion_macros::user_doc;
-use hashbrown::hash_table::HashTable;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use hashbrown::hash_table::HashTable;
 
 make_udaf_expr_and_func!(
     ArrayAgg,
@@ -1109,7 +1109,8 @@ impl Accumulator for DistinctArrayAggAccumulator {
             + self.map_size
             + self.counts.capacity() * size_of::<u64>()
             + self.hashes_buffer.capacity() * size_of::<u64>()
-            + self.datatype.size() - size_of_val(&self.datatype)
+            + self.datatype.size()
+            - size_of_val(&self.datatype)
     }
 }
 
