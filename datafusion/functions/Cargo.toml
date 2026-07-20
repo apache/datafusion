@@ -352,6 +352,11 @@ required-features = ["regex_expressions"]
 
 [[bench]]
 harness = false
+name = "regexp_instr"
+required-features = ["regex_expressions"]
+
+[[bench]]
+harness = false
 name = "get_field"
 
 [[bench]]

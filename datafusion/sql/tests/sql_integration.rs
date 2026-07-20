@@ -2279,6 +2279,29 @@ fn create_external_table_csv() {
 }
 
 #[test]
+fn create_external_table_multiple_locations() {
+    let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION ('foo.csv', 'bar.csv')";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = plan else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(
+        cmd.locations,
+        vec!["foo.csv".to_string(), "bar.csv".to_string()]
+    );
+}
+
+#[test]
+fn create_external_table_location_with_literal_comma() {
+    let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo,bar.csv'";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = plan else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(cmd.locations, vec!["foo,bar.csv".to_string()]);
+}
+
+#[test]
 fn create_external_table_with_pk() {
     let sql = "CREATE EXTERNAL TABLE t(c1 int, primary key(c1)) STORED AS CSV LOCATION 'foo.csv'";
     let plan = logical_plan(sql).unwrap();
