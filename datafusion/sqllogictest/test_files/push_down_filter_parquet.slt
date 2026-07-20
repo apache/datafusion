@@ -1113,7 +1113,7 @@ statement ok
 CREATE EXTERNAL TABLE i_disj_p (eid INT) STORED AS PARQUET
 LOCATION 'test_files/scratch/push_down_filter_parquet/i_disj_p.parquet';
 
-# Must return only `5`. `NULL NOT IN (2, 3)` is UNKNOWN — that row is dropped.
+# Must return only `5`. `NULL NOT IN (2, 3)` is UNKNOWN, so that row is dropped.
 query I
 SELECT id FROM ao_p WHERE id NOT IN (SELECT eid FROM i_disj_p) ORDER BY id;
 ----
