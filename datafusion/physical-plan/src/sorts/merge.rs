@@ -89,29 +89,6 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Cursors for each input partition. `None` means the input is exhausted
     cursors: Vec<Option<Cursor<C>>>,
 
-    /// Configuration parameter to enable round-robin selection of tied winners of loser tree.
-    ///
-    /// This option controls the tie-breaker strategy and attempts to avoid the
-    /// issue of unbalanced polling between partitions
-    ///
-    /// If `true`, when multiple partitions have the same value, the partition
-    /// that has the fewest poll counts is selected. This strategy ensures that
-    /// multiple partitions with the same value are chosen equally, distributing
-    /// the polling load in a round-robin fashion. This approach balances the
-    /// workload more effectively across partitions and avoids excessive buffer
-    /// growth.
-    ///
-    /// if `false`, partitions with smaller indices are consistently chosen as
-    /// the winners, which can lead to an uneven distribution of polling and potentially
-    /// causing upstream operator buffers for the other partitions to grow
-    /// excessively, as they continued receiving data without consuming it.
-    ///
-    /// For example, an upstream operator like `RepartitionExec` execution would
-    /// keep sending data to certain partitions, but those partitions wouldn't
-    /// consume the data if they weren't selected as winners. This resulted in
-    /// inefficient buffer usage.
-    enable_round_robin_tie_breaker: bool,
-
     /// Flag indicating whether we are in the mode of round-robin
     /// tie breaker for the loser tree winners.
     round_robin_tie_breaker_mode: bool,
@@ -127,7 +104,7 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     current_reset_epoch: usize,
 
     /// Stores the previous value of each partitions for tracking the poll counts on the same value
-    /// when round_robin_tie_breaker is enabled
+    /// Used if and only if round robin tie breaker is enabled, otherwise None
     prev_cursors: Option<Vec<Option<Cursor<C>>>>,
 
     /// Optional number of rows to fetch
@@ -167,7 +144,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             batch_size,
             fetch,
             produced: 0,
-            enable_round_robin_tie_breaker,
         }
     }
 
@@ -371,6 +347,31 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
     }
 
+    /// Whether round-robin selection of tied winners of loser tree is enabled.
+    ///
+    /// This option controls the tie-breaker strategy and attempts to avoid the
+    /// issue of unbalanced polling between partitions
+    ///
+    /// If `true`, when multiple partitions have the same value, the partition
+    /// that has the fewest poll counts is selected. This strategy ensures that
+    /// multiple partitions with the same value are chosen equally, distributing
+    /// the polling load in a round-robin fashion. This approach balances the
+    /// workload more effectively across partitions and avoids excessive buffer
+    /// growth.
+    ///
+    /// if `false`, partitions with smaller indices are consistently chosen as
+    /// the winners, which can lead to an uneven distribution of polling and potentially
+    /// causing upstream operator buffers for the other partitions to grow
+    /// excessively, as they continued receiving data without consuming it.
+    ///
+    /// For example, an upstream operator like `RepartitionExec` execution would
+    /// keep sending data to certain partitions, but those partitions wouldn't
+    /// consume the data if they weren't selected as winners. This resulted in
+    /// inefficient buffer usage.
+    fn round_robin_tie_breaker_enabled(&self) -> bool {
+        self.prev_cursors.is_some()
+    }
+
     fn fetch_reached(&mut self) -> bool {
         self.fetch
             .map(|fetch| self.produced + self.in_progress.len() >= fetch)
@@ -387,8 +388,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             if cursor.is_finished() {
                 // Take the current cursor, leaving `None` in its place
                 let taken = self.cursors[stream_idx].take();
-                if self.enable_round_robin_tie_breaker {
-                    self.prev_cursors.as_mut().expect("prev_cursor should be set when round robin tie breaker is enabled")[stream_idx] = taken;
+                if let Some(prev_cursors) = &mut self.prev_cursors {
+                    prev_cursors[stream_idx] = taken;
                 }
             }
             true
@@ -555,7 +556,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         if cmp_node == 1 {
             let challenger = self.loser_tree[1];
             // If round-robin tie-breaker is enabled and we're at the final comparison (cmp_node == 1)
-            if self.enable_round_robin_tie_breaker {
+            if self.round_robin_tie_breaker_enabled() {
                 match (&self.cursors[winner], &self.cursors[challenger]) {
                     (Some(ac), Some(bc)) => match ac.cmp(bc) {
                         std::cmp::Ordering::Equal => {
