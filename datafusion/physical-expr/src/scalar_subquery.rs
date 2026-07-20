@@ -24,7 +24,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_datafusion_err};
-use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
+use datafusion_expr::physical_planning_context::{ScalarSubqueryResults, SubqueryIndex};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
