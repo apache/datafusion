@@ -32,11 +32,14 @@ use hex;
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
-use std::fmt::{self, Display};
+use std::fmt::{self, Debug, Display, Formatter};
 use std::num::NonZeroUsize;
+use std::ops::Deref;
 use std::str::FromStr;
 #[cfg(feature = "parquet_encryption")]
 use std::sync::Arc;
+use arrow::buffer::Buffer;
+use arrow_ipc::reader::{BufferAllocationStrategy, FileDecoder, StreamDecoder};
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -583,6 +586,72 @@ impl Display for SpillCompression {
     }
 }
 
+#[derive(Default, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BufferAllocationStrategyWrapper(arrow_ipc::reader::BufferAllocationStrategy);
+
+impl Deref for BufferAllocationStrategyWrapper {
+    type Target = BufferAllocationStrategy;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<BufferAllocationStrategy> for BufferAllocationStrategyWrapper {
+    fn from(value: BufferAllocationStrategy) -> Self {
+        Self(value)
+    }
+}
+
+impl Into<BufferAllocationStrategy> for BufferAllocationStrategyWrapper {
+    fn into(self) -> BufferAllocationStrategy {
+        self.0
+    }
+}
+
+impl Debug for BufferAllocationStrategyWrapper {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for BufferAllocationStrategyWrapper {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "shared" | "" => Ok(Self(BufferAllocationStrategy::Shared)),
+            "owned_if_free" | "owned-if-free" => Ok(Self(BufferAllocationStrategy::OwnedIfFree)),
+            "owned" => Ok(Self(BufferAllocationStrategy::Owned)),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid Arrow IPC buffer allocation strategy type: {other}. Expected one of: shared, owned_if_free, owned"
+            ))),
+        }
+    }
+}
+
+impl ConfigField for BufferAllocationStrategyWrapper {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = BufferAllocationStrategyWrapper::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for BufferAllocationStrategyWrapper {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self.0 {
+            BufferAllocationStrategy::Shared => "shared",
+            BufferAllocationStrategy::OwnedIfFree => "owned_if_free",
+            BufferAllocationStrategy::Owned => "owned",
+        };
+        write!(f, "{str}")
+    }
+}
+
 /// A `usize` configuration value that rejects zero when set from strings.
 ///
 /// Use this for options where zero is never a meaningful runtime value.
@@ -813,6 +882,9 @@ config_namespace! {
         /// larger spill files. In contrast, zstd achieves
         /// higher compression ratios at the cost of slower (de)compression speed.
         pub spill_compression: SpillCompression, default = SpillCompression::Uncompressed
+
+        /// In Arrow IPC reader whether to read back each buffer owned, or shared betwwen
+        pub ipc_buffer_allocation_strategy: BufferAllocationStrategyWrapper, default = BufferAllocationStrategyWrapper::default()
 
         /// Specifies the reserved memory for each spillable sort operation to
         /// facilitate an in-memory merge.

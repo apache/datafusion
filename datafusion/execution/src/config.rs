@@ -16,7 +16,7 @@
 // under the License.
 
 use std::{collections::HashMap, sync::Arc};
-
+use arrow::ipc::reader::BufferAllocationStrategy;
 use datafusion_common::{
     Result, ScalarValue,
     config::{ConfigExtension, ConfigNonZeroUsize, ConfigOptions, SpillCompression},
@@ -266,6 +266,10 @@ impl SessionConfig {
     /// Compression codec for spill file
     pub fn spill_compression(&self) -> SpillCompression {
         self.options.execution.spill_compression
+    }
+    /// Compression codec for spill file
+    pub fn buffer_allocation_strategy(&self) -> BufferAllocationStrategy {
+        self.options.execution.ipc_buffer_allocation_strategy.into()
     }
 
     /// Selects a name for the default catalog and schema

@@ -47,7 +47,7 @@ use arrow::ipc::{
 use arrow::record_batch::RecordBatch;
 use arrow_data::ArrayDataBuilder;
 use arrow_ipc::CompressionType;
-
+use arrow_ipc::reader::BufferAllocationStrategy;
 use datafusion_common::Result;
 use datafusion_common::config::SpillCompression;
 use datafusion_execution::RecordBatchStream;
@@ -89,11 +89,15 @@ impl SpillReaderStream {
         schema: SchemaRef,
         spill_file: Arc<dyn SpillFile>,
         max_record_batch_memory: Option<usize>,
+        buffer_allocation_strategy: BufferAllocationStrategy,
     ) -> Result<Self> {
         let byte_stream = spill_file.read_stream()?;
         // DataFusion controls what it writes so it can trust its own IPC output,
         // matching the behavior of the previous StreamReader-based implementation.
-        let decoder = unsafe { StreamDecoder::new().with_skip_validation(true) };
+        let decoder = unsafe {
+            StreamDecoder::new().with_skip_validation(true)
+        }
+          .with_buffer_allocation_strategy(buffer_allocation_strategy);
         Ok(Self {
             schema,
             decoder,

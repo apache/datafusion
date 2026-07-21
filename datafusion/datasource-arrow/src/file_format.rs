@@ -204,8 +204,8 @@ impl FileFormat for ArrowFormat {
         let mut source: Arc<dyn FileSource> =
             match is_object_in_arrow_ipc_file_format(object_store, object_location).await
             {
-                Ok(true) => Arc::new(ArrowSource::new_file_source(table_schema)),
-                Ok(false) => Arc::new(ArrowSource::new_stream_file_source(table_schema)),
+                Ok(true) => Arc::new(ArrowSource::new_file_source(table_schema).with_buffer_allocation_strategy(state.config().buffer_allocation_strategy())),
+                Ok(false) => Arc::new(ArrowSource::new_stream_file_source(table_schema).with_buffer_allocation_strategy(state.config().buffer_allocation_strategy())),
                 Err(e) => Err(e)?,
             };
 
