@@ -24,7 +24,6 @@ use std::sync::Arc;
 use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::config::CsvOptions;
-use datafusion_common::format::ExplainFormat;
 use datafusion_common::{
     DataFusionError, JoinType, NullEquality, Result, internal_datafusion_err,
     internal_err, not_impl_err,
@@ -86,7 +85,6 @@ use datafusion_physical_plan::joins::{
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
-use datafusion_physical_plan::metrics::MetricCategory;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::proto::{
@@ -834,8 +832,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::NestedLoopJoin(_) => {
                 NestedLoopJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Analyze(analyze) => {
-                self.try_into_analyze_physical_plan(analyze, ctx, proto_converter)
+            PhysicalPlanType::Analyze(_) => {
+                AnalyzeExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::JsonSink(sink) => {
                 self.try_into_json_sink_physical_plan(sink, ctx, proto_converter)
@@ -897,14 +895,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
         if let Some(node) = plan.try_to_proto(&encode_ctx)? {
             return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<AnalyzeExec>() {
-            return protobuf::PhysicalPlanNode::try_from_analyze_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
         }
 
         if let Some(exec) = plan.downcast_ref::<HashJoinExec>() {
@@ -2159,48 +2149,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         NestedLoopJoinExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `AnalyzeExec` deserializes itself via `AnalyzeExec::try_from_proto`"
+    )]
     fn try_into_analyze_physical_plan(
         &self,
-        analyze: &protobuf::AnalyzeExecNode,
+        _analyze: &protobuf::AnalyzeExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&analyze.input, ctx, proto_converter)?;
-        let metric_categories = if analyze.has_metric_categories {
-            let cats: Result<Vec<MetricCategory>> = analyze
-                .metric_categories
-                .iter()
-                .map(|s| s.parse::<MetricCategory>())
-                .collect();
-            Some(cats?)
-        } else {
-            None
+        let plan_decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
         };
-        let pb_format =
-            protobuf::ExplainFormat::try_from(analyze.format).map_err(|_| {
-                DataFusionError::Internal(format!(
-                    "Received an AnalyzeExecNode message with unknown ExplainFormat {}",
-                    analyze.format
-                ))
-            })?;
-        let format = match pb_format {
-            protobuf::ExplainFormat::Indent => ExplainFormat::Indent,
-            protobuf::ExplainFormat::Tree => ExplainFormat::Tree,
-            protobuf::ExplainFormat::Pgjson => ExplainFormat::PostgresJSON,
-            protobuf::ExplainFormat::Graphviz => ExplainFormat::Graphviz,
-        };
-        Ok(Arc::new(
-            AnalyzeExec::builder(
-                analyze.verbose,
-                analyze.show_statistics,
-                input,
-                Arc::new(convert_required!(analyze.schema)?),
-            )
-            .with_metric_categories(metric_categories)
-            .with_format(format)
-            .build(),
-        ))
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&plan_decoder);
+        AnalyzeExec::try_from_proto(self.node(), &decode_ctx)
     }
 
     fn try_into_json_sink_physical_plan(
@@ -2596,38 +2560,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `AnalyzeExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_analyze_exec(
         exec: &AnalyzeExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
+        let plan_encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let (has_metric_categories, metric_categories) = match exec.metric_categories() {
-            Some(cats) => (true, cats.iter().map(|c| c.to_string()).collect()),
-            None => (false, vec![]),
         };
-        let format = match exec.format() {
-            ExplainFormat::Indent => protobuf::ExplainFormat::Indent,
-            ExplainFormat::Tree => protobuf::ExplainFormat::Tree,
-            ExplainFormat::PostgresJSON => protobuf::ExplainFormat::Pgjson,
-            ExplainFormat::Graphviz => protobuf::ExplainFormat::Graphviz,
-        } as i32;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Analyze(Box::new(
-                protobuf::AnalyzeExecNode {
-                    verbose: exec.verbose(),
-                    show_statistics: exec.show_statistics(),
-                    input: Some(Box::new(input)),
-                    schema: Some(exec.schema().as_ref().try_into()?),
-                    has_metric_categories,
-                    metric_categories,
-                    format,
-                },
-            ))),
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&plan_encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("AnalyzeExec did not serialize itself")
         })
     }
 

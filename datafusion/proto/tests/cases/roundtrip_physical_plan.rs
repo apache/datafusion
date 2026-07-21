@@ -77,6 +77,7 @@ use datafusion::physical_plan::joins::{
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion::physical_plan::metrics::MetricCategory;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -101,6 +102,7 @@ use datafusion_common::config::{ConfigOptions, TableParquetOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::format::ExplainFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -1948,14 +1950,43 @@ fn roundtrip_like() -> Result<()> {
 
 #[test]
 fn roundtrip_analyze() -> Result<()> {
-    let field_a = Field::new("plan_type", DataType::Utf8, false);
-    let field_b = Field::new("plan", DataType::Utf8, false);
-    let schema = Schema::new(vec![field_a, field_b]);
-    let input = Arc::new(PlaceholderRowExec::new(Arc::new(schema.clone())));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("plan_type", DataType::Utf8, false),
+        Field::new("plan", DataType::Utf8, false),
+    ]));
+    let input = Arc::new(PlaceholderRowExec::new(Arc::clone(&schema)));
+    let metric_categories = vec![MetricCategory::Rows, MetricCategory::Timing];
+    let analyze = Arc::new(
+        AnalyzeExec::builder(true, true, input, Arc::clone(&schema))
+            .with_metric_categories(Some(metric_categories.clone()))
+            .with_format(ExplainFormat::Tree)
+            .build(),
+    );
 
-    roundtrip_test(Arc::new(
-        AnalyzeExec::builder(false, false, input, Arc::new(schema)).build(),
-    ))
+    let ctx = SessionContext::new();
+    let roundtripped = roundtrip_test_and_return(
+        analyze,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let roundtripped = roundtripped.downcast_ref::<AnalyzeExec>().unwrap();
+
+    assert_eq!(roundtripped.schema(), schema);
+    assert!(roundtripped.verbose());
+    assert!(roundtripped.show_statistics());
+    assert_eq!(
+        roundtripped.metric_categories(),
+        Some(metric_categories.as_slice())
+    );
+    assert_eq!(roundtripped.format(), &ExplainFormat::Tree);
+    assert!(
+        roundtripped
+            .input()
+            .downcast_ref::<PlaceholderRowExec>()
+            .is_some()
+    );
+    Ok(())
 }
 
 #[test]
