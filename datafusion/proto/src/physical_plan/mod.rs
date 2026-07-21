@@ -1184,7 +1184,7 @@ pub trait PhysicalPlanNodeExt: Sized {
     )]
     fn try_into_projection_physical_plan(
         &self,
-        _projection: &protobuf::ProjectionExecNode,
+        projection: &protobuf::ProjectionExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1193,7 +1193,16 @@ pub trait PhysicalPlanNodeExt: Sized {
             proto_converter,
         };
         let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
-        ProjectionExec::try_from_proto(self.node(), &decode_ctx)
+        // `try_from_proto` takes the enclosing `PhysicalPlanNode`, while this
+        // deprecated method is driven by the `ProjectionExecNode` argument.
+        // Re-wrap the argument so the decoded plan keeps depending on it rather
+        // than on `self`, which a caller may not have kept in sync.
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Projection(Box::new(
+                projection.clone(),
+            ))),
+        };
+        ProjectionExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_filter_physical_plan(

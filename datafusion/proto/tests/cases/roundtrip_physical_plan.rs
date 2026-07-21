@@ -2392,6 +2392,64 @@ async fn roundtrip_physical_plan_node() {
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
 }
 
+/// The deprecated `try_into_projection_physical_plan` shim now delegates to
+/// [`ProjectionExec::try_from_proto`], which reads the enclosing
+/// `PhysicalPlanNode` rather than a `ProjectionExecNode`. Assert the shim still
+/// decodes the node passed as an argument, not `self`, so an out-of-tree caller
+/// that passes a projection unrelated to `self` keeps the old behaviour.
+#[test]
+fn deprecated_projection_shim_decodes_argument_not_self() -> Result<()> {
+    use datafusion_proto::protobuf::PhysicalPlanNode;
+    use datafusion_proto::protobuf::physical_plan_node::PhysicalPlanType;
+
+    let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
+    let projection = Arc::new(ProjectionExec::try_new(
+        vec![ProjectionExpr::new(
+            col("a", &schema)?,
+            "renamed".to_string(),
+        )],
+        input,
+    )?);
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let projection_node = PhysicalPlanNode::try_from_physical_plan_with_converter(
+        projection,
+        &codec,
+        &proto_converter,
+    )?;
+    let Some(PhysicalPlanType::Projection(projection_exec_node)) =
+        &projection_node.physical_plan_type
+    else {
+        panic!("expected a Projection node, got {projection_node:?}");
+    };
+
+    // `self` is deliberately a different plan variant than the argument.
+    let unrelated_node = PhysicalPlanNode::try_from_physical_plan_with_converter(
+        Arc::new(EmptyExec::new(Arc::new(schema))),
+        &codec,
+        &proto_converter,
+    )?;
+
+    let session_ctx = SessionContext::new();
+    let task_ctx = session_ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    #[allow(deprecated)]
+    let decoded = unrelated_node.try_into_projection_physical_plan(
+        projection_exec_node,
+        &decode_ctx,
+        &proto_converter,
+    )?;
+
+    let decoded = decoded
+        .downcast_ref::<ProjectionExec>()
+        .expect("decoded plan should be a ProjectionExec");
+    assert_eq!(decoded.expr().len(), 1);
+    assert_eq!(decoded.expr()[0].alias, "renamed");
+    Ok(())
+}
+
 /// Helper function to create a SessionContext with all TPC-H tables registered as external tables
 async fn tpch_context() -> Result<SessionContext> {
     use datafusion_common::test_util::datafusion_test_data;
