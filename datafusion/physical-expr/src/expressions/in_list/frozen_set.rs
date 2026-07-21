@@ -22,6 +22,18 @@ use std::hash::{BuildHasher, Hash};
 use datafusion_common::{Result, exec_datafusion_err};
 use hashbrown::{DefaultHashBuilder, HashTable};
 
+/// Computes the keyed hash used to place values in a [`FrozenSet`].
+pub(super) trait FrozenSetHash<V> {
+    fn hash_one(&self, value: V) -> u64;
+}
+
+impl<V: Hash> FrozenSetHash<V> for DefaultHashBuilder {
+    #[inline(always)]
+    fn hash_one(&self, value: V) -> u64 {
+        BuildHasher::hash_one(self, value)
+    }
+}
+
 /// Immutable set optimized for repeated membership tests.
 ///
 /// Each hash bucket holds two values directly. Values that collide beyond those
@@ -30,8 +42,8 @@ use hashbrown::{DefaultHashBuilder, HashTable};
 ///
 /// The first member is used as the empty-slot sentinel and handled before
 /// lookup, so primary slots store `V` directly without an `Option<V>` wrapper.
-pub(super) struct FrozenSet<V> {
-    hash_builder: DefaultHashBuilder,
+pub(super) struct FrozenSet<V, H = DefaultHashBuilder> {
+    hash_builder: H,
     sentinel: Option<V>,
     buckets: Box<[[V; 2]]>,
     overflowed: Box<[bool]>,
@@ -43,9 +55,19 @@ where
     V: Copy + Eq + Hash,
 {
     pub(super) fn try_new(values: &[V]) -> Result<Self> {
+        Self::try_new_with_hasher(values, DefaultHashBuilder::default())
+    }
+}
+
+impl<V, H> FrozenSet<V, H>
+where
+    V: Copy + Eq,
+    H: FrozenSetHash<V>,
+{
+    pub(super) fn try_new_with_hasher(values: &[V], hash_builder: H) -> Result<Self> {
         let Some((&sentinel, values)) = values.split_first() else {
             return Ok(Self {
-                hash_builder: DefaultHashBuilder::default(),
+                hash_builder,
                 sentinel: None,
                 buckets: Box::default(),
                 overflowed: Box::default(),
@@ -55,7 +77,7 @@ where
 
         if values.is_empty() {
             return Ok(Self {
-                hash_builder: DefaultHashBuilder::default(),
+                hash_builder,
                 sentinel: Some(sentinel),
                 buckets: Box::default(),
                 overflowed: Box::default(),
@@ -71,7 +93,7 @@ where
             .checked_mul(2)
             .ok_or_else(|| exec_datafusion_err!("FrozenSet capacity overflow"))?;
         let mut set = Self {
-            hash_builder: DefaultHashBuilder::default(),
+            hash_builder,
             sentinel: Some(sentinel),
             buckets: vec![[sentinel; 2]; bucket_count].into_boxed_slice(),
             overflowed: vec![false; bucket_count].into_boxed_slice(),
@@ -110,7 +132,7 @@ where
             .entry(
                 hash,
                 |stored| *stored == value,
-                |stored| hash_builder.hash_one(stored),
+                |stored| hash_builder.hash_one(*stored),
             )
             .or_insert(value);
         self.overflowed[bucket] = true;
@@ -162,6 +184,14 @@ mod tests {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct Colliding(u64);
 
+    struct ConstantHash;
+
+    impl FrozenSetHash<u64> for ConstantHash {
+        fn hash_one(&self, _value: u64) -> u64 {
+            0
+        }
+    }
+
     impl Hash for Colliding {
         fn hash<H: Hasher>(&self, state: &mut H) {
             0_u8.hash(state);
@@ -209,5 +239,13 @@ mod tests {
         let set = FrozenSet::try_new(&values).unwrap();
         assert!(values.iter().all(|&value| set.contains(value)));
         assert!((128..256).all(|value| !set.contains(Colliding(value))));
+    }
+
+    #[test]
+    fn handles_custom_hash_collisions() {
+        let values = (0_u64..128).collect::<Vec<_>>();
+        let set = FrozenSet::try_new_with_hasher(&values, ConstantHash).unwrap();
+        assert!(values.iter().all(|&value| set.contains(value)));
+        assert!((128..256).all(|value| !set.contains(value)));
     }
 }

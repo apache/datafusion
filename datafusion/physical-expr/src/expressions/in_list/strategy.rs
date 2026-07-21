@@ -31,13 +31,24 @@ use arrow::datatypes::{
 use datafusion_common::Result;
 
 use super::array_static_filter::ArrayStaticFilter;
+use super::byte_view_filter::instantiate_byte_view_filter;
 use super::primitive_filter::*;
 use super::static_filter::StaticFilter;
 
 type StaticFilterRef = Arc<dyn StaticFilter + Send + Sync>;
 
-pub(super) fn instantiate_static_filter(in_array: ArrayRef) -> Result<StaticFilterRef> {
+pub(super) fn instantiate_static_filter(
+    in_array: ArrayRef,
+    expr_data_type: &DataType,
+) -> Result<StaticFilterRef> {
     let in_array = flatten_dictionary_haystack(in_array)?;
+
+    // Byte-view filters inspect the physical view representation directly.
+    if dictionary_value_type(expr_data_type) == in_array.data_type()
+        && let Some(filter) = instantiate_byte_view_filter(&in_array)?
+    {
+        return Ok(filter);
+    }
 
     if let Some(filter) = instantiate_branchless_filter(&in_array)? {
         return Ok(filter);
@@ -48,6 +59,13 @@ pub(super) fn instantiate_static_filter(in_array: ArrayRef) -> Result<StaticFilt
     }
 
     instantiate_standard_filter(in_array)
+}
+
+fn dictionary_value_type(mut data_type: &DataType) -> &DataType {
+    while let DataType::Dictionary(_, value_type) = data_type {
+        data_type = value_type;
+    }
+    data_type
 }
 
 fn flatten_dictionary_haystack(in_array: ArrayRef) -> Result<ArrayRef> {

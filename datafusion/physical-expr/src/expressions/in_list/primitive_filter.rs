@@ -402,7 +402,7 @@ where
     }
 
     #[inline]
-    fn contains_slice(
+    pub(super) fn contains_slice(
         &self,
         values: &[PrimitiveFilterNative<T>],
         nulls: Option<&NullBuffer>,
