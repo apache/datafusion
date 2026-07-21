@@ -308,6 +308,51 @@ impl FileSource for CsvSource {
             DisplayFormatType::TreeRender => Ok(()),
         }
     }
+
+    /// Emit a `CsvScan` node wrapping the shared base config. Kept byte-identical
+    /// to the former `try_from_data_source_exec` CsvScan branch in
+    /// `datafusion-proto`.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        base: &FileScanConfig,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        let node = protobuf::CsvScanExecNode {
+            base_conf: Some(base.to_proto_conf(ctx)?),
+            has_header: self.has_header(),
+            delimiter: proto_byte_to_string(self.delimiter(), "delimiter")?,
+            quote: proto_byte_to_string(self.quote(), "quote")?,
+            optional_escape: self
+                .escape()
+                .map(|escape| {
+                    Ok::<_, DataFusionError>(
+                        protobuf::csv_scan_exec_node::OptionalEscape::Escape(
+                            proto_byte_to_string(escape, "escape")?,
+                        ),
+                    )
+                })
+                .transpose()?,
+            optional_comment: self
+                .comment()
+                .map(|comment| {
+                    Ok::<_, DataFusionError>(
+                        protobuf::csv_scan_exec_node::OptionalComment::Comment(
+                            proto_byte_to_string(comment, "comment")?,
+                        ),
+                    )
+                })
+                .transpose()?,
+            newlines_in_values: self.newlines_in_values(),
+            truncate_rows: self.truncate_rows(),
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::CsvScan(node)),
+        }))
+    }
 }
 
 impl FileOpener for CsvOpener {
@@ -500,4 +545,105 @@ pub async fn plan_to_csv(
     }
 
     Ok(())
+}
+
+/// Convert a single byte to its one-character UTF-8 string form for the wire.
+/// Local copy of `datafusion-proto`'s `byte_to_string`; kept byte-identical.
+#[cfg(feature = "proto")]
+fn proto_byte_to_string(b: u8, description: &str) -> Result<String> {
+    let bytes = &[b];
+    let s = std::str::from_utf8(bytes).map_err(|_| {
+        datafusion_common::internal_datafusion_err!(
+            "Invalid CSV {description}: can not represent {bytes:0x?} as utf8"
+        )
+    })?;
+    Ok(s.to_owned())
+}
+
+/// Convert a one-character string from the wire back to a single byte.
+/// Local copy of `datafusion-proto`'s `str_to_byte`; kept byte-identical.
+#[cfg(feature = "proto")]
+fn proto_str_to_byte(s: &str, description: &str) -> Result<u8> {
+    datafusion_common::assert_eq_or_internal_err!(
+        s.len(),
+        1,
+        "Invalid CSV {description}: expected single character, got {s}"
+    );
+    Ok(s.as_bytes()[0])
+}
+
+#[cfg(feature = "proto")]
+impl CsvSource {
+    /// Reconstruct a `DataSourceExec` (wrapping a `FileScanConfig` over a
+    /// `CsvSource`) from a `CsvScan` [`PhysicalPlanNode`].
+    ///
+    /// The inverse of [`FileSource::try_to_proto`] on `CsvSource`; kept
+    /// byte-compatible with the former `try_into_csv_scan_physical_plan` in
+    /// `datafusion-proto`.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::config::CsvOptions;
+        use datafusion_datasource::file_compression_type::FileCompressionType;
+        use datafusion_datasource::file_scan_config::{
+            FileScanConfig, FileScanConfigBuilder,
+        };
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_proto_models::protobuf;
+
+        let scan = match &node.physical_plan_type {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::CsvScan(scan)) => scan,
+            _ => {
+                return datafusion_common::internal_err!(
+                    "PhysicalPlanNode is not a CsvScan"
+                );
+            }
+        };
+
+        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "CsvScanExecNode is missing required field 'base_conf'"
+            )
+        })?;
+
+        let escape = match &scan.optional_escape {
+            Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(escape)) => {
+                Some(proto_str_to_byte(escape, "escape")?)
+            }
+            None => None,
+        };
+        let comment = match &scan.optional_comment {
+            Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(comment)) => {
+                Some(proto_str_to_byte(comment, "comment")?)
+            }
+            None => None,
+        };
+
+        // Parse table schema with partition columns.
+        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
+
+        let csv_options = CsvOptions {
+            has_header: Some(scan.has_header),
+            delimiter: proto_str_to_byte(&scan.delimiter, "delimiter")?,
+            quote: proto_str_to_byte(&scan.quote, "quote")?,
+            newlines_in_values: Some(scan.newlines_in_values),
+            ..Default::default()
+        };
+        let source = Arc::new(
+            CsvSource::new(table_schema)
+                .with_csv_options(csv_options)
+                .with_escape(escape)
+                .with_comment(comment),
+        );
+
+        let conf = FileScanConfigBuilder::from(FileScanConfig::from_proto_conf(
+            base_conf, ctx, source,
+        )?)
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+        .build();
+        Ok(DataSourceExec::from_data_source(conf))
+    }
 }

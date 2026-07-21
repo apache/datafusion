@@ -71,6 +71,43 @@ pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64>;
+
+    /// Serialize this sink into a full [`PhysicalPlanNode`] (a `DataSinkExec`
+    /// wrapping this sink), if it knows how.
+    ///
+    /// This is the `DataSink` analog of
+    /// [`FileSource::try_to_proto`](crate::file::FileSource::try_to_proto):
+    /// [`DataSinkExec::try_to_proto`] does the shared work of encoding the child
+    /// plan and the required output ordering, then hands the concrete sink the
+    /// finished pieces so it only appends its own format-specific fields around
+    /// the shared [`FileSinkConfig`](crate::file_sink_config::FileSinkConfig)
+    /// spine via [`FileSinkConfig::to_proto`](crate::file_sink_config::FileSinkConfig::to_proto).
+    ///
+    /// * `input` — the already-encoded child plan node.
+    /// * `sort_order` — the already-encoded required output ordering, if any.
+    /// * `sink_schema` — the exec's (count) output schema; serialized into the
+    ///   node's `sink_schema` field for byte compatibility (the decoder
+    ///   recomputes it from the input, so it is otherwise informational).
+    ///
+    /// The sink carries no child physical expressions of its own, so no encode
+    /// ctx is needed here (contrast with `FileSource::try_to_proto`).
+    ///
+    /// * `Ok(None)` (the default) — this sink has no proto hook; the caller
+    ///   falls back to the central downcast chain in `datafusion-proto`.
+    /// * `Ok(Some(node))` — fully serialized; the caller must not fall back.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _input: datafusion_proto_models::protobuf::PhysicalPlanNode,
+        _sort_order: Option<
+            datafusion_proto_models::protobuf::PhysicalSortExprNodeCollection,
+        >,
+        _sink_schema: &Schema,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        Ok(None)
+    }
 }
 
 impl dyn DataSink {
@@ -267,6 +304,47 @@ impl ExecutionPlan for DataSinkExec {
     /// Returns the metrics of the underlying [DataSink]
     fn metrics(&self) -> Option<MetricsSet> {
         self.sink.metrics()
+    }
+
+    /// Encodes the shared parts of a sink node — the child plan and the optional
+    /// required output ordering — then delegates the format-specific wrapping to
+    /// the concrete [`DataSink::try_to_proto`]. Keeps the format-specific wire
+    /// logic in the format crate, mirroring `DataSourceExec::try_to_proto`.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_physical_expr::PhysicalSortExpr;
+        use datafusion_proto_models::protobuf;
+
+        let input = ctx.encode_child(self.input())?;
+
+        // Required output ordering: only the child expressions need the ctx; the
+        // asc/nulls_first wrapping is plain data inlined into a
+        // `PhysicalSortExprNode` (same shape as `sorts/sort.rs`).
+        let sort_order = match self.sort_order() {
+            Some(requirements) => {
+                let nodes = requirements
+                    .iter()
+                    .map(|requirement| {
+                        let expr: PhysicalSortExpr = requirement.to_owned().into();
+                        Ok(protobuf::PhysicalSortExprNode {
+                            expr: Some(Box::new(ctx.encode_expr(&expr.expr)?)),
+                            asc: !expr.options.descending,
+                            nulls_first: expr.options.nulls_first,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Some(protobuf::PhysicalSortExprNodeCollection {
+                    physical_sort_expr_nodes: nodes,
+                })
+            }
+            None => None,
+        };
+
+        self.sink()
+            .try_to_proto(input, sort_order, self.schema().as_ref())
     }
 }
 

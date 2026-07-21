@@ -812,6 +812,102 @@ impl ExecutionPlan for FilterExec {
                     .ok()
             })
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        let expr = ctx.encode_expr(self.predicate())?;
+        // Preserve the exact wire format: `None` (full projection) is serialized
+        // as the identity projection `[0, 1, .., num_fields - 1]` so that it is
+        // distinguishable from an explicit projection on decode.
+        let projection = match self.projection() {
+            None => (0..self.input().schema().fields().len())
+                .map(|i| i as u32)
+                .collect(),
+            Some(v) => v.iter().map(|x| *x as u32).collect(),
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Filter(Box::new(
+                    protobuf::FilterExecNode {
+                        input: Some(Box::new(input)),
+                        expr: Some(expr),
+                        default_filter_selectivity: self.default_selectivity() as u32,
+                        projection,
+                        batch_size: self.batch_size() as u32,
+                        fetch: self.fetch().map(|f| f as u32),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl FilterExec {
+    /// Reconstruct a [`FilterExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`]: it takes the whole
+    /// [`PhysicalPlanNode`] so every plan's `try_from_proto` shares one
+    /// signature.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let filter = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Filter,
+            "FilterExec",
+        );
+        let input =
+            ctx.decode_required_child(filter.input.as_deref(), "FilterExec", "input")?;
+        let predicate = ctx.decode_required_expr(
+            filter.expr.as_ref(),
+            input.schema().as_ref(),
+            "FilterExec",
+            "expr",
+        )?;
+
+        let filter_selectivity = filter.default_filter_selectivity.try_into();
+        // Preserve the `None` state across proto boundaries. Proto cannot distinguish
+        // between `None` (full projection) and `Some(vec![])` (empty projection) since
+        // both serialize as an empty list. If all columns are included, we reconstruct
+        // `None` to avoid losing this semantic distinction on deserialization.
+        let num_fields = input.schema().fields().len();
+        let mut is_full_projection = filter.projection.len() == num_fields;
+        let mut projection_vec: Vec<usize> = Vec::with_capacity(filter.projection.len());
+        for (i, idx) in filter.projection.iter().enumerate() {
+            let idx = *idx as usize;
+            is_full_projection &= idx == i;
+            projection_vec.push(idx);
+        }
+        let projection = if is_full_projection {
+            None
+        } else {
+            Some(projection_vec)
+        };
+        let filter = FilterExecBuilder::new(predicate, input)
+            .apply_projection(projection)?
+            .with_batch_size(filter.batch_size as usize)
+            .with_fetch(filter.fetch.map(|f| f as usize))
+            .build()?;
+        match filter_selectivity {
+            Ok(filter_selectivity) => Ok(Arc::new(
+                filter.with_default_selectivity(filter_selectivity)?,
+            )),
+            Err(_) => Err(datafusion_common::internal_datafusion_err!(
+                "filter_selectivity in PhysicalPlanNode is invalid "
+            )),
+        }
+    }
 }
 
 impl EmbeddedProjection for FilterExec {

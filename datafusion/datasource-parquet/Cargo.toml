@@ -46,6 +46,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-proto-models = { workspace = true, optional = true }
 datafusion-pruning = { workspace = true }
 datafusion-session = { workspace = true }
 futures = { workspace = true }
@@ -74,6 +75,13 @@ name = "datafusion_datasource_parquet"
 path = "src/mod.rs"
 
 [features]
+# Enables `FileSource::try_to_proto` on `ParquetSource` and the `ParquetScan`
+# decode entry point. Mirrors the `proto` feature on `datafusion-datasource-csv`.
+proto = [
+    "dep:datafusion-proto-models",
+    "datafusion-datasource/proto",
+    "datafusion-physical-plan/proto",
+]
 parquet_encryption = [
     "parquet/encryption",
     "datafusion-common/parquet_encryption",

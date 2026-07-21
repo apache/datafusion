@@ -62,6 +62,7 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_execution::TaskContext;
+use datafusion_expr::execution_props::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalPlanNode};
@@ -108,6 +109,15 @@ pub trait ExecutionPlanDecode {
         node: &PhysicalExprNode,
         input_schema: &Schema,
     ) -> Result<Arc<dyn PhysicalExpr>>;
+
+    /// Deserialize a child plan within a scope where `results` is the active
+    /// scalar-subquery-results container, so `ScalarSubqueryExpr` nodes anywhere
+    /// in the child subtree resolve against it. Used only by `ScalarSubqueryExec`.
+    fn decode_plan_with_scalar_subquery_results(
+        &self,
+        node: &PhysicalPlanNode,
+        results: ScalarSubqueryResults,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// The session task context, used by plans that need the function registry
     /// or session configuration. Never exposes the proto extension codec.
@@ -213,6 +223,28 @@ impl<'a> ExecutionPlanDecodeCtx<'a> {
         node: &PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.decoder.decode_plan(node)
+    }
+
+    /// Deserialize a slice of child plans (the repeated-`inputs` shape used by
+    /// `UnionExec`, `InterleaveExec`, …). Symmetric with
+    /// [`ExecutionPlanEncodeCtx::encode_children`].
+    pub fn decode_children<'b, I>(&self, nodes: I) -> Result<Vec<Arc<dyn ExecutionPlan>>>
+    where
+        I: IntoIterator<Item = &'b PhysicalPlanNode>,
+    {
+        nodes.into_iter().map(|n| self.decode_child(n)).collect()
+    }
+
+    /// Deserialize a child plan within a scope carrying `results` as the active
+    /// scalar-subquery-results container (used only by `ScalarSubqueryExec`, so
+    /// that `ScalarSubqueryExpr` nodes in the child subtree resolve against it).
+    pub fn decode_child_with_scalar_subquery_results(
+        &self,
+        node: &PhysicalPlanNode,
+        results: ScalarSubqueryResults,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.decoder
+            .decode_plan_with_scalar_subquery_results(node, results)
     }
 
     /// Deserialize a required child plan, producing a uniform "missing required

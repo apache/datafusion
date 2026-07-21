@@ -1553,6 +1553,134 @@ impl ExecutionPlan for SortExec {
             updated_node: Some(new_sort),
         })
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        // A PhysicalSortExpr is a PhysicalExpr + SortOptions. The expr is encoded
+        // through the ctx; the SortOptions wrapping into a PhysicalSortExprNode
+        // (asc/nulls_first) is plain data and inlined here.
+        let expr = self
+            .expr()
+            .iter()
+            .map(|sort_expr| {
+                let sort_node = Box::new(protobuf::PhysicalSortExprNode {
+                    expr: Some(Box::new(ctx.encode_expr(&sort_expr.expr)?)),
+                    asc: !sort_expr.options.descending,
+                    nulls_first: sort_expr.options.nulls_first,
+                });
+                Ok(protobuf::PhysicalExprNode {
+                    expr_id: None,
+                    expr_type: Some(protobuf::physical_expr_node::ExprType::Sort(
+                        sort_node,
+                    )),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let dynamic_filter = match self.dynamic_filter_expr() {
+            Some(df) => {
+                let df_expr: Arc<dyn PhysicalExpr> = df;
+                Some(ctx.encode_expr(&df_expr)?)
+            }
+            None => None,
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Sort(Box::new(
+                    protobuf::SortExecNode {
+                        input: Some(Box::new(input)),
+                        expr,
+                        fetch: match self.fetch() {
+                            Some(n) => n as i64,
+                            None => -1,
+                        },
+                        preserve_partitioning: self.preserve_partitioning(),
+                        dynamic_filter,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl SortExec {
+    /// Reconstruct a [`SortExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`]: it takes the whole
+    /// [`PhysicalPlanNode`] and decodes the child plan and sort expressions
+    /// recursively through the [`ExecutionPlanDecodeCtx`]. The `SortOptions`
+    /// (asc/nulls_first) are read directly off the plain `PhysicalSortExprNode`.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    /// [`ExecutionPlanDecodeCtx`]: crate::proto::ExecutionPlanDecodeCtx
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_expr_node::ExprType;
+        let sort = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Sort,
+            "SortExec",
+        );
+        let input =
+            ctx.decode_required_child(sort.input.as_deref(), "SortExec", "input")?;
+        let input_schema = input.schema();
+        let exprs = sort
+            .expr
+            .iter()
+            .map(|expr| {
+                let Some(ExprType::Sort(sort_expr)) = expr.expr_type.as_ref() else {
+                    return datafusion_common::internal_err!(
+                        "SortExec expr must be a sort expression"
+                    );
+                };
+                let expr_node = sort_expr.expr.as_deref().ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "SortExec sort expression is missing its inner expr"
+                    )
+                })?;
+                Ok(PhysicalSortExpr {
+                    expr: ctx.decode_expr(expr_node, input_schema.as_ref())?,
+                    options: arrow::compute::SortOptions {
+                        descending: !sort_expr.asc,
+                        nulls_first: sort_expr.nulls_first,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let Some(ordering) = LexOrdering::new(exprs) else {
+            return datafusion_common::internal_err!("SortExec requires an ordering");
+        };
+        let fetch = (sort.fetch >= 0).then_some(sort.fetch as usize);
+        let new_sort = SortExec::new(ordering, input)
+            .with_fetch(fetch)
+            .with_preserve_partitioning(sort.preserve_partitioning);
+
+        let new_sort = if let Some(df_proto) = &sort.dynamic_filter {
+            let df_expr =
+                ctx.decode_expr(df_proto, new_sort.input().schema().as_ref())?;
+            let df = (df_expr as Arc<dyn std::any::Any + Send + Sync>)
+                .downcast::<DynamicFilterPhysicalExpr>()
+                .map_err(|_| {
+                    internal_datafusion_err!(
+                        "SortExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+                    )
+                })?;
+            new_sort.with_dynamic_filter_expr(df)?
+        } else {
+            new_sort
+        };
+
+        Ok(Arc::new(new_sort))
+    }
 }
 
 #[cfg(test)]

@@ -20,6 +20,12 @@
 
 pub(crate) mod sort_pushdown;
 
+/// Shared `FileScanConfig` <-> proto conversion, gated on the `proto` feature.
+/// Attaches inherent `to_proto_conf` / `from_proto_conf` / `parse_table_schema_from_proto`
+/// helpers to [`FileScanConfig`] used by every file source's `try_to_proto` hook.
+#[cfg(feature = "proto")]
+pub(crate) mod proto;
+
 use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
@@ -1174,6 +1180,18 @@ impl DataSource for FileScanConfig {
         }
 
         Some(Arc::new(SharedWorkSource::from_config(self)) as Arc<dyn Any + Send + Sync>)
+    }
+
+    /// Serialize this file scan by delegating to the concrete
+    /// [`FileSource`]'s
+    /// [`try_to_proto`](crate::file::FileSource::try_to_proto) hook, passing
+    /// `self` as the shared spine it needs to emit the base config.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        self.file_source().try_to_proto(self, ctx)
     }
 }
 

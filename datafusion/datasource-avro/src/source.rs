@@ -168,6 +168,67 @@ impl FileSource for AvroSource {
         // Avro OCF does not support safe byte-range splitting in this reader path.
         false
     }
+
+    /// Emit an `AvroScan` node wrapping the shared base config. Avro carries no
+    /// format-specific fields, so this is just the base conf. Kept
+    /// byte-identical to the former `try_from_data_source_exec` AvroScan branch
+    /// in `datafusion-proto`.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        base: &FileScanConfig,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        let node = protobuf::AvroScanExecNode {
+            base_conf: Some(base.to_proto_conf(ctx)?),
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::AvroScan(node)),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl AvroSource {
+    /// Reconstruct a `DataSourceExec` (wrapping a `FileScanConfig` over an
+    /// `AvroSource`) from an `AvroScan`
+    /// [`PhysicalPlanNode`](datafusion_proto_models::protobuf::PhysicalPlanNode).
+    ///
+    /// The inverse of [`FileSource::try_to_proto`] on `AvroSource`; kept
+    /// byte-compatible with the former `try_into_avro_scan_physical_plan` in
+    /// `datafusion-proto`.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_proto_models::protobuf;
+
+        let scan = match &node.physical_plan_type {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::AvroScan(scan)) => scan,
+            _ => {
+                return datafusion_common::internal_err!(
+                    "PhysicalPlanNode is not an AvroScan"
+                );
+            }
+        };
+
+        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "AvroScanExecNode is missing required field 'base_conf'"
+            )
+        })?;
+
+        // Parse table schema with partition columns, then rebuild the source.
+        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
+        let source = Arc::new(AvroSource::new(table_schema));
+
+        let conf = FileScanConfig::from_proto_conf(base_conf, ctx, source)?;
+        Ok(DataSourceExec::from_data_source(conf))
+    }
 }
 
 mod private {

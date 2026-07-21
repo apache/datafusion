@@ -26,6 +26,9 @@ pub(crate) fn str_to_byte(s: &String, description: &str) -> Result<u8> {
     Ok(s.as_bytes()[0])
 }
 
+// Dead once CsvSource moved to the try_to_proto hook (#22419); the old CSV
+// decode arm that still uses it will be deleted in the same cleanup pass.
+#[allow(dead_code)]
 pub(crate) fn byte_to_string(b: u8, description: &str) -> Result<String> {
     let b = &[b];
     let b = std::str::from_utf8(b).map_err(|_| {

@@ -702,6 +702,10 @@ impl TryFromProto<&protobuf::FileGroup> for FileGroup {
         Ok(FileGroup::new(files))
     }
 }
+// The sink `TryFromProto` impls below are superseded: each sink now
+// deserializes itself via its `try_from_proto` constructor in its own crate
+// (#23494). They are kept for downstream callers until the deprecation window
+// closes (trait impls cannot carry `#[deprecated]`).
 
 impl TryFromProto<&protobuf::JsonSink> for JsonSink {
     type Error = DataFusionError;

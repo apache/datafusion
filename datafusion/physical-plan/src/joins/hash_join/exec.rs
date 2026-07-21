@@ -1769,6 +1769,316 @@ impl ExecutionPlan for HashJoinExec {
             .ok()
             .map(|exec| Arc::new(exec) as _)
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let left = ctx.encode_child(self.left())?;
+        let right = ctx.encode_child(self.right())?;
+
+        let on = self
+            .on()
+            .iter()
+            .map(|(l, r)| -> Result<protobuf::JoinOn> {
+                Ok(protobuf::JoinOn {
+                    left: Some(ctx.encode_expr(l)?),
+                    right: Some(ctx.encode_expr(r)?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // The `*::from_proto` conversions live in `datafusion-proto`, which sits
+        // above this crate in the dependency graph and is therefore unreachable.
+        // Inline an exhaustive match from the `datafusion_common` enum to the
+        // proto enum for each of the four enums this node carries.
+        let join_type = match self.join_type() {
+            JoinType::Inner => protobuf::JoinType::Inner,
+            JoinType::Left => protobuf::JoinType::Left,
+            JoinType::Right => protobuf::JoinType::Right,
+            JoinType::Full => protobuf::JoinType::Full,
+            JoinType::LeftSemi => protobuf::JoinType::Leftsemi,
+            JoinType::RightSemi => protobuf::JoinType::Rightsemi,
+            JoinType::LeftAnti => protobuf::JoinType::Leftanti,
+            JoinType::RightAnti => protobuf::JoinType::Rightanti,
+            JoinType::LeftMark => protobuf::JoinType::Leftmark,
+            JoinType::RightMark => protobuf::JoinType::Rightmark,
+        };
+        let null_equality = match self.null_equality() {
+            NullEquality::NullEqualsNothing => protobuf::NullEquality::NullEqualsNothing,
+            NullEquality::NullEqualsNull => protobuf::NullEquality::NullEqualsNull,
+        };
+        let partition_mode = match self.partition_mode() {
+            PartitionMode::CollectLeft => protobuf::PartitionMode::CollectLeft,
+            PartitionMode::Partitioned => protobuf::PartitionMode::Partitioned,
+            PartitionMode::Auto => protobuf::PartitionMode::Auto,
+        };
+
+        let filter = self
+            .filter()
+            .map(|f| -> Result<protobuf::JoinFilter> {
+                let expression = ctx.encode_expr(f.expression())?;
+                let column_indices = f
+                    .column_indices()
+                    .iter()
+                    .map(|i| {
+                        let side = match i.side {
+                            JoinSide::Left => protobuf::JoinSide::LeftSide,
+                            JoinSide::Right => protobuf::JoinSide::RightSide,
+                            JoinSide::None => protobuf::JoinSide::None,
+                        };
+                        protobuf::ColumnIndex {
+                            index: i.index as u32,
+                            side: side.into(),
+                        }
+                    })
+                    .collect();
+                // `JoinFilter::schema` is `arrow::Schema`; the proto field is
+                // `datafusion_proto_common::protobuf_common::Schema`, so this
+                // resolves to the `TryFrom<&Schema>` impl in datafusion-proto-common
+                // (a dependency of this crate under the `proto` feature).
+                let schema = f.schema().as_ref().try_into()?;
+                Ok(protobuf::JoinFilter {
+                    expression: Some(expression),
+                    column_indices,
+                    schema: Some(schema),
+                })
+            })
+            .transpose()?;
+
+        let dynamic_filter = self
+            .dynamic_filter_expr()
+            .map(|df| {
+                let df_expr: Arc<dyn PhysicalExpr> =
+                    Arc::clone(df) as Arc<dyn PhysicalExpr>;
+                ctx.encode_expr(&df_expr)
+            })
+            .transpose()?;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::HashJoin(Box::new(
+                    protobuf::HashJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        on,
+                        join_type: join_type.into(),
+                        partition_mode: partition_mode.into(),
+                        null_equality: null_equality.into(),
+                        filter,
+                        // Proto3 `repeated` cannot distinguish `None` from
+                        // `Some(vec![])`. `Some(vec![])` (reachable via
+                        // `try_embed_projection` for e.g. `SELECT count(1) … JOIN …`)
+                        // changes the output schema, so it is encoded with the
+                        // single-element sentinel `[u32::MAX]` (never a valid column
+                        // index); every other state is sent as-is. See
+                        // `try_from_proto` for the matching decoder.
+                        projection: match self.projection.as_ref() {
+                            None => Vec::new(),
+                            Some(v) if v.is_empty() => vec![u32::MAX],
+                            Some(v) => v.iter().map(|x| *x as u32).collect(),
+                        },
+                        null_aware: self.null_aware,
+                        dynamic_filter,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl HashJoinExec {
+    /// Reconstruct a [`HashJoinExec`] from its protobuf representation.
+    ///
+    /// The inverse of [`ExecutionPlan::try_to_proto`]. It takes the whole
+    /// [`PhysicalPlanNode`] (so every plan's `try_from_proto` shares one
+    /// signature) and drives child-plan / child-expression recursion through the
+    /// [`ExecutionPlanDecodeCtx`].
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    /// [`ExecutionPlanDecodeCtx`]: crate::proto::ExecutionPlanDecodeCtx
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::internal_datafusion_err;
+        use datafusion_proto_models::protobuf;
+        use std::any::Any;
+
+        let hashjoin = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::HashJoin,
+            "HashJoinExec",
+        );
+
+        let left =
+            ctx.decode_required_child(hashjoin.left.as_deref(), "HashJoinExec", "left")?;
+        let right = ctx.decode_required_child(
+            hashjoin.right.as_deref(),
+            "HashJoinExec",
+            "right",
+        )?;
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+
+        // The `on` pairs decode against their respective child schemas.
+        let on: Vec<(PhysicalExprRef, PhysicalExprRef)> = hashjoin
+            .on
+            .iter()
+            .map(|col| {
+                let l = ctx.decode_required_expr(
+                    col.left.as_ref(),
+                    left_schema.as_ref(),
+                    "HashJoinExec",
+                    "on.left",
+                )?;
+                let r = ctx.decode_required_expr(
+                    col.right.as_ref(),
+                    right_schema.as_ref(),
+                    "HashJoinExec",
+                    "on.right",
+                )?;
+                Ok((l, r))
+            })
+            .collect::<Result<_>>()?;
+
+        // Inline exhaustive proto -> `datafusion_common` enum conversions (the
+        // `from_proto` helpers live in the unreachable datafusion-proto crate).
+        let join_type =
+            match protobuf::JoinType::try_from(hashjoin.join_type).map_err(|_| {
+                internal_datafusion_err!(
+                    "HashJoinExec: unknown JoinType {}",
+                    hashjoin.join_type
+                )
+            })? {
+                protobuf::JoinType::Inner => JoinType::Inner,
+                protobuf::JoinType::Left => JoinType::Left,
+                protobuf::JoinType::Right => JoinType::Right,
+                protobuf::JoinType::Full => JoinType::Full,
+                protobuf::JoinType::Leftsemi => JoinType::LeftSemi,
+                protobuf::JoinType::Rightsemi => JoinType::RightSemi,
+                protobuf::JoinType::Leftanti => JoinType::LeftAnti,
+                protobuf::JoinType::Rightanti => JoinType::RightAnti,
+                protobuf::JoinType::Leftmark => JoinType::LeftMark,
+                protobuf::JoinType::Rightmark => JoinType::RightMark,
+            };
+        let null_equality = match protobuf::NullEquality::try_from(hashjoin.null_equality)
+            .map_err(|_| {
+                internal_datafusion_err!(
+                    "HashJoinExec: unknown NullEquality {}",
+                    hashjoin.null_equality
+                )
+            })? {
+            protobuf::NullEquality::NullEqualsNothing => NullEquality::NullEqualsNothing,
+            protobuf::NullEquality::NullEqualsNull => NullEquality::NullEqualsNull,
+        };
+        let partition_mode = match protobuf::PartitionMode::try_from(
+            hashjoin.partition_mode,
+        )
+        .map_err(|_| {
+            internal_datafusion_err!(
+                "HashJoinExec: unknown PartitionMode {}",
+                hashjoin.partition_mode
+            )
+        })? {
+            protobuf::PartitionMode::CollectLeft => PartitionMode::CollectLeft,
+            protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
+            protobuf::PartitionMode::Auto => PartitionMode::Auto,
+        };
+
+        let filter = hashjoin
+            .filter
+            .as_ref()
+            .map(|f| -> Result<JoinFilter> {
+                // The `JoinFilter` carries its own intermediate schema; the filter
+                // expression and column indices are relative to it. The proto
+                // schema type is datafusion-proto-common's, so `try_into` resolves
+                // to that crate's `TryFrom<&Schema>` impl.
+                let schema: Schema = f
+                    .schema
+                    .as_ref()
+                    .ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "HashJoinExec: JoinFilter missing schema"
+                        )
+                    })?
+                    .try_into()?;
+                let expression = ctx.decode_required_expr(
+                    f.expression.as_ref(),
+                    &schema,
+                    "HashJoinExec",
+                    "filter.expression",
+                )?;
+                let column_indices = f
+                    .column_indices
+                    .iter()
+                    .map(|i| {
+                        let side =
+                            match protobuf::JoinSide::try_from(i.side).map_err(|_| {
+                                internal_datafusion_err!(
+                                    "HashJoinExec: unknown JoinSide {}",
+                                    i.side
+                                )
+                            })? {
+                                protobuf::JoinSide::LeftSide => JoinSide::Left,
+                                protobuf::JoinSide::RightSide => JoinSide::Right,
+                                protobuf::JoinSide::None => JoinSide::None,
+                            };
+                        Ok(ColumnIndex {
+                            index: i.index as usize,
+                            side,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(JoinFilter::new(
+                    expression,
+                    column_indices,
+                    Arc::new(schema),
+                ))
+            })
+            .transpose()?;
+
+        // Preserve the empty-projection sentinel written by `try_to_proto`.
+        let projection = match hashjoin.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        };
+
+        let mut hash_join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            filter,
+            &join_type,
+            projection,
+            partition_mode,
+            null_equality,
+            hashjoin.null_aware,
+        )?;
+
+        if let Some(dynamic_filter_proto) = &hashjoin.dynamic_filter {
+            // The dynamic filter is a `DynamicFilterPhysicalExpr` over the probe
+            // (right) side; decode against the right schema then downcast.
+            let dynamic_filter_expr =
+                ctx.decode_expr(dynamic_filter_proto, right_schema.as_ref())?;
+            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
+                .downcast::<DynamicFilterPhysicalExpr>()
+                .map_err(|_| {
+                    internal_datafusion_err!(
+                        "HashJoinExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+                    )
+                })?;
+            hash_join = hash_join.with_dynamic_filter_expr(df)?;
+        }
+
+        Ok(Arc::new(hash_join))
+    }
 }
 
 /// Determines which sides of a join are "preserved" for filter pushdown.

@@ -185,6 +185,62 @@ impl ExecutionPlan for EmptyExec {
 
         Ok(Arc::new(stats))
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        // EmptyExec is a leaf plan carrying only its schema on the wire.
+        let schema = self.schema().as_ref().try_into()?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Empty(
+                    protobuf::EmptyExecNode {
+                        schema: Some(schema),
+                        partitions: self
+                            .properties()
+                            .output_partitioning()
+                            .partition_count() as u32,
+                    },
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl EmptyExec {
+    /// Reconstruct an [`EmptyExec`] from its protobuf representation.
+    ///
+    /// The inverse of [`ExecutionPlan::try_to_proto`]: it takes the whole
+    /// [`PhysicalPlanNode`] and reads back the schema (this leaf plan has no
+    /// children or expressions to decode).
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        _ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let empty = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Empty,
+            "EmptyExec",
+        );
+        let schema = empty.schema.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "EmptyExec is missing required field 'schema'"
+            )
+        })?;
+        let schema = Arc::new(arrow::datatypes::Schema::try_from(schema)?);
+        // Absent (0) means a single partition, matching the pre-`partitions`
+        // wire format.
+        let partitions = empty.partitions.max(1) as usize;
+        Ok(Arc::new(EmptyExec::new(schema).with_partitions(partitions)))
+    }
 }
 
 #[cfg(test)]

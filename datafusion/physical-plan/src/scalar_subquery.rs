@@ -254,6 +254,68 @@ impl ExecutionPlan for ScalarSubqueryExec {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        // Index is positional (recovered on decode via enumerate), not on the wire.
+        let subqueries =
+            ctx.encode_children(self.subqueries().iter().map(|sq| &sq.plan))?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::ScalarSubquery(Box::new(
+                    protobuf::ScalarSubqueryExecNode {
+                        input: Some(Box::new(input)),
+                        subqueries,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ScalarSubqueryExec {
+    /// Reconstruct a [`ScalarSubqueryExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let sq = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::ScalarSubquery,
+            "ScalarSubqueryExec",
+        );
+        // The subquery-results container must be active while decoding the input,
+        // so ScalarSubqueryExpr nodes in the input subtree resolve against it.
+        let results = ScalarSubqueryResults::new(sq.subqueries.len());
+        let input_node = sq.input.as_deref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ScalarSubqueryExec is missing required field 'input'"
+            )
+        })?;
+        let input =
+            ctx.decode_child_with_scalar_subquery_results(input_node, results.clone())?;
+        let subqueries = sq
+            .subqueries
+            .iter()
+            .enumerate()
+            .map(|(index, plan_node)| {
+                Ok(ScalarSubqueryLink {
+                    plan: ctx.decode_child(plan_node)?,
+                    index: SubqueryIndex::new(index),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Arc::new(ScalarSubqueryExec::new(
+            input, subqueries, results,
+        )))
+    }
 }
 
 /// Wait for the subquery execution future to complete.

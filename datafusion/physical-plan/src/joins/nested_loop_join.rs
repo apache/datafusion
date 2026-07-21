@@ -768,6 +768,208 @@ impl ExecutionPlan for NestedLoopJoinExec {
             try_embed_projection(projection, self)
         }
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let left = ctx.encode_child(self.left())?;
+        let right = ctx.encode_child(self.right())?;
+
+        // The `*::from_proto` conversions live in `datafusion-proto`, which sits
+        // above this crate in the dependency graph and is therefore unreachable.
+        // Inline an exhaustive match from the `datafusion_common` enum to the
+        // proto enum (a numeric cast would corrupt the value, as the two enums
+        // number their variants differently).
+        let join_type = match self.join_type() {
+            JoinType::Inner => protobuf::JoinType::Inner,
+            JoinType::Left => protobuf::JoinType::Left,
+            JoinType::Right => protobuf::JoinType::Right,
+            JoinType::Full => protobuf::JoinType::Full,
+            JoinType::LeftSemi => protobuf::JoinType::Leftsemi,
+            JoinType::RightSemi => protobuf::JoinType::Rightsemi,
+            JoinType::LeftAnti => protobuf::JoinType::Leftanti,
+            JoinType::RightAnti => protobuf::JoinType::Rightanti,
+            JoinType::LeftMark => protobuf::JoinType::Leftmark,
+            JoinType::RightMark => protobuf::JoinType::Rightmark,
+        };
+
+        let filter = self
+            .filter()
+            .map(|f| -> Result<protobuf::JoinFilter> {
+                let expression = ctx.encode_expr(f.expression())?;
+                let column_indices = f
+                    .column_indices()
+                    .iter()
+                    .map(|i| {
+                        let side = match i.side {
+                            JoinSide::Left => protobuf::JoinSide::LeftSide,
+                            JoinSide::Right => protobuf::JoinSide::RightSide,
+                            JoinSide::None => protobuf::JoinSide::None,
+                        };
+                        protobuf::ColumnIndex {
+                            index: i.index as u32,
+                            side: side.into(),
+                        }
+                    })
+                    .collect();
+                // `JoinFilter::schema` is `arrow::Schema`; the proto field is
+                // `datafusion_proto_common::protobuf_common::Schema`, so this
+                // resolves to the `TryFrom<&Schema>` impl in datafusion-proto-common.
+                let schema = f.schema().as_ref().try_into()?;
+                Ok(protobuf::JoinFilter {
+                    expression: Some(expression),
+                    column_indices,
+                    schema: Some(schema),
+                })
+            })
+            .transpose()?;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::NestedLoopJoin(Box::new(
+                    protobuf::NestedLoopJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        join_type: join_type.into(),
+                        filter,
+                        // Proto3 `repeated` cannot distinguish `None` from
+                        // `Some(vec![])`; the single-element sentinel `[u32::MAX]`
+                        // (never a valid column index) encodes the empty-but-present
+                        // projection. See `try_from_proto` for the decoder.
+                        projection: match self.projection.as_ref() {
+                            None => Vec::new(),
+                            Some(v) if v.is_empty() => vec![u32::MAX],
+                            Some(v) => v.iter().map(|x| *x as u32).collect(),
+                        },
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl NestedLoopJoinExec {
+    /// Reconstruct a [`NestedLoopJoinExec`] from its protobuf representation.
+    ///
+    /// The inverse of [`ExecutionPlan::try_to_proto`]; it takes the whole
+    /// [`PhysicalPlanNode`] and drives child-plan / child-expression recursion
+    /// through the [`ExecutionPlanDecodeCtx`].
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    /// [`ExecutionPlanDecodeCtx`]: crate::proto::ExecutionPlanDecodeCtx
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::NestedLoopJoin,
+            "NestedLoopJoinExec",
+        );
+
+        let left = ctx.decode_required_child(
+            join.left.as_deref(),
+            "NestedLoopJoinExec",
+            "left",
+        )?;
+        let right = ctx.decode_required_child(
+            join.right.as_deref(),
+            "NestedLoopJoinExec",
+            "right",
+        )?;
+
+        // Inline exhaustive proto -> `datafusion_common` enum conversion (the
+        // `from_proto` helper lives in the unreachable datafusion-proto crate).
+        let join_type =
+            match protobuf::JoinType::try_from(join.join_type).map_err(|_| {
+                internal_datafusion_err!(
+                    "NestedLoopJoinExec: unknown JoinType {}",
+                    join.join_type
+                )
+            })? {
+                protobuf::JoinType::Inner => JoinType::Inner,
+                protobuf::JoinType::Left => JoinType::Left,
+                protobuf::JoinType::Right => JoinType::Right,
+                protobuf::JoinType::Full => JoinType::Full,
+                protobuf::JoinType::Leftsemi => JoinType::LeftSemi,
+                protobuf::JoinType::Rightsemi => JoinType::RightSemi,
+                protobuf::JoinType::Leftanti => JoinType::LeftAnti,
+                protobuf::JoinType::Rightanti => JoinType::RightAnti,
+                protobuf::JoinType::Leftmark => JoinType::LeftMark,
+                protobuf::JoinType::Rightmark => JoinType::RightMark,
+            };
+
+        let filter = join
+            .filter
+            .as_ref()
+            .map(|f| -> Result<JoinFilter> {
+                // The `JoinFilter` carries its own intermediate schema; the filter
+                // expression and column indices are relative to it. The proto
+                // schema type is datafusion-proto-common's, so `try_into` resolves
+                // to that crate's `TryFrom<&Schema>` impl.
+                let schema: Schema = f
+                    .schema
+                    .as_ref()
+                    .ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "NestedLoopJoinExec: JoinFilter missing schema"
+                        )
+                    })?
+                    .try_into()?;
+                let expression = ctx.decode_required_expr(
+                    f.expression.as_ref(),
+                    &schema,
+                    "NestedLoopJoinExec",
+                    "filter.expression",
+                )?;
+                let column_indices = f
+                    .column_indices
+                    .iter()
+                    .map(|i| {
+                        let side =
+                            match protobuf::JoinSide::try_from(i.side).map_err(|_| {
+                                internal_datafusion_err!(
+                                    "NestedLoopJoinExec: unknown JoinSide {}",
+                                    i.side
+                                )
+                            })? {
+                                protobuf::JoinSide::LeftSide => JoinSide::Left,
+                                protobuf::JoinSide::RightSide => JoinSide::Right,
+                                protobuf::JoinSide::None => JoinSide::None,
+                            };
+                        Ok(ColumnIndex {
+                            index: i.index as usize,
+                            side,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(JoinFilter::new(
+                    expression,
+                    column_indices,
+                    Arc::new(schema),
+                ))
+            })
+            .transpose()?;
+
+        // Preserve the empty-projection sentinel written by `try_to_proto`.
+        let projection = match join.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        };
+
+        Ok(Arc::new(NestedLoopJoinExec::try_new(
+            left, right, filter, &join_type, projection,
+        )?))
+    }
 }
 
 impl EmbeddedProjection for NestedLoopJoinExec {
