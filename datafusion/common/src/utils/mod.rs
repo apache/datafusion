@@ -428,14 +428,7 @@ where
 {
     let cut_offset = offsets[n];
     if n.saturating_mul(2) < offsets.len() {
-        let mut prefix = Vec::<O>::with_capacity(n + 1);
-        // SAFETY: copying to a newly allocated vector with sufficient capacity.
-        // The length of `offsets` is checked to exceed n.
-        unsafe {
-            copy_nonoverlapping(offsets.as_ptr(), prefix.as_mut_ptr(), n);
-            *prefix.as_mut_ptr().add(n) = cut_offset;
-            prefix.set_len(n + 1);
-        }
+        let prefix: Vec<O> = offsets[..=n].into();
         // Shift the remaining offsets in place so that the first offset is 0.
         let dst = offsets.as_mut_ptr();
         for (i, &offset) in offsets[n..].iter().enumerate() {
