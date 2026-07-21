@@ -24,10 +24,11 @@ use arrow::compute::kernels::bitwise::{
     bitwise_xor, bitwise_xor_scalar,
 };
 use arrow::compute::kernels::boolean::not;
+use arrow::compute::kernels::cast::cast;
 use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_common::{internal_err, plan_err};
+use datafusion_common::{downcast_value, internal_err, plan_err};
 
 use std::sync::Arc;
 
@@ -162,14 +163,8 @@ create_left_integral_dyn_scalar_kernel!(
 /// Invoke a compute kernel on a pair of binary data arrays with flags
 macro_rules! regexp_is_match_flag {
     ($LEFT:expr, $RIGHT:expr, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("failed to downcast array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("failed to downcast array");
+        let ll = downcast_value!($LEFT, $ARRAYTYPE);
+        let rr = downcast_value!($RIGHT, $ARRAYTYPE);
 
         let flag = if $FLAG {
             Some($ARRAYTYPE::from(vec!["i"; ll.len()]))
@@ -184,12 +179,37 @@ macro_rules! regexp_is_match_flag {
     }};
 }
 
+/// Unpack a dictionary array to its value type, leaving other arrays as-is
+fn flatten_dictionary(array: &ArrayRef) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::Dictionary(_, value_type) => Ok(cast(array, value_type)?),
+        _ => Ok(Arc::clone(array)),
+    }
+}
+
 pub(crate) fn regex_match_dyn(
     left: &ArrayRef,
     right: &ArrayRef,
     not_match: bool,
     flag: bool,
 ) -> Result<ArrayRef> {
+    // Type coercion deliberately preserves `Dictionary(_, Utf8)` inputs so
+    // that literal patterns can use the dictionary fast path in
+    // `regex_match_dyn_scalar`. Here every row has its own pattern, so the
+    // dictionary encoding offers no shortcut: flatten the inputs, and if the
+    // dictionary's value type differs from the coerced pattern type (e.g.
+    // `Dictionary(Int32, Utf8)` matched against `Utf8View` patterns), cast to
+    // a common string type.
+    if matches!(left.data_type(), DataType::Dictionary(_, _))
+        || matches!(right.data_type(), DataType::Dictionary(_, _))
+    {
+        let left = flatten_dictionary(left)?;
+        let mut right = flatten_dictionary(right)?;
+        if right.data_type() != left.data_type() {
+            right = cast(&right, left.data_type())?;
+        }
+        return regex_match_dyn(&left, &right, not_match, flag);
+    }
     match left.data_type() {
         DataType::Utf8 => {
             regexp_is_match_flag!(left, right, StringArray, not_match, flag)
@@ -210,27 +230,32 @@ pub(crate) fn regex_match_dyn(
 /// Invoke a compute kernel on a data array and a scalar value with flag
 macro_rules! regexp_is_match_flag_scalar {
     ($LEFT:expr, $RIGHT:expr, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("failed to downcast array");
-
-        if let Some(Some(string_value)) = $RIGHT.try_as_str() {
-            let flag = $FLAG.then_some("i");
-            match regexp_is_match_scalar(ll, &string_value, flag) {
-                Ok(mut array) => {
-                    if $NOT {
-                        array = not(&array).unwrap();
+        match $LEFT.as_any().downcast_ref::<$ARRAYTYPE>() {
+            None => internal_err!(
+                "failed to downcast array to {} for operation 'regex_match_dyn_scalar'",
+                stringify!($ARRAYTYPE)
+            ),
+            Some(ll) => {
+                if let Some(Some(string_value)) = $RIGHT.try_as_str() {
+                    let flag = $FLAG.then_some("i");
+                    match regexp_is_match_scalar(ll, &string_value, flag) {
+                        Ok(mut array) => {
+                            if $NOT {
+                                array = not(&array).unwrap();
+                            }
+                            Ok(Arc::new(array))
+                        }
+                        Err(e) => {
+                            internal_err!("failed to call 'regex_match_dyn_scalar' {}", e)
+                        }
                     }
-                    Ok(Arc::new(array))
+                } else {
+                    internal_err!(
+                        "failed to cast literal value {} for operation 'regex_match_dyn_scalar'",
+                        $RIGHT
+                    )
                 }
-                Err(e) => internal_err!("failed to call 'regex_match_dyn_scalar' {}", e),
             }
-        } else {
-            internal_err!(
-                "failed to cast literal value {} for operation 'regex_match_dyn_scalar'",
-                $RIGHT
-            )
         }
     }};
 }
