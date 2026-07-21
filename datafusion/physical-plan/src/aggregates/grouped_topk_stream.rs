@@ -22,8 +22,8 @@ use crate::aggregates::topk::priority_map::PriorityMap;
 #[cfg(debug_assertions)]
 use crate::aggregates::topk_types_supported;
 use crate::aggregates::{
-    AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
-    evaluate_many, outputs_group_hashes,
+    AggregateExec, AggregateOutputMode, PhysicalGroupBy, aggregate_expressions,
+    evaluate_group_by, evaluate_many,
 };
 use crate::metrics::BaselineMetrics;
 use crate::repartition::{ExpressionHasher, HashMetrics};
@@ -112,7 +112,9 @@ impl GroupedTopKAggregateStream {
         // Note: Null values in aggregate columns are filtered by the aggregation layer
         // before reaching the heap, so the heap implementations don't need explicit null handling.
         let priority_map = PriorityMap::new(kt, vt, limit, desc)?;
-        let output_group_hashes = outputs_group_hashes(aggr.mode, &group_by);
+        let output_group_hashes = ExpressionHasher::new(group_by.input_exprs())
+            .should_output_hashes(&aggr.input().schema())?
+            && aggr.mode.output_mode() == AggregateOutputMode::Partial;
         let output_hasher = ExpressionHasher::new_with_metrics(
             group_by.output_exprs(),
             HashMetrics::new(&aggr.metrics, partition),

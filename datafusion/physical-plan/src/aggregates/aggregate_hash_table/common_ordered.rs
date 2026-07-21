@@ -34,8 +34,8 @@ use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_val
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
-    AggregateExec, AggregateMode, GroupHashTracker, PhysicalGroupBy,
-    aggregate_expressions, evaluate_group_by, outputs_group_hashes,
+    AggregateExec, AggregateMode, AggregateOutputMode, GroupHashTracker, PhysicalGroupBy,
+    aggregate_expressions, evaluate_group_by,
 };
 use crate::repartition::{ExpressionHasher, HashMetrics};
 
@@ -173,6 +173,13 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             })
             .collect::<Result<_>>()?;
 
+        let hasher = ExpressionHasher::new_with_metrics(
+            agg.group_by.input_exprs(),
+            HashMetrics::new(&agg.metrics, partition),
+        );
+        let should_output_hashes = hasher.should_output_hashes(input_schema)?
+            && aggregate_mode.output_mode() == AggregateOutputMode::Partial;
+
         Ok(Self {
             output_schema,
             batch_size,
@@ -182,12 +189,8 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                 group_ordering,
                 group_values,
                 group_indices: vec![],
-                group_hash_tracker: outputs_group_hashes(*aggregate_mode, &agg.group_by)
-                    .then(GroupHashTracker::default),
-                hasher: ExpressionHasher::new_with_metrics(
-                    agg.group_by.input_exprs(),
-                    HashMetrics::new(&agg.metrics, partition),
-                ),
+                group_hash_tracker: should_output_hashes.then(GroupHashTracker::default),
+                hasher,
                 accumulators,
             },
             _mode: PhantomData,

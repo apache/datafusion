@@ -594,13 +594,16 @@ impl GroupedHashAggregateStream {
         } else {
             None
         };
-        let track_group_hashes = !agg_group_by.is_true_no_grouping()
-            && (agg.mode.output_mode() == AggregateOutputMode::Partial
-                || oom_mode == OutOfMemoryMode::Spill);
+
         let hasher = ExpressionHasher::new_with_metrics(
             agg_group_by.input_exprs(),
             HashMetrics::new(&agg.metrics, partition),
         );
+        // Spilled batches contain partial state that a later aggregate merges,
+        // so they use the same hash-output policy as regular partial output.
+        let should_output_hashes = hasher.should_output_hashes(&agg.input().schema())?
+            && (agg.mode.output_mode() == AggregateOutputMode::Partial
+                || oom_mode == OutOfMemoryMode::Spill);
 
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
@@ -615,7 +618,7 @@ impl GroupedHashAggregateStream {
             oom_mode,
             group_values,
             current_group_indices: Default::default(),
-            group_hash_tracker: track_group_hashes.then(GroupHashTracker::default),
+            group_hash_tracker: should_output_hashes.then(GroupHashTracker::default),
             hasher,
             exec_state,
             baseline_metrics,

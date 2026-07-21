@@ -229,10 +229,6 @@ pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool 
     is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
 }
 
-fn outputs_group_hashes(mode: AggregateMode, group_by: &PhysicalGroupBy) -> bool {
-    mode.output_mode() == AggregateOutputMode::Partial && !group_by.is_true_no_grouping()
-}
-
 /// Tracks hashes for interned groups solely for inclusion in aggregate output.
 ///
 /// This type does not compute hashes or decide whether an input hash can be
@@ -2248,10 +2244,11 @@ fn create_schema(
     aggr_expr: &[Arc<AggregateFunctionExpr>],
     mode: AggregateMode,
 ) -> Result<Schema> {
+    let input_hasher = ExpressionHasher::new(group_by.input_exprs());
+    let output_hashes = input_hasher.should_output_hashes(input_schema)?
+        && mode.output_mode() == AggregateOutputMode::Partial;
     let mut fields = Vec::with_capacity(
-        group_by.num_output_exprs()
-            + aggr_expr.len()
-            + outputs_group_hashes(mode, group_by) as usize,
+        group_by.num_output_exprs() + aggr_expr.len() + output_hashes as usize,
     );
     fields.extend(group_by.output_fields(input_schema)?);
 
@@ -2270,7 +2267,7 @@ fn create_schema(
         }
     }
 
-    if outputs_group_hashes(mode, group_by) {
+    if output_hashes {
         let hasher = ExpressionHasher::new(group_by.output_exprs());
         fields.push(
             Field::new(hasher.internal_hash_col_name(), DataType::UInt64, false).into(),
@@ -2757,7 +2754,7 @@ mod tests {
 
     use arrow::array::{
         BooleanArray, DictionaryArray, Float32Array, Float64Array, Int32Array,
-        Int64Array, StructArray, UInt32Array, UInt64Array,
+        Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::Int32Type;
@@ -2811,6 +2808,9 @@ mod tests {
         batches
             .iter()
             .map(|batch| {
+                let Ok(hash_index) = batch.schema().index_of(&hash_name) else {
+                    return Ok(batch.clone());
+                };
                 let actual = hasher
                     .precomputed(batch)
                     .expect("partial aggregate output should contain group hashes");
@@ -2818,7 +2818,6 @@ mod tests {
                 let expected = hasher.compute_hashes(&arrays)?;
                 assert_eq!(actual, expected);
 
-                let hash_index = batch.schema().index_of(&hash_name)?;
                 let projection = (0..batch.num_columns())
                     .filter(|&index| index != hash_index)
                     .collect::<Vec<_>>();
@@ -2835,6 +2834,9 @@ mod tests {
         let hash_exprs = group_by.output_exprs();
         let mut hasher = ExpressionHasher::new(hash_exprs.clone());
         let hash_name = hasher.internal_hash_col_name();
+        if schema.index_of(&hash_name).is_err() {
+            return RecordBatch::try_new(schema, columns).map_err(Into::into);
+        }
         let fields = schema
             .fields()
             .iter()
@@ -3676,21 +3678,21 @@ mod tests {
     #[tokio::test]
     async fn partial_repartition_final_preserves_group_hashes() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Int32, false),
+            Field::new("key", DataType::Utf8, false),
             Field::new("value", DataType::Int32, false),
         ]));
         let partitions = vec![
             vec![RecordBatch::try_new(
                 Arc::clone(&schema),
                 vec![
-                    Arc::new(Int32Array::from(vec![1, 2, 1])),
+                    Arc::new(StringArray::from(vec!["a", "b", "a"])),
                     Arc::new(Int32Array::from(vec![1, 1, 1])),
                 ],
             )?],
             vec![RecordBatch::try_new(
                 Arc::clone(&schema),
                 vec![
-                    Arc::new(Int32Array::from(vec![2, 3])),
+                    Arc::new(StringArray::from(vec!["b", "c"])),
                     Arc::new(Int32Array::from(vec![1, 1])),
                 ],
             )?],
@@ -3783,9 +3785,9 @@ mod tests {
 +-----+--------------+
 | key | COUNT(value) |
 +-----+--------------+
-| 1   | 2            |
-| 2   | 2            |
-| 3   | 1            |
+| a   | 2            |
+| b   | 2            |
+| c   | 1            |
 +-----+--------------+
 ");
 

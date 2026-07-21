@@ -911,12 +911,7 @@ mod test {
                 ColumnStatistics::new_unknown(),
             ],
         };
-        let mut expected_partial_p0_statistics = expected_p0_statistics.clone();
-        expected_partial_p0_statistics
-            .column_statistics
-            .push(ColumnStatistics::new_unknown());
-
-        assert_eq!(*p0_statistics, expected_partial_p0_statistics);
+        assert_eq!(*p0_statistics, expected_p0_statistics);
 
         let expected_p1_statistics = Statistics {
             num_rows: Precision::Inexact(2),
@@ -934,16 +929,11 @@ mod test {
                 ColumnStatistics::new_unknown(),
             ],
         };
-        let mut expected_partial_p1_statistics = expected_p1_statistics.clone();
-        expected_partial_p1_statistics
-            .column_statistics
-            .push(ColumnStatistics::new_unknown());
-
         let p1_statistics = StatisticsContext::new().compute(
             aggregate_exec_partial.as_ref(),
             &StatisticsArgs::new().with_partition(Some(1)),
         )?;
-        assert_eq!(*p1_statistics, expected_partial_p1_statistics);
+        assert_eq!(*p1_statistics, expected_p1_statistics);
 
         validate_statistics_with_data(
             aggregate_exec_partial.clone(),
@@ -1017,20 +1007,15 @@ mod test {
                 ColumnStatistics::new_unknown(),
             ],
         };
-        let mut empty_partial_stat = empty_stat.clone();
-        empty_partial_stat
-            .column_statistics
-            .push(ColumnStatistics::new_unknown());
-
         assert_eq!(
-            empty_partial_stat,
+            empty_stat,
             *StatisticsContext::new().compute(
                 agg_partial.as_ref(),
                 &StatisticsArgs::new().with_partition(Some(0))
             )?
         );
         assert_eq!(
-            empty_partial_stat,
+            empty_stat,
             *StatisticsContext::new().compute(
                 agg_partial.as_ref(),
                 &StatisticsArgs::new().with_partition(Some(1))
