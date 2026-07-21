@@ -23,12 +23,12 @@
 //! within datafusion, so that function can
 //! be efficiently implemented.
 //!
-//! Specifically, like Redis's version, this HLL structure uses
+//! Specifically, like Redis's version, the default HLL structure uses
 //! 2**14 = 16384 registers, which means the standard error is
-//! 1.04/(16384**0.5) = 0.8125%. Unlike Redis, the register takes
-//! up full [`u8`] size instead of a raw int* and thus saves some
+//! 1.04/(16384**0.5) = 0.8125%. The precision `p` is now a runtime
+//! parameter; supported range is 4 ≤ p ≤ 18. Unlike Redis, the register
+//! takes up full [`u8`] size instead of a raw int* and thus saves some
 //! tricky bit shifting techniques used in the original version.
-//! This results in a memory usage increase from 12Kib to 16Kib.
 //! Also only the dense version is adopted, so there's no automatic
 //! conversion, largely to simplify the code.
 //!
@@ -38,20 +38,24 @@ use std::hash::BuildHasher;
 use std::hash::Hash;
 use std::marker::PhantomData;
 
-/// The greater is P, the smaller the error.
-const HLL_P: usize = 14_usize;
-/// The number of bits of the hash value used determining the number of leading zeros
-const HLL_Q: usize = 64_usize - HLL_P;
-pub(crate) const NUM_REGISTERS: usize = 1_usize << HLL_P;
-/// Mask to obtain index into the registers
-const HLL_P_MASK: u64 = (NUM_REGISTERS as u64) - 1;
+/// Default precision — matches the historical hardcoded value.
+pub(crate) const DEFAULT_HLL_P: usize = 14_usize;
+/// Number of registers at the default precision.
+pub(crate) const NUM_REGISTERS: usize = 1_usize << DEFAULT_HLL_P;
+
+/// Minimum and maximum supported precision values.
+pub(crate) const HLL_P_MIN: usize = 4;
+pub(crate) const HLL_P_MAX: usize = 18;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HyperLogLog<T>
 where
     T: Hash + ?Sized,
 {
-    registers: [u8; NUM_REGISTERS],
+    registers: Vec<u8>,
+    p: usize,
+    q: usize,     // 64 - p
+    p_mask: u64,  // (1 << p) - 1
     phantom: PhantomData<T>,
 }
 
@@ -70,20 +74,64 @@ impl<T> HyperLogLog<T>
 where
     T: Hash + ?Sized,
 {
-    /// Creates a new, empty HyperLogLog.
+    /// Creates a new, empty HyperLogLog with the default precision (14).
     pub fn new() -> Self {
-        let registers = [0; NUM_REGISTERS];
-        Self::new_with_registers(registers)
+        Self::with_precision(DEFAULT_HLL_P)
     }
 
-    /// Creates a HyperLogLog from already populated registers
-    /// note that this method should not be invoked in untrusted environment
-    /// because the internal structure of registers are not examined.
-    pub(crate) fn new_with_registers(registers: [u8; NUM_REGISTERS]) -> Self {
+    /// Creates a new, empty HyperLogLog with the given precision `p`.
+    ///
+    /// The number of registers is `2^p`. Supported range: `HLL_P_MIN..=HLL_P_MAX`.
+    pub fn with_precision(p: usize) -> Self {
+        assert!(
+            (HLL_P_MIN..=HLL_P_MAX).contains(&p),
+            "HLL precision must be in {HLL_P_MIN}..={HLL_P_MAX}, got {p}",
+        );
+        let num_registers = 1_usize << p;
+        let q = 64 - p;
+        let p_mask = (num_registers as u64) - 1;
         Self {
-            registers,
+            registers: vec![0u8; num_registers],
+            p,
+            q,
+            p_mask,
             phantom: PhantomData,
         }
+    }
+
+    /// Creates a HyperLogLog from already populated registers.
+    ///
+    /// The precision is inferred from the register slice length, which must be
+    /// a power of two in the range `2^HLL_P_MIN..=2^HLL_P_MAX`.
+    ///
+    /// Note that this method should not be invoked in an untrusted environment
+    /// because the internal structure of registers is not examined.
+    pub(crate) fn from_registers(registers: Vec<u8>) -> Self {
+        let len = registers.len();
+        assert!(
+            len.is_power_of_two(),
+            "register slice length must be a power of two, got {len}",
+        );
+        let p = len.ilog2() as usize;
+        assert!(
+            (HLL_P_MIN..=HLL_P_MAX).contains(&p),
+            "inferred precision {p} is outside {HLL_P_MIN}..={HLL_P_MAX}",
+        );
+        let q = 64 - p;
+        let p_mask = (len as u64) - 1;
+        Self {
+            registers,
+            p,
+            q,
+            p_mask,
+            phantom: PhantomData,
+        }
+    }
+
+    /// The precision of this sketch.
+    #[inline]
+    pub(crate) fn precision(&self) -> usize {
+        self.p
     }
 
     /// The HLL hash state is shared through `datafusion_common::hash_utils`
@@ -105,30 +153,26 @@ where
     /// by [`Self::add`].
     #[inline]
     pub(crate) fn add_hashed(&mut self, hash: u64) {
-        let index = (hash & HLL_P_MASK) as usize;
-        let p = ((hash >> HLL_P) | (1_u64 << HLL_Q)).trailing_zeros() + 1;
-        self.registers[index] = self.registers[index].max(p as u8);
+        let index = (hash & self.p_mask) as usize;
+        let rho = ((hash >> self.p) | (1_u64 << self.q)).trailing_zeros() + 1;
+        self.registers[index] = self.registers[index].max(rho as u8);
     }
 
-    /// Get the register histogram (each value in register index into
-    /// the histogram; u32 is enough because we only have 2**14=16384 registers
     #[inline]
-    fn get_histogram(&self) -> [u32; HLL_Q + 2] {
-        let mut histogram = [0; HLL_Q + 2];
-        // hopefully this can be unrolled
-        for r in self.registers {
-            histogram[r as usize] += 1;
+    fn get_histogram(&self) -> [u32; 64 - HLL_P_MIN + 2] {
+        let mut histogram = [0u32; 64 - HLL_P_MIN + 2];
+        for r in &self.registers {
+            histogram[*r as usize] += 1;
         }
         histogram
     }
 
-    /// Merge the other [`HyperLogLog`] into this one
+    /// Merge the other [`HyperLogLog`] into this one.
     pub fn merge(&mut self, other: &HyperLogLog<T>) {
-        assert!(
-            self.registers.len() == other.registers.len(),
-            "unexpected got unequal register size, expect {}, got {}",
-            self.registers.len(),
-            other.registers.len()
+        assert_eq!(
+            self.p, other.p,
+            "cannot merge HLL sketches with different precisions ({} vs {})",
+            self.p, other.p
         );
         for i in 0..self.registers.len() {
             self.registers[i] = self.registers[i].max(other.registers[i]);
@@ -137,40 +181,44 @@ where
 
     /// Guess the number of unique elements seen by the HyperLogLog.
     pub fn count(&self) -> usize {
-        count_from_histogram(&self.get_histogram())
+        count_from_histogram(&self.get_histogram()[..self.q + 2], self.p)
     }
 }
 
-/// Compute `index` and `rho` (register value) for a precomputed hash, exactly as
-/// [`HyperLogLog::add_hashed`] does.
+/// Compute `index` and `rho` (register value) for a precomputed hash at a given
+/// precision, exactly as [`HyperLogLog::add_hashed`] does.
 #[inline]
-pub(crate) fn register_for_hash(hash: u64) -> (usize, u8) {
-    let index = (hash & HLL_P_MASK) as usize;
-    let rho = (((hash >> HLL_P) | (1_u64 << HLL_Q)).trailing_zeros() + 1) as u8;
+pub(crate) fn register_for_hash(hash: u64, p: usize) -> (usize, u8) {
+    let q = 64 - p;
+    let p_mask: u64 = ((1_usize << p) as u64) - 1;
+    let index = (hash & p_mask) as usize;
+    let rho = (((hash >> p) | (1_u64 << q)).trailing_zeros() + 1) as u8;
     (index, rho)
 }
 
 /// Estimate the cardinality of a set of precomputed hashes without
-/// materializing a full [`NUM_REGISTERS`]-byte register array.
+/// materializing a full register array.
 ///
 /// This is equivalent to adding every hash to a fresh [`HyperLogLog`] via
 /// [`HyperLogLog::add_hashed`] and calling [`HyperLogLog::count`], but only does
 /// work proportional to the number of hashes. It is used to cheaply estimate the
 /// many small groups produced by a high-cardinality `GROUP BY`, where allocating
-/// and scanning a 16 KiB sketch per group would dominate the runtime.
+/// and scanning a sketch per group would dominate the runtime.
 ///
 /// `hashes` may contain duplicates (duplicate hashes are idempotent).
-pub(crate) fn count_from_hashes(hashes: &[u64]) -> usize {
+pub(crate) fn count_from_hashes(hashes: &[u64], p: usize) -> usize {
     if hashes.is_empty() {
         return 0;
     }
+    let num_registers = 1_usize << p;
+    let q = 64 - p;
     // For each touched register index keep the maximum rho. Sorting by
     // (index, rho) groups equal indices together with the max rho last.
     let mut idx_rho: Vec<(usize, u8)> =
-        hashes.iter().map(|&hash| register_for_hash(hash)).collect();
+        hashes.iter().map(|&hash| register_for_hash(hash, p)).collect();
     idx_rho.sort_unstable();
 
-    let mut histogram = [0u32; HLL_Q + 2];
+    let mut histogram = [0u32; 64 - HLL_P_MIN + 2];
     let mut touched = 0u32;
     let mut i = 0;
     while i < idx_rho.len() {
@@ -185,16 +233,17 @@ pub(crate) fn count_from_hashes(hashes: &[u64]) -> usize {
         touched += 1;
     }
     // All remaining registers are still zero.
-    histogram[0] = NUM_REGISTERS as u32 - touched;
-    count_from_histogram(&histogram)
+    histogram[0] = num_registers as u32 - touched;
+    count_from_histogram(&histogram[..q + 2], p)
 }
 
 /// Apply the HyperLogLog cardinality estimator to a register histogram.
 #[inline]
-fn count_from_histogram(histogram: &[u32; HLL_Q + 2]) -> usize {
-    let m = NUM_REGISTERS as f64;
-    let mut z = m * hll_tau((m - histogram[HLL_Q + 1] as f64) / m);
-    for i in histogram[1..=HLL_Q].iter().rev() {
+fn count_from_histogram(histogram: &[u32], p: usize) -> usize {
+    let q = 64 - p;
+    let m = (1_usize << p) as f64;
+    let mut z = m * hll_tau((m - histogram[q + 1] as f64) / m);
+    for i in histogram[1..=q].iter().rev() {
         z += *i as f64;
         z *= 0.5;
     }
@@ -283,16 +332,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{HyperLogLog, NUM_REGISTERS};
+    use super::{DEFAULT_HLL_P, HLL_P_MAX, HLL_P_MIN, HyperLogLog, NUM_REGISTERS};
 
-    fn compare_with_delta(got: usize, expected: usize) {
+    fn compare_with_delta(got: usize, expected: usize, p: usize) {
         let expected = expected as f64;
         let diff = (got as f64) - expected;
         let diff = diff.abs() / expected;
         // times 6 because we want the tests to be stable
         // so we allow a rather large margin of error
         // this is adopted from redis's unit test version as well
-        let margin = 1.04 / ((NUM_REGISTERS as f64).sqrt()) * 6.0;
+        let margin = 1.04 / (((1_usize << p) as f64).sqrt()) * 6.0;
         assert!(
             diff <= margin,
             "{} is not near {} percent of {} which is ({}, {})",
@@ -310,7 +359,7 @@ mod tests {
             for i in 0..$SIZE {
                 hll.add(&i);
             }
-            compare_with_delta(hll.count(), $SIZE);
+            compare_with_delta(hll.count(), $SIZE, DEFAULT_HLL_P);
         }};
     }
 
@@ -379,14 +428,14 @@ mod tests {
             let b = s.as_bytes();
             hll.add(b);
         }
-        compare_with_delta(hll.count(), 1000);
+        compare_with_delta(hll.count(), 1000, DEFAULT_HLL_P);
     }
 
     #[test]
     fn test_string() {
         let mut hll = HyperLogLog::<String>::new();
         hll.extend((0..1000).map(|i| i.to_string()));
-        compare_with_delta(hll.count(), 1000);
+        compare_with_delta(hll.count(), 1000, DEFAULT_HLL_P);
     }
 
     #[test]
@@ -405,7 +454,7 @@ mod tests {
         other.extend((0..1000).map(|i| i.to_string()));
 
         hll.merge(&other);
-        compare_with_delta(hll.count(), 1000);
+        compare_with_delta(hll.count(), 1000, DEFAULT_HLL_P);
     }
 
     #[test]
@@ -414,6 +463,102 @@ mod tests {
         for i in 0..1_000_000 {
             hll.add(&(i % 1000));
         }
-        compare_with_delta(hll.count(), 1000);
+        compare_with_delta(hll.count(), 1000, DEFAULT_HLL_P);
+    }
+
+    // --- precision-parameter tests ---
+
+    #[test]
+    fn test_precision_default_matches_new() {
+        assert_eq!(HyperLogLog::<u64>::new().precision(), DEFAULT_HLL_P);
+        assert_eq!(NUM_REGISTERS, 1 << DEFAULT_HLL_P);
+    }
+
+    #[test]
+    fn test_precision_12_accuracy() {
+        let p = 12;
+        let mut hll = HyperLogLog::<u64>::with_precision(p);
+        for i in 0..10_000u64 {
+            hll.add(&i);
+        }
+        compare_with_delta(hll.count(), 10_000, p);
+    }
+
+    #[test]
+    fn test_precision_10_accuracy() {
+        let p = 10;
+        let mut hll = HyperLogLog::<u64>::with_precision(p);
+        for i in 0..10_000u64 {
+            hll.add(&i);
+        }
+        compare_with_delta(hll.count(), 10_000, p);
+    }
+
+    #[test]
+    fn test_from_registers_roundtrip() {
+        for p in [10, 12, 14] {
+            let mut src = HyperLogLog::<u64>::with_precision(p);
+            for i in 0..1000u64 {
+                src.add(&i);
+            }
+            let bytes = src.as_ref().to_vec();
+            assert_eq!(bytes.len(), 1 << p);
+
+            let dst = HyperLogLog::<u64>::from_registers(bytes);
+            assert_eq!(dst.precision(), p);
+            assert_eq!(dst.count(), src.count());
+        }
+    }
+
+    #[test]
+    fn test_merge_same_precision() {
+        for p in [10, 12, 14] {
+            let mut a = HyperLogLog::<u64>::with_precision(p);
+            a.extend(0..500u64);
+            let mut b = HyperLogLog::<u64>::with_precision(p);
+            b.extend(500..1000u64);
+            a.merge(&b);
+            compare_with_delta(a.count(), 1000, p);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot merge HLL sketches with different precisions")]
+    fn test_merge_different_precision_panics() {
+        let mut a = HyperLogLog::<u64>::with_precision(12);
+        let b = HyperLogLog::<u64>::with_precision(14);
+        a.merge(&b);
+    }
+
+    #[test]
+    fn test_precision_range_bounds() {
+        // boundary values must not panic
+        let _ = HyperLogLog::<u64>::with_precision(HLL_P_MIN);
+        let _ = HyperLogLog::<u64>::with_precision(HLL_P_MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "HLL precision must be in")]
+    fn test_precision_below_min_panics() {
+        let _ = HyperLogLog::<u64>::with_precision(HLL_P_MIN - 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "HLL precision must be in")]
+    fn test_precision_above_max_panics() {
+        let _ = HyperLogLog::<u64>::with_precision(HLL_P_MAX + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "register slice length must be a power of two")]
+    fn test_from_registers_non_power_of_two_panics() {
+        let _ = HyperLogLog::<u64>::from_registers(vec![0u8; 3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "inferred precision")]
+    fn test_from_registers_out_of_range_precision_panics() {
+        // 2 bytes => p = 1, below HLL_P_MIN
+        let _ = HyperLogLog::<u64>::from_registers(vec![0u8; 2]);
     }
 }
