@@ -1040,6 +1040,53 @@ SELECT gcd(arrow_cast(column1, 'Decimal128(38,0)'), arrow_cast(column2, 'Decimal
 5
 15
 
+# gcd with the remaining decimal array widths
+query R
+SELECT gcd(arrow_cast(column1, 'Decimal32(7,0)'), arrow_cast(column2, 'Decimal32(7,0)')) FROM (VALUES (15, 10), (15, 25), (15, 0));
+----
+5
+5
+15
+
+query R
+SELECT gcd(arrow_cast(column1, 'Decimal64(16,0)'), arrow_cast(column2, 'Decimal64(16,0)')) FROM (VALUES (15, 10), (15, 25), (15, 0));
+----
+5
+5
+15
+
+query R
+SELECT gcd(arrow_cast(column1, 'Decimal256(40,0)'), arrow_cast(column2, 'Decimal256(40,0)')) FROM (VALUES (15, 10), (15, 25), (15, 0));
+----
+5
+5
+15
+
+# gcd array with zero, minimum, and null scalars
+query I
+SELECT gcd(column1, -9223372036854775808) FROM (VALUES (1), (2), (NULL));
+----
+1
+2
+NULL
+
+query I
+SELECT gcd(column1, NULL) FROM (VALUES (1), (2), (NULL));
+----
+NULL
+NULL
+NULL
+
+# invalid argument count and type
+query error DataFusion error:
+SELECT gcd();
+
+query error DataFusion error:
+SELECT gcd(1, 2, 3);
+
+query error DataFusion error:
+SELECT gcd('x', 'y');
+
 
 # gcd array and scalar with nulls in the array
 query I
