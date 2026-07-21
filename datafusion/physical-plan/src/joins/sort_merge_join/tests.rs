@@ -27,7 +27,7 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::bitwise_stream::BitwiseSortMergeJoinStream;
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
@@ -52,6 +52,7 @@ use arrow_ord::sort::SortColumn;
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
 use datafusion_common::JoinType::*;
+use datafusion_common::instant::Instant;
 use datafusion_common::{
     JoinSide, internal_err,
     test_util::{batches_to_sort_string, batches_to_string},
@@ -3815,7 +3816,7 @@ async fn consume_stream_until_finish_barrier_reached(
     let mut after_finish_barrier_reached = vec![];
     let mut background_task = JoinSet::new();
 
-    let mut start_time_since_last_ready = datafusion_common::instant::Instant::now();
+    let mut start_time_since_last_ready = Instant::now();
     loop {
         let next_item = output_stream.next();
 
@@ -3835,7 +3836,7 @@ async fn consume_stream_until_finish_barrier_reached(
                 } else {
                     output_batched.push(batch);
                 }
-                start_time_since_last_ready = datafusion_common::instant::Instant::now();
+                start_time_since_last_ready = Instant::now();
             }
             Poll::Ready(Some(Err(e))) => return Err(e),
             Poll::Ready(None) if !switch_to_finish_barrier => {
