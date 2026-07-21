@@ -32,6 +32,7 @@ use datafusion_common::Result;
 
 use super::array_static_filter::ArrayStaticFilter;
 use super::byte_view_filter::instantiate_byte_view_filter;
+use super::fixed_size_binary_filter::instantiate_fixed_size_binary_filter;
 use super::primitive_filter::*;
 use super::static_filter::StaticFilter;
 
@@ -43,11 +44,14 @@ pub(super) fn instantiate_static_filter(
 ) -> Result<StaticFilterRef> {
     let in_array = flatten_dictionary_haystack(in_array)?;
 
-    // Byte-view filters inspect the physical view representation directly.
-    if dictionary_value_type(expr_data_type) == in_array.data_type()
-        && let Some(filter) = instantiate_byte_view_filter(&in_array)?
-    {
-        return Ok(filter);
+    // These filters inspect their Arrow physical representation directly.
+    if dictionary_value_type(expr_data_type) == in_array.data_type() {
+        if let Some(filter) = instantiate_fixed_size_binary_filter(&in_array)? {
+            return Ok(filter);
+        }
+        if let Some(filter) = instantiate_byte_view_filter(&in_array)? {
+            return Ok(filter);
+        }
     }
 
     if let Some(filter) = instantiate_branchless_filter(&in_array)? {
@@ -238,35 +242,6 @@ where
     branchless_filter_for_len::<T>(in_array, non_null_count).map(Some)
 }
 
-fn branchless_filter_for_len<T>(
-    in_array: &ArrayRef,
-    non_null_count: usize,
-) -> Result<StaticFilterRef>
-where
-    T: PrimitiveFilterType,
-    PrimitiveFilterNative<T>: Copy + PartialEq + Send + Sync,
-{
-    macro_rules! dispatch {
-        ($($n:literal),* $(,)?) => {
-            match non_null_count {
-                $($n => Ok(Arc::new(BranchlessFilter::<T, $n>::try_new(in_array)?)),)*
-                _ => unreachable!("validated branchless list length"),
-            }
-        };
-    }
-
-    match T::BRANCHLESS_MAX_LIST_LEN {
-        4 => dispatch!(0, 1, 2, 3, 4),
-        8 => dispatch!(0, 1, 2, 3, 4, 5, 6, 7, 8),
-        16 => dispatch!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
-        32 => dispatch!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-            22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
-        ),
-        _ => unreachable!("known branchless max list length"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use arrow::array::{Decimal128Array, UInt32Array};
@@ -327,5 +302,26 @@ mod tests {
         assert!(instantiate_branchless_filter(&array)?.is_some());
 
         Ok(())
+    }
+
+    #[test]
+    fn physical_type_gate_recursively_unwraps_dictionaries() {
+        let value_type = DataType::FixedSizeBinary(16);
+        let expr_type = DataType::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(DataType::Dictionary(
+                Box::new(DataType::Int16),
+                Box::new(value_type.clone()),
+            )),
+        );
+
+        assert_eq!(dictionary_value_type(&expr_type), &value_type);
+        assert_ne!(
+            dictionary_value_type(&DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::FixedSizeBinary(8)),
+            )),
+            &value_type
+        );
     }
 }
