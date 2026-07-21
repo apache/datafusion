@@ -80,8 +80,8 @@ impl ArrowFieldFunc {
                     Arc::new(Field::new(
                         "entries",
                         DataType::Struct(Fields::from(vec![
-                            Field::new("keys", DataType::Utf8, false),
-                            Field::new("values", DataType::Utf8, true),
+                            Field::new("key", DataType::Utf8, false),
+                            Field::new("value", DataType::Utf8, true),
                         ])),
                         false,
                     )),

@@ -2216,7 +2216,7 @@ fn round_trip_scalar_values_and_data_types() {
                 Arc::new(Field::new(
                     "entries",
                     DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Int32, true),
+                        Field::new("key", DataType::Int32, false),
                         Field::new("value", DataType::Utf8, false),
                     ])),
                     false,
@@ -2228,7 +2228,7 @@ fn round_trip_scalar_values_and_data_types() {
                 Arc::new(Field::new(
                     "entries",
                     DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Int32, true),
+                        Field::new("key", DataType::Int32, false),
                         Field::new("value", DataType::Utf8, true),
                     ])),
                     false,

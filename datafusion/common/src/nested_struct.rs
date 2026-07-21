@@ -509,7 +509,7 @@ mod tests {
     use arrow::{
         array::{
             BinaryArray, Int32Array, Int32Builder, Int64Array, ListArray, ListViewArray,
-            MapArray, MapBuilder, NullArray, StringArray, StringBuilder,
+            MapArray, MapBuilder, MapFieldNames, NullArray, StringArray, StringBuilder,
         },
         buffer::{NullBuffer, ScalarBuffer},
         datatypes::{DataType, Field, FieldRef, Int32Type},
@@ -1009,10 +1009,19 @@ mod tests {
             None,
         ])) as ArrayRef;
 
-        // Map field with second row null
+        // Map field with second row null. Use explicit field names matching the
+        // target schema; arrow's `MapBuilder` default is now `key`/`value`.
         let string_builder = StringBuilder::new();
         let int_builder = Int32Builder::new();
-        let mut map_builder = MapBuilder::new(None, string_builder, int_builder);
+        let mut map_builder = MapBuilder::new(
+            Some(MapFieldNames {
+                entry: "entries".to_string(),
+                key: "keys".to_string(),
+                value: "values".to_string(),
+            }),
+            string_builder,
+            int_builder,
+        );
         map_builder.keys().append_value("a");
         map_builder.values().append_value(1);
         map_builder.append(true).unwrap();
