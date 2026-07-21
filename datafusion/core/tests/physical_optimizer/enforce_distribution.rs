@@ -1125,7 +1125,7 @@ fn range_left_mark_hash_join_reuses_range_partitioning() -> Result<()> {
 }
 
 #[test]
-fn range_left_anti_hash_join_rehashes_incompatible_sort_options() -> Result<()> {
+fn range_left_anti_hash_join_rehashes_incompatible_null_options() -> Result<()> {
     let left = parquet_exec_with_output_partitioning(range_partitioning(
         "a",
         [10, 20, 30],
@@ -1133,10 +1133,10 @@ fn range_left_anti_hash_join_rehashes_incompatible_sort_options() -> Result<()> 
     )?);
     let right = parquet_exec_with_output_partitioning(range_partitioning(
         "a",
-        [30, 20, 10],
+        [10, 20, 30],
         SortOptions {
-            descending: true,
-            nulls_first: true,
+            descending: false,
+            nulls_first: false,
         },
     )?);
     let join_on = vec![(
@@ -1156,7 +1156,7 @@ fn range_left_anti_hash_join_rehashes_incompatible_sort_options() -> Result<()> 
       RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
         DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
       RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
-        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 DESC], [(30), (20), (10)], 4), file_type=parquet
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC NULLS LAST], [(10), (20), (30)], 4), file_type=parquet
     "
     );
 
