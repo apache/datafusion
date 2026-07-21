@@ -73,7 +73,7 @@ impl HexCase {
 ///
 /// Allocates only through `out`'s own growth. Callers that must bound or guard
 /// that growth should reserve capacity in `out` before calling.
-#[inline]
+#[inline(always)]
 pub fn encode_bytes_into(bytes: &[u8], case: HexCase, out: &mut Vec<u8>) {
     let lookup = case.lookup();
     for &byte in bytes {
@@ -104,7 +104,7 @@ pub fn encode_bytes_into(bytes: &[u8], case: HexCase, out: &mut Vec<u8>) {
 /// encode_bytes_to_slice(&[0xde, 0xad, 0xbe, 0xef], HexCase::Lower, &mut out);
 /// assert_eq!(&out, b"deadbeef");
 /// ```
-#[inline]
+#[inline(always)]
 pub fn encode_bytes_to_slice(bytes: &[u8], case: HexCase, out: &mut [u8]) {
     debug_assert_eq!(out.len(), bytes.len() * 2);
     let lookup = case.lookup();
@@ -152,7 +152,7 @@ pub fn encode_bytes(bytes: &[u8], case: HexCase) -> String {
 /// assert_eq!(encode_u64(0xAB, HexCase::Lower, &mut buf), b"ab");
 /// assert_eq!(encode_u64(0, HexCase::Lower, &mut buf), b"0");
 /// ```
-#[inline]
+#[inline(always)]
 pub fn encode_u64(v: u64, case: HexCase, buf: &mut [u8; 16]) -> &[u8] {
     let start = write_digits(v, case, buf);
     &buf[start..]
@@ -166,7 +166,7 @@ pub fn encode_u64(v: u64, case: HexCase, buf: &mut [u8; 16]) -> &[u8] {
 /// return instead reborrowed `buf` as `&buf[..]` inline in [`encode_u64`], the
 /// borrow checker would extend that reborrow over the rest of the function
 /// body, conflicting with the mutable writes on the non-zero path below.
-#[inline]
+#[inline(always)]
 fn write_digits(v: u64, case: HexCase, buf: &mut [u8; 16]) -> usize {
     if v == 0 {
         buf[15] = b'0';
