@@ -2143,3 +2143,43 @@ FROM (SELECT r AS x, r AS y FROM (SELECT random() AS r FROM volatile_scan) AS t)
 true
 true
 true
+
+#####################
+# Section: expensive expressions are not re-inlined by projection pushdown
+#
+# A repeated expensive expression (e.g. `power(a, 2)`) is extracted by CSE into
+# a single intermediate projection. Projection pushdown must keep it as one
+# `ProjectionExec` above the scan (`power(a, 2)` computed once) rather than
+# inlining it into the `DataSourceExec` projection and re-evaluating it at each
+# reference site.
+#####################
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+COPY (SELECT 1.0::double AS a, 2.0::double AS b, 3::bigint AS c
+      UNION ALL SELECT 4.0, 5.0, 6
+      UNION ALL SELECT 7.0, 8.0, 9)
+TO 'test_files/scratch/projection_pushdown/cse.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE cse_scan STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/cse.parquet';
+
+query TT
+EXPLAIN SELECT power(a, 2) + b AS x, power(a, 2) - b AS y, power(a, 2) * c AS z
+FROM cse_scan;
+----
+logical_plan
+01)Projection: __common_expr_1 + cse_scan.b AS x, __common_expr_1 - cse_scan.b AS y, __common_expr_1 * CAST(cse_scan.c AS Float64) AS z
+02)--Projection: power(cse_scan.a, Float64(2)) AS __common_expr_1, cse_scan.b, cse_scan.c
+03)----TableScan: cse_scan projection=[a, b, c]
+physical_plan
+01)ProjectionExec: expr=[__common_expr_1@0 + b@1 as x, __common_expr_1@0 - b@1 as y, __common_expr_1@0 * CAST(c@2 AS Float64) as z]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/cse.parquet]]}, projection=[power(a@0, 2) as __common_expr_1, b, c], file_type=parquet
+
+# Reset the config changed above (the SLT runner expects target_partitions = 4).
+statement ok
+SET datafusion.execution.target_partitions = 4;

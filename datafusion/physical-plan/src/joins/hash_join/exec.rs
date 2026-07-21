@@ -1297,10 +1297,15 @@ impl ExecutionPlan for HashJoinExec {
             && matches!(
                 self.join_type,
                 JoinType::Inner
+                    | JoinType::Full
                     | JoinType::Left
                     | JoinType::LeftSemi
                     | JoinType::LeftAnti
                     | JoinType::LeftMark
+                    | JoinType::Right
+                    | JoinType::RightSemi
+                    | JoinType::RightAnti
+                    | JoinType::RightMark
             )
         {
             requirements.allow_range_satisfaction_for_key_partitioning()
@@ -1414,6 +1419,7 @@ impl ExecutionPlan for HashJoinExec {
                             filter,
                             on_right,
                             repartition_random_state,
+                            self.null_aware,
                         ))
                     })))
                 })

@@ -150,13 +150,40 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         "range_partitioned_narrow",
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("test_files/scratch_range_partitioning/range_partitioned_narrow"),
-        schema,
+        Arc::clone(&schema),
         [
             "1,1,10\n5,2,50\n",
             "10,1,100\n15,2,150\n",
             "20,1,200\n25,2,250\n30,1,300\n35,2,350\n",
         ],
         Some(narrow_output_partitioning),
+    );
+
+    let sparse_output_partitioning = Partitioning::Range(
+        RangePartitioning::try_new(
+            vec![col("range_key").sort(true, true)],
+            vec![
+                SplitPoint::new(vec![ScalarValue::Int32(Some(10))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(20))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(30))]),
+            ],
+        )
+        .expect("range partitioning should be valid"),
+    );
+
+    register_csv_listing_table(
+        ctx,
+        "range_partitioned_sparse",
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test_files/scratch_range_partitioning/range_partitioned_sparse"),
+        schema,
+        [
+            "5,2,50\n8,3,80\n",
+            "10,1,100\n",
+            "20,1,200\n",
+            "30,1,300\n40,4,400\n",
+        ],
+        Some(sparse_output_partitioning),
     );
 }
 
