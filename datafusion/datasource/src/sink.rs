@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{Result, assert_eq_or_internal_err};
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_datafusion_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use datafusion_physical_expr_common::sort_expr::{LexRequirement, OrderingRequirements};
@@ -192,6 +192,40 @@ impl DataSinkExec {
                     })
             })
             .transpose()
+    }
+
+    /// Decode the optional sink ordering from a protobuf plan node.
+    #[cfg(feature = "proto")]
+    pub fn decode_sort_order(
+        collection: Option<
+            &datafusion_proto_models::protobuf::PhysicalSortExprNodeCollection,
+        >,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+        schema: &Schema,
+    ) -> Result<Option<LexRequirement>> {
+        use arrow::compute::SortOptions;
+        use datafusion_physical_expr::PhysicalSortExpr;
+
+        let Some(collection) = collection else {
+            return Ok(None);
+        };
+        let sort_exprs = collection
+            .physical_sort_expr_nodes
+            .iter()
+            .map(|node| {
+                let expr = node.expr.as_ref().ok_or_else(|| {
+                    internal_datafusion_err!("Unexpected empty physical expression")
+                })?;
+                Ok(PhysicalSortExpr {
+                    expr: ctx.decode_expr(expr, schema)?,
+                    options: SortOptions {
+                        descending: !node.asc,
+                        nulls_first: node.nulls_first,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(LexRequirement::new(sort_exprs.into_iter().map(Into::into)))
     }
 
     fn create_schema(
