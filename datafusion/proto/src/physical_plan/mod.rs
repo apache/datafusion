@@ -1555,18 +1555,17 @@ pub trait PhysicalPlanNodeExt: Sized {
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&limit.input, ctx, proto_converter)?;
-        let fetch = if limit.fetch >= 0 {
-            Some(limit.fetch as usize)
-        } else {
-            None
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::GlobalLimit(Box::new(
+                limit.clone(),
+            ))),
         };
-        Ok(Arc::new(GlobalLimitExec::new(
-            input,
-            limit.skip as usize,
-            fetch,
-        )))
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        GlobalLimitExec::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -1579,9 +1578,17 @@ pub trait PhysicalPlanNodeExt: Sized {
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&limit.input, ctx, proto_converter)?;
-        Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::LocalLimit(Box::new(
+                limit.clone(),
+            ))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        LocalLimitExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_window_physical_plan(
@@ -2994,23 +3001,13 @@ pub trait PhysicalPlanNodeExt: Sized {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            limit.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::GlobalLimit(Box::new(
-                protobuf::GlobalLimitExecNode {
-                    input: Some(Box::new(input)),
-                    skip: limit.skip() as u32,
-                    fetch: match limit.fetch() {
-                        Some(n) => n as i64,
-                        _ => -1, // no limit
-                    },
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        limit.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("GlobalLimitExec is not serializable")
         })
     }
 
@@ -3023,19 +3020,14 @@ pub trait PhysicalPlanNodeExt: Sized {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            limit.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::LocalLimit(Box::new(
-                protobuf::LocalLimitExecNode {
-                    input: Some(Box::new(input)),
-                    fetch: limit.fetch() as u32,
-                },
-            ))),
-        })
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        limit
+            .try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("LocalLimitExec is not serializable"))
     }
 
     fn try_from_hash_join_exec(
