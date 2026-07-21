@@ -24,15 +24,13 @@ use arrow::datatypes::{
     Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::cast::as_primitive_array;
+use datafusion_common::utils::hex::{HexCase, encode_u64};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
-
-/// Hex lookup table for fast conversion
-const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
 
 /// Converts the number to its equivalent hexadecimal representation.
 /// to_hex(2147483647) = '7fffffff'
@@ -59,8 +57,7 @@ where
     // Process all values directly (including null slots - we write empty strings for nulls)
     // The null bitmap will mark which entries are actually null
     for value in integer_array.values() {
-        let hex_len = value.write_hex_to_buffer(&mut hex_buffer);
-        values.extend_from_slice(&hex_buffer[16 - hex_len..]);
+        values.extend_from_slice(value.write_hex(&mut hex_buffer));
         offsets.push(values.len() as i32);
     }
 
@@ -79,101 +76,50 @@ where
 #[inline]
 fn to_hex_scalar<T: ToHex>(value: T) -> String {
     let mut hex_buffer = [0u8; 16];
-    let hex_len = value.write_hex_to_buffer(&mut hex_buffer);
-    // SAFETY: hex_buffer is ASCII hex digits
-    unsafe { std::str::from_utf8_unchecked(&hex_buffer[16 - hex_len..]).to_string() }
+    let hex = value.write_hex(&mut hex_buffer);
+    // SAFETY: hex holds only ASCII hex digits.
+    unsafe { std::str::from_utf8_unchecked(hex).to_string() }
 }
 
 /// Trait for converting integer types to hexadecimal in a buffer
 trait ToHex: ArrowNativeType {
-    /// Write hex representation to buffer and return the number of hex digits written.
-    /// The hex digits are written right-aligned in the buffer (starting from position 16 - len).
-    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize;
+    /// Writes the hex representation into `buf` and returns the written
+    /// subslice. Digits are right-aligned in `buf` with leading zeros trimmed.
+    fn write_hex(self, buf: &mut [u8; 16]) -> &[u8];
 }
 
-/// Write unsigned value to hex buffer and return the number of digits written.
-/// Digits are written right-aligned in the buffer.
-#[inline]
-fn write_unsigned_hex_to_buffer(value: u64, buffer: &mut [u8; 16]) -> usize {
-    if value == 0 {
-        buffer[15] = b'0';
-        return 1;
-    }
-
-    // Write hex digits from right to left
-    let mut pos = 16;
-    let mut v = value;
-    while v > 0 {
-        pos -= 1;
-        buffer[pos] = HEX_CHARS[(v & 0xf) as usize];
-        v >>= 4;
-    }
-
-    16 - pos
+/// Signed values use their two's complement representation, matching a cast to
+/// the corresponding unsigned type.
+macro_rules! impl_to_hex_signed {
+    ($ty:ty) => {
+        impl ToHex for $ty {
+            #[inline]
+            fn write_hex(self, buf: &mut [u8; 16]) -> &[u8] {
+                encode_u64(self as i64 as u64, HexCase::Lower, buf)
+            }
+        }
+    };
 }
 
-/// Write signed value to hex buffer (two's complement for negative) and return digit count
-#[inline]
-fn write_signed_hex_to_buffer(value: i64, buffer: &mut [u8; 16]) -> usize {
-    // For negative values, use two's complement representation (same as casting to u64)
-    write_unsigned_hex_to_buffer(value as u64, buffer)
+macro_rules! impl_to_hex_unsigned {
+    ($ty:ty) => {
+        impl ToHex for $ty {
+            #[inline]
+            fn write_hex(self, buf: &mut [u8; 16]) -> &[u8] {
+                encode_u64(self as u64, HexCase::Lower, buf)
+            }
+        }
+    };
 }
 
-impl ToHex for i8 {
-    #[inline]
-    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
-        write_signed_hex_to_buffer(self as i64, buffer)
-    }
-}
-
-impl ToHex for i16 {
-    #[inline]
-    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
-        write_signed_hex_to_buffer(self as i64, buffer)
-    }
-}
-
-impl ToHex for i32 {
-    #[inline]
-    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
-        write_signed_hex_to_buffer(self as i64, buffer)
-    }
-}
-
-impl ToHex for i64 {
-    #[inline]
-    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
-        write_signed_hex_to_buffer(self, buffer)
-    }
-}
-
-impl ToHex for u8 {
-    #[inline]
-    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
-        write_unsigned_hex_to_buffer(self as u64, buffer)
-    }
-}
-
-impl ToHex for u16 {
-    #[inline]
-    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
-        write_unsigned_hex_to_buffer(self as u64, buffer)
-    }
-}
-
-impl ToHex for u32 {
-    #[inline]
-    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
-        write_unsigned_hex_to_buffer(self as u64, buffer)
-    }
-}
-
-impl ToHex for u64 {
-    #[inline]
-    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
-        write_unsigned_hex_to_buffer(self, buffer)
-    }
-}
+impl_to_hex_signed!(i8);
+impl_to_hex_signed!(i16);
+impl_to_hex_signed!(i32);
+impl_to_hex_signed!(i64);
+impl_to_hex_unsigned!(u8);
+impl_to_hex_unsigned!(u16);
+impl_to_hex_unsigned!(u32);
+impl_to_hex_unsigned!(u64);
 
 #[user_doc(
     doc_section(label = "String Functions"),
