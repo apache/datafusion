@@ -166,11 +166,11 @@ fn random_string(rng: &mut StdRng, len: usize) -> String {
 fn strings_with_shared_prefix(
     rng: &mut StdRng,
     count: usize,
-    prefix_len: usize,
+    prefix: &str,
+    discriminator: char,
 ) -> Vec<String> {
-    let prefix = random_string(rng, prefix_len);
     (0..count)
-        .map(|_| format!("{}{}", prefix, random_string(rng, 8))) // prefix + random 8-char suffix
+        .map(|_| format!("{prefix}{}{discriminator}", random_string(rng, 7)))
         .collect()
 }
 
@@ -275,12 +275,14 @@ fn bench_string_shared_prefix<A>(
         .wrapping_add(prefix_len as u64 * 0x4444);
     let mut rng = StdRng::seed_from_u64(seed);
 
-    // Generate IN list with a shared prefix.
-    let haystack = strings_with_shared_prefix(&mut rng, list_size, prefix_len);
+    // Use the same prefix and equal-length, disjoint suffixes for both pools so
+    // misses exercise length/prefix collisions rather than immediate rejection.
+    let prefix = random_string(&mut rng, prefix_len);
+    let haystack = strings_with_shared_prefix(&mut rng, list_size, &prefix, 'h');
 
     // Generate non-matching strings with the same prefix to keep misses close
     // to the matching set.
-    let non_match_pool = strings_with_shared_prefix(&mut rng, 100, prefix_len);
+    let non_match_pool = strings_with_shared_prefix(&mut rng, 100, &prefix, 'm');
 
     // Generate array with controlled match rate
     let values: A = (0..ARRAY_SIZE)
@@ -313,6 +315,7 @@ fn bench_string_mixed_lengths<A>(
     name: &str,
     list_size: usize,
     match_rate: f64,
+    inline_rate: f64,
     to_scalar: fn(String) -> ScalarValue,
 ) where
     A: Array + FromIterator<Option<String>> + 'static,
@@ -320,12 +323,21 @@ fn bench_string_mixed_lengths<A>(
     let seed = 0xABCD_EF01_u64.wrapping_add(list_size as u64 * 0x5555);
     let mut rng = StdRng::seed_from_u64(seed);
 
-    // Mixed lengths: some short (<= 12), some long (> 12)
-    let lengths = [4, 8, 12, 16, 20, 24];
+    let inline_lengths = [4, 8, 12];
+    let long_lengths = [16, 20, 24];
+    let inline_count = ((list_size as f64 * inline_rate).round() as usize)
+        .max(1)
+        .min(list_size - 1);
 
     // Generate IN list with mixed lengths
     let haystack: Vec<String> = (0..list_size)
-        .map(|_| {
+        .map(|idx| {
+            let inline = idx < inline_count;
+            let lengths = if inline {
+                &inline_lengths
+            } else {
+                &long_lengths
+            };
             let len = *lengths.choose(&mut rng).unwrap();
             random_string(&mut rng, len)
         })
@@ -337,6 +349,11 @@ fn bench_string_mixed_lengths<A>(
             Some(if !haystack.is_empty() && rng.random_bool(match_rate) {
                 haystack.choose(&mut rng).unwrap().clone()
             } else {
+                let lengths = if rng.random_bool(inline_rate) {
+                    &inline_lengths
+                } else {
+                    &long_lengths
+                };
                 let len = *lengths.choose(&mut rng).unwrap();
                 random_string(&mut rng, len)
             })
@@ -602,6 +619,7 @@ fn bench_utf8(c: &mut Criterion) {
                 &format!("mixed_len/list={list_size}/match={match_pct}%"),
                 list_size,
                 match_pct as f64 / 100.0,
+                0.5,
                 to_scalar,
             );
         }
@@ -694,6 +712,23 @@ fn bench_utf8view(c: &mut Criterion) {
                 &format!("mixed_len/list={list_size}/match={match_pct}%"),
                 list_size,
                 match_pct as f64 / 100.0,
+                0.5,
+                to_scalar,
+            );
+        }
+    }
+
+    // Strongly skewed mixed lists exercise routing near the all-inline and
+    // all-long boundaries while retaining both representations.
+    for inline_pct in [2, 98] {
+        for match_pct in MATCH_RATES {
+            bench_string_mixed_lengths::<StringViewArray>(
+                c,
+                "utf8view",
+                &format!("mixed_len/inline={inline_pct}%/list=64/match={match_pct}%"),
+                64,
+                match_pct as f64 / 100.0,
+                inline_pct as f64 / 100.0,
                 to_scalar,
             );
         }
