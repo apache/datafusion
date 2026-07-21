@@ -1294,7 +1294,15 @@ impl ExecutionPlan for HashJoinExec {
         };
 
         if self.mode == PartitionMode::Partitioned
-            && matches!(self.join_type, JoinType::Inner | JoinType::Full)
+            && matches!(
+                self.join_type,
+                JoinType::Inner
+                    | JoinType::Full
+                    | JoinType::Right
+                    | JoinType::RightSemi
+                    | JoinType::RightAnti
+                    | JoinType::RightMark
+            )
         {
             requirements.allow_range_satisfaction_for_key_partitioning()
         } else {
