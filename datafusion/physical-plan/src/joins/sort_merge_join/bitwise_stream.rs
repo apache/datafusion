@@ -121,14 +121,15 @@
 
 use std::cmp::Ordering;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::EmptyRecordBatchStream;
 use crate::joins::utils::{JoinFilter, JoinKeyComparator, compare_join_arrays};
 use crate::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, RecordOutput,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time,
 };
 use crate::spill::spill_manager::SpillManager;
-use crate::stream::RecordBatchStreamAdapter;
+use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
 use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch, not};
 use arrow::datatypes::SchemaRef;
@@ -252,11 +253,18 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     coalescer: BatchCoalescer,
     schema: SchemaRef,
 
-    // Metrics
+    // Metrics — output rows/batches and end time are recorded by the
+    // ObservedStream wrapper in try_new, not here.
     input_batches: Count,
     input_rows: Count,
-    baseline_metrics: BaselineMetrics,
     peak_mem_used: Gauge,
+    /// Time spent doing the join's own work (including spill write and
+    /// read-back). The clock is stopped while awaiting the child inputs or
+    /// the consumer taking an emitted batch — see [`Self::stop_join_time`].
+    join_time: Time,
+    /// Start of the currently running `join_time` span; `None` while the
+    /// clock is stopped.
+    join_time_start: Option<Instant>,
 
     // Memory / spill — only the inner key buffer is tracked via reservation,
     // matching existing SMJ (which tracks only the buffered side). The outer
@@ -311,9 +319,7 @@ impl BitwiseSortMergeJoinStream {
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
         );
 
-        // TODO: join_time is registered but not yet populated; time metrics
-        // will be re-wired once the generator-based refactor settles.
-        let _join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
+        let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
         let input_batches =
             MetricBuilder::new(metrics).counter("input_batches", partition);
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
@@ -345,8 +351,9 @@ impl BitwiseSortMergeJoinStream {
             schema: Arc::clone(&schema),
             input_batches,
             input_rows,
-            baseline_metrics,
             peak_mem_used,
+            join_time,
+            join_time_start: None,
             reservation,
             spill_manager,
             runtime_env,
@@ -357,11 +364,36 @@ impl BitwiseSortMergeJoinStream {
         };
 
         let stream = async_try_stream(|mut emitter| async move {
-            state.join(&mut emitter).await?;
-            state.baseline_metrics.done();
-            Ok(())
+            state.start_join_time();
+            let result = state.join(&mut emitter).await;
+            state.stop_join_time();
+            result
         });
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        // ObservedStream records the baseline metrics (output rows/batches,
+        // end time) exactly as the former hand-written poll_next did.
+        Ok(Box::pin(ObservedStream::new(
+            Box::pin(RecordBatchStreamAdapter::new(schema, stream)),
+            baseline_metrics,
+            None,
+        )))
+    }
+
+    /// Start (resume) the `join_time` clock.
+    fn start_join_time(&mut self) {
+        debug_assert!(self.join_time_start.is_none(), "join_time already running");
+        self.join_time_start = Some(Instant::now());
+    }
+
+    /// Stop (pause) the `join_time` clock, accumulating the elapsed span.
+    ///
+    /// Called around awaits whose duration is not the join's own work: the
+    /// child input streams' `next()` and `emitter.emit()` (where the
+    /// consumer processes the batch). The join's own spill read-back is NOT
+    /// excluded — that time is join work.
+    fn stop_join_time(&mut self) {
+        if let Some(start) = self.join_time_start.take() {
+            self.join_time.add_elapsed(start);
+        }
     }
 
     /// Resize the memory reservation to match current tracked usage.
@@ -440,7 +472,11 @@ impl BitwiseSortMergeJoinStream {
     /// Fetch the next outer batch. Returns true if a batch was loaded.
     async fn next_outer_batch(&mut self) -> Result<bool> {
         loop {
-            match self.outer.next().await {
+            // The child's execution time is its own, not join_time.
+            self.stop_join_time();
+            let item = self.outer.next().await;
+            self.start_join_time();
+            match item {
                 None => {
                     // Release the outer input pipeline's resources.
                     let outer_schema = self.outer.schema();
@@ -472,7 +508,11 @@ impl BitwiseSortMergeJoinStream {
     /// Fetch the next inner batch. Returns true if a batch was loaded.
     async fn next_inner_batch(&mut self) -> Result<bool> {
         loop {
-            match self.inner.next().await {
+            // The child's execution time is its own, not join_time.
+            self.stop_join_time();
+            let item = self.inner.next().await;
+            self.start_join_time();
+            match item {
                 None => {
                     // Release the inner input pipeline's resources.
                     let inner_schema = self.inner.schema();
@@ -701,6 +741,9 @@ impl BitwiseSortMergeJoinStream {
                 .read_spill_as_stream(Arc::clone(spill_file), None)?;
             let mut spill_stream_has_data = false;
 
+            // Note: the clock keeps running across the spill reads — the
+            // spill file is the join's own data, so reading it back is
+            // join work (unlike the child inputs' `next()`).
             while matched_count < outer_group_len {
                 match spill_stream.next().await {
                     Some(Ok(inner_slice)) => {
@@ -987,8 +1030,11 @@ impl BitwiseSortMergeJoinStream {
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) {
         while let Some(batch) = self.coalescer.next_completed_batch() {
-            (&batch).record_output(&self.baseline_metrics);
+            // While the emitted batch is in the consumer's hands the join
+            // isn't doing any work.
+            self.stop_join_time();
             emitter.emit(batch).await;
+            self.start_join_time();
         }
     }
 

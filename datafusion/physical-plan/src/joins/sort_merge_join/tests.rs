@@ -4656,6 +4656,21 @@ async fn bitwise_spill_with_filter() -> Result<()> {
                 metrics.spilled_rows().unwrap() > 0,
                 "expected spilled_rows > 0 for {join_type:?}, batch_size={batch_size}"
             );
+            let join_time = metrics
+                .sum_by_name("join_time")
+                .map(|m| m.as_usize())
+                .unwrap_or(0);
+            assert!(
+                join_time > 0,
+                "expected join_time > 0 for {join_type:?}, batch_size={batch_size}"
+            );
+            let output_rows = metrics.output_rows().unwrap_or(0);
+            let collected_rows: usize = spilled_result.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(
+                output_rows, collected_rows,
+                "output_rows metric should match collected rows for \
+                 {join_type:?}, batch_size={batch_size}"
+            );
 
             // Run without spilling and compare results
             let task_ctx_no_spill = Arc::new(
