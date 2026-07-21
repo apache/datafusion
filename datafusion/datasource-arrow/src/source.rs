@@ -80,6 +80,7 @@ impl FileOpener for ArrowStreamFileOpener {
         }
         let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
+        let buffer_allocation_strategy = self.buffer_allocation_strategy;
 
         Ok(Box::pin(async move {
             let r = object_store
@@ -89,7 +90,7 @@ impl FileOpener for ArrowStreamFileOpener {
             let stream = match r.payload {
                 #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(file, _) => futures::stream::iter(
-                    StreamReader::try_new(file.try_clone()?, projection.clone())?.with_buffer_allocation_strategy(self.buffer_allocation_strategy),
+                    StreamReader::try_new(file.try_clone()?, projection.clone())?.with_buffer_allocation_strategy(buffer_allocation_strategy),
                 )
                 .map(|r| r.map_err(Into::into))
                 .boxed(),
@@ -99,7 +100,7 @@ impl FileOpener for ArrowStreamFileOpener {
                     futures::stream::iter(StreamReader::try_new(
                         cursor,
                         projection.clone(),
-                    )?.with_buffer_allocation_strategy(self.buffer_allocation_strategy))
+                    )?.with_buffer_allocation_strategy(buffer_allocation_strategy))
                     .map(|r| r.map_err(Into::into))
                     .boxed()
                 }
@@ -121,6 +122,7 @@ impl FileOpener for ArrowFileOpener {
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
+        let buffer_allocation_strategy = self.buffer_allocation_strategy;
 
         Ok(Box::pin(async move {
             let range = partitioned_file.range.clone();
@@ -132,7 +134,7 @@ impl FileOpener for ArrowFileOpener {
                     let stream = match r.payload {
                         #[cfg(not(target_arch = "wasm32"))]
                         GetResultPayload::File(file, _) => futures::stream::iter(
-                            FileReader::try_new(file.try_clone()?, projection.clone())?.with_buffer_allocation_strategy(self.buffer_allocation_strategy),
+                            FileReader::try_new(file.try_clone()?, projection.clone())?.with_buffer_allocation_strategy(buffer_allocation_strategy),
                         )
                         .map(|r| r.map_err(Into::into))
                         .boxed(),
@@ -142,7 +144,7 @@ impl FileOpener for ArrowFileOpener {
                             futures::stream::iter(FileReader::try_new(
                                 cursor,
                                 projection.clone(),
-                            )?.with_buffer_allocation_strategy(self.buffer_allocation_strategy))
+                            )?.with_buffer_allocation_strategy(buffer_allocation_strategy))
                             .map(|r| r.map_err(Into::into))
                             .boxed()
                         }
@@ -182,7 +184,7 @@ impl FileOpener for ArrowFileOpener {
                     // build decoder according to footer & projection
                     let schema =
                         arrow_ipc::convert::fb_to_schema(footer.schema().unwrap());
-                    let mut decoder = FileDecoder::new(schema.into(), footer.version()).with_buffer_allocation_strategy(self.buffer_allocation_strategy);
+                    let mut decoder = FileDecoder::new(schema.into(), footer.version()).with_buffer_allocation_strategy(buffer_allocation_strategy);
                     if let Some(projection) = projection {
                         decoder = decoder.with_projection(projection);
                     }

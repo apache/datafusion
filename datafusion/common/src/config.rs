@@ -32,14 +32,13 @@ use hex;
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
-use std::fmt::{self, Debug, Display, Formatter};
+use std::fmt::{self, Display};
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::str::FromStr;
 #[cfg(feature = "parquet_encryption")]
 use std::sync::Arc;
-use arrow::buffer::Buffer;
-use arrow_ipc::reader::{BufferAllocationStrategy, FileDecoder, StreamDecoder};
+use arrow_ipc::reader::BufferAllocationStrategy;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -587,7 +586,7 @@ impl Display for SpillCompression {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub struct BufferAllocationStrategyWrapper(arrow_ipc::reader::BufferAllocationStrategy);
+pub struct BufferAllocationStrategyWrapper(BufferAllocationStrategy);
 
 impl Deref for BufferAllocationStrategyWrapper {
     type Target = BufferAllocationStrategy;
@@ -609,8 +608,8 @@ impl Into<BufferAllocationStrategy> for BufferAllocationStrategyWrapper {
     }
 }
 
-impl Debug for BufferAllocationStrategyWrapper {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl fmt::Debug for BufferAllocationStrategyWrapper {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
