@@ -62,6 +62,8 @@ use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctio
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
+use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
@@ -4431,18 +4433,44 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
         Ok(())
     }
 
+    /// Decode a custom extension expression from `buf`.
+    ///
+    /// `inputs` holds the already-decoded children carried in the
+    /// `PhysicalExtensionExprNode.inputs` field. If the codec instead embeds
+    /// nested `PhysicalExprNode`s *inside* `buf`, decode them through
+    /// `ctx.decode(..)` (equivalently [`PhysicalExprDecodeCtx::decode`]) rather
+    /// than the free [`parse_physical_expr`] function: `ctx` carries the active
+    /// schema and task context (so UDF/column references resolve against the
+    /// real registry) and routes through any active `DeduplicatingDeserializer`,
+    /// so a shared inner expression (e.g. a `DynamicFilterPhysicalExpr`
+    /// referenced both from a `SortExec.filter` and from inside this blob)
+    /// cache-hits on its `expr_id` and re-shares one `Arc<dyn PhysicalExpr>`.
+    ///
+    /// [`parse_physical_expr`]: crate::physical_plan::from_proto::parse_physical_expr
     fn try_decode_expr(
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn PhysicalExpr>],
+        _ctx: &PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
     }
 
+    /// Encode a custom extension expression into `buf`.
+    ///
+    /// If the codec embeds nested `PhysicalExprNode`s inside `buf`, encode them
+    /// through `ctx.encode_child(..)` (equivalently
+    /// [`PhysicalExprEncodeCtx::encode_child`]) rather than the free
+    /// [`serialize_physical_expr`] function, so an active
+    /// `DeduplicatingProtoConverter` stamps matching `expr_id`s for shared
+    /// inner expressions. See [`Self::try_decode_expr`].
+    ///
+    /// [`serialize_physical_expr`]: crate::physical_plan::to_proto::serialize_physical_expr
     fn try_encode_expr(
         &self,
         _node: &Arc<dyn PhysicalExpr>,
         _buf: &mut Vec<u8>,
+        _ctx: &PhysicalExprEncodeCtx<'_>,
     ) -> Result<()> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
     }
