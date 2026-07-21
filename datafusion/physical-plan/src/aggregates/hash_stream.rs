@@ -532,7 +532,9 @@ impl PartialHashAggregateStream {
 
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
-        let result = original_state.hash_table_mut().next_output_batch();
+        let result = original_state
+            .hash_table_mut()
+            .next_output_batch(&self.baseline_metrics);
         timer.done();
 
         match result {
@@ -560,10 +562,7 @@ impl PartialHashAggregateStream {
                     original_state
                 };
 
-                ControlFlow::Break((
-                    Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
-                    next_state,
-                ))
+                ControlFlow::Break((Poll::Ready(Some(Ok(batch))), next_state))
             }
             Ok(None) => {
                 let _ = self.reservation.try_resize(0);
@@ -894,7 +893,9 @@ impl FinalHashAggregateStream {
 
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
-        let result = original_state.hash_table_mut().next_output_batch();
+        let result = original_state
+            .hash_table_mut()
+            .next_output_batch(&self.baseline_metrics);
         timer.done();
 
         match result {
@@ -909,10 +910,7 @@ impl FinalHashAggregateStream {
                     original_state
                 };
 
-                ControlFlow::Break((
-                    Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
-                    next_state,
-                ))
+                ControlFlow::Break((Poll::Ready(Some(Ok(batch))), next_state))
             }
             Ok(None) => {
                 let _ = self.reservation.try_resize(0);
@@ -1019,6 +1017,223 @@ mod tests {
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
     use futures::StreamExt;
+
+    use crate::metrics::MetricValue;
+
+    fn task_ctx_with_batch_size(batch_size: u64) -> Result<Arc<TaskContext>> {
+        let runtime = RuntimeEnvBuilder::default().build_arc()?;
+        let mut task_ctx = TaskContext::default().with_runtime(runtime);
+        let mut session_config = task_ctx.session_config().clone();
+        session_config = session_config.set(
+            "datafusion.execution.batch_size",
+            &datafusion_common::ScalarValue::UInt64(Some(batch_size)),
+        );
+        task_ctx = task_ctx.with_session_config(session_config);
+        Ok(Arc::new(task_ctx))
+    }
+
+    fn output_bytes_metric(agg: &AggregateExec) -> usize {
+        agg.metrics()
+            .unwrap()
+            .sum(|m| matches!(m.value(), MetricValue::OutputBytes(_)))
+            .map(|v| v.as_usize())
+            .unwrap()
+    }
+
+    // Regression test: the hash table materializes its emitted output once,
+    // then slices it into `batch_size`-sized chunks across successive
+    // `poll_next` calls (see `next_batch` in aggregate_hash_table/common.rs).
+    // Since those slices share the same underlying buffers, `output_bytes`
+    // must not count those buffers once per slice.
+    #[tokio::test]
+    async fn test_partial_hash_stream_output_bytes_metric_deduplicates_across_slices()
+    -> Result<()> {
+        async fn run(batch_size: u64) -> Result<(usize, usize)> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("group_col", DataType::Int32, false),
+                Field::new("value_col", DataType::Int64, false),
+            ]));
+
+            // 30 distinct groups, so the hash table's final emit is one 30-row batch.
+            let group_ids: Vec<i32> = (0..30).collect();
+            let values: Vec<i64> = vec![1; 30];
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(group_ids)),
+                    Arc::new(Int64Array::from(values)),
+                ],
+            )?;
+            let input_partitions = vec![vec![batch]];
+
+            let group_expr = vec![(col("group_col", &schema)?, "group_col".to_string())];
+            let aggr_expr = vec![Arc::new(
+                AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("count_value")
+                    .build()?,
+            )];
+
+            let exec =
+                TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
+            let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
+
+            let aggregate_exec = AggregateExec::try_new(
+                AggregateMode::Partial,
+                PhysicalGroupBy::new_single(group_expr),
+                aggr_expr,
+                vec![None],
+                exec,
+                Arc::clone(&schema),
+            )?;
+
+            let task_ctx = task_ctx_with_batch_size(batch_size)?;
+            let mut stream =
+                PartialHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?;
+            let mut num_batches = 0;
+            while let Some(result) = stream.next().await {
+                result?;
+                num_batches += 1;
+            }
+
+            Ok((num_batches, output_bytes_metric(&aggregate_exec)))
+        }
+
+        // batch_size = 100: the 30-row emit fits in one output batch, no slicing.
+        let (num_batches_whole, output_bytes_whole) = run(100).await?;
+        assert_eq!(num_batches_whole, 1);
+
+        // batch_size = 10: the same 30-row emit is sliced into 3 output
+        // batches, all sharing buffers with the same original batch.
+        let (num_batches_split, output_bytes_split) = run(10).await?;
+        assert_eq!(num_batches_split, 3);
+
+        // The emitted batch is materialized once regardless of batch_size —
+        // batch_size only controls how that one batch is later sliced across
+        // poll_next calls. So with correct deduplication, output_bytes must
+        // be exactly the same whether or not the batch gets split.
+        assert_eq!(
+            output_bytes_split, output_bytes_whole,
+            "output_bytes should be deduplicated across output slices"
+        );
+
+        Ok(())
+    }
+
+    // Same regression as above, but for the final stage: the final hash
+    // table also materializes its emitted output once and slices it across
+    // polls, so its output_bytes must be deduplicated the same way.
+    #[tokio::test]
+    async fn test_final_hash_stream_output_bytes_metric_deduplicates_across_slices()
+    -> Result<()> {
+        async fn run(batch_size: u64) -> Result<(usize, usize)> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("group_col", DataType::Int32, false),
+                Field::new("value_col", DataType::Int64, false),
+            ]));
+
+            // 30 distinct groups, so the final stage's emit is one 30-row batch.
+            let group_ids: Vec<i32> = (0..30).collect();
+            let values: Vec<i64> = vec![1; 30];
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(group_ids)),
+                    Arc::new(Int64Array::from(values)),
+                ],
+            )?;
+            let input_partitions = vec![vec![batch]];
+
+            let group_by = PhysicalGroupBy::new_single(vec![(
+                col("group_col", &schema)?,
+                "group_col".to_string(),
+            )]);
+            let aggr_expr = vec![Arc::new(
+                AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("count_value")
+                    .build()?,
+            )];
+
+            let exec =
+                TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
+            let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
+
+            let partial_aggregate_exec = AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by.clone(),
+                aggr_expr.clone(),
+                vec![None],
+                exec,
+                Arc::clone(&schema),
+            )?;
+
+            // Generate the partial-state input for the final stage under
+            // test. Use a large batch_size here so the partial stage returns
+            // one unsliced batch — the split we're testing happens in the
+            // *final* stage below, not here.
+            let gen_task_ctx = task_ctx_with_batch_size(1024)?;
+            let mut partial_stream = PartialHashAggregateStream::new(
+                &partial_aggregate_exec,
+                &gen_task_ctx,
+                0,
+            )?;
+            let mut partial_batches = Vec::new();
+            while let Some(result) = partial_stream.next().await {
+                partial_batches.push(result?);
+            }
+            assert_eq!(
+                partial_batches.len(),
+                1,
+                "expected one unsliced partial batch"
+            );
+            let partial_schema = partial_aggregate_exec.schema();
+
+            let final_input = TestMemoryExec::try_new(
+                &[partial_batches],
+                Arc::clone(&partial_schema),
+                None,
+            )?;
+            let final_input =
+                Arc::new(TestMemoryExec::update_cache(&Arc::new(final_input)));
+
+            let final_aggregate_exec = AggregateExec::try_new(
+                AggregateMode::Final,
+                group_by.as_final(),
+                aggr_expr,
+                vec![None],
+                final_input,
+                Arc::clone(&schema),
+            )?;
+
+            let task_ctx = task_ctx_with_batch_size(batch_size)?;
+            let mut stream =
+                FinalHashAggregateStream::new(&final_aggregate_exec, &task_ctx, 0)?;
+            let mut num_batches = 0;
+            while let Some(result) = stream.next().await {
+                result?;
+                num_batches += 1;
+            }
+
+            Ok((num_batches, output_bytes_metric(&final_aggregate_exec)))
+        }
+
+        // batch_size = 100: the 30-row emit fits in one output batch, no slicing.
+        let (num_batches_whole, output_bytes_whole) = run(100).await?;
+        assert_eq!(num_batches_whole, 1);
+
+        // batch_size = 10: the same 30-row emit is sliced into 3 output
+        // batches, all sharing buffers with the same original batch.
+        let (num_batches_split, output_bytes_split) = run(10).await?;
+        assert_eq!(num_batches_split, 3);
+
+        assert_eq!(
+            output_bytes_split, output_bytes_whole,
+            "output_bytes should be deduplicated across output slices"
+        );
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_partial_hash_stream_double_emission_race_condition_bug() -> Result<()> {

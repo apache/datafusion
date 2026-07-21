@@ -35,7 +35,7 @@ use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{AggregateHashTable, SingleMarker};
-use crate::metrics::{BaselineMetrics, RecordOutput};
+use crate::metrics::BaselineMetrics;
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 
@@ -264,7 +264,9 @@ impl SingleHashAggregateStream {
 
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
-        let result = original_state.hash_table_mut().next_output_batch();
+        let result = original_state
+            .hash_table_mut()
+            .next_output_batch(&self.baseline_metrics);
         timer.done();
 
         match result {
@@ -285,10 +287,7 @@ impl SingleHashAggregateStream {
                     original_state
                 };
 
-                ControlFlow::Break((
-                    Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
-                    next_state,
-                ))
+                ControlFlow::Break((Poll::Ready(Some(Ok(batch))), next_state))
             }
             Ok(None) => {
                 let _ = self.reservation.try_resize(0);

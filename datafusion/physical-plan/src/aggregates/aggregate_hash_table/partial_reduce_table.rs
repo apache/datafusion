@@ -20,6 +20,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
 use crate::aggregates::AggregateExec;
+use crate::metrics::BaselineMetrics;
 
 use super::common::{AggregateHashTable, HashAggregateAccumulator, PartialReduceMarker};
 
@@ -48,8 +49,9 @@ impl AggregateHashTable<PartialReduceMarker> {
     /// exhausted, and an internal error if polled in the `Building` state.
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
+        bm: &BaselineMetrics,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(HashAggregateAccumulator::state)
+        self.next_output_batch_inner(HashAggregateAccumulator::state, bm)
     }
 
     /// Partial-reduce aggregation consumes partial aggregate states and merges

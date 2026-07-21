@@ -20,7 +20,10 @@
 use std::{borrow::Cow, collections::BTreeMap, sync::Arc, task::Poll};
 
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, utils::memory::get_record_batch_memory_size};
+use datafusion_common::{
+    Result,
+    utils::memory::{RecordBatchMemoryCounter, get_record_batch_memory_size},
+};
 
 use super::{
     Count, ExecutionPlanMetricsSet, Metric, MetricBuilder, MetricsSet, Time, Timestamp,
@@ -309,6 +312,24 @@ impl SplitMetrics {
                 .with_category(super::MetricCategory::Rows)
                 .counter("batches_split", partition),
         }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct RecordBatchMemoryMetrics(RecordBatchMemoryCounter);
+
+impl RecordBatchMemoryMetrics {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Similar to RecordBatch.record_output, but deduplicating accross batches to avoid
+    /// output_size inflation due to shared memory
+    pub fn record_output(&mut self, batch: &RecordBatch, bm: &BaselineMetrics) {
+        bm.record_output(batch.num_rows());
+        let n_bytes = self.0.count_batch(batch);
+        bm.output_bytes.add(n_bytes);
+        bm.output_batches.add(1);
     }
 }
 
