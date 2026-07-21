@@ -77,8 +77,7 @@ pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
     /// Implementations can use `ctx` to encode the input plan, sink-specific
     /// expressions, and [`DataSinkExec::encode_sort_order`].
     ///
-    /// Returning `Ok(None)` preserves the legacy central serialization fallback
-    /// without eagerly encoding any child plans or expressions.
+    /// Returning `Ok(None)` lets the caller try its extension codec instead.
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,

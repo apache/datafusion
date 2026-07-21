@@ -54,7 +54,7 @@ use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
-use datafusion_physical_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_physical_plan::aggregates::AggregateExec;
@@ -95,7 +95,6 @@ use prost::Message;
 use prost::bytes::BufMut;
 
 use crate::common::{byte_to_string, str_to_byte};
-use crate::convert::TryFromProto;
 use crate::convert_required;
 use crate::physical_plan::from_proto::{
     parse_physical_expr_with_converter, parse_physical_sort_exprs,
@@ -788,9 +787,15 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::CsvSink(_) => {
                 CsvSink::try_from_proto(self.node(), &decode_ctx)
             }
-            #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
-            PhysicalPlanType::ParquetSink(sink) => {
-                self.try_into_parquet_sink_physical_plan(sink, ctx, proto_converter)
+            PhysicalPlanType::ParquetSink(_) => {
+                #[cfg(feature = "parquet")]
+                {
+                    ParquetSink::try_from_proto(self.node(), &decode_ctx)
+                }
+                #[cfg(not(feature = "parquet"))]
+                panic!(
+                    "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
+                )
             }
             PhysicalPlanType::Unnest(_) => {
                 UnnestExec::try_from_proto(self.node(), &decode_ctx)
@@ -847,16 +852,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>()
             && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_source_exec(
                 data_source_exec,
-                codec,
-                proto_converter,
-            )?
-        {
-            return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<DataSinkExec>()
-            && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_sink_exec(
-                exec,
                 codec,
                 proto_converter,
             )?
@@ -1673,6 +1668,10 @@ pub trait PhysicalPlanNodeExt: Sized {
     }
 
     #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ParquetSink` deserializes itself via `ParquetSink::try_from_proto`"
+    )]
     fn try_into_parquet_sink_physical_plan(
         &self,
         sink: &protobuf::ParquetSinkExecNode,
@@ -1681,35 +1680,17 @@ pub trait PhysicalPlanNodeExt: Sized {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "parquet")]
         {
-            let input = into_physical_plan(&sink.input, ctx, proto_converter)?;
-
-            let data_sink = ParquetSink::try_from_proto(
-                sink.sink
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Missing required field in protobuf"))?,
-            )?;
-            let sink_schema = input.schema();
-            let sort_order = sink
-                .sort_order
-                .as_ref()
-                .map(|collection| {
-                    parse_physical_sort_exprs(
-                        &collection.physical_sort_expr_nodes,
-                        ctx,
-                        &sink_schema,
-                        proto_converter,
-                    )
-                    .map(|sort_exprs| {
-                        LexRequirement::new(sort_exprs.into_iter().map(Into::into))
-                    })
-                })
-                .transpose()?
-                .flatten();
-            Ok(Arc::new(DataSinkExec::new(
-                input,
-                Arc::new(data_sink),
-                sort_order,
-            )))
+            let node = protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(
+                    sink.clone(),
+                ))),
+            };
+            let decoder = ConverterPlanDecoder {
+                ctx,
+                proto_converter,
+            };
+            let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+            ParquetSink::try_from_proto(&node, &decode_ctx)
         }
         #[cfg(not(feature = "parquet"))]
         panic!("Trying to use ParquetSink without `parquet` feature enabled");
@@ -2536,40 +2517,21 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `DataSinkExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_data_sink_exec(
         exec: &DataSinkExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Option<protobuf::PhysicalPlanNode>> {
-        let input: protobuf::PhysicalPlanNode =
-            protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-                exec.input().to_owned(),
-                codec,
-                proto_converter,
-            )?;
         let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
         };
         let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
-        let sort_order = exec.encode_sort_order(&encode_ctx)?;
-
-        #[cfg(feature = "parquet")]
-        if let Some(sink) = exec.sink().downcast_ref::<ParquetSink>() {
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(
-                    protobuf::ParquetSinkExecNode {
-                        input: Some(Box::new(input)),
-                        sink: Some(protobuf::ParquetSink::try_from_proto(sink)?),
-                        sink_schema: Some(exec.schema().as_ref().try_into()?),
-                        sort_order,
-                    },
-                ))),
-            }));
-        }
-
-        // If unknown DataSink then let extension handle it
-        Ok(None)
+        exec.try_to_proto(&encode_ctx)
     }
 
     #[deprecated(
@@ -3296,18 +3258,6 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         self.encode_protobuf(buf, |codec, data| codec.try_encode_udaf(node, data))
-    }
-}
-
-fn into_physical_plan(
-    node: &Option<Box<protobuf::PhysicalPlanNode>>,
-    ctx: &PhysicalPlanDecodeContext<'_>,
-    proto_converter: &dyn PhysicalProtoConverterExtension,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    if let Some(field) = node {
-        proto_converter.proto_to_execution_plan(field, ctx)
-    } else {
-        Err(proto_error("Missing required field in protobuf"))
     }
 }
 
