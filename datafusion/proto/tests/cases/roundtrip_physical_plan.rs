@@ -66,6 +66,7 @@ use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{
     BinaryExpr, Column, DynamicFilterPhysicalExpr, NotExpr, PhysicalSortExpr, binary,
     cast, col, in_list, like, lit,
@@ -97,6 +98,7 @@ use datafusion::physical_plan::{
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::{ConfigOptions, TableParquetOptions};
+use datafusion_common::display::{PlanType, StringifiedPlan};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -1954,6 +1956,75 @@ fn roundtrip_analyze() -> Result<()> {
     roundtrip_test(Arc::new(
         AnalyzeExec::builder(false, false, input, Arc::new(schema)).build(),
     ))
+}
+
+#[test]
+fn roundtrip_explain() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("plan_type", DataType::Utf8, false),
+        Field::new("plan", DataType::Utf8, false),
+    ]));
+    let stringified_plans = vec![
+        StringifiedPlan::new(PlanType::InitialLogicalPlan, "initial logical"),
+        StringifiedPlan::new(
+            PlanType::AnalyzedLogicalPlan {
+                analyzer_name: "analyzer".to_string(),
+            },
+            "analyzed logical",
+        ),
+        StringifiedPlan::new(PlanType::FinalAnalyzedLogicalPlan, "final analyzed"),
+        StringifiedPlan::new(
+            PlanType::OptimizedLogicalPlan {
+                optimizer_name: "logical optimizer".to_string(),
+            },
+            "optimized logical",
+        ),
+        StringifiedPlan::new(PlanType::FinalLogicalPlan, "final logical"),
+        StringifiedPlan::new(PlanType::InitialPhysicalPlan, "initial physical"),
+        StringifiedPlan::new(
+            PlanType::InitialPhysicalPlanWithStats,
+            "initial physical with stats",
+        ),
+        StringifiedPlan::new(
+            PlanType::InitialPhysicalPlanWithSchema,
+            "initial physical with schema",
+        ),
+        StringifiedPlan::new(
+            PlanType::OptimizedPhysicalPlan {
+                optimizer_name: "physical optimizer".to_string(),
+            },
+            "optimized physical",
+        ),
+        StringifiedPlan::new(PlanType::FinalPhysicalPlan, "final physical"),
+        StringifiedPlan::new(
+            PlanType::FinalPhysicalPlanWithStats,
+            "final physical with stats",
+        ),
+        StringifiedPlan::new(
+            PlanType::FinalPhysicalPlanWithSchema,
+            "final physical with schema",
+        ),
+        StringifiedPlan::new(PlanType::PhysicalPlanError, "physical plan error"),
+    ];
+    let explain = Arc::new(ExplainExec::new(
+        Arc::clone(&schema),
+        stringified_plans.clone(),
+        true,
+    ));
+
+    let ctx = SessionContext::new();
+    let roundtripped = roundtrip_test_and_return(
+        explain,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let roundtripped = roundtripped.downcast_ref::<ExplainExec>().unwrap();
+
+    assert_eq!(roundtripped.schema(), schema);
+    assert_eq!(roundtripped.stringified_plans(), stringified_plans);
+    assert!(roundtripped.verbose());
+    Ok(())
 }
 
 #[tokio::test]

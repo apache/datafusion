@@ -24,7 +24,6 @@ use std::sync::Arc;
 use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::config::CsvOptions;
-use datafusion_common::display::StringifiedPlan;
 use datafusion_common::format::ExplainFormat;
 use datafusion_common::{
     DataFusionError, JoinType, NullEquality, Result, internal_datafusion_err,
@@ -747,8 +746,8 @@ pub trait PhysicalPlanNodeExt: Sized {
         };
         let decode_ctx = ExecutionPlanDecodeCtx::new(&plan_decoder);
         match plan {
-            PhysicalPlanType::Explain(explain) => {
-                self.try_into_explain_physical_plan(explain, ctx, proto_converter)
+            PhysicalPlanType::Explain(_) => {
+                ExplainExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Projection(_) => {
                 ProjectionExec::try_from_proto(self.node(), &decode_ctx)
@@ -900,10 +899,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             return Ok(node);
         }
 
-        if let Some(exec) = plan.downcast_ref::<ExplainExec>() {
-            return protobuf::PhysicalPlanNode::try_from_explain_exec(exec, codec);
-        }
-
         if let Some(exec) = plan.downcast_ref::<AnalyzeExec>() {
             return protobuf::PhysicalPlanNode::try_from_analyze_exec(
                 exec,
@@ -1033,21 +1028,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         }
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ExplainExec` deserializes itself via `ExplainExec::try_from_proto`"
+    )]
     fn try_into_explain_physical_plan(
         &self,
-        explain: &protobuf::ExplainExecNode,
-        _ctx: &PhysicalPlanDecodeContext<'_>,
-        _proto_converter: &dyn PhysicalProtoConverterExtension,
+        _explain: &protobuf::ExplainExecNode,
+        ctx: &PhysicalPlanDecodeContext<'_>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(ExplainExec::new(
-            Arc::new(explain.schema.as_ref().unwrap().try_into()?),
-            explain
-                .stringified_plans
-                .iter()
-                .map(StringifiedPlan::from_proto)
-                .collect(),
-            explain.verbose,
-        )))
+        let plan_decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&plan_decoder);
+        ExplainExec::try_from_proto(self.node(), &decode_ctx)
     }
 
     #[deprecated(
@@ -2562,22 +2558,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         )))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ExplainExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_explain_exec(
         exec: &ExplainExec,
-        _codec: &dyn PhysicalExtensionCodec,
+        codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Explain(
-                protobuf::ExplainExecNode {
-                    schema: Some(exec.schema().as_ref().try_into()?),
-                    stringified_plans: exec
-                        .stringified_plans()
-                        .iter()
-                        .map(protobuf::StringifiedPlan::from_proto)
-                        .collect(),
-                    verbose: exec.verbose(),
-                },
-            )),
+        let proto_converter = DefaultPhysicalProtoConverter {};
+        let plan_encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter: &proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&plan_encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("ExplainExec did not serialize itself")
         })
     }
 
