@@ -420,8 +420,8 @@ pub fn split_vec_min_alloc<T>(vec: &mut Vec<T>, n: usize) -> Vec<T> {
 /// in debug builds.
 ///
 /// Allocates for whichever side is smaller, so the new allocation is
-/// `min(n + 1, vec.len() - n)`. This matters when the split emits a prefix
-/// under memory pressure, where `n` can be close to `vec.len()`.
+/// `min(n + 1, offsets.len() - n)`. This matters when the split emits a prefix
+/// under memory pressure, where `n` can be close to `offsets.len()`.
 pub fn take_n_offsets<O>(offsets: &mut Vec<O>, n: usize) -> Vec<O>
 where
     O: OffsetSizeTrait,
