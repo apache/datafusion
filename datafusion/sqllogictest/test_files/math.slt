@@ -88,6 +88,92 @@ SELECT round(125.2345, -3), round(125.2345, -2), round(125.2345, -1), round(125.
 ----
 0 100 130 125 125 125.2 125.23 125.235
 
+# Round signed and unsigned integer scalar widths
+query IIIIIIII
+SELECT
+  round(arrow_cast('115', 'Int8'), -1),
+  round(arrow_cast('-115', 'Int16'), -1),
+  round(arrow_cast('115', 'Int32'), -1),
+  round(arrow_cast('-115', 'Int64'), -1),
+  round(arrow_cast('115', 'UInt8'), -1),
+  round(arrow_cast('115', 'UInt16'), -1),
+  round(arrow_cast('115', 'UInt32'), -1),
+  round(arrow_cast('115', 'UInt64'), -1);
+----
+120 -120 120 -120 120 120 120 120
+
+# Round signed and unsigned integer arrays, including null and oversized scales
+query IIIIIIII
+SELECT
+  round(arrow_cast(column1, 'Int8'), column2),
+  round(arrow_cast(column1, 'Int16'), column2),
+  round(arrow_cast(column1, 'Int32'), column2),
+  round(arrow_cast(column1, 'Int64'), column2),
+  round(arrow_cast(column1, 'UInt8'), column2),
+  round(arrow_cast(column1, 'UInt16'), column2),
+  round(arrow_cast(column1, 'UInt32'), column2),
+  round(arrow_cast(column1, 'UInt64'), column2)
+FROM (VALUES ('115', -1), ('0', -1), (NULL, -20)) AS t(column1, column2);
+----
+120 120 120 120 120 120 120 120
+0 0 0 0 0 0 0 0
+NULL NULL NULL NULL NULL NULL NULL NULL
+
+# Round all decimal widths as scalars
+query RRRR
+SELECT
+  round(arrow_cast('125.55', 'Decimal32(7,2)'), 1),
+  round(arrow_cast('-125.55', 'Decimal64(16,2)'), 1),
+  round(arrow_cast('125.55', 'Decimal128(30,2)'), 1),
+  round(arrow_cast('-125.55', 'Decimal256(40,2)'), 1);
+----
+125.6 -125.6 125.6 -125.6
+
+# Round all decimal widths as arrays with per-row decimal places
+query RRRR
+SELECT
+  round(arrow_cast(column1, 'Decimal32(7,2)'), column2),
+  round(arrow_cast(column1, 'Decimal64(16,2)'), column2),
+  round(arrow_cast(column1, 'Decimal128(30,2)'), column2),
+  round(arrow_cast(column1, 'Decimal256(40,2)'), column2)
+FROM (VALUES ('125.55', 1), ('-125.55', 0), ('125.55', -1), (NULL, 1)) AS t(column1, column2);
+----
+125.6 125.6 125.6 125.6
+-126 -126 -126 -126
+130 130 130 130
+NULL NULL NULL NULL
+
+# Float arrays with scalar and per-row decimal places
+query RRRR
+SELECT
+  round(arrow_cast(column1, 'Float32'), 1),
+  round(arrow_cast(column1, 'Float64'), 1),
+  round(arrow_cast(column1, 'Float32'), column2),
+  round(arrow_cast(column1, 'Float64'), column2)
+FROM (VALUES ('125.55', 1), ('-125.55', 0), (NULL, -1)) AS t(column1, column2);
+----
+125.6 125.6 125.6 125.6
+-125.6 -125.6 -126 -126
+NULL NULL NULL NULL
+
+# Null decimal places, invalid argument count/type, and out-of-range scale
+query R
+SELECT round(1.25, NULL);
+----
+NULL
+
+query error DataFusion error:
+SELECT round();
+
+query error DataFusion error:
+SELECT round(1, 2, 3);
+
+query error DataFusion error:
+SELECT round('x');
+
+query error round decimal_places 2147483648 is out of supported i32 range
+SELECT round(1.25, 2147483648);
+
 # atan2
 query RRRRRRR
 SELECT atan2(2.0, 1.0), atan2(-2.0, 1.0), atan2(2.0, -1.0), atan2(-2.0, -1.0), atan2(NULL, 1.0), atan2(2.0, NULL), atan2(NULL, NULL);
