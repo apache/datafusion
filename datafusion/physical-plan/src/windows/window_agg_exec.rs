@@ -317,6 +317,389 @@ impl ExecutionPlan for WindowAggExec {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let input = ctx.encode_child(self.input())?;
+        let window_expr = self
+            .window_expr()
+            .iter()
+            .map(|expr| encode_physical_window_expr(expr, ctx))
+            .collect::<Result<Vec<_>>>()?;
+        let partition_keys = self
+            .partition_keys()
+            .iter()
+            .map(|expr| ctx.encode_expr(expr))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Window(Box::new(
+                    protobuf::WindowAggExecNode {
+                        input: Some(Box::new(input)),
+                        window_expr,
+                        partition_keys,
+                        input_order_mode: None,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl WindowAggExec {
+    /// Reconstruct a window plan from its protobuf representation.
+    ///
+    /// This returns a [`WindowAggExec`] when `input_order_mode` is absent and a
+    /// [`BoundedWindowAggExec`] when it is present.
+    ///
+    /// [`BoundedWindowAggExec`]: crate::windows::BoundedWindowAggExec
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use super::BoundedWindowAggExec;
+        use crate::InputOrderMode;
+        use datafusion_proto_models::protobuf;
+        use protobuf::window_agg_exec_node::InputOrderMode as ProtoInputOrderMode;
+
+        let window_agg = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Window,
+            "WindowAggExec",
+        );
+        let input = ctx.decode_required_child(
+            window_agg.input.as_deref(),
+            "WindowAggExec",
+            "input",
+        )?;
+        let input_schema = input.schema();
+        let window_expr = window_agg
+            .window_expr
+            .iter()
+            .map(|expr| decode_physical_window_expr(expr, ctx, input_schema.as_ref()))
+            .collect::<Result<Vec<_>>>()?;
+        let partition_keys = window_agg
+            .partition_keys
+            .iter()
+            .map(|expr| ctx.decode_expr(expr, input_schema.as_ref()))
+            .collect::<Result<Vec<_>>>()?;
+
+        if let Some(input_order_mode) = window_agg.input_order_mode.as_ref() {
+            let input_order_mode = match input_order_mode {
+                ProtoInputOrderMode::Linear(_) => InputOrderMode::Linear,
+                ProtoInputOrderMode::PartiallySorted(
+                    protobuf::PartiallySortedInputOrderMode { columns },
+                ) => InputOrderMode::PartiallySorted(
+                    columns.iter().map(|column| *column as usize).collect(),
+                ),
+                ProtoInputOrderMode::Sorted(_) => InputOrderMode::Sorted,
+            };
+            Ok(Arc::new(BoundedWindowAggExec::try_new(
+                window_expr,
+                input,
+                input_order_mode,
+                !partition_keys.is_empty(),
+            )?))
+        } else {
+            Ok(Arc::new(WindowAggExec::try_new(
+                window_expr,
+                input,
+                !partition_keys.is_empty(),
+            )?))
+        }
+    }
+}
+
+#[cfg(feature = "proto")]
+pub(crate) fn encode_physical_window_expr(
+    window_expr: &Arc<dyn WindowExpr>,
+    ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+) -> Result<datafusion_proto_models::protobuf::PhysicalWindowExprNode> {
+    use super::{PlainAggregateWindowExpr, StandardWindowExpr, WindowUDFExpr};
+    use datafusion_common::not_impl_err;
+    use datafusion_physical_expr::window::SlidingAggregateWindowExpr;
+    use datafusion_proto_models::protobuf::{self, physical_window_expr_node};
+
+    let expr = window_expr.as_any();
+    let mut args = window_expr.expressions().to_vec();
+    let window_frame = window_expr.get_window_frame();
+    let (window_function, fun_definition, ignore_nulls, distinct) =
+        if let Some(plain) = expr.downcast_ref::<PlainAggregateWindowExpr>() {
+            let aggregate_expr = plain.get_aggregate_expr();
+            (
+                physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+                    aggregate_expr.fun().name().to_string(),
+                ),
+                ctx.encode_udaf(aggregate_expr.fun())?,
+                aggregate_expr.ignore_nulls(),
+                aggregate_expr.is_distinct(),
+            )
+        } else if let Some(sliding) = expr.downcast_ref::<SlidingAggregateWindowExpr>() {
+            let aggregate_expr = sliding.get_aggregate_expr();
+            (
+                physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+                    aggregate_expr.fun().name().to_string(),
+                ),
+                ctx.encode_udaf(aggregate_expr.fun())?,
+                aggregate_expr.ignore_nulls(),
+                aggregate_expr.is_distinct(),
+            )
+        } else if let Some(standard) = expr.downcast_ref::<StandardWindowExpr>() {
+            if let Some(window_udf) = standard
+                .get_standard_func_expr()
+                .as_any()
+                .downcast_ref::<WindowUDFExpr>()
+            {
+                args = window_udf.args().to_vec();
+                (
+                    physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(
+                        window_udf.fun().name().to_string(),
+                    ),
+                    ctx.encode_udwf(window_udf.fun().as_ref())?,
+                    false,
+                    false,
+                )
+            } else {
+                return not_impl_err!(
+                    "User-defined window function not supported: {window_expr:?}"
+                );
+            }
+        } else {
+            return not_impl_err!("WindowExpr not supported: {window_expr:?}");
+        };
+
+    let args = ctx.encode_expressions(&args)?;
+    let partition_by = ctx.encode_expressions(window_expr.partition_by())?;
+    let order_by = window_expr
+        .order_by()
+        .iter()
+        .map(|sort_expr| {
+            Ok(protobuf::PhysicalSortExprNode {
+                expr: Some(Box::new(ctx.encode_expr(&sort_expr.expr)?)),
+                asc: !sort_expr.options.descending,
+                nulls_first: sort_expr.options.nulls_first,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(protobuf::PhysicalWindowExprNode {
+        args,
+        partition_by,
+        order_by,
+        window_frame: Some(encode_window_frame(window_frame.as_ref())?),
+        window_function: Some(window_function),
+        name: window_expr.name().to_string(),
+        fun_definition,
+        ignore_nulls,
+        distinct,
+    })
+}
+
+#[cfg(feature = "proto")]
+fn decode_physical_window_expr(
+    proto: &datafusion_proto_models::protobuf::PhysicalWindowExprNode,
+    ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    input_schema: &arrow::datatypes::Schema,
+) -> Result<Arc<dyn WindowExpr>> {
+    use super::{create_window_expr, schema_add_window_field};
+    use arrow::compute::SortOptions;
+    use datafusion_common::{internal_datafusion_err, internal_err};
+    use datafusion_expr::WindowFunctionDefinition;
+    use datafusion_proto_models::protobuf::physical_window_expr_node;
+
+    let args = proto
+        .args
+        .iter()
+        .map(|expr| ctx.decode_expr(expr, input_schema))
+        .collect::<Result<Vec<_>>>()?;
+    let partition_by = proto
+        .partition_by
+        .iter()
+        .map(|expr| ctx.decode_expr(expr, input_schema))
+        .collect::<Result<Vec<_>>>()?;
+    let order_by = proto
+        .order_by
+        .iter()
+        .map(|sort_expr| {
+            let expr = sort_expr.expr.as_ref().ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Missing expr in window order_by sort expression"
+                )
+            })?;
+            Ok(PhysicalSortExpr {
+                expr: ctx.decode_expr(expr, input_schema)?,
+                options: SortOptions {
+                    descending: !sort_expr.asc,
+                    nulls_first: sort_expr.nulls_first,
+                },
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let window_frame = proto
+        .window_frame
+        .as_ref()
+        .map(decode_window_frame)
+        .transpose()?
+        .ok_or_else(|| {
+            internal_datafusion_err!("Missing required field 'window_frame' in protobuf")
+        })?;
+    let function = match proto.window_function.as_ref() {
+        Some(physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+            name,
+        )) => WindowFunctionDefinition::AggregateUDF(
+            ctx.decode_udaf(name, proto.fun_definition.as_deref())?,
+        ),
+        Some(physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(
+            name,
+        )) => WindowFunctionDefinition::WindowUDF(
+            ctx.decode_udwf(name, proto.fun_definition.as_deref())?,
+        ),
+        None => {
+            return internal_err!("Missing required field 'window_function' in protobuf");
+        }
+    };
+
+    let name = proto.name.clone();
+    let extended_schema = schema_add_window_field(&args, input_schema, &function, &name)?;
+    create_window_expr(
+        &function,
+        name,
+        &args,
+        &partition_by,
+        &order_by,
+        Arc::new(window_frame),
+        extended_schema,
+        proto.ignore_nulls,
+        proto.distinct,
+        None,
+    )
+}
+
+#[cfg(feature = "proto")]
+fn encode_window_frame(
+    window_frame: &datafusion_expr::WindowFrame,
+) -> Result<datafusion_proto_models::protobuf::WindowFrame> {
+    use datafusion_expr::WindowFrameUnits;
+    use datafusion_proto_models::protobuf;
+
+    let units = match window_frame.units {
+        WindowFrameUnits::Rows => protobuf::WindowFrameUnits::Rows,
+        WindowFrameUnits::Range => protobuf::WindowFrameUnits::Range,
+        WindowFrameUnits::Groups => protobuf::WindowFrameUnits::Groups,
+    };
+    Ok(protobuf::WindowFrame {
+        window_frame_units: units.into(),
+        start_bound: Some(encode_window_frame_bound(&window_frame.start_bound)?),
+        end_bound: Some(protobuf::window_frame::EndBound::Bound(
+            encode_window_frame_bound(&window_frame.end_bound)?,
+        )),
+    })
+}
+
+#[cfg(feature = "proto")]
+fn encode_window_frame_bound(
+    bound: &datafusion_expr::WindowFrameBound,
+) -> Result<datafusion_proto_models::protobuf::WindowFrameBound> {
+    use datafusion_expr::WindowFrameBound;
+    use datafusion_proto_common::protobuf_common;
+    use datafusion_proto_models::protobuf;
+
+    let encode_value =
+        |value: &datafusion_common::ScalarValue| -> Result<protobuf_common::ScalarValue> {
+            Ok(value.try_into()?)
+        };
+    Ok(match bound {
+        WindowFrameBound::CurrentRow => protobuf::WindowFrameBound {
+            window_frame_bound_type: protobuf::WindowFrameBoundType::CurrentRow.into(),
+            bound_value: None,
+        },
+        WindowFrameBound::Preceding(value) => protobuf::WindowFrameBound {
+            window_frame_bound_type: protobuf::WindowFrameBoundType::Preceding.into(),
+            bound_value: Some(encode_value(value)?),
+        },
+        WindowFrameBound::Following(value) => protobuf::WindowFrameBound {
+            window_frame_bound_type: protobuf::WindowFrameBoundType::Following.into(),
+            bound_value: Some(encode_value(value)?),
+        },
+    })
+}
+
+#[cfg(feature = "proto")]
+fn decode_window_frame(
+    window_frame: &datafusion_proto_models::protobuf::WindowFrame,
+) -> Result<datafusion_expr::WindowFrame> {
+    use datafusion_common::internal_datafusion_err;
+    use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+    use datafusion_proto_models::protobuf;
+
+    let units = protobuf::WindowFrameUnits::try_from(window_frame.window_frame_units)
+        .map_err(|_| {
+            internal_datafusion_err!(
+                "Received a WindowFrame message with unknown WindowFrameUnits {}",
+                window_frame.window_frame_units
+            )
+        })?;
+    let units = match units {
+        protobuf::WindowFrameUnits::Rows => WindowFrameUnits::Rows,
+        protobuf::WindowFrameUnits::Range => WindowFrameUnits::Range,
+        protobuf::WindowFrameUnits::Groups => WindowFrameUnits::Groups,
+    };
+    let start_bound =
+        decode_window_frame_bound(window_frame.start_bound.as_ref().ok_or_else(
+            || internal_datafusion_err!("Missing start_bound in WindowFrame"),
+        )?)?;
+    let end_bound = window_frame
+        .end_bound
+        .as_ref()
+        .map(|end_bound| match end_bound {
+            protobuf::window_frame::EndBound::Bound(bound) => {
+                decode_window_frame_bound(bound)
+            }
+        })
+        .transpose()?
+        .unwrap_or(WindowFrameBound::CurrentRow);
+    Ok(WindowFrame::new_bounds(units, start_bound, end_bound))
+}
+
+#[cfg(feature = "proto")]
+fn decode_window_frame_bound(
+    bound: &datafusion_proto_models::protobuf::WindowFrameBound,
+) -> Result<datafusion_expr::WindowFrameBound> {
+    use datafusion_common::{ScalarValue, internal_datafusion_err};
+    use datafusion_expr::WindowFrameBound;
+    use datafusion_proto_common::protobuf_common;
+    use datafusion_proto_models::protobuf;
+
+    let decode_value = |value: &protobuf_common::ScalarValue| -> Result<ScalarValue> {
+        Ok(ScalarValue::try_from(value)?)
+    };
+    let bound_type = protobuf::WindowFrameBoundType::try_from(
+        bound.window_frame_bound_type,
+    )
+    .map_err(|_| {
+        internal_datafusion_err!(
+            "Received a WindowFrameBound message with unknown WindowFrameBoundType {}",
+            bound.window_frame_bound_type
+        )
+    })?;
+    match bound_type {
+        protobuf::WindowFrameBoundType::CurrentRow => Ok(WindowFrameBound::CurrentRow),
+        protobuf::WindowFrameBoundType::Preceding => match &bound.bound_value {
+            Some(value) => Ok(WindowFrameBound::Preceding(decode_value(value)?)),
+            None => Ok(WindowFrameBound::Preceding(ScalarValue::UInt64(None))),
+        },
+        protobuf::WindowFrameBoundType::Following => match &bound.bound_value {
+            Some(value) => Ok(WindowFrameBound::Following(decode_value(value)?)),
+            None => Ok(WindowFrameBound::Following(ScalarValue::UInt64(None))),
+        },
+    }
 }
 
 /// Compute the window aggregate columns
