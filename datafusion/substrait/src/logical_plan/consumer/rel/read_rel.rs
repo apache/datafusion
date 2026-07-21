@@ -35,6 +35,7 @@ use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
 use substrait::proto::{Expression, ReadRel};
 use url::Url;
 
+#[expect(deprecated)]
 pub async fn from_read_rel(
     consumer: &impl SubstraitConsumer,
     read: &ReadRel,
@@ -113,7 +114,14 @@ pub async fn from_read_rel(
             .await
         }
         Some(ReadType::VirtualTable(vt)) => {
-            // Check for produce_one_row pattern.
+            if vt.values.is_empty() && vt.expressions.is_empty() {
+                return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                    produce_one_row: false,
+                    schema: DFSchemaRef::new(substrait_schema),
+                }));
+            }
+
+            // Check for produce_one_row pattern in both old (values) and new (expressions) formats.
             // A VirtualTable with exactly one row containing only empty/default fields represents
             // an EmptyRelation with produce_one_row=true. This pattern is used for queries without
             // a FROM clause (e.g., "SELECT 1 AS one") where a single phantom row is needed to
@@ -121,9 +129,14 @@ pub async fn from_read_rel(
             // the SQL "DUAL" table (see: https://en.wikipedia.org/wiki/DUAL_table) which some
             // databases provide as a single-row source for selecting constant expressions when no
             // real table is present.
-            let is_produce_one_row = vt.expressions.len() == 1
+            let is_produce_one_row = (vt.values.len() == 1
+                && vt.expressions.is_empty()
                 && substrait_schema.fields().is_empty()
-                && vt.expressions[0].fields.is_empty();
+                && vt.values[0].fields.is_empty())
+                || (vt.expressions.len() == 1
+                    && vt.values.is_empty()
+                    && substrait_schema.fields().is_empty()
+                    && vt.expressions[0].fields.is_empty());
 
             if is_produce_one_row {
                 return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -132,65 +145,63 @@ pub async fn from_read_rel(
                 }));
             }
 
-            if vt.expressions.is_empty() {
-                return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
-                    produce_one_row: false,
-                    schema: DFSchemaRef::new(substrait_schema),
-                }));
-            }
+            let values = if !vt.expressions.is_empty() {
+                let mut exprs = vec![];
+                for row in &vt.expressions {
+                    if row.fields.len() != substrait_schema.fields().len() {
+                        return substrait_err!(
+                            "Field count mismatch: expected {} fields but found {} in virtual table row",
+                            substrait_schema.fields().len(),
+                            row.fields.len()
+                        );
+                    }
 
-            let mut values = vec![];
-            for row in &vt.expressions {
-                if row.fields.len() != substrait_schema.fields().len() {
-                    return substrait_err!(
-                        "Field count mismatch: expected {} fields but found {} in virtual table row",
-                        substrait_schema.fields().len(),
-                        row.fields.len()
-                    );
-                }
-
-                let mut row_exprs = vec![];
-                let mut name_idx = 0;
-                for (field_idx, expression) in row.fields.iter().enumerate() {
-                    let expr = match expression.rex_type.as_ref() {
-                        Some(substrait::proto::expression::RexType::Literal(lit)) => {
-                            if !named_struct.names.is_empty() {
-                                name_idx += 1; // top-level names are provided through schema
+                    let mut row_exprs = vec![];
+                    let mut name_idx = 0;
+                    for (field_idx, expression) in row.fields.iter().enumerate() {
+                        let expr = match expression.rex_type.as_ref() {
+                            Some(substrait::proto::expression::RexType::Literal(lit)) => {
+                                if !named_struct.names.is_empty() {
+                                    name_idx += 1; // top-level names are provided through schema
+                                }
+                                Expr::Literal(
+                                    from_substrait_literal(
+                                        consumer,
+                                        lit,
+                                        &named_struct.names,
+                                        &mut name_idx,
+                                    )?,
+                                    None,
+                                )
                             }
-                            Expr::Literal(
-                                from_substrait_literal(
-                                    consumer,
-                                    lit,
+                            _ => {
+                                rename_field(
+                                    substrait_schema.field(field_idx).as_ref(),
                                     &named_struct.names,
+                                    field_idx,
                                     &mut name_idx,
-                                )?,
-                                None,
-                            )
-                        }
-                        _ => {
-                            rename_field(
-                                substrait_schema.field(field_idx).as_ref(),
-                                &named_struct.names,
-                                field_idx,
-                                &mut name_idx,
-                            )?;
-                            consumer
-                                .consume_expression(expression, &substrait_schema)
-                                .await?
-                        }
-                    };
-                    row_exprs.push(expr);
-                }
+                                )?;
+                                consumer
+                                    .consume_expression(expression, &substrait_schema)
+                                    .await?
+                            }
+                        };
+                        row_exprs.push(expr);
+                    }
 
-                if name_idx != named_struct.names.len() {
-                    return substrait_err!(
-                        "Names list must match exactly to nested schema, but found {} uses for {} names",
-                        name_idx,
-                        named_struct.names.len()
-                    );
+                    if name_idx != named_struct.names.len() {
+                        return substrait_err!(
+                            "Names list must match exactly to nested schema, but found {} uses for {} names",
+                            name_idx,
+                            named_struct.names.len()
+                        );
+                    }
+                    exprs.push(row_exprs);
                 }
-                values.push(row_exprs);
-            }
+                exprs
+            } else {
+                convert_literal_rows(consumer, vt, named_struct)?
+            };
 
             Ok(LogicalPlan::Values(Values {
                 schema: DFSchemaRef::new(substrait_schema),
@@ -242,6 +253,46 @@ pub async fn from_read_rel(
             not_impl_err!("Unsupported Readtype: {:?}", read.read_type)
         }
     }
+}
+
+/// Converts Substrait literal rows from a VirtualTable into DataFusion expressions.
+///
+/// This function processes the deprecated `values` field of VirtualTable, converting
+/// each literal value into a `Expr::Literal` while tracking and validating the name
+/// indices against the provided named struct schema.
+fn convert_literal_rows(
+    consumer: &impl SubstraitConsumer,
+    vt: &substrait::proto::read_rel::VirtualTable,
+    named_struct: &substrait::proto::NamedStruct,
+) -> datafusion::common::Result<Vec<Vec<Expr>>> {
+    #[expect(deprecated)]
+    vt.values
+        .iter()
+        .map(|row| {
+            let mut name_idx = 0;
+            let lits = row
+                .fields
+                .iter()
+                .map(|lit| {
+                    name_idx += 1; // top-level names are provided through schema
+                    Ok(Expr::Literal(from_substrait_literal(
+                        consumer,
+                        lit,
+                        &named_struct.names,
+                        &mut name_idx,
+                    )?, None))
+                })
+                .collect::<datafusion::common::Result<_>>()?;
+            if name_idx != named_struct.names.len() {
+                return substrait_err!(
+                    "Names list must match exactly to nested schema, but found {} uses for {} names",
+                    name_idx,
+                    named_struct.names.len()
+                );
+            }
+            Ok(lits)
+        })
+        .collect::<datafusion::common::Result<_>>()
 }
 
 pub fn apply_masking(
