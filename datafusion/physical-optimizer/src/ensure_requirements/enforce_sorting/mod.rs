@@ -50,8 +50,8 @@ use std::sync::Arc;
 
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
-    add_sort_above, add_sort_above_with_check, is_coalesce_partitions, is_limit,
-    is_repartition, is_sort, is_sort_preserving_merge, is_window,
+    add_sort_above, add_sort_above_with_check, is_coalesce_partitions, is_repartition,
+    is_sort, is_sort_preserving_merge, is_window,
 };
 
 use datafusion_common::Result;
@@ -102,24 +102,28 @@ fn update_sort_ctx_children_data(
         child_node.data = if is_sort(child_plan) {
             // child is sort
             true
-        } else if is_limit(child_plan) {
-            // There is no sort linkage for this path, it starts at a limit.
-            false
         } else {
             // If a descendent is a sort, and the child maintains the sort.
             let is_spm = is_sort_preserving_merge(child_plan);
             let required_orderings = child_plan.required_input_ordering();
             let flags = child_plan.maintains_input_order();
+            let preserve_input_order = child_plan.requires_input_order_preservation();
             // Add parent node to the tree if there is at least one child with
             // a sort connection:
-            izip!(flags, required_orderings).any(|(maintains, required_ordering)| {
-                let propagates_ordering =
-                    (maintains && required_ordering.is_none()) || is_spm;
-                // `connected_to_sort` only returns the correct answer with bottom-up traversal
-                let connected_to_sort =
-                    child_node.children.iter().any(|child| child.data);
-                propagates_ordering && connected_to_sort
-            })
+            izip!(
+                flags,
+                required_orderings,
+                preserve_input_order,
+                &child_node.children
+            )
+            .any(
+                |(maintains, required_ordering, preserve_input_order, child)| {
+                    let propagates_ordering = !preserve_input_order
+                        && ((maintains && required_ordering.is_none()) || is_spm);
+                    // `connected_to_sort` only returns the correct answer with bottom-up traversal
+                    propagates_ordering && child.data
+                },
+            )
         }
     }
 
@@ -419,11 +423,12 @@ pub fn ensure_sorting(
 
     let plan = &requirements.plan;
     let mut updated_children = vec![];
-    for (idx, (required_ordering, mut child)) in plan
-        .required_input_ordering()
-        .into_iter()
-        .zip(requirements.children)
-        .enumerate()
+    for (idx, (required_ordering, preserve_input_order, mut child)) in izip!(
+        plan.required_input_ordering(),
+        plan.requires_input_order_preservation(),
+        requirements.children
+    )
+    .enumerate()
     {
         let physical_ordering = child.plan.output_ordering();
 
@@ -444,7 +449,9 @@ pub fn ensure_sorting(
                 );
                 child = update_sort_ctx_children_data(child, true)?;
             }
-        } else if physical_ordering.is_none() || !plan.maintains_input_order()[idx] {
+        } else if !preserve_input_order
+            && (physical_ordering.is_none() || !plan.maintains_input_order()[idx])
+        {
             // We have a `SortExec` whose effect may be neutralized by another
             // order-imposing operator, remove this sort:
             child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;

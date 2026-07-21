@@ -202,6 +202,22 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         vec![None; self.children().len()]
     }
 
+    /// Specifies whether the identity or number of rows produced by this plan
+    /// depends on the order of each child input.
+    ///
+    /// Unlike [`Self::required_input_ordering`], this property does not require
+    /// a particular ordering that can be expressed using the child's schema.
+    /// It only requires that an existing input ordering is not discarded or
+    /// replaced with an incompatible ordering by physical optimizations. For
+    /// example, Limit must preserve an input ordering established by a Sort
+    /// even when an intervening Projection removes the sort columns from its
+    /// output schema.
+    ///
+    /// The default implementation returns `false` for every child.
+    fn requires_input_order_preservation(&self) -> Vec<bool> {
+        vec![false; self.children().len()]
+    }
+
     /// Returns `false` if this `ExecutionPlan`'s implementation may reorder
     /// rows within or between partitions.
     ///
@@ -1321,6 +1337,7 @@ pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
 
     check_len!(plan, maintains_input_order, children_len);
     check_len!(plan, required_input_ordering, children_len);
+    check_len!(plan, requires_input_order_preservation, children_len);
     check_len!(plan, benefits_from_input_partitioning, children_len);
     plan.input_distribution_requirements()
         .check_invariants(plan, check)?;

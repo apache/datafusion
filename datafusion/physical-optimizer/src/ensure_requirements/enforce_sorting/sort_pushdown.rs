@@ -54,11 +54,13 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 /// computational cost is reduced by pushing down `SortExec`s through certain
 /// executors. The object carries the parent required ordering, the (optional)
 /// `fetch` value of the parent node, and the parent's distribution requirement
-/// (used by the distribution-aware pushdown path) as its data.
+/// (used by the distribution-aware pushdown path) as its data. It also tracks
+/// whether the input ordering is semantically significant to an ancestor.
 #[derive(Clone, Debug)]
 pub struct ParentRequirements {
     ordering_requirement: Option<OrderingRequirements>,
     fetch: Option<usize>,
+    preserve_input_order: bool,
     /// The distribution required by the consumer above any SortExec we insert.
     /// When this is `SinglePartition` and the input has multiple partitions,
     /// `add_sort_above_with_distribution` wraps the sort in `SortPreservingMergeExec`.
@@ -70,6 +72,7 @@ impl Default for ParentRequirements {
         Self {
             ordering_requirement: None,
             fetch: None,
+            preserve_input_order: false,
             distribution_requirement: Distribution::UnspecifiedDistribution,
         }
     }
@@ -80,6 +83,7 @@ pub type SortPushDown = PlanContext<ParentRequirements>;
 /// Assigns the ordering requirement of the root node to the its children.
 pub fn assign_initial_requirements(sort_push_down: &mut SortPushDown) {
     let reqs = sort_push_down.plan.required_input_ordering();
+    let preserve_input_order = sort_push_down.plan.requires_input_order_preservation();
     let dists = sort_push_down
         .plan
         .input_distribution_requirements()
@@ -90,11 +94,28 @@ pub fn assign_initial_requirements(sort_push_down: &mut SortPushDown) {
         child.data = ParentRequirements {
             ordering_requirement: requirement,
             fetch: child.plan.fetch(),
+            preserve_input_order: preserve_input_order[idx],
             distribution_requirement: dists
                 .get(idx)
                 .cloned()
                 .unwrap_or(Distribution::UnspecifiedDistribution),
         };
+    }
+}
+
+/// Assigns sequence-preservation requirements to each child.
+///
+/// A plan can introduce this requirement for one of its own inputs, or pass
+/// down a requirement from its parent when it maintains that input's order.
+fn assign_input_order_preservation(
+    sort_push_down: &mut SortPushDown,
+    preserve_output_order: bool,
+) {
+    let own_requirements = sort_push_down.plan.requires_input_order_preservation();
+    let maintains_input_order = sort_push_down.plan.maintains_input_order();
+    for (idx, child) in sort_push_down.children.iter_mut().enumerate() {
+        child.data.preserve_input_order = own_requirements[idx]
+            || (preserve_output_order && maintains_input_order[idx]);
     }
 }
 
@@ -142,6 +163,7 @@ fn pushdown_sorts_helper(
 ) -> Result<Transformed<SortPushDown>> {
     let plan = sort_push_down.plan;
     let parent_fetch = sort_push_down.data.fetch;
+    let preserve_input_order = sort_push_down.data.preserve_input_order;
     let parent_distribution = sort_push_down.data.distribution_requirement.clone();
 
     let Some(parent_requirement) = sort_push_down.data.ordering_requirement.clone()
@@ -149,6 +171,13 @@ fn pushdown_sorts_helper(
         // If there are no ordering requirements from the parent, nothing to do
         // unless we have a sort.
         if is_sort(&plan) {
+            // This Sort establishes the ordering consumed by an ancestor. Keep
+            // it and continue optimizing below it using its own requirements.
+            if preserve_input_order {
+                sort_push_down.plan = plan;
+                assign_initial_requirements(&mut sort_push_down);
+                return Ok(Transformed::no(sort_push_down));
+            }
             let Some(sort_ordering) = plan.output_ordering().cloned() else {
                 return internal_err!("SortExec should have output ordering");
             };
@@ -178,6 +207,7 @@ fn pushdown_sorts_helper(
                 .cloned()
                 .unwrap_or(Distribution::UnspecifiedDistribution);
         }
+        assign_input_order_preservation(&mut sort_push_down, preserve_input_order);
         return Ok(Transformed::no(sort_push_down));
     };
 
@@ -195,6 +225,22 @@ fn pushdown_sorts_helper(
             parent_requirement.first().clone(),
             sort_ordering.clone().into(),
         );
+
+        // Replacing this Sort with an incompatible ordering would change the
+        // rows observed by the order-sensitive ancestor. Keep this Sort and
+        // satisfy the parent's independent requirement above it.
+        if preserve_input_order && !satisfy_parent && !parent_is_stricter {
+            sort_push_down.plan = plan;
+            sort_push_down = add_sort_above_with_distribution(
+                sort_push_down,
+                parent_requirement.into_single(),
+                parent_fetch,
+                &parent_distribution,
+            );
+            assign_initial_requirements(&mut sort_push_down);
+            sort_push_down.children[0].data.preserve_input_order = true;
+            return Ok(Transformed::yes(sort_push_down));
+        }
 
         // Remove the current sort as we are either going to prove that it is
         // unnecessary, or replace it with a stricter sort.
@@ -217,6 +263,7 @@ fn pushdown_sorts_helper(
             sort_push_down.children[0].data = ParentRequirements {
                 ordering_requirement: Some(OrderingRequirements::from(sort_ordering)),
                 fetch: sort_fetch,
+                preserve_input_order: false,
                 distribution_requirement: Distribution::UnspecifiedDistribution,
             };
             return Ok(Transformed::yes(sort_push_down));
@@ -274,6 +321,7 @@ fn pushdown_sorts_helper(
                     .unwrap_or(&Distribution::UnspecifiedDistribution),
             );
         }
+        assign_input_order_preservation(&mut sort_push_down, preserve_input_order);
     } else if let Some(adjusted) = pushdown_requirement_to_children(
         &sort_push_down.plan,
         parent_requirement.clone(),
@@ -305,6 +353,7 @@ fn pushdown_sorts_helper(
                     .unwrap_or(&Distribution::UnspecifiedDistribution),
             );
         }
+        assign_input_order_preservation(&mut sort_push_down, preserve_input_order);
         sort_push_down.data.ordering_requirement = None;
     } else {
         // Can not push down requirements, add new `SortExec` (distribution-aware):
@@ -326,6 +375,26 @@ fn pushdown_requirement_to_children(
     parent_required: OrderingRequirements,
     parent_fetch: Option<usize>,
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+    // A concrete ordering from above can cross an order-sensitive operator only
+    // when it is compatible with the operator's existing output ordering. A
+    // finer compatible ordering is safe, while an incompatible ordering could
+    // change which rows the operator produces.
+    if plan
+        .requires_input_order_preservation()
+        .into_iter()
+        .any(|preserve| preserve)
+    {
+        let Some(output_ordering) = plan.output_ordering() else {
+            return Ok(None);
+        };
+        if !plan.equivalence_properties().requirements_compatible(
+            parent_required.first().clone(),
+            output_ordering.clone().into(),
+        ) {
+            return Ok(None);
+        }
+    }
+
     // If there is a limit on the parent plan we cannot push it down through operators that change the cardinality.
     // E.g. consider if LIMIT 2 is applied below a FilteExec that filters out 1/2 of the rows we'll end up with 1 row instead of 2.
     // If the LIMIT is applied after the FilterExec and the FilterExec returns > 2 rows we'll end up with 2 rows (correct).

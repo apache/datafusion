@@ -163,6 +163,10 @@ impl ExecutionPlan for GlobalLimitExec {
         vec![true]
     }
 
+    fn requires_input_order_preservation(&self) -> Vec<bool> {
+        vec![true]
+    }
+
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
     }
@@ -395,6 +399,10 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
+    fn requires_input_order_preservation(&self) -> Vec<bool> {
         vec![true]
     }
 
