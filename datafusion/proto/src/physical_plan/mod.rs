@@ -782,8 +782,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Analyze(_) => {
                 AnalyzeExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::JsonSink(sink) => {
-                self.try_into_json_sink_physical_plan(sink, ctx, proto_converter)
+            PhysicalPlanType::JsonSink(_) => {
+                JsonSink::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::CsvSink(_) => {
                 CsvSink::try_from_proto(self.node(), &decode_ctx)
@@ -1630,41 +1630,25 @@ pub trait PhysicalPlanNodeExt: Sized {
         AnalyzeExec::try_from_proto(self.node(), &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `JsonSink` deserializes itself via `JsonSink::try_from_proto`"
+    )]
     fn try_into_json_sink_physical_plan(
         &self,
         sink: &protobuf::JsonSinkExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = into_physical_plan(&sink.input, ctx, proto_converter)?;
-
-        let data_sink = JsonSink::try_from_proto(
-            sink.sink
-                .as_ref()
-                .ok_or_else(|| proto_error("Missing required field in protobuf"))?,
-        )?;
-        let sink_schema = input.schema();
-        let sort_order = sink
-            .sort_order
-            .as_ref()
-            .map(|collection| {
-                parse_physical_sort_exprs(
-                    &collection.physical_sort_expr_nodes,
-                    ctx,
-                    &sink_schema,
-                    proto_converter,
-                )
-                .map(|sort_exprs| {
-                    LexRequirement::new(sort_exprs.into_iter().map(Into::into))
-                })
-            })
-            .transpose()?
-            .flatten();
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            Arc::new(data_sink),
-            sort_order,
-        )))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::JsonSink(Box::new(sink.clone()))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        JsonSink::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -2569,19 +2553,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         };
         let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
         let sort_order = exec.encode_sort_order(&encode_ctx)?;
-
-        if let Some(sink) = exec.sink().downcast_ref::<JsonSink>() {
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::JsonSink(Box::new(
-                    protobuf::JsonSinkExecNode {
-                        input: Some(Box::new(input)),
-                        sink: Some(protobuf::JsonSink::try_from_proto(sink)?),
-                        sink_schema: Some(exec.schema().as_ref().try_into()?),
-                        sort_order,
-                    },
-                ))),
-            }));
-        }
 
         #[cfg(feature = "parquet")]
         if let Some(sink) = exec.sink().downcast_ref::<ParquetSink>() {
