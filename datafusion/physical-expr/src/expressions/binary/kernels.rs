@@ -25,7 +25,7 @@ use arrow::compute::kernels::bitwise::{
 };
 use arrow::compute::kernels::boolean::not;
 use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
-use arrow::compute::kernels::take::take;
+use arrow::compute::take;
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{exec_err, internal_err, plan_err};
