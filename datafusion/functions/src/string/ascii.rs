@@ -96,7 +96,7 @@ impl ScalarUDFImpl for AsciiFunc {
             ColumnarValue::Scalar(scalar) => {
                 Ok(ColumnarValue::Scalar(ascii_scalar(&scalar)?))
             }
-            ColumnarValue::Array(array1) => Ok(ColumnarValue::Array(ascii(&[array])?)),
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(ascii(&[array])?)),
         }
     }
 
@@ -191,7 +191,7 @@ pub fn ascii(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         DataType::Dictionary(_, _) => {
             let dictionary = args[0].as_any_dictionary();
-            let converted = ascii(&[dictionary.values().clone()])?;
+            let converted = ascii(&[Arc::clone(dictionary.values())])?;
             Ok(dictionary.with_values(converted))
         }
         _ => internal_err!("Unsupported data type"),
