@@ -25,13 +25,14 @@ use arrow::compute::kernels::bitwise::{
 };
 use arrow::compute::kernels::boolean::not;
 use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
+use arrow::compute::kernels::take::take;
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{exec_err, internal_err, plan_err};
 
 use std::sync::Arc;
 
-
+/// Downcasts $LEFT and $RIGHT to $ARRAY_TYPE and then calls $KERNEL($LEFT, $RIGHT)
 macro_rules! call_kernel {
     ($LEFT:expr, $RIGHT:expr, $KERNEL:expr, $ARRAY_TYPE:ident) => {{
         let left = $LEFT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
@@ -41,6 +42,8 @@ macro_rules! call_kernel {
     }};
 }
 
+/// Creates a $FUNC(left: ArrayRef, right: ArrayRef) that
+/// downcasts left / right to the appropriate integral type and calls the kernel
 macro_rules! create_left_integral_dyn_kernel {
     ($FUNC:ident, $KERNEL:ident) => {
         pub(crate) fn $FUNC(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
@@ -85,7 +88,7 @@ create_left_integral_dyn_kernel!(bitwise_and_dyn, bitwise_and);
 create_left_integral_dyn_kernel!(bitwise_shift_right_dyn, bitwise_shift_right);
 create_left_integral_dyn_kernel!(bitwise_shift_left_dyn, bitwise_shift_left);
 
-
+/// Downcasts $LEFT as $ARRAY_TYPE and $RIGHT as TYPE and calls $KERNEL($LEFT, $RIGHT)
 macro_rules! call_scalar_kernel {
     ($LEFT:expr, $RIGHT:expr, $KERNEL:ident, $ARRAY_TYPE:ident, $TYPE:ty) => {{
         let len = $LEFT.len();
@@ -101,6 +104,8 @@ macro_rules! call_scalar_kernel {
     }};
 }
 
+/// Creates a $FUNC(left: ArrayRef, right: ScalarValue) that
+/// downcasts left / right to the appropriate integral type and calls the kernel
 macro_rules! create_left_integral_dyn_scalar_kernel {
     ($FUNC:ident, $KERNEL:ident) => {
         pub(crate) fn $FUNC(
@@ -211,11 +216,7 @@ pub(crate) fn regex_match_dyn(
         }
         DataType::Dictionary(_, _) => {
             let dict = left.as_any_dictionary();
-            let unpacked_left = arrow::compute::kernels::take::take(
-                dict.values().as_ref(),
-                dict.keys(),
-                None,
-            )?;
+            let unpacked_left = take(dict.values().as_ref(), dict.keys(), None)?;
             regex_match_dyn(&unpacked_left, right, not_match, flag)
         }
         other => internal_err!(
@@ -302,4 +303,24 @@ pub(crate) fn regex_match_dyn_scalar(
         ),
     };
     Some(result)
+}
+
+#[test]
+fn test_regex_match_dyn_dictionary() -> Result<()> {
+    let values = StringArray::from(vec![Some("user auth failed"), Some("anonymous")]);
+    let keys = Int32Array::from(vec![Some(0), Some(1), None, Some(0)]);
+    let left: ArrayRef = Arc::new(DictionaryArray::new(keys, Arc::new(values)));
+    let right: ArrayRef = Arc::new(StringArray::from(vec![
+        Some("(auth|login)"),
+        Some("^anon"),
+        Some("x"),
+        Some("nope"),
+    ]));
+
+    let result = regex_match_dyn(&left, &right, false, false)?;
+    assert_eq!(
+        result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+        &BooleanArray::from(vec![Some(true), Some(true), None, Some(false)])
+    );
+    Ok(())
 }

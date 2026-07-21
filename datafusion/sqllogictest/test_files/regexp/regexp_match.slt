@@ -201,7 +201,7 @@ select null !~* 'abc';
 NULL
 
 
-# Test for Issue 23709: regex_match_dyn with Dictionary encoded patterns
+# Test for Issue 23709: regex_match_dyn with Dictionary encoded value side
 statement ok
 CREATE TABLE dict_regex_t AS SELECT * FROM (VALUES ('user auth failed')) v(s);
 
@@ -218,3 +218,4 @@ DROP TABLE dict_regex_t;
 
 statement ok
 DROP TABLE dict_regex_p;
+
