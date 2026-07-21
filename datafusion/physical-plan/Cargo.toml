@@ -38,7 +38,7 @@ all-features = true
 workspace = true
 
 [features]
-force_hash_collisions = []
+force_hash_collisions = ["datafusion-common/force_hash_collisions"]
 test_utils = ["arrow/test_utils"]
 tokio_coop = []
 tokio_coop_fallback = []
@@ -137,6 +137,11 @@ name = "dictionary_group_values"
 [[bench]]
 harness = false
 name = "hash_join_semi_anti"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
+name = "ie_join"
 required-features = ["test_utils"]
 
 [[bench]]

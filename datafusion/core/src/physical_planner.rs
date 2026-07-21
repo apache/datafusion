@@ -43,7 +43,8 @@ use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    CrossJoinExec, HashJoinExec, IEJoinCondition, IEJoinExec, NestedLoopJoinExec,
+    PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -90,7 +91,7 @@ use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessar
 use datafusion_expr::physical_planning_context::{
     PhysicalPlanningContext, ScalarSubqueryResults, SubqueryIndex,
 };
-use datafusion_expr::utils::{expr_to_columns, split_conjunction};
+use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
     FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
@@ -381,6 +382,169 @@ struct LogicalNode<'a> {
     // None if root
     parent_index: Option<usize>,
     state: NodeState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JoinExprSide {
+    Left,
+    Right,
+    Both,
+    Neither,
+}
+
+struct IEJoinSelection {
+    conditions: [IEJoinCondition; 2],
+    predicate_indices: [usize; 2],
+}
+
+fn join_expr_side(
+    expr: &Expr,
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
+) -> JoinExprSide {
+    let columns = expr.column_refs();
+    let contains_left = columns
+        .iter()
+        .any(|column| left_schema.index_of_column(column).is_ok());
+    let contains_right = columns
+        .iter()
+        .any(|column| right_schema.index_of_column(column).is_ok());
+    match (contains_left, contains_right) {
+        (true, false) => JoinExprSide::Left,
+        (false, true) => JoinExprSide::Right,
+        (true, true) => JoinExprSide::Both,
+        (false, false) => JoinExprSide::Neither,
+    }
+}
+
+/// Extracts the first two cross-input range predicates and normalizes them to
+/// `left_expr OP right_expr`. Predicates that mix both inputs on either side,
+/// or compare an input expression with a constant, remain residual filters.
+fn try_create_ie_join_conditions(
+    filters: &[Expr],
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
+    execution_props: &ExecutionProps,
+    planning_ctx: &PhysicalPlanningContext,
+) -> Result<Option<IEJoinSelection>> {
+    let mut conditions = Vec::with_capacity(2);
+    let mut predicate_indices = Vec::with_capacity(2);
+    for (predicate_index, expr) in filters.iter().enumerate() {
+        let Expr::BinaryExpr(binary) = expr else {
+            continue;
+        };
+        if !matches!(
+            binary.op,
+            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+        ) {
+            continue;
+        }
+        // IEJoin evaluates each driver once per input row. A volatile
+        // expression must retain per-candidate evaluation semantics.
+        if binary.left.is_volatile() || binary.right.is_volatile() {
+            continue;
+        }
+        let mut operator = binary.op;
+        let (left, right) = match (
+            join_expr_side(&binary.left, left_schema, right_schema),
+            join_expr_side(&binary.right, left_schema, right_schema),
+        ) {
+            (JoinExprSide::Left, JoinExprSide::Right) => {
+                (binary.left.as_ref(), binary.right.as_ref())
+            }
+            (JoinExprSide::Right, JoinExprSide::Left) => {
+                operator = operator
+                    .swap()
+                    .expect("range comparison operators are swappable");
+                (binary.right.as_ref(), binary.left.as_ref())
+            }
+            _ => continue,
+        };
+
+        conditions.push(IEJoinCondition::new(
+            create_physical_expr(left, left_schema, execution_props, planning_ctx)?,
+            create_physical_expr(right, right_schema, execution_props, planning_ctx)?,
+            operator,
+        ));
+        predicate_indices.push(predicate_index);
+        if conditions.len() == 2 {
+            break;
+        }
+    }
+
+    Ok(if conditions.len() == 2 {
+        Some(IEJoinSelection {
+            conditions: conditions.try_into().expect("length checked above"),
+            predicate_indices: predicate_indices
+                .try_into()
+                .expect("length checked above"),
+        })
+    } else {
+        None
+    })
+}
+
+fn create_join_filter(
+    expr: &Expr,
+    left_df_schema: &DFSchema,
+    right_df_schema: &DFSchema,
+    physical_left_schema: &Schema,
+    physical_right_schema: &Schema,
+    execution_props: &ExecutionProps,
+    planning_ctx: &PhysicalPlanningContext,
+) -> Result<join_utils::JoinFilter> {
+    let columns = expr.column_refs();
+    let left_field_indices = columns
+        .iter()
+        .filter_map(|column| left_df_schema.index_of_column(column).ok())
+        .sorted()
+        .collect::<Vec<_>>();
+    let right_field_indices = columns
+        .iter()
+        .filter_map(|column| right_df_schema.index_of_column(column).ok())
+        .sorted()
+        .collect::<Vec<_>>();
+
+    let (filter_df_fields, filter_fields): (Vec<_>, Vec<_>) = left_field_indices
+        .iter()
+        .copied()
+        .map(|index| {
+            (
+                left_df_schema.qualified_field(index),
+                physical_left_schema.field(index).clone(),
+            )
+        })
+        .chain(right_field_indices.iter().copied().map(|index| {
+            (
+                right_df_schema.qualified_field(index),
+                physical_right_schema.field(index).clone(),
+            )
+        }))
+        .unzip();
+    let filter_df_fields = filter_df_fields
+        .into_iter()
+        .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
+        .collect();
+    let metadata: HashMap<_, _> = left_df_schema
+        .metadata()
+        .clone()
+        .into_iter()
+        .chain(right_df_schema.metadata().clone())
+        .collect();
+    let filter_df_schema =
+        DFSchema::new_with_metadata(filter_df_fields, metadata.clone())?;
+    let filter_schema = Schema::new_with_metadata(filter_fields, metadata);
+    let filter_expr =
+        create_physical_expr(expr, &filter_df_schema, execution_props, planning_ctx)?;
+    let column_indices = join_utils::JoinFilter::build_column_indices(
+        left_field_indices,
+        right_field_indices,
+    );
+    Ok(join_utils::JoinFilter::new(
+        filter_expr,
+        column_indices,
+        Arc::new(filter_schema),
+    ))
 }
 
 impl DefaultPhysicalPlanner {
@@ -1556,123 +1720,104 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<join_utils::JoinOn>>()?;
 
-                // TODO: `num_range_filters` can be used later on for ASOF joins (`num_range_filters > 1`)
                 let mut num_range_filters = 0;
                 let mut range_filters: Vec<Expr> = Vec::new();
+                let mut filter_conjuncts: Vec<Expr> = Vec::new();
                 let mut total_filters = 0;
+                let physical_left_schema = physical_left.schema();
+                let physical_right_schema = physical_right.schema();
 
-                let join_filter = match filter {
-                    Some(expr) => {
-                        let split_expr = split_conjunction(expr);
-                        for expr in split_expr.iter() {
-                            match *expr {
-                                Expr::BinaryExpr(BinaryExpr {
-                                    left: _,
-                                    right: _,
+                if let Some(expr) = filter {
+                    filter_conjuncts =
+                        split_conjunction(expr).into_iter().cloned().collect();
+                    for expr in &filter_conjuncts {
+                        match expr {
+                            Expr::BinaryExpr(BinaryExpr {
+                                left: _,
+                                right: _,
+                                op,
+                            }) => {
+                                if matches!(
                                     op,
-                                }) => {
-                                    if matches!(
-                                        op,
-                                        Operator::Lt
-                                            | Operator::LtEq
-                                            | Operator::Gt
-                                            | Operator::GtEq
-                                    ) {
-                                        range_filters.push((**expr).clone());
-                                        num_range_filters += 1;
-                                    }
-                                    total_filters += 1;
+                                    Operator::Lt
+                                        | Operator::LtEq
+                                        | Operator::Gt
+                                        | Operator::GtEq
+                                ) {
+                                    range_filters.push(expr.clone());
+                                    num_range_filters += 1;
                                 }
-                                // TODO: Want to deal with `Expr::Between` for IEJoins, it counts as two range predicates
-                                // which is why it is not dealt with in PWMJ
-                                // Expr::Between(_) => {},
-                                _ => {
-                                    total_filters += 1;
-                                }
+                                total_filters += 1;
+                            }
+                            // TODO: Support `Expr::Between` by decomposing it into
+                            // two IEJoin range predicates. PWMJ still requires one.
+                            _ => {
+                                total_filters += 1;
                             }
                         }
-
-                        // Extract columns from filter expression and saved in a HashSet
-                        let cols = expr.column_refs();
-
-                        // Collect left & right field indices, the field indices are sorted in ascending order
-                        let left_field_indices = cols
-                            .iter()
-                            .filter_map(|c| left_df_schema.index_of_column(c).ok())
-                            .sorted()
-                            .collect::<Vec<_>>();
-                        let right_field_indices = cols
-                            .iter()
-                            .filter_map(|c| right_df_schema.index_of_column(c).ok())
-                            .sorted()
-                            .collect::<Vec<_>>();
-
-                        // Collect DFFields and Fields required for intermediate schemas
-                        let (filter_df_fields, filter_fields): (Vec<_>, Vec<_>) =
-                            left_field_indices
-                                .clone()
-                                .into_iter()
-                                .map(|i| {
-                                    (
-                                        left_df_schema.qualified_field(i),
-                                        physical_left.schema().field(i).clone(),
-                                    )
-                                })
-                                .chain(right_field_indices.clone().into_iter().map(|i| {
-                                    (
-                                        right_df_schema.qualified_field(i),
-                                        physical_right.schema().field(i).clone(),
-                                    )
-                                }))
-                                .unzip();
-                        let filter_df_fields = filter_df_fields
-                            .into_iter()
-                            .map(|(qualifier, field)| {
-                                (qualifier.cloned(), Arc::clone(field))
-                            })
-                            .collect();
-
-                        let metadata: HashMap<_, _> = left_df_schema
-                            .metadata()
-                            .clone()
-                            .into_iter()
-                            .chain(right_df_schema.metadata().clone())
-                            .collect();
-
-                        // Construct intermediate schemas used for filtering data and
-                        // convert logical expression to physical according to filter schema
-                        let filter_df_schema = DFSchema::new_with_metadata(
-                            filter_df_fields,
-                            metadata.clone(),
-                        )?;
-                        let filter_schema =
-                            Schema::new_with_metadata(filter_fields, metadata);
-
-                        let filter_expr = create_physical_expr(
-                            expr,
-                            &filter_df_schema,
-                            execution_props,
-                            planning_ctx,
-                        )?;
-                        let column_indices = join_utils::JoinFilter::build_column_indices(
-                            left_field_indices,
-                            right_field_indices,
-                        );
-
-                        Some(join_utils::JoinFilter::new(
-                            filter_expr,
-                            column_indices,
-                            Arc::new(filter_schema),
-                        ))
                     }
-                    _ => None,
-                };
+                }
 
                 let prefer_hash_join =
                     session_state.config_options().optimizer.prefer_hash_join;
 
+                let ie_join_selection = if *join_type == JoinType::Inner
+                    && !*null_aware
+                    && range_filters.len() >= 2
+                    && session_state.config_options().optimizer.enable_ie_join
+                {
+                    try_create_ie_join_conditions(
+                        &filter_conjuncts,
+                        left_df_schema,
+                        right_df_schema,
+                        execution_props,
+                        planning_ctx,
+                    )?
+                } else {
+                    None
+                };
+                let join_filter_expr = if let Some(selection) = &ie_join_selection {
+                    conjunction(
+                        filter_conjuncts
+                            .iter()
+                            .enumerate()
+                            .filter(|(index, _)| {
+                                !selection.predicate_indices.contains(index)
+                            })
+                            .map(|(_, expr)| expr.clone()),
+                    )
+                } else {
+                    filter.as_ref().cloned()
+                };
+                let join_filter = join_filter_expr
+                    .as_ref()
+                    .map(|expr| {
+                        create_join_filter(
+                            expr,
+                            left_df_schema,
+                            right_df_schema,
+                            &physical_left_schema,
+                            &physical_right_schema,
+                            execution_props,
+                            planning_ctx,
+                        )
+                    })
+                    .transpose()?;
+
                 // TODO: Allow PWMJ to deal with residual equijoin conditions
-                let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
+                let join: Arc<dyn ExecutionPlan> = if let Some(selection) =
+                    ie_join_selection
+                {
+                    Arc::new(IEJoinExec::try_new(
+                        physical_left,
+                        physical_right,
+                        join_on,
+                        selection.conditions,
+                        join_filter,
+                        *join_type,
+                        *null_equality,
+                    )?)
+                } else if join_on.is_empty() {
                     if join_filter.is_none() && *join_type == JoinType::Inner {
                         // cross join if there is no join conditions and no join filter set
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
@@ -5359,6 +5504,70 @@ digraph {
         assert_contains!(&err_str, "field data type at index");
         assert_contains!(&err_str, "field nullability at index");
         assert_contains!(&err_str, "field metadata at index");
+    }
+
+    #[tokio::test]
+    async fn ie_join_plans_and_executes_keyed_interval_overlap() -> Result<()> {
+        let mut config = SessionConfig::new().with_target_partitions(4);
+        config.options_mut().optimizer.enable_ie_join = true;
+        let ctx = SessionContext::new_with_config(config);
+        let query = r#"
+            WITH
+              l(k, start_at, end_at) AS (
+                VALUES ('A', 1, 3), ('A', 5, 7), ('B', 2, 4), ('C', 1, 2)
+              ),
+              r(k, start_at, end_at) AS (
+                VALUES ('A', 1, 5), ('A', 8, 9), ('B', 0, 2),
+                       ('B', 5, 6), ('C', 4, 5)
+              )
+            SELECT COUNT(*) AS matches
+            FROM l JOIN r
+              ON l.k = r.k
+             AND l.start_at <= r.end_at
+             AND r.start_at <= l.end_at
+             AND l.start_at <> r.start_at
+        "#;
+
+        let plan = ctx.sql(query).await?.create_physical_plan().await?;
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        assert_contains!(&formatted, "IEJoinExec");
+        assert_contains!(&formatted, "conditions=[");
+        assert_contains!(&formatted, "filter=");
+        assert_contains!(&formatted, "RepartitionExec");
+
+        let batches = ctx.sql(query).await?.collect().await?;
+        assert_batches_eq!(
+            [
+                "+---------+",
+                "| matches |",
+                "+---------+",
+                "| 2       |",
+                "+---------+",
+            ],
+            &batches
+        );
+
+        let volatile_query = r#"
+            WITH
+              l(k, start_at, end_at) AS (VALUES ('A', 1, 3)),
+              r(k, start_at, end_at) AS (VALUES ('A', 1, 5))
+            SELECT *
+            FROM l JOIN r
+              ON l.k = r.k
+             AND CAST(l.start_at AS DOUBLE) + random() <= r.end_at
+             AND r.start_at <= l.end_at
+        "#;
+        let plan = ctx
+            .sql(volatile_query)
+            .await?
+            .create_physical_plan()
+            .await?;
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        assert!(
+            !formatted.contains("IEJoinExec"),
+            "volatile range expressions must remain candidate filters:\n{formatted}"
+        );
+        Ok(())
     }
 
     #[derive(Debug)]

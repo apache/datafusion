@@ -1583,6 +1583,12 @@ config_namespace! {
         /// one range filter.
         pub enable_piecewise_merge_join: bool, default = false
 
+        /// When set to true, IEJoin is enabled. IEJoin is currently experimental.
+        /// The physical planner will choose IEJoin for inner joins with at least two
+        /// range filters. Equality join keys, when present, are used to co-partition
+        /// the inputs before applying the range join.
+        pub enable_ie_join: bool, default = false
+
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold: usize, default = 1024 * 1024
