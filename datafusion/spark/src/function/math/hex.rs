@@ -335,7 +335,7 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{
-        BinaryArray, DictionaryArray, Int32Array, Int64Array, StringArray,
+        Array, BinaryArray, DictionaryArray, Int32Array, Int64Array, StringArray,
     };
     use arrow::{
         array::{
@@ -456,6 +456,21 @@ mod test {
         for (i, (num, expected)) in cases.iter().enumerate() {
             assert_eq!(*expected, arr.value(i), "hex({num})");
         }
+    }
+
+    #[test]
+    fn test_hex_encode_bytes_lowercase() {
+        // Every in-repo caller of `hex_encode_bytes` goes through `spark_hex`,
+        // which always passes `lowercase = false`. The `lowercase = true` path
+        // is reachable only via `spark_sha2_hex`, which has no in-workspace
+        // caller, so it otherwise has no coverage. Drive it directly here.
+        let input = StringArray::from(vec![Some("hi"), Some("bye"), None, Some("rust")]);
+        let result = super::hex_encode_bytes(input.iter(), true, input.len()).unwrap();
+        let result = as_string_array(&result);
+
+        let expected =
+            StringArray::from(vec![Some("6869"), Some("627965"), None, Some("72757374")]);
+        assert_eq!(result, &expected);
     }
 
     #[test]

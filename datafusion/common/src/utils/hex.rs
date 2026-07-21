@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Hex encoding shared across the workspace.
+//! Hex encoding of bytes and integers.
 //!
-//! `to_hex`, Spark's `hex`, and the digest functions (`md5`, `sha1`, `sha2`)
-//! all need the same conversion. Keeping one implementation here avoids the
-//! per-crate lookup tables that previously diverged in both speed and case
-//! handling.
+//! [`encode_bytes`] and [`encode_bytes_into`] encode a byte slice into an
+//! owned `String` or an appended `Vec<u8>`, respectively; [`encode_bytes_to_slice`]
+//! writes into a caller-provided, pre-sized buffer. [`encode_u64`] encodes an
+//! integer, trimming leading zeros. All four take a [`HexCase`] to choose
+//! between lowercase and uppercase digits.
 
 /// Case of the emitted hex digits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,7 +44,7 @@ const fn build_lookup(digits: &[u8; 16]) -> [[u8; 2]; 256] {
     let mut table = [[0u8; 2]; 256];
     let mut i = 0;
     while i < 256 {
-        table[i][0] = digits[(i >> 4) & 0xF];
+        table[i][0] = digits[i >> 4];
         table[i][1] = digits[i & 0xF];
         i += 1;
     }
@@ -93,6 +94,16 @@ pub fn encode_bytes_into(bytes: &[u8], case: HexCase, out: &mut Vec<u8>) {
 /// an `out` that is too short silently drops the remaining input, and an
 /// `out` that is too long is left with unwritten, stale bytes at the end.
 /// Callers are responsible for sizing `out` correctly.
+///
+/// # Example
+///
+/// ```
+/// use datafusion_common::utils::hex::{HexCase, encode_bytes_to_slice};
+///
+/// let mut out = [0u8; 8];
+/// encode_bytes_to_slice(&[0xde, 0xad, 0xbe, 0xef], HexCase::Lower, &mut out);
+/// assert_eq!(&out, b"deadbeef");
+/// ```
 #[inline]
 pub fn encode_bytes_to_slice(bytes: &[u8], case: HexCase, out: &mut [u8]) {
     debug_assert_eq!(out.len(), bytes.len() * 2);
@@ -103,6 +114,15 @@ pub fn encode_bytes_to_slice(bytes: &[u8], case: HexCase, out: &mut [u8]) {
 }
 
 /// Returns the hex encoding of `bytes` as an owned `String`.
+///
+/// # Example
+///
+/// ```
+/// use datafusion_common::utils::hex::{HexCase, encode_bytes};
+///
+/// assert_eq!(encode_bytes(&[0xde, 0xad, 0xbe, 0xef], HexCase::Lower), "deadbeef");
+/// assert_eq!(encode_bytes(&[0xde, 0xad, 0xbe, 0xef], HexCase::Upper), "DEADBEEF");
+/// ```
 #[inline]
 pub fn encode_bytes(bytes: &[u8], case: HexCase) -> String {
     let mut out = Vec::with_capacity(bytes.len() * 2);
@@ -119,6 +139,19 @@ pub fn encode_bytes(bytes: &[u8], case: HexCase) -> String {
 /// Signed values should be cast with `as u64`, which yields the two's
 /// complement representation that both `to_hex` and Spark's `hex` produce for
 /// negative input.
+///
+/// # Example
+///
+/// The caller owns the buffer and can reuse it across calls; each call
+/// returns a fresh subslice of it, borrowed for as long as `buf` is:
+///
+/// ```
+/// use datafusion_common::utils::hex::{HexCase, encode_u64};
+///
+/// let mut buf = [0u8; 16];
+/// assert_eq!(encode_u64(0xAB, HexCase::Lower, &mut buf), b"ab");
+/// assert_eq!(encode_u64(0, HexCase::Lower, &mut buf), b"0");
+/// ```
 #[inline]
 pub fn encode_u64(v: u64, case: HexCase, buf: &mut [u8; 16]) -> &[u8] {
     let start = write_digits(v, case, buf);
@@ -129,8 +162,10 @@ pub fn encode_u64(v: u64, case: HexCase, buf: &mut [u8; 16]) -> &[u8] {
 /// first digit.
 ///
 /// Split out from [`encode_u64`] so the mutable borrow of `buf` ends before the
-/// returned slice reborrows it; a conditional `return &buf[..]` inside the loop
-/// body would outlive the writes that follow it.
+/// returned slice reborrows it. The `v == 0` case returns early; if that early
+/// return instead reborrowed `buf` as `&buf[..]` inline in [`encode_u64`], the
+/// borrow checker would extend that reborrow over the rest of the function
+/// body, conflicting with the mutable writes on the non-zero path below.
 #[inline]
 fn write_digits(v: u64, case: HexCase, buf: &mut [u8; 16]) -> usize {
     if v == 0 {
@@ -254,20 +289,21 @@ mod tests {
     }
 
     #[test]
-    fn encode_bytes_agrees_with_encode_bytes_into() {
-        let bytes: Vec<u8> = (0..=255u8).collect();
-        for case in [HexCase::Lower, HexCase::Upper] {
-            let mut out = Vec::new();
-            encode_bytes_into(&bytes, case, &mut out);
-            assert_eq!(String::from_utf8(out).unwrap(), encode_bytes(&bytes, case));
-        }
+    fn encode_u64_reused_buffer_leaks_no_stale_digits() {
+        let mut buf = [0u8; 16];
+        assert_eq!(
+            encode_u64(u64::MAX, HexCase::Lower, &mut buf),
+            b"ffffffffffffffff"
+        );
+        assert_eq!(encode_u64(0, HexCase::Lower, &mut buf), b"0");
+        assert_eq!(encode_u64(0xAB, HexCase::Lower, &mut buf), b"ab");
     }
 
     #[test]
     fn encode_bytes_to_slice_empty() {
-        let mut out = [];
+        let mut out: [u8; 0] = [];
         encode_bytes_to_slice(&[], HexCase::Lower, &mut out);
-        assert_eq!(out, []);
+        assert_eq!(out, [] as [u8; 0]);
     }
 
     #[test]
