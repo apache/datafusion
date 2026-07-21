@@ -57,6 +57,22 @@ pub struct StructFieldMapping {
     pub fields: Vec<(Vec<ScalarValue>, usize)>,
 }
 
+/// Describes how a scalar UDF transforms range partitioning boundaries.
+///
+/// Implementations identify the input argument whose ranges are transformed
+/// and map boundaries from that input to the UDF output. The physical
+/// partitioning machinery applies the remaining safety checks, such as sort
+/// direction, nullability, and boundary alignment.
+pub trait RangePartitioningTransform: Debug + Send + Sync {
+    /// Index of the input argument whose range partitioning is transformed.
+    fn source_index(&self) -> usize;
+
+    /// Maps a source range boundary to the corresponding output boundary.
+    ///
+    /// Returns `None` when the boundary cannot be mapped safely.
+    fn map_boundary(&self, boundary: &ScalarValue) -> Option<ScalarValue>;
+}
+
 /// Logical representation of a Scalar User Defined Function.
 ///
 /// A scalar function produces a single row output for each row of input. This
@@ -338,6 +354,14 @@ impl ScalarUDF {
         literal_args: &[Option<ScalarValue>],
     ) -> Option<StructFieldMapping> {
         self.inner.struct_field_mapping(literal_args)
+    }
+
+    /// See [`ScalarUDFImpl::range_partitioning_transform`] for more details.
+    pub fn range_partitioning_transform(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<Box<dyn RangePartitioningTransform>> {
+        self.inner.range_partitioning_transform(literal_args)
     }
 
     /// Updates bounds for child expressions, given a known interval for this
@@ -1029,6 +1053,20 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         None
     }
 
+    /// Returns a transform describing how this function maps range
+    /// partitioning boundaries.
+    ///
+    /// `literal_args[i]` is `Some(value)` when argument `i` is a known literal.
+    /// Implementations should return a transform only when those literals make
+    /// the function a monotonic, many-to-one transformation of one input and
+    /// mapping an aligned boundary preserves partition ownership.
+    fn range_partitioning_transform(
+        &self,
+        _literal_args: &[Option<ScalarValue>],
+    ) -> Option<Box<dyn RangePartitioningTransform>> {
+        None
+    }
+
     /// Returns the documentation for this Scalar UDF.
     ///
     /// Documentation can be accessed programmatically as well as generating
@@ -1186,6 +1224,13 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         literal_args: &[Option<ScalarValue>],
     ) -> Option<StructFieldMapping> {
         self.inner.struct_field_mapping(literal_args)
+    }
+
+    fn range_partitioning_transform(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<Box<dyn RangePartitioningTransform>> {
+        self.inner.range_partitioning_transform(literal_args)
     }
 
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {

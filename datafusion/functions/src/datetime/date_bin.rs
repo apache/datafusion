@@ -40,8 +40,8 @@ use datafusion_common::{
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TIMEZONE_WILDCARD, Volatility,
+    ColumnarValue, Documentation, RangePartitioningTransform, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TIMEZONE_WILDCARD, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -115,6 +115,32 @@ FROM VALUES (TIME '02:18:18'), (TIME '19:00:03')  t(time);
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DateBinFunc {
     signature: Signature,
+}
+
+#[derive(Debug)]
+struct DateBinRangePartitioningTransform {
+    stride: ScalarValue,
+    origin: ScalarValue,
+}
+
+impl RangePartitioningTransform for DateBinRangePartitioningTransform {
+    fn source_index(&self) -> usize {
+        1
+    }
+
+    fn map_boundary(&self, boundary: &ScalarValue) -> Option<ScalarValue> {
+        let result = date_bin_impl(
+            &ColumnarValue::Scalar(self.stride.clone()),
+            &ColumnarValue::Scalar(boundary.clone()),
+            &ColumnarValue::Scalar(self.origin.clone()),
+        )
+        .ok()?;
+
+        match result {
+            ColumnarValue::Scalar(value) => Some(value),
+            ColumnarValue::Array(_) => None,
+        }
+    }
 }
 
 impl Default for DateBinFunc {
@@ -283,9 +309,59 @@ impl ScalarUDFImpl for DateBinFunc {
             Ok(SortProperties::Unordered)
         }
     }
+
+    fn range_partitioning_transform(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<Box<dyn RangePartitioningTransform>> {
+        if !(2..=3).contains(&literal_args.len()) {
+            return None;
+        }
+
+        let stride = literal_args.first()?.as_ref()?;
+        if !is_positive_fixed_width_stride(stride) {
+            return None;
+        }
+
+        let origin = if literal_args.len() == 3 {
+            let origin = literal_args.get(2)?.as_ref()?;
+            if !matches!(origin, ScalarValue::TimestampNanosecond(Some(_), _)) {
+                return None;
+            }
+            origin.clone()
+        } else {
+            ScalarValue::TimestampNanosecond(Some(0), Some("+00:00".into()))
+        };
+
+        Some(Box::new(DateBinRangePartitioningTransform {
+            stride: stride.clone(),
+            origin,
+        }))
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+fn is_positive_fixed_width_stride(value: &ScalarValue) -> bool {
+    let nanos = match value {
+        ScalarValue::IntervalDayTime(Some(value)) => {
+            let (days, millis) = IntervalDayTimeType::to_parts(*value);
+            i128::from(days) * i128::from(NANOSECONDS_IN_DAY)
+                + i128::from(millis) * i128::from(NANOS_PER_MILLI)
+        }
+        ScalarValue::IntervalMonthDayNano(Some(value)) => {
+            let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(*value);
+            if months != 0 {
+                return false;
+            }
+            i128::from(days) * i128::from(NANOSECONDS_IN_DAY) + i128::from(nanos)
+        }
+        _ => return false,
+    };
+
+    nanos > 0 && nanos <= i128::from(i64::MAX)
 }
 
 const NANOS_PER_MICRO: i64 = 1_000;
@@ -848,6 +924,62 @@ mod tests {
         assert!(
             err.strip_backtrace().contains("overflows i64"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_range_partitioning_transform() {
+        let hour = ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+            months: 0,
+            days: 0,
+            nanoseconds: 3_600_000_000_000,
+        }));
+        let transform = DateBinFunc::new()
+            .range_partitioning_transform(&[Some(hour), None])
+            .expect("fixed-width date_bin should transform range boundaries");
+
+        assert_eq!(transform.source_index(), 1);
+        assert_eq!(
+            transform.map_boundary(&ScalarValue::TimestampNanosecond(
+                Some(3_600_000_000_000),
+                None,
+            )),
+            Some(ScalarValue::TimestampNanosecond(
+                Some(3_600_000_000_000),
+                None,
+            ))
+        );
+        assert_eq!(
+            transform.map_boundary(&ScalarValue::TimestampNanosecond(
+                Some(5_400_000_000_000),
+                None,
+            )),
+            Some(ScalarValue::TimestampNanosecond(
+                Some(3_600_000_000_000),
+                None,
+            ))
+        );
+
+        let month = ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+            months: 1,
+            days: 0,
+            nanoseconds: 0,
+        }));
+        assert!(
+            DateBinFunc::new()
+                .range_partitioning_transform(&[Some(month), None])
+                .is_none()
+        );
+
+        let negative = ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+            months: 0,
+            days: 0,
+            nanoseconds: -1,
+        }));
+        assert!(
+            DateBinFunc::new()
+                .range_partitioning_transform(&[Some(negative), None])
+                .is_none()
         );
     }
 
