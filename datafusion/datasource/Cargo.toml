@@ -34,6 +34,12 @@ all-features = true
 backtrace = ["datafusion-common/backtrace"]
 compression = ["async-compression", "liblzma", "bzip2", "flate2", "zstd", "tokio-util"]
 default = ["compression"]
+# Enables `DataSink::try_to_proto` serialization hooks. Off by default so
+# consumers that never serialize plans pay nothing.
+proto = [
+    "dep:datafusion-proto-models",
+    "datafusion-physical-plan/proto",
+]
 
 [dependencies]
 arrow = { workspace = true }
@@ -56,6 +62,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-proto-models = { workspace = true, optional = true }
 datafusion-session = { workspace = true }
 flate2 = { workspace = true, optional = true }
 futures = { workspace = true }
