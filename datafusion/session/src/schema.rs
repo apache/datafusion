@@ -36,7 +36,7 @@ use datafusion_expr::TableType;
 #[async_trait]
 pub trait SchemaProvider: Any + Debug + Sync + Send {
     /// Returns the owner of the Schema, default is None. This value is reported
-    /// as part of `information_tables.schemata
+    /// as part of `information_schema.schemata`.
     fn owner_name(&self) -> Option<&str> {
         None
     }
