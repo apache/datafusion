@@ -89,15 +89,13 @@ version = "54.0.0"
 #
 # See for more details: https://github.com/rust-lang/cargo/issues/11329
 apache-avro = { version = "0.21", default-features = false }
-arrow = {
-    git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
+arrow = { git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
 #    version = "59.1.0",
     features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-avro = {
-    git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
+arrow-avro = { git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
 #    version = "59.1.0",
     default-features = false, features = [
     "deflate",
@@ -106,17 +104,14 @@ arrow-avro = {
     "bzip2",
     "xz",
 ] }
-arrow-buffer = {
+arrow-buffer = { git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
 #    version = "59.1.0",
-    git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
 
     default-features = false }
-arrow-data = {
-    git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
+arrow-data = { git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
 #    version = "59.1.0",
     default-features = false }
-arrow-flight = {
-    git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
+arrow-flight = { git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
 
 #    version = "59.1.0",
     features = [
@@ -124,21 +119,18 @@ arrow-flight = {
 ] }
 # Both codecs are required here to make sure that code paths like
 # file-spilling have access to all compression codecs.
-arrow-ipc = {
-    git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
+arrow-ipc = { git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
 
 #    version = "59.1.0",
     default-features = false, features = [
     "lz4",
     "zstd",
 ] }
-arrow-ord = {
-    git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
+arrow-ord = { git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
 
 #    version = "59.1.0",
     default-features = false }
-arrow-schema = {
-    git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
+arrow-schema = { git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
 
 #    version = "59.1.0",
     default-features = false }
@@ -207,8 +199,7 @@ memchr = "2.8.1"
 num-traits = { version = "0.2" }
 object_store = { version = "0.13.2", default-features = false }
 parking_lot = "0.12"
-parquet = {
-    git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
+parquet = { git = "https://github.com/rluvaton/arrow-rs", rev = "9075b4bc94f9a0ba3caf0befb7c93c897f4260ba",
 
 #    version = "59.1.0",
     default-features = false, features = [
