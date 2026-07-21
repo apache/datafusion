@@ -33,7 +33,10 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
     not_impl_err, plan_err,
     types::{NativeType, logical_string},
-    utils::take_function_args,
+    utils::{
+        hex::{HexCase, encode_bytes as encode_hex, encode_bytes_to_slice},
+        take_function_args,
+    },
 };
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -369,7 +372,7 @@ impl Encoding {
         match self {
             Self::Base64 => BASE64_ENGINE.encode(value),
             Self::Base64Padded => BASE64_ENGINE_PADDED.encode(value),
-            Self::Hex => hex::encode(value),
+            Self::Hex => encode_hex(value, HexCase::Lower),
         }
     }
 
@@ -476,11 +479,7 @@ where
     for v in array.iter() {
         if let Some(v) = v {
             let out_len = v.len() * 2;
-            // The slice is sized to exactly `2 * v.len()`, which is the only
-            // condition under which `encode_to_slice` can fail, so this cannot
-            // error.
-            hex::encode_to_slice(v, &mut values[pos..pos + out_len])
-                .map_err(|e| exec_datafusion_err!("Failed to encode to hex: {e}"))?;
+            encode_bytes_to_slice(v, HexCase::Lower, &mut values[pos..pos + out_len]);
             pos += out_len;
         }
         offsets.push(OutputOffset::usize_as(pos));

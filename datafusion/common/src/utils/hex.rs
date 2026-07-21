@@ -80,6 +80,28 @@ pub fn encode_bytes_into(bytes: &[u8], case: HexCase, out: &mut Vec<u8>) {
     }
 }
 
+/// Writes the hex encoding of `bytes` into `out`.
+///
+/// `out` must be exactly `2 * bytes.len()` bytes long. This is for callers
+/// that already own a pre-sized buffer (for example a slice of a larger,
+/// pre-allocated output array) and want to write directly into it rather
+/// than appending to a `Vec`.
+///
+/// The length requirement is only checked in debug builds, via
+/// `debug_assert_eq!`. In release builds a mismatched `out` length is not
+/// an error: only `min(bytes.len(), out.len() / 2)` bytes are encoded, so
+/// an `out` that is too short silently drops the remaining input, and an
+/// `out` that is too long is left with unwritten, stale bytes at the end.
+/// Callers are responsible for sizing `out` correctly.
+#[inline]
+pub fn encode_bytes_to_slice(bytes: &[u8], case: HexCase, out: &mut [u8]) {
+    debug_assert_eq!(out.len(), bytes.len() * 2);
+    let lookup = case.lookup();
+    for (&b, chunk) in bytes.iter().zip(out.chunks_exact_mut(2)) {
+        chunk.copy_from_slice(&lookup[b as usize]);
+    }
+}
+
 /// Returns the hex encoding of `bytes` as an owned `String`.
 #[inline]
 pub fn encode_bytes(bytes: &[u8], case: HexCase) -> String {
@@ -237,6 +259,34 @@ mod tests {
         for case in [HexCase::Lower, HexCase::Upper] {
             let mut out = Vec::new();
             encode_bytes_into(&bytes, case, &mut out);
+            assert_eq!(String::from_utf8(out).unwrap(), encode_bytes(&bytes, case));
+        }
+    }
+
+    #[test]
+    fn encode_bytes_to_slice_empty() {
+        let mut out = [];
+        encode_bytes_to_slice(&[], HexCase::Lower, &mut out);
+        assert_eq!(out, []);
+    }
+
+    #[test]
+    fn encode_bytes_to_slice_examples() {
+        let mut out = [0u8; 8];
+        encode_bytes_to_slice(&[0xde, 0xad, 0xbe, 0xef], HexCase::Lower, &mut out);
+        assert_eq!(&out, b"deadbeef");
+
+        let mut out = [0u8; 8];
+        encode_bytes_to_slice(&[0xde, 0xad, 0xbe, 0xef], HexCase::Upper, &mut out);
+        assert_eq!(&out, b"DEADBEEF");
+    }
+
+    #[test]
+    fn encode_bytes_to_slice_agrees_with_encode_bytes() {
+        let bytes: Vec<u8> = (0..=255u8).collect();
+        for case in [HexCase::Lower, HexCase::Upper] {
+            let mut out = vec![0u8; bytes.len() * 2];
+            encode_bytes_to_slice(&bytes, case, &mut out);
             assert_eq!(String::from_utf8(out).unwrap(), encode_bytes(&bytes, case));
         }
     }
