@@ -595,7 +595,9 @@ fn bench_emit_first_small(c: &mut Criterion) {
                 |b, batches| {
                     b.iter_batched_ref(
                         || populate_group_values(&schema, batches),
-                        |gv| gv.emit(EmitTo::First(n)).unwrap(),
+                        |gv| {
+                            drop(black_box(gv.emit(EmitTo::First(n)).unwrap()));
+                        },
                         criterion::BatchSize::SmallInput,
                     );
                 },
@@ -624,7 +626,9 @@ fn bench_emit_first_large(c: &mut Criterion) {
                 |b, batches| {
                     b.iter_batched_ref(
                         || populate_group_values(&schema, batches),
-                        |gv| gv.emit(EmitTo::First(n)).unwrap(),
+                        |gv| {
+                            drop(black_box(gv.emit(EmitTo::First(n)).unwrap()));
+                        },
                         criterion::BatchSize::LargeInput,
                     );
                 },
