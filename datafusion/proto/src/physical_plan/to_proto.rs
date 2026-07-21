@@ -635,47 +635,6 @@ impl TryFromProto<&FileSinkConfig> for protobuf::FileSinkConfig {
     type Error = DataFusionError;
 
     fn try_from_proto(conf: &FileSinkConfig) -> Result<Self, Self::Error> {
-        let file_groups = conf
-            .file_group
-            .iter()
-            .map(protobuf::PartitionedFile::try_from_proto)
-            .collect::<Result<Vec<_>>>()?;
-        let table_paths = conf
-            .table_paths
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        let table_partition_cols = conf
-            .table_partition_cols
-            .iter()
-            .map(|(name, data_type)| {
-                Ok(protobuf::PartitionColumn {
-                    name: name.to_owned(),
-                    arrow_type: Some(data_type.try_into()?),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let file_output_mode = match conf.file_output_mode {
-            datafusion_datasource::file_sink_config::FileOutputMode::Automatic => {
-                protobuf::FileOutputMode::Automatic
-            }
-            datafusion_datasource::file_sink_config::FileOutputMode::SingleFile => {
-                protobuf::FileOutputMode::SingleFile
-            }
-            datafusion_datasource::file_sink_config::FileOutputMode::Directory => {
-                protobuf::FileOutputMode::Directory
-            }
-        };
-        Ok(Self {
-            object_store_url: conf.object_store_url.to_string(),
-            file_groups,
-            table_paths,
-            output_schema: Some(conf.output_schema.as_ref().try_into()?),
-            table_partition_cols,
-            keep_partition_by_columns: conf.keep_partition_by_columns,
-            insert_op: conf.insert_op as i32,
-            file_extension: conf.file_extension.to_string(),
-            file_output_mode: file_output_mode.into(),
-        })
+        conf.to_proto()
     }
 }

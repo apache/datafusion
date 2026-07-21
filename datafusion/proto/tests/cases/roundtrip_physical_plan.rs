@@ -129,6 +129,7 @@ use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
 };
+use datafusion_proto::convert::TryFromProto;
 use datafusion_proto::physical_plan::from_proto::{
     parse_protobuf_file_scan_config, parse_table_schema_from_proto,
 };
@@ -2040,6 +2041,36 @@ fn data_sink_exec_delegates_to_sink_proto_hook() -> Result<()> {
         node.physical_plan_type,
         Some(protobuf::physical_plan_node::PhysicalPlanType::Empty(_))
     ));
+    Ok(())
+}
+
+#[test]
+fn file_sink_config_conversion_preserves_compatibility_api() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "partition",
+        DataType::Utf8,
+        false,
+    )]));
+    let config = FileSinkConfig {
+        original_url: "file:///tmp/output".to_string(),
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_group: FileGroup::new(vec![PartitionedFile::new("/tmp/output", 1)]),
+        table_paths: vec![ListingTableUrl::parse("file:///tmp/output")?],
+        output_schema: schema,
+        table_partition_cols: vec![("partition".to_string(), DataType::Utf8)],
+        insert_op: InsertOp::Overwrite,
+        keep_partition_by_columns: true,
+        file_extension: "parquet".to_string(),
+        file_output_mode: FileOutputMode::Directory,
+    };
+
+    let direct = config.to_proto()?;
+    let compatibility = protobuf::FileSinkConfig::try_from_proto(&config)?;
+    assert_eq!(direct, compatibility);
+
+    let direct = FileSinkConfig::from_proto(&direct)?;
+    let compatibility = FileSinkConfig::try_from_proto(&compatibility)?;
+    assert_eq!(direct.to_proto()?, compatibility.to_proto()?);
     Ok(())
 }
 
