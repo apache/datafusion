@@ -112,7 +112,7 @@ async fn get_s3_object_store_builder_inner(
         let CredentialsFromConfig {
             region,
             credentials,
-        } = CredentialsFromConfig::try_new().await?;
+        } = Box::pin(CredentialsFromConfig::try_new()).await?;
         if let Some(region) = region {
             builder = builder.with_region(region);
         }
