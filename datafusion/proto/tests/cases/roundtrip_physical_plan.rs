@@ -2251,7 +2251,14 @@ fn roundtrip_unnest() -> Result<()> {
     let output_schema =
         Arc::new(Schema::new(vec![fa, fb0, fc1, fc2, fd0, fe1, fe2, fe3]));
     let input = Arc::new(EmptyExec::new(input_schema));
-    let options = UnnestOptions::default();
+    let options = UnnestOptions {
+        preserve_nulls: false,
+        recursions: vec![datafusion_common::RecursionUnnestOption {
+            input_column: datafusion_common::Column::new_unqualified("b"),
+            output_column: datafusion_common::Column::new_unqualified("b"),
+            depth: 2,
+        }],
+    };
     let unnest = UnnestExec::new(
         input,
         vec![
@@ -2270,9 +2277,17 @@ fn roundtrip_unnest() -> Result<()> {
         ],
         vec![2, 4],
         output_schema,
-        options,
+        options.clone(),
     )?;
-    roundtrip_test(Arc::new(unnest))
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let result =
+        roundtrip_test_and_return(Arc::new(unnest), &ctx, &codec, &proto_converter)?;
+    let result = result.downcast_ref::<UnnestExec>().unwrap();
+    assert_eq!(result.options(), &options);
+
+    Ok(())
 }
 
 #[tokio::test]

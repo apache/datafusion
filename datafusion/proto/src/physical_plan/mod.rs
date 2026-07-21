@@ -100,7 +100,7 @@ use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubque
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
-use datafusion_physical_plan::unnest::{ListUnnest, UnnestExec};
+use datafusion_physical_plan::unnest::UnnestExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr};
 use prost::Message;
@@ -124,10 +124,7 @@ use crate::physical_plan::to_proto::{
 use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
-use crate::protobuf::{
-    self, ListUnnest as ProtoListUnnest, SortMergeJoinExecNode, proto_error,
-    window_agg_exec_node,
-};
+use crate::protobuf::{self, SortMergeJoinExecNode, proto_error, window_agg_exec_node};
 
 pub mod from_proto;
 pub mod to_proto;
@@ -853,8 +850,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::ParquetSink(sink) => {
                 self.try_into_parquet_sink_physical_plan(sink, ctx, proto_converter)
             }
-            PhysicalPlanType::Unnest(unnest) => {
-                self.try_into_unnest_physical_plan(unnest, ctx, proto_converter)
+            PhysicalPlanType::Unnest(_) => {
+                UnnestExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Cooperative(_) => {
                 CooperativeExec::try_from_proto(self.node(), &decode_ctx)
@@ -1057,14 +1054,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             )?
         {
             return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<UnnestExec>() {
-            return protobuf::PhysicalPlanNode::try_from_unnest_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
         }
 
         if let Some(exec) = plan.downcast_ref::<LazyMemoryExec>()
@@ -2504,32 +2493,25 @@ pub trait PhysicalPlanNodeExt: Sized {
         panic!("Trying to use ParquetSink without `parquet` feature enabled");
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `UnnestExec` deserializes itself via `UnnestExec::try_from_proto`"
+    )]
     fn try_into_unnest_physical_plan(
         &self,
         unnest: &protobuf::UnnestExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = into_physical_plan(&unnest.input, ctx, proto_converter)?;
-
-        Ok(Arc::new(UnnestExec::new(
-            input,
-            unnest
-                .list_type_columns
-                .iter()
-                .map(|c| ListUnnest {
-                    index_in_input_schema: c.index_in_input_schema as _,
-                    depth: c.depth as _,
-                })
-                .collect(),
-            unnest.struct_type_columns.iter().map(|c| *c as _).collect(),
-            Arc::new(convert_required!(unnest.schema)?),
-            unnest
-                .options
-                .as_ref()
-                .map(datafusion_common::UnnestOptions::from_proto)
-                .ok_or_else(|| proto_error("Missing required field in protobuf"))?,
-        )?))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Unnest(Box::new(unnest.clone()))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        UnnestExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn generate_series_name_to_str(name: protobuf::GenerateSeriesName) -> &'static str {
@@ -3892,39 +3874,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(None)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `UnnestExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_unnest_exec(
         exec: &UnnestExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Unnest(Box::new(
-                protobuf::UnnestExecNode {
-                    input: Some(Box::new(input)),
-                    schema: Some(exec.schema().try_into()?),
-                    list_type_columns: exec
-                        .list_column_indices()
-                        .iter()
-                        .map(|c| ProtoListUnnest {
-                            index_in_input_schema: c.index_in_input_schema as _,
-                            depth: c.depth as _,
-                        })
-                        .collect(),
-                    struct_type_columns: exec
-                        .struct_column_indices()
-                        .iter()
-                        .map(|c| *c as _)
-                        .collect(),
-                    options: Some(protobuf::UnnestOptions::from_proto(exec.options())),
-                },
-            ))),
-        })
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("UnnestExec is not serializable"))
     }
 
     #[deprecated(
