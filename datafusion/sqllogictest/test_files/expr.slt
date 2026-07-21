@@ -1732,6 +1732,30 @@ SELECT sha512(NULL);
 ----
 NULL
 
+# sha512 string and binary array inputs
+query BBBBBB
+SELECT
+  sha512(column1) = sha512('tom'),
+  sha512(arrow_cast(column1, 'LargeUtf8')) = sha512('tom'),
+  sha512(arrow_cast(column1, 'Utf8View')) = sha512('tom'),
+  sha512(arrow_cast(column1, 'Binary')) = sha512('tom'),
+  sha512(arrow_cast(column1, 'LargeBinary')) = sha512('tom'),
+  sha512(arrow_cast(column1, 'BinaryView')) = sha512('tom')
+FROM (VALUES ('tom'), (NULL)) AS t(column1);
+----
+true true true true true true
+NULL NULL NULL NULL NULL NULL
+
+# invalid argument count and type
+query error DataFusion error:
+SELECT sha512();
+
+query error DataFusion error:
+SELECT sha512('tom', 'extra');
+
+query error DataFusion error:
+SELECT sha512(1);
+
 query ?
 SELECT digest(NULL,'sha512');
 ----
