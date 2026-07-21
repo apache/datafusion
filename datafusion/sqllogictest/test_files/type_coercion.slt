@@ -349,6 +349,23 @@ SELECT arrow_cast(t.s, 'Dictionary(Int32, Utf8)') SIMILAR TO p.pat FROM t CROSS 
 ----
 true
 
+# non-scalar Utf8View / LargeUtf8 patterns are accepted by the SQL planner and
+# coerced by the analyzer (https://github.com/apache/datafusion/issues/23732)
+query B
+SELECT t.s SIMILAR TO arrow_cast(p.pat, 'Utf8View') FROM t CROSS JOIN p;
+----
+true
+
+query B
+SELECT t.s SIMILAR TO arrow_cast(p.pat, 'LargeUtf8') FROM t CROSS JOIN p;
+----
+true
+
+query B
+SELECT t.s NOT SIMILAR TO arrow_cast(p.pat, 'Utf8View') FROM t CROSS JOIN p;
+----
+false
+
 statement ok
 DROP TABLE t;
 
