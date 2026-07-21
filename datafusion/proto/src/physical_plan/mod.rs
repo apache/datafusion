@@ -77,7 +77,7 @@ use datafusion_physical_plan::coop::CooperativeExec;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::explain::ExplainExec;
 use datafusion_physical_plan::expressions::PhysicalSortExpr;
-use datafusion_physical_plan::filter::{FilterExec, FilterExecBuilder};
+use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
@@ -1216,53 +1216,15 @@ pub trait PhysicalPlanNodeExt: Sized {
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&filter.input, ctx, proto_converter)?;
-
-        let predicate = filter
-            .expr
-            .as_ref()
-            .map(|expr| {
-                proto_converter.proto_to_physical_expr(expr, input.schema().as_ref(), ctx)
-            })
-            .transpose()?
-            .ok_or_else(|| {
-                internal_datafusion_err!(
-                    "filter (FilterExecNode) in PhysicalPlanNode is missing."
-                )
-            })?;
-
-        let filter_selectivity = filter.default_filter_selectivity.try_into();
-        // Preserve the `None` state across proto boundaries. Proto cannot distinguish
-        // between `None` (full projection) and `Some(vec![])` (empty projection) since
-        // both serialize as an empty list. If all columns are included, we reconstruct
-        // `None` to avoid losing this semantic distinction on deserialization.
-        let num_fields = input.schema().fields().len();
-        let mut is_full_projection = filter.projection.len() == num_fields;
-        let mut projection_vec: Vec<usize> = Vec::with_capacity(filter.projection.len());
-        for (i, idx) in filter.projection.iter().enumerate() {
-            let idx = *idx as usize;
-            is_full_projection &= idx == i;
-            projection_vec.push(idx);
-        }
-        let projection = if is_full_projection {
-            None
-        } else {
-            Some(projection_vec)
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Filter(Box::new(filter.clone()))),
         };
-        let filter = FilterExecBuilder::new(predicate, input)
-            .apply_projection(projection)?
-            .with_batch_size(filter.batch_size as usize)
-            .with_fetch(filter.fetch.map(|f| f as usize))
-            .build()?;
-        match filter_selectivity {
-            Ok(filter_selectivity) => Ok(Arc::new(
-                filter.with_default_selectivity(filter_selectivity)?,
-            )),
-            Err(_) => Err(internal_datafusion_err!(
-                "filter_selectivity in PhysicalPlanNode is invalid "
-            )),
-        }
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        FilterExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_csv_scan_physical_plan(
@@ -2968,31 +2930,13 @@ pub trait PhysicalPlanNodeExt: Sized {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Filter(Box::new(
-                protobuf::FilterExecNode {
-                    input: Some(Box::new(input)),
-                    expr: Some(
-                        proto_converter
-                            .physical_expr_to_proto(exec.predicate(), codec)?,
-                    ),
-                    default_filter_selectivity: exec.default_selectivity() as u32,
-                    projection: match exec.projection() {
-                        None => (0..exec.input().schema().fields().len())
-                            .map(|i| i as u32)
-                            .collect(),
-                        Some(v) => v.iter().map(|x| *x as u32).collect(),
-                    },
-                    batch_size: exec.batch_size() as u32,
-                    fetch: exec.fetch().map(|f| f as u32),
-                },
-            ))),
-        })
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("FilterExec is not serializable"))
     }
 
     fn try_from_global_limit_exec(
