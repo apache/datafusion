@@ -58,8 +58,8 @@ use datafusion_common::{
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
-    ExplainOption, ScalarUDF, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
-    dml::InsertOp, is_null, lit, utils::COUNT_STAR_EXPANSION,
+    AsOfMatch, ExplainOption, ScalarUDF, SortExpr, TableProviderFilterPushDown,
+    UNNAMED_TABLE, case, dml::InsertOp, is_null, lit, utils::COUNT_STAR_EXPANSION,
 };
 use datafusion_functions::core::coalesce;
 use datafusion_functions::math::nanvl;
@@ -1371,6 +1371,45 @@ impl DataFrame {
     ) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
             .join_on(right.plan, join_type, on_exprs)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
+        })
+    }
+
+    /// Join this `DataFrame` to the closest eligible row in `right`.
+    ///
+    /// Every left row is emitted exactly once. `on` contains optional equality
+    /// expressions and `match_condition` selects the ordered predecessor or
+    /// successor from the matching right group.
+    pub fn join_asof(
+        self,
+        right: DataFrame,
+        on: Vec<(Expr, Expr)>,
+        match_condition: AsOfMatch,
+    ) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .asof_join(right.plan, on, match_condition)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
+        })
+    }
+
+    /// Join this `DataFrame` to the closest eligible row in `right` using
+    /// same-named equality keys.
+    pub fn join_asof_using(
+        self,
+        right: DataFrame,
+        using_keys: Vec<Column>,
+        match_condition: AsOfMatch,
+    ) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .asof_join_using(right.plan, using_keys, match_condition)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,

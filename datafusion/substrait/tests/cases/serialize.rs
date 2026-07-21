@@ -104,6 +104,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn asof_join_fails_closed_until_substrait_has_an_extension() -> Result<()> {
+        let ctx = create_context().await?;
+        let plan = ctx
+            .sql(
+                "SELECT * FROM data l ASOF JOIN data r \
+                 MATCH_CONDITION (l.a >= r.a) ON l.b = r.b",
+            )
+            .await?
+            .into_optimized_plan()?;
+        let error = to_substrait_plan(&plan, &ctx.state())
+            .expect_err("ASOF must not be lowered to a generic Substrait join");
+        assert!(
+            error
+                .to_string()
+                .contains("Substrait ASOF join is not supported")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn include_remaps_for_projects() -> Result<()> {
         let ctx = create_context().await?;
         let df = ctx.sql("SELECT b, a + a, a FROM data").await?;

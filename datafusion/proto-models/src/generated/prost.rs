@@ -5,7 +5,7 @@
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -79,6 +79,8 @@ pub mod logical_plan_node {
         Dml(::prost::alloc::boxed::Box<super::DmlNode>),
         #[prost(message, tag = "34")]
         EmptyTableScan(super::EmptyTableScanNode),
+        #[prost(message, tag = "35")]
+        AsOfJoin(::prost::alloc::boxed::Box<super::AsOfJoinNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -419,6 +421,29 @@ pub struct JoinNode {
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(bool, tag = "9")]
     pub null_aware: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AsOfJoinNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(message, repeated, tag = "3")]
+    pub left_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(message, repeated, tag = "4")]
+    pub right_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(message, optional, boxed, tag = "5")]
+    pub left_match_expr: ::core::option::Option<
+        ::prost::alloc::boxed::Box<LogicalExprNode>,
+    >,
+    #[prost(message, optional, boxed, tag = "6")]
+    pub right_match_expr: ::core::option::Option<
+        ::prost::alloc::boxed::Box<LogicalExprNode>,
+    >,
+    #[prost(enumeration = "AsOfMatchOperator", tag = "7")]
+    pub match_operator: i32,
+    #[prost(enumeration = "super::datafusion_common::JoinConstraint", tag = "8")]
+    pub join_constraint: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DistinctNode {
@@ -1292,7 +1317,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1378,6 +1403,8 @@ pub mod physical_plan_node {
         ArrowScan(super::ArrowScanExecNode),
         #[prost(message, tag = "39")]
         ScalarSubquery(::prost::alloc::boxed::Box<super::ScalarSubqueryExecNode>),
+        #[prost(message, tag = "40")]
+        AsOfJoin(::prost::alloc::boxed::Box<super::AsOfJoinExecNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2473,6 +2500,23 @@ pub struct SortMergeJoinExecNode {
     pub null_equality: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AsOfJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "3")]
+    pub on: ::prost::alloc::vec::Vec<JoinOn>,
+    #[prost(message, optional, tag = "4")]
+    pub left_match_expr: ::core::option::Option<PhysicalExprNode>,
+    #[prost(message, optional, tag = "5")]
+    pub right_match_expr: ::core::option::Option<PhysicalExprNode>,
+    #[prost(enumeration = "AsOfMatchOperator", tag = "6")]
+    pub match_operator: i32,
+    #[prost(uint32, repeated, tag = "7")]
+    pub right_output_indices: ::prost::alloc::vec::Vec<u32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsyncFuncExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
@@ -2503,6 +2547,41 @@ pub struct PhysicalScalarSubqueryExprNode {
     pub nullable: bool,
     #[prost(uint32, tag = "3")]
     pub index: u32,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AsOfMatchOperator {
+    Unspecified = 0,
+    Lt = 1,
+    LtEq = 2,
+    Gt = 3,
+    GtEq = 4,
+}
+impl AsOfMatchOperator {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "AS_OF_MATCH_OPERATOR_UNSPECIFIED",
+            Self::Lt => "AS_OF_MATCH_OPERATOR_LT",
+            Self::LtEq => "AS_OF_MATCH_OPERATOR_LT_EQ",
+            Self::Gt => "AS_OF_MATCH_OPERATOR_GT",
+            Self::GtEq => "AS_OF_MATCH_OPERATOR_GT_EQ",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "AS_OF_MATCH_OPERATOR_UNSPECIFIED" => Some(Self::Unspecified),
+            "AS_OF_MATCH_OPERATOR_LT" => Some(Self::Lt),
+            "AS_OF_MATCH_OPERATOR_LT_EQ" => Some(Self::LtEq),
+            "AS_OF_MATCH_OPERATOR_GT" => Some(Self::Gt),
+            "AS_OF_MATCH_OPERATOR_GT_EQ" => Some(Self::GtEq),
+            _ => None,
+        }
+    }
 }
 /// Identifies a built-in file format supported by DataFusion.
 /// Used by DefaultLogicalExtensionCodec to serialize/deserialize

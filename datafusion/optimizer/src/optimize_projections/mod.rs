@@ -24,8 +24,9 @@ use crate::{OptimizerConfig, OptimizerRule};
 use std::sync::Arc;
 
 use datafusion_common::{
-    Column, DFSchema, HashMap, JoinType, Result, assert_eq_or_internal_err,
-    get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
+    Column, DFSchema, HashMap, JoinConstraint, JoinType, Result,
+    assert_eq_or_internal_err, get_required_group_by_exprs_indices,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
@@ -402,6 +403,44 @@ fn optimize_projections(
             }
             // Joins benefit from "small" input tables (lower memory usage).
             // Therefore, each child benefits from projection:
+            vec![
+                left_indices.with_projection_beneficial(),
+                right_indices.with_projection_beneficial(),
+            ]
+        }
+        LogicalPlan::AsOfJoin(join) => {
+            let left_len = join.left.schema().fields().len();
+            let omitted_right = if join.join_constraint == JoinConstraint::Using {
+                join.on
+                    .iter()
+                    .map(|(_, right)| {
+                        let column = right.get_as_join_column().ok_or_else(|| {
+                            internal_datafusion_err!("ASOF USING key is not a column")
+                        })?;
+                        join.right.schema().index_of_column(column)
+                    })
+                    .collect::<Result<std::collections::HashSet<_>>>()?
+            } else {
+                std::collections::HashSet::new()
+            };
+            let right_output_indices = (0..join.right.schema().fields().len())
+                .filter(|index| !omitted_right.contains(index))
+                .collect::<Vec<_>>();
+            let mut left_required = Vec::new();
+            let mut right_required = Vec::new();
+            for index in indices.indices() {
+                if *index < left_len {
+                    left_required.push(*index);
+                } else if let Some(right_index) =
+                    right_output_indices.get(*index - left_len)
+                {
+                    right_required.push(*right_index);
+                }
+            }
+            let left_indices = RequiredIndices::new_from_indices(left_required)
+                .with_plan_exprs(&plan, join.left.schema())?;
+            let right_indices = RequiredIndices::new_from_indices(right_required)
+                .with_plan_exprs(&plan, join.right.schema())?;
             vec![
                 left_indices.with_projection_beneficial(),
                 right_indices.with_projection_beneficial(),
