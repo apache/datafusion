@@ -23,6 +23,7 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
+use async_trait::async_trait;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef};
@@ -39,7 +40,7 @@ use datafusion::datasource::physical_plan::{
     FileSinkConfig, ParquetSource, wrap_partition_type_in_dict,
     wrap_partition_value_in_dict,
 };
-use datafusion::datasource::sink::DataSinkExec;
+use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::count_udaf;
@@ -1954,6 +1955,92 @@ fn roundtrip_analyze() -> Result<()> {
     roundtrip_test(Arc::new(
         AnalyzeExec::builder(false, false, input, Arc::new(schema)).build(),
     ))
+}
+
+#[derive(Debug)]
+struct ProtoHookSink {
+    schema: SchemaRef,
+}
+
+impl DisplayAs for ProtoHookSink {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "ProtoHookSink")
+    }
+}
+
+#[async_trait]
+impl DataSink for ProtoHookSink {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    async fn write_all(
+        &self,
+        _data: SendableRecordBatchStream,
+        _context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        unreachable!("serialization test does not execute the sink")
+    }
+
+    fn try_to_proto(
+        &self,
+        input: PhysicalPlanNode,
+        sort_order: Option<protobuf::PhysicalSortExprNodeCollection>,
+        sink_schema: &Schema,
+    ) -> Result<Option<PhysicalPlanNode>> {
+        assert!(matches!(
+            input.physical_plan_type,
+            Some(protobuf::physical_plan_node::PhysicalPlanType::PlaceholderRow(_))
+        ));
+        assert_eq!(
+            sort_order
+                .as_ref()
+                .map(|ordering| ordering.physical_sort_expr_nodes.len()),
+            Some(1)
+        );
+        assert_eq!(sink_schema.fields().len(), 1);
+
+        Ok(Some(PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Empty(
+                    protobuf::EmptyExecNode {
+                        schema: Some(sink_schema.try_into()?),
+                        partitions: 1,
+                    },
+                ),
+            ),
+        }))
+    }
+}
+
+#[test]
+fn data_sink_exec_delegates_to_sink_proto_hook() -> Result<()> {
+    let input_schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int64,
+        false,
+    )]));
+    let input = Arc::new(PlaceholderRowExec::new(Arc::clone(&input_schema)));
+    let sink = Arc::new(ProtoHookSink {
+        schema: Arc::clone(&input_schema),
+    });
+    let sort_order = [PhysicalSortRequirement::new(
+        Arc::new(Column::new("value", 0)),
+        Some(SortOptions::default()),
+    )]
+    .into();
+    let plan = Arc::new(DataSinkExec::new(input, sink, Some(sort_order)));
+
+    let node = PhysicalPlanNode::try_from_physical_plan(
+        plan,
+        &DefaultPhysicalExtensionCodec {},
+    )?;
+
+    assert!(matches!(
+        node.physical_plan_type,
+        Some(protobuf::physical_plan_node::PhysicalPlanType::Empty(_))
+    ));
+    Ok(())
 }
 
 #[tokio::test]
