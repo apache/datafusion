@@ -120,6 +120,8 @@ use datafusion_functions_aggregate::min_max::max_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
+use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
@@ -1369,6 +1371,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             &self,
             buf: &[u8],
             inputs: &[Arc<dyn PhysicalExpr>],
+            _ctx: &PhysicalExprDecodeCtx<'_>,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             if buf == "CustomPredicateExpr".as_bytes() {
                 Ok(Arc::new(CustomPredicateExpr {
@@ -1383,6 +1386,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             &self,
             node: &Arc<dyn PhysicalExpr>,
             buf: &mut Vec<u8>,
+            _ctx: &PhysicalExprEncodeCtx<'_>,
         ) -> Result<()> {
             if node.downcast_ref::<CustomPredicateExpr>().is_some() {
                 buf.extend_from_slice("CustomPredicateExpr".as_bytes());
@@ -4539,6 +4543,188 @@ fn roundtrip_parquet_exec_range_output_partitioning() -> Result<()> {
         roundtrip_file_scan_config(scan_config)?.output_partitioning,
         Some(output_partitioning)
     );
+
+    Ok(())
+}
+
+/// A custom `PhysicalExpr` whose extension codec embeds a nested
+/// `PhysicalExprNode` *inside its own blob* (rather than the standard
+/// `PhysicalExtensionExprNode.inputs` field). This is the case that only
+/// works if the expr-level codec methods receive the encode/decode context.
+#[derive(Debug)]
+struct WrapperExpr {
+    inner: Arc<dyn PhysicalExpr>,
+}
+
+impl Display for WrapperExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WrapperExpr({})", self.inner)
+    }
+}
+
+impl PartialEq for WrapperExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.eq(&other.inner)
+    }
+}
+impl Eq for WrapperExpr {}
+
+impl std::hash::Hash for WrapperExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
+    }
+}
+
+impl PhysicalExpr for WrapperExpr {
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        self.inner.data_type(input_schema)
+    }
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        self.inner.nullable(input_schema)
+    }
+    fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
+        internal_err!("WrapperExpr is not executable in this test")
+    }
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![&self.inner]
+    }
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(WrapperExpr {
+            inner: Arc::clone(&children[0]),
+        }))
+    }
+    fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+/// Wire layout for [`WrapperExpr`]: a single nested `PhysicalExprNode`.
+#[derive(Clone, PartialEq, prost::Message)]
+struct WrapperExprProto {
+    #[prost(message, optional, boxed, tag = "1")]
+    inner: Option<Box<datafusion_proto::protobuf::PhysicalExprNode>>,
+}
+
+#[derive(Debug)]
+struct WrapperCodec;
+
+impl PhysicalExtensionCodec for WrapperCodec {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[Arc<dyn ExecutionPlan>],
+        _ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        internal_err!("not used")
+    }
+    fn try_encode(
+        &self,
+        _node: Arc<dyn ExecutionPlan>,
+        _buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<()> {
+        internal_err!("not used")
+    }
+    fn try_decode_expr(
+        &self,
+        buf: &[u8],
+        _inputs: &[Arc<dyn PhysicalExpr>],
+        ctx: &PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let proto = WrapperExprProto::decode(buf)
+            .map_err(|e| internal_datafusion_err!("decode WrapperExprProto: {e}"))?;
+        let inner_proto = proto
+            .inner
+            .ok_or_else(|| internal_datafusion_err!("missing inner"))?;
+        // Decode the nested expr through the context so it resolves against
+        // the real schema/registry AND participates in dedup — no fabricated
+        // `SessionContext` or hard-coded schema required.
+        let inner = ctx.decode(&inner_proto)?;
+        Ok(Arc::new(WrapperExpr { inner }))
+    }
+    fn try_encode_expr(
+        &self,
+        node: &Arc<dyn PhysicalExpr>,
+        buf: &mut Vec<u8>,
+        ctx: &PhysicalExprEncodeCtx<'_>,
+    ) -> Result<()> {
+        let wrapper = node
+            .downcast_ref::<WrapperExpr>()
+            .ok_or_else(|| internal_datafusion_err!("not WrapperExpr"))?;
+        // Encode the nested expr through the context so an active
+        // `DeduplicatingProtoConverter` stamps a matching `expr_id`.
+        let inner_proto = ctx.encode_child(&wrapper.inner)?;
+        let proto = WrapperExprProto {
+            inner: Some(Box::new(inner_proto)),
+        };
+        proto
+            .encode(buf)
+            .map_err(|e| internal_datafusion_err!("encode WrapperExprProto: {e}"))?;
+        Ok(())
+    }
+}
+
+/// A `DynamicFilterPhysicalExpr` referenced both as a bare expression and
+/// nested inside a custom expression's codec blob must reconstruct to a
+/// single shared `Inner` after roundtrip.
+///
+/// This exercises the expr-level codec hooks receiving the encode/decode
+/// context: `try_encode_expr` routes its nested `PhysicalExprNode` through
+/// `ctx.encode_child` and `try_decode_expr` through `ctx.decode`, so the
+/// nested filter picks up the same `DeduplicatingProtoConverter` /
+/// `DeduplicatingDeserializer` cache as the bare reference. Without the
+/// context the nested expr would serialize with `expr_id: None` and decode
+/// into a distinct `Inner`, breaking heap-max propagation across the
+/// extension boundary in distributed execution.
+#[test]
+fn extension_codec_expr_participates_in_deduplication() -> Result<()> {
+    use prost::Message;
+
+    // A single composite expression holding TWO references to the same
+    // dynamic filter: bare on the left of an AND, wrapped on the right.
+    let dyn_filter = make_dynamic_filter();
+    let wrapper: Arc<dyn PhysicalExpr> = Arc::new(WrapperExpr {
+        inner: Arc::clone(&dyn_filter),
+    });
+    let composite: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::clone(&dyn_filter),
+        Operator::And,
+        Arc::clone(&wrapper),
+    ));
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let codec = WrapperCodec;
+    let converter = DeduplicatingProtoConverter {};
+
+    // Encode, then round-trip through prost bytes to mimic the wire.
+    let proto = converter.physical_expr_to_proto(&composite, &codec)?;
+    let bytes = proto.encode_to_vec();
+    let decoded_proto =
+        datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice()).unwrap();
+
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let decoded =
+        converter.proto_to_physical_expr(&decoded_proto, &schema, &decode_ctx)?;
+
+    let binary = decoded
+        .downcast_ref::<BinaryExpr>()
+        .expect("must decode back to BinaryExpr");
+    let decoded_left = Arc::clone(binary.left());
+    let decoded_right = Arc::clone(binary.right());
+    let decoded_wrapper = decoded_right
+        .downcast_ref::<WrapperExpr>()
+        .expect("right side must decode back to WrapperExpr");
+
+    // The load-bearing check: an `update()` on the bare-side filter must be
+    // observable from the wrapped-side filter, proving both refs back the
+    // same `Inner`.
+    assert_dynamic_filter_update_is_visible(&decoded_left, &decoded_wrapper.inner)?;
 
     Ok(())
 }
