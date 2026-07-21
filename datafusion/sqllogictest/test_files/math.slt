@@ -127,6 +127,92 @@ SELECT isnan(1::DECIMAL(10,2)), isnan(0::DECIMAL(10,2)), isnan(NULL::DECIMAL(10,
 ----
 false false NULL false
 
+# isnan: scalar values at the remaining numeric widths
+query BBBBBBBBBB
+SELECT
+    isnan(arrow_cast('NaN', 'Float16')),
+    isnan(arrow_cast('-1.5', 'Float16')),
+    isnan(arrow_cast('-128', 'Int8')),
+    isnan(arrow_cast('-32768', 'Int16')),
+    isnan(arrow_cast('-9223372036854775808', 'Int64')),
+    isnan(arrow_cast('65535', 'UInt16')),
+    isnan(arrow_cast('18446744073709551615', 'UInt64')),
+    isnan(arrow_cast('1.25', 'Decimal32(7,2)')),
+    isnan(arrow_cast('-12.34', 'Decimal64(16,2)')),
+    isnan(arrow_cast('0.00', 'Decimal256(40,2)'))
+----
+true false false false false false false false false false
+
+# isnan: floating-point arrays, including infinities and nulls
+query IBBB
+SELECT id,
+    isnan(arrow_cast(v, 'Float16')),
+    isnan(arrow_cast(v, 'Float32')),
+    isnan(arrow_cast(v, 'Float64'))
+FROM (VALUES
+    (1, 'NaN'),
+    (2, 'Infinity'),
+    (3, '-Infinity'),
+    (4, '0.0'),
+    (5, NULL)
+) AS t(id, v)
+ORDER BY id
+----
+1 true true true
+2 false false false
+3 false false false
+4 false false false
+5 NULL NULL NULL
+
+# isnan: signed and unsigned integer arrays
+query IBBBBBBBB
+SELECT id,
+    isnan(arrow_cast(v, 'Int8')),
+    isnan(arrow_cast(v, 'Int16')),
+    isnan(arrow_cast(v, 'Int32')),
+    isnan(arrow_cast(v, 'Int64')),
+    isnan(arrow_cast(v, 'UInt8')),
+    isnan(arrow_cast(v, 'UInt16')),
+    isnan(arrow_cast(v, 'UInt32')),
+    isnan(arrow_cast(v, 'UInt64'))
+FROM (VALUES (1, '0'), (2, '42'), (3, NULL)) AS t(id, v)
+ORDER BY id
+----
+1 false false false false false false false false
+2 false false false false false false false false
+3 NULL NULL NULL NULL NULL NULL NULL NULL
+
+# isnan: decimal arrays at every Arrow decimal width
+query IBBBB
+SELECT id,
+    isnan(arrow_cast(v, 'Decimal32(7,2)')),
+    isnan(arrow_cast(v, 'Decimal64(16,2)')),
+    isnan(arrow_cast(v, 'Decimal128(30,2)')),
+    isnan(arrow_cast(v, 'Decimal256(40,2)'))
+FROM (VALUES (1, '0.00'), (2, '-12.34'), (3, NULL)) AS t(id, v)
+ORDER BY id
+----
+1 false false false false
+2 false false false false
+3 NULL NULL NULL NULL
+
+# isnan: an untyped all-null array
+query B
+SELECT isnan(v) FROM (VALUES (NULL), (NULL)) AS t(v)
+----
+NULL
+NULL
+
+# isnan: invalid argument count and type
+statement error
+SELECT isnan()
+
+statement error
+SELECT isnan(1, 2)
+
+statement error
+SELECT isnan('not numeric')
+
 # iszero
 query BBBB
 SELECT iszero(1.0), iszero(0.0), iszero(-0.0), iszero(NULL)
