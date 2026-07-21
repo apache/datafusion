@@ -64,6 +64,10 @@ name = "scalar_to_array"
 harness = false
 name = "stats_merge"
 
+[[bench]]
+harness = false
+name = "split_vec"
+
 [dependencies]
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
