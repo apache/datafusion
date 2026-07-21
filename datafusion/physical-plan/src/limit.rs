@@ -271,14 +271,6 @@ impl ExecutionPlan for GlobalLimitExec {
 
 #[cfg(feature = "proto")]
 impl GlobalLimitExec {
-    /// Reconstruct a [`GlobalLimitExec`] from its protobuf representation.
-    ///
-    /// The inverse of [`ExecutionPlan::try_to_proto`]: it takes the whole
-    /// [`PhysicalPlanNode`], decodes the single child recursively, and restores
-    /// the skip/fetch (a negative wire `fetch` decodes back to `None`).
-    ///
-    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
-    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
@@ -503,13 +495,6 @@ impl ExecutionPlan for LocalLimitExec {
 
 #[cfg(feature = "proto")]
 impl LocalLimitExec {
-    /// Reconstruct a [`LocalLimitExec`] from its protobuf representation.
-    ///
-    /// The inverse of [`ExecutionPlan::try_to_proto`]: it takes the whole
-    /// [`PhysicalPlanNode`] and decodes the single child recursively.
-    ///
-    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
-    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
