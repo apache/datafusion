@@ -16,11 +16,14 @@
 // under the License.
 
 use insta::assert_snapshot;
+use std::collections::HashMap;
 
 use datafusion::assert_batches_eq;
 use datafusion::catalog::MemTable;
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::test_util::register_unbounded_file_with_ordering;
+use datafusion_physical_plan::joins::{CrossJoinExec, NestedLoopJoinExec};
+use datafusion_physical_plan::test::TestMemoryExec;
 use datafusion_sql::unparser::plan_to_sql;
 
 use super::*;
@@ -298,4 +301,36 @@ async fn unparse_cross_join() -> Result<()> {
     assert_snapshot!(opt_sql, @"SELECT j1.j1_id, j2.j2_string FROM j1 CROSS JOIN j2 WHERE (j2.j2_id = 0)");
 
     Ok(())
+}
+
+#[test]
+fn test_swap_joins_on_conflicting_metadata() {
+    let input = |field: &str, meta_value: &str| {
+        let schema = Arc::new(
+            Schema::new(vec![Field::new(field, DataType::Int32, false)]).with_metadata(
+                HashMap::from([(String::from("metadata_key"), String::from(meta_value))]),
+            ),
+        );
+        TestMemoryExec::try_new_exec(&[vec![]], schema, None).unwrap()
+    };
+
+    let join = CrossJoinExec::new(input("a", "left value"), input("b", "right value"));
+
+    let swapped_join = join.swap_inputs().unwrap();
+
+    // The metadata of the join and the swapped version must be the same
+    assert_eq!(join.schema().metadata(), swapped_join.schema().metadata());
+
+    let join = NestedLoopJoinExec::try_new(
+        input("a", "left value"),
+        input("b", "right value"),
+        None,
+        &JoinType::Inner,
+        None,
+    )
+    .unwrap();
+
+    let swapped_join = join.swap_inputs().unwrap();
+
+    assert_eq!(join.schema().metadata(), swapped_join.schema().metadata());
 }

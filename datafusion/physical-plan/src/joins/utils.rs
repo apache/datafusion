@@ -18,7 +18,7 @@
 //! Join related functionality used both on logical and physical plans
 
 use std::cmp::{Ordering, min};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::iter::once;
@@ -265,12 +265,13 @@ fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> 
     }
 }
 
-/// Creates a schema for a join operation.
+/// Creates a schema for a join operation and use existing metadata.
 /// The fields from the left side are first
-pub fn build_join_schema(
+pub fn build_join_schema_with_metadata(
     left: &Schema,
     right: &Schema,
     join_type: &JoinType,
+    metadata: &HashMap<String, String>,
 ) -> (Schema, Vec<ColumnIndex>) {
     let left_fields = || {
         left.fields()
@@ -334,6 +335,19 @@ pub fn build_join_schema(
         }
     };
 
+    (
+        fields.finish().with_metadata(metadata.clone()),
+        column_indices,
+    )
+}
+
+/// Creates a schema for a join operation.
+/// The fields from the left side are first
+pub fn build_join_schema(
+    left: &Schema,
+    right: &Schema,
+    join_type: &JoinType,
+) -> (Schema, Vec<ColumnIndex>) {
     let (schema1, schema2) = match join_type {
         JoinType::Right
         | JoinType::RightSemi
@@ -349,7 +363,7 @@ pub fn build_join_schema(
         .chain(schema2.metadata().clone())
         .collect();
 
-    (fields.finish().with_metadata(metadata), column_indices)
+    build_join_schema_with_metadata(left, right, join_type, &metadata)
 }
 
 /// A [`OnceAsync`] runs an `async` closure once, where multiple calls to

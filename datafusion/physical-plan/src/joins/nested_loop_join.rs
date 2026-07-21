@@ -17,6 +17,7 @@
 
 //! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
+use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::ops::{BitOr, ControlFlow};
 use std::sync::Arc;
@@ -24,8 +25,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 
 use super::utils::{
-    asymmetric_join_output_partitioning, need_produce_result_in_final,
-    reorder_output_after_swap, swap_join_projection,
+    asymmetric_join_output_partitioning, build_join_schema_with_metadata,
+    need_produce_result_in_final, reorder_output_after_swap, swap_join_projection,
 };
 use crate::common::can_project;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
@@ -234,6 +235,7 @@ pub struct NestedLoopJoinExecBuilder {
     join_type: JoinType,
     filter: Option<JoinFilter>,
     projection: Option<ProjectionRef>,
+    metadata: Option<HashMap<String, String>>,
 }
 
 impl NestedLoopJoinExecBuilder {
@@ -249,6 +251,7 @@ impl NestedLoopJoinExecBuilder {
             join_type,
             filter: None,
             projection: None,
+            metadata: None,
         }
     }
 
@@ -269,6 +272,12 @@ impl NestedLoopJoinExecBuilder {
         self
     }
 
+    /// Set metadata for the schema.
+    pub fn with_metadata(mut self, metadata: Option<HashMap<String, String>>) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
     /// Build resulting execution plan.
     pub fn build(self) -> Result<NestedLoopJoinExec> {
         let Self {
@@ -277,13 +286,23 @@ impl NestedLoopJoinExecBuilder {
             join_type,
             filter,
             projection,
+            metadata,
         } = self;
 
         let left_schema = left.schema();
         let right_schema = right.schema();
         check_join_is_valid(&left_schema, &right_schema, &[])?;
-        let (join_schema, column_indices) =
-            build_join_schema(&left_schema, &right_schema, &join_type);
+
+        let (join_schema, column_indices) = if let Some(metadata) = metadata {
+            build_join_schema_with_metadata(
+                &left_schema,
+                &right_schema,
+                &join_type,
+                &metadata,
+            )
+        } else {
+            build_join_schema(&left_schema, &right_schema, &join_type)
+        };
         let join_schema = Arc::new(join_schema);
         let cache = NestedLoopJoinExec::compute_properties(
             &left,
@@ -316,6 +335,7 @@ impl From<&NestedLoopJoinExec> for NestedLoopJoinExecBuilder {
             join_type: exec.join_type,
             filter: exec.filter.clone(),
             projection: exec.projection.clone(),
+            metadata: None,
         }
     }
 }
@@ -453,18 +473,24 @@ impl NestedLoopJoinExec {
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let left = self.left();
         let right = self.right();
-        let new_join = NestedLoopJoinExec::try_new(
+
+        let swapped_projection = swap_join_projection(
+            left.schema().fields().len(),
+            right.schema().fields().len(),
+            self.projection.as_deref(),
+            self.join_type(),
+        );
+
+        let new_join = NestedLoopJoinExecBuilder::new(
             Arc::clone(right),
             Arc::clone(left),
-            self.filter().map(JoinFilter::swap),
-            &self.join_type().swap(),
-            swap_join_projection(
-                left.schema().fields().len(),
-                right.schema().fields().len(),
-                self.projection.as_deref(),
-                self.join_type(),
-            ),
-        )?;
+            self.join_type().swap(),
+        )
+        .with_projection(swapped_projection)
+        .with_filter(self.filter().map(JoinFilter::swap))
+        // Preserve existing metadata
+        .with_metadata(Some(self.join_schema.metadata.clone()))
+        .build()?;
 
         // For Semi/Anti joins, swap result will produce same output schema,
         // no need to wrap them into additional projection

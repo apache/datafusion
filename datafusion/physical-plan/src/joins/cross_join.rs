@@ -775,9 +775,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
 mod tests {
     use super::*;
     use crate::common;
-    use crate::test::{TestMemoryExec, assert_join_metrics, build_table_scan_i32};
-    use arrow_schema::{DataType, Field};
-    use std::collections::HashMap;
+    use crate::test::{assert_join_metrics, build_table_scan_i32};
 
     use datafusion_common::{assert_contains, test_util::batches_to_sort_string};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -1068,28 +1066,6 @@ mod tests {
         );
 
         Ok(())
-    }
-
-    #[test]
-    fn test_swapped_cross_join_schema_on_conflicting_metadata() {
-        let input = |field: &str, meta_value: &str| {
-            let schema = Arc::new(
-                Schema::new(vec![Field::new(field, DataType::Int32, false)])
-                    .with_metadata(HashMap::from([(
-                        String::from("metadata_key"),
-                        String::from(meta_value),
-                    )])),
-            );
-            TestMemoryExec::try_new_exec(&[vec![]], schema, None).unwrap()
-        };
-        // Conflicting metadata on left and right input, right side wins "metadata_key" -> "right value"
-        let join =
-            CrossJoinExec::new(input("a", "left value"), input("b", "right value"));
-
-        let swapped_join = join.swap_inputs().unwrap();
-
-        // The metadata of the cross-join and the swapped cross-join (with projection on top) must be the same
-        assert_eq!(join.schema().metadata(), swapped_join.schema().metadata());
     }
 
     /// Returns the column names on the schema
