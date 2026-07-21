@@ -261,13 +261,15 @@ impl From<FFI_EmissionType> for EmissionType {
 
 #[cfg(test)]
 mod tests {
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::physical_expr::PhysicalSortExpr;
     use datafusion::physical_plan::Partitioning;
+    use datafusion_common::{ScalarValue, SplitPoint};
+    use datafusion_physical_expr::{LexOrdering, RangePartitioning};
 
     use super::*;
 
     fn create_test_props() -> Result<PlanProperties> {
-        use arrow::datatypes::{DataType, Field, Schema};
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
 
@@ -284,10 +286,6 @@ mod tests {
     }
 
     fn create_range_test_props() -> Result<PlanProperties> {
-        use arrow::datatypes::{DataType, Field, Schema};
-        use datafusion_common::{ScalarValue, SplitPoint};
-        use datafusion_physical_expr::{LexOrdering, RangePartitioning};
-
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
         let col = datafusion::physical_plan::expressions::col("a", &schema)?;
         let ordering = LexOrdering::new([PhysicalSortExpr::new_default(col)])
