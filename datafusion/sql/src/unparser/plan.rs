@@ -49,7 +49,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{OUTER_REFERENCE_COLUMN_PREFIX, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{
-    Aggregate, BinaryExpr, Distinct, Expr, FetchType, JoinConstraint, JoinType,
+    Aggregate, AsOfJoin, BinaryExpr, Distinct, Expr, FetchType, JoinConstraint, JoinType,
     LogicalPlan, LogicalPlanBuilder, Operator, Projection, SkipType, Sort, SortExpr,
     TableScan, Unnest, UserDefinedLogicalNode, Window, expr::Alias,
 };
@@ -1435,154 +1435,7 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::AsOfJoin(join) => {
-                let already_projected = select.already_projected();
-                let left_plan = Self::unwrap_qualified_passthrough_join_projection(
-                    Arc::clone(&join.left),
-                );
-                let inline_left_join = matches!(left_plan.as_ref(), LogicalPlan::Join(_));
-                let left_projection = if already_projected {
-                    None
-                } else if inline_left_join {
-                    self.select_to_sql_recursively(
-                        left_plan.as_ref(),
-                        query,
-                        select,
-                        relation,
-                    )?;
-                    select.pop_projections();
-                    Some(self.derived_input_projection(join.left.as_ref(), None)?)
-                } else if Self::asof_input_requires_derived(join.left.as_ref()) {
-                    let qualifier =
-                        self.derive_asof_input(join.left.as_ref(), relation)?;
-                    Some(self.derived_input_projection(
-                        join.left.as_ref(),
-                        qualifier.as_ref(),
-                    )?)
-                } else {
-                    self.select_to_sql_recursively(
-                        join.left.as_ref(),
-                        query,
-                        select,
-                        relation,
-                    )?;
-                    Some(select.pop_projections())
-                };
-                if already_projected {
-                    if inline_left_join {
-                        self.select_to_sql_recursively(
-                            left_plan.as_ref(),
-                            query,
-                            select,
-                            relation,
-                        )?;
-                    } else if Self::asof_input_requires_derived(join.left.as_ref()) {
-                        self.derive_asof_input(join.left.as_ref(), relation)?;
-                    } else {
-                        self.select_to_sql_recursively(
-                            join.left.as_ref(),
-                            query,
-                            select,
-                            relation,
-                        )?;
-                    }
-                }
-
-                let mut right_relation = RelationBuilder::default();
-                let nested_right =
-                    self.join_input_to_nested_relation(join.right.as_ref(), query)?;
-                let right_projection = if already_projected {
-                    if let Some(nested_right) = nested_right {
-                        right_relation = nested_right;
-                    } else if Self::asof_input_requires_derived(join.right.as_ref()) {
-                        self.derive_asof_input(join.right.as_ref(), &mut right_relation)?;
-                    } else {
-                        self.select_to_sql_recursively(
-                            join.right.as_ref(),
-                            query,
-                            select,
-                            &mut right_relation,
-                        )?;
-                    }
-                    None
-                } else if let Some(nested_right) = nested_right {
-                    right_relation = nested_right;
-                    Some(self.derived_input_projection(join.right.as_ref(), None)?)
-                } else if Self::asof_input_requires_derived(join.right.as_ref()) {
-                    let qualifier =
-                        self.derive_asof_input(join.right.as_ref(), &mut right_relation)?;
-                    Some(self.derived_input_projection(
-                        join.right.as_ref(),
-                        qualifier.as_ref(),
-                    )?)
-                } else {
-                    self.select_to_sql_recursively(
-                        join.right.as_ref(),
-                        query,
-                        select,
-                        &mut right_relation,
-                    )?;
-                    Some(select.pop_projections())
-                };
-                let Ok(Some(relation)) = right_relation.build() else {
-                    return internal_err!("Failed to build ASOF right relation");
-                };
-                let constraint =
-                    self.join_constraint_to_sql(join.join_constraint, &join.on, None)?;
-                let match_condition =
-                    self.expr_to_sql(&Expr::BinaryExpr(BinaryExpr::new(
-                        Box::new(join.match_condition.left.clone()),
-                        join.match_condition.op,
-                        Box::new(join.match_condition.right.clone()),
-                    )))?;
-                let ast_join = ast::Join {
-                    relation,
-                    global: false,
-                    join_operator: ast::JoinOperator::AsOf {
-                        match_condition,
-                        constraint,
-                    },
-                };
-                let mut from = select.pop_from().ok_or_else(|| {
-                    internal_datafusion_err!("ASOF left relation is missing")
-                })?;
-                from.push_join(ast_join);
-                select.push_from(from);
-
-                if !already_projected {
-                    let left_projection = left_projection.ok_or_else(|| {
-                        internal_datafusion_err!("ASOF left projection is missing")
-                    })?;
-                    let right_projection = right_projection.ok_or_else(|| {
-                        internal_datafusion_err!("ASOF right projection is missing")
-                    })?;
-                    let omitted_right = if join.join_constraint == JoinConstraint::Using {
-                        join.on
-                            .iter()
-                            .filter_map(|(_, right)| right.get_as_join_column())
-                            .collect::<Vec<_>>()
-                    } else {
-                        vec![]
-                    };
-                    let right_projection = right_projection.into_iter().filter(|item| {
-                        let ast::SelectItem::UnnamedExpr(ast::Expr::CompoundIdentifier(
-                            ids,
-                        )) = item
-                        else {
-                            return true;
-                        };
-                        let Some(name) = ids.last() else {
-                            return true;
-                        };
-                        !omitted_right.iter().any(|column| column.name == name.value)
-                    });
-                    select.projection(
-                        left_projection
-                            .into_iter()
-                            .chain(right_projection)
-                            .collect(),
-                    );
-                }
-                Ok(())
+                self.asof_join_to_sql(join, query, select, relation)
             }
             LogicalPlan::SubqueryAlias(plan_alias) => {
                 let (plan, mut columns) =
@@ -1879,6 +1732,145 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported operator: {plan:?}")
             }
         }
+    }
+
+    // Keep ASOF-specific locals out of the recursive plan unparser's stack frame.
+    #[inline(never)]
+    fn asof_join_to_sql(
+        &self,
+        join: &AsOfJoin,
+        query: &mut Option<QueryBuilder>,
+        select: &mut SelectBuilder,
+        relation: &mut RelationBuilder,
+    ) -> Result<()> {
+        let already_projected = select.already_projected();
+        let left_plan =
+            Self::unwrap_qualified_passthrough_join_projection(Arc::clone(&join.left));
+        let inline_left_join = matches!(left_plan.as_ref(), LogicalPlan::Join(_));
+        let left_projection = if already_projected {
+            None
+        } else if inline_left_join {
+            self.select_to_sql_recursively(left_plan.as_ref(), query, select, relation)?;
+            select.pop_projections();
+            Some(self.derived_input_projection(join.left.as_ref(), None)?)
+        } else if Self::asof_input_requires_derived(join.left.as_ref()) {
+            let qualifier = self.derive_asof_input(join.left.as_ref(), relation)?;
+            Some(self.derived_input_projection(join.left.as_ref(), qualifier.as_ref())?)
+        } else {
+            self.select_to_sql_recursively(join.left.as_ref(), query, select, relation)?;
+            Some(select.pop_projections())
+        };
+        if already_projected {
+            if inline_left_join {
+                self.select_to_sql_recursively(
+                    left_plan.as_ref(),
+                    query,
+                    select,
+                    relation,
+                )?;
+            } else if Self::asof_input_requires_derived(join.left.as_ref()) {
+                self.derive_asof_input(join.left.as_ref(), relation)?;
+            } else {
+                self.select_to_sql_recursively(
+                    join.left.as_ref(),
+                    query,
+                    select,
+                    relation,
+                )?;
+            }
+        }
+
+        let mut right_relation = RelationBuilder::default();
+        let nested_right =
+            self.join_input_to_nested_relation(join.right.as_ref(), query)?;
+        let right_projection = if already_projected {
+            if let Some(nested_right) = nested_right {
+                right_relation = nested_right;
+            } else if Self::asof_input_requires_derived(join.right.as_ref()) {
+                self.derive_asof_input(join.right.as_ref(), &mut right_relation)?;
+            } else {
+                self.select_to_sql_recursively(
+                    join.right.as_ref(),
+                    query,
+                    select,
+                    &mut right_relation,
+                )?;
+            }
+            None
+        } else if let Some(nested_right) = nested_right {
+            right_relation = nested_right;
+            Some(self.derived_input_projection(join.right.as_ref(), None)?)
+        } else if Self::asof_input_requires_derived(join.right.as_ref()) {
+            let qualifier =
+                self.derive_asof_input(join.right.as_ref(), &mut right_relation)?;
+            Some(self.derived_input_projection(join.right.as_ref(), qualifier.as_ref())?)
+        } else {
+            self.select_to_sql_recursively(
+                join.right.as_ref(),
+                query,
+                select,
+                &mut right_relation,
+            )?;
+            Some(select.pop_projections())
+        };
+        let Ok(Some(relation)) = right_relation.build() else {
+            return internal_err!("Failed to build ASOF right relation");
+        };
+        let constraint =
+            self.join_constraint_to_sql(join.join_constraint, &join.on, None)?;
+        let match_condition = self.expr_to_sql(&Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(join.match_condition.left.clone()),
+            join.match_condition.op,
+            Box::new(join.match_condition.right.clone()),
+        )))?;
+        let ast_join = ast::Join {
+            relation,
+            global: false,
+            join_operator: ast::JoinOperator::AsOf {
+                match_condition,
+                constraint,
+            },
+        };
+        let mut from = select
+            .pop_from()
+            .ok_or_else(|| internal_datafusion_err!("ASOF left relation is missing"))?;
+        from.push_join(ast_join);
+        select.push_from(from);
+
+        if !already_projected {
+            let left_projection = left_projection.ok_or_else(|| {
+                internal_datafusion_err!("ASOF left projection is missing")
+            })?;
+            let right_projection = right_projection.ok_or_else(|| {
+                internal_datafusion_err!("ASOF right projection is missing")
+            })?;
+            let omitted_right = if join.join_constraint == JoinConstraint::Using {
+                join.on
+                    .iter()
+                    .filter_map(|(_, right)| right.get_as_join_column())
+                    .collect::<Vec<_>>()
+            } else {
+                vec![]
+            };
+            let right_projection = right_projection.into_iter().filter(|item| {
+                let ast::SelectItem::UnnamedExpr(ast::Expr::CompoundIdentifier(ids)) =
+                    item
+                else {
+                    return true;
+                };
+                let Some(name) = ids.last() else {
+                    return true;
+                };
+                !omitted_right.iter().any(|column| column.name == name.value)
+            });
+            select.projection(
+                left_projection
+                    .into_iter()
+                    .chain(right_projection)
+                    .collect(),
+            );
+        }
+        Ok(())
     }
 
     /// Walk through transparent nodes (SubqueryAlias) to find the inner

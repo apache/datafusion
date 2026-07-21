@@ -1115,15 +1115,18 @@ impl OptimizerRule for PushDownFilter {
                                 })
                         });
                 if push.is_empty() {
-                    filter.predicate =
-                        conjunction(keep).expect("filter predicates are not empty");
+                    let Some(predicate) = conjunction(keep) else {
+                        return internal_err!("ASOF join filter predicates are empty");
+                    };
+                    filter.predicate = predicate;
                     filter.input = Arc::new(LogicalPlan::AsOfJoin(join));
                     Ok(Transformed::no(LogicalPlan::Filter(filter)))
                 } else {
-                    join.left = Arc::new(LogicalPlan::Filter(Filter::new(
-                        conjunction(push).expect("push predicates are not empty"),
-                        join.left,
-                    )));
+                    let Some(predicate) = conjunction(push) else {
+                        return internal_err!("ASOF join push-down predicates are empty");
+                    };
+                    join.left =
+                        Arc::new(LogicalPlan::Filter(Filter::new(predicate, join.left)));
                     Ok(Transformed::yes(with_filters(
                         keep,
                         LogicalPlan::AsOfJoin(join),

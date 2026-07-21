@@ -1,0 +1,184 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE TABLE asof_left(id INT, grp TEXT, ts INT) AS VALUES
+  (1, 'A', 1),
+  (2, 'A', 4),
+  (3, 'A', 7),
+  (4, 'B', 2),
+  (5, 'B', 8),
+  (6, NULL, 3),
+  (7, 'A', NULL);
+
+statement ok
+CREATE TABLE asof_right(grp TEXT, ts INT, val TEXT) AS VALUES
+  ('A', 2, 'a2'),
+  ('A', 4, 'a4'),
+  ('A', 6, 'a6'),
+  ('B', 1, 'b1'),
+  ('B', 6, 'b6'),
+  (NULL, 2, 'null-group'),
+  ('A', NULL, 'null-ts');
+
+# Inclusive predecessor per equality group. This also verifies unmatched left
+# rows and NULL behavior for equality keys and ordered expressions.
+query IIIT
+SELECT l.id, l.ts, r.ts, r.val
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.grp = r.grp
+ORDER BY l.id;
+----
+1 1 NULL NULL
+2 4 4 a4
+3 7 6 a6
+4 2 1 b1
+5 8 6 b6
+6 3 NULL NULL
+7 NULL NULL NULL
+
+# Strict predecessor per equality group.
+query IIIT
+SELECT l.id, l.ts, r.ts, r.val
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts > r.ts)
+ON l.grp = r.grp
+ORDER BY l.id;
+----
+1 1 NULL NULL
+2 4 2 a2
+3 7 6 a6
+4 2 1 b1
+5 8 6 b6
+6 3 NULL NULL
+7 NULL NULL NULL
+
+# Inclusive successor per equality group.
+query IIIT
+SELECT l.id, l.ts, r.ts, r.val
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts <= r.ts)
+ON l.grp = r.grp
+ORDER BY l.id;
+----
+1 1 2 a2
+2 4 4 a4
+3 7 NULL NULL
+4 2 6 b6
+5 8 NULL NULL
+6 3 NULL NULL
+7 NULL NULL NULL
+
+# Strict successor per equality group.
+query IIIT
+SELECT l.id, l.ts, r.ts, r.val
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts < r.ts)
+ON l.grp = r.grp
+ORDER BY l.id;
+----
+1 1 2 a2
+2 4 6 a6
+3 7 NULL NULL
+4 2 6 b6
+5 8 NULL NULL
+6 3 NULL NULL
+7 NULL NULL NULL
+
+# USING merges the equality key into one output column.
+query TIIT
+SELECT grp, l.id, r.ts, r.val
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts >= r.ts)
+USING (grp)
+ORDER BY l.id;
+----
+A 1 NULL NULL
+A 2 4 a4
+A 3 6 a6
+B 4 1 b1
+B 5 6 b6
+NULL 6 NULL NULL
+A 7 NULL NULL
+
+# Equality keys are optional.
+query IT
+SELECT l.id, r.label
+FROM (VALUES (1, 1), (2, 5), (3, CAST(NULL AS INT))) AS l(id, ts)
+ASOF JOIN (VALUES (2, 'r2'), (4, 'r4')) AS r(ts, label)
+MATCH_CONDITION (l.ts >= r.ts)
+ORDER BY l.id;
+----
+1 NULL
+2 r4
+3 NULL
+
+query TT
+EXPLAIN SELECT l.id, r.val
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.grp = r.grp;
+----
+logical_plan
+01)Projection: l.id, r.val
+02)--AsOf Join: match=[l.ts >= r.ts], constraint=On, on=[l.grp = r.grp]
+03)----SubqueryAlias: l
+04)------TableScan: asof_left projection=[id, grp, ts]
+05)----SubqueryAlias: r
+06)------TableScan: asof_right projection=[grp, ts, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, val@5 as val]
+02)--AsOfJoinExec: on=[(grp = grp)], match=[ts >= ts]
+03)----SortExec: expr=[grp@1 ASC, ts@2 ASC], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----SortExec: expr=[grp@0 ASC, ts@1 ASC], preserve_partitioning=[false]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query error ASOF MATCH_CONDITION requires <, <=, >, or >=
+SELECT *
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts = r.ts)
+ON l.grp = r.grp;
+
+query error ASOF MATCH_CONDITION left operand must reference only the left input
+SELECT *
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (r.ts >= l.ts)
+ON l.grp = r.grp;
+
+query error ASOF ON accepts only equality conditions combined with AND
+SELECT *
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.grp > r.grp;
+
+query error ASOF MATCH_CONDITION must be a single comparison
+SELECT *
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts)
+ON l.grp = r.grp;
