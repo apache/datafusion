@@ -121,7 +121,6 @@
 
 use std::cmp::Ordering;
 use std::sync::Arc;
-use std::time::Instant;
 
 use crate::EmptyRecordBatchStream;
 use crate::joins::utils::{JoinFilter, JoinKeyComparator, compare_join_arrays};
@@ -135,6 +134,7 @@ use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch, not};
 use arrow::datatypes::SchemaRef;
 use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
 use arrow::util::bit_util::apply_bitwise_binary_op;
+use datafusion_common::instant::Instant;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, ScalarValue, internal_err,
 };
