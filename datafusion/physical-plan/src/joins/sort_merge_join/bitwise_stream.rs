@@ -499,10 +499,11 @@ impl BitwiseSortMergeJoinStream {
         }
     }
 
-    /// Emit the current outer batch through the coalescer, applying the
-    /// matched bitset as a selection mask.
+    /// Push the current outer batch into the coalescer, applying the matched
+    /// bitset as a selection mask. Consumes the batch (`outer_batch` becomes
+    /// `None`).
     fn emit_outer_batch(&mut self) -> Result<()> {
-        let batch = self.outer_batch.as_ref().unwrap();
+        let batch = self.outer_batch.take().unwrap();
 
         // finish() converts the bit-packed builder directly to a
         // BooleanBuffer — no iteration or repacking needed.
@@ -525,14 +526,14 @@ impl BitwiseSortMergeJoinStream {
             }
             JoinType::LeftSemi | JoinType::RightSemi => {
                 let selection = BooleanArray::new(matched_buf, None);
-                let filtered = filter_record_batch(batch, &selection)?;
+                let filtered = filter_record_batch(&batch, &selection)?;
                 if filtered.num_rows() > 0 {
                     self.coalescer.push_batch(filtered)?;
                 }
             }
             JoinType::LeftAnti | JoinType::RightAnti => {
                 let selection = not(&BooleanArray::new(matched_buf, None))?;
-                let filtered = filter_record_batch(batch, &selection)?;
+                let filtered = filter_record_batch(&batch, &selection)?;
                 if filtered.num_rows() > 0 {
                     self.coalescer.push_batch(filtered)?;
                 }
@@ -542,88 +543,76 @@ impl BitwiseSortMergeJoinStream {
         Ok(())
     }
 
-    /// Process a key match between outer and inner sides (no filter).
-    /// Sets matched bits for all outer rows sharing the current key.
-    fn process_key_match_no_filter(&mut self) -> Result<()> {
-        let outer_batch = self.outer_batch.as_ref().unwrap();
-        let num_outer = outer_batch.num_rows();
+    /// Mark all outer rows in the current key group as matched and advance
+    /// the outer cursor past the group (within the current batch).
+    fn mark_outer_key_group_matched(&mut self) -> Result<()> {
+        let num_outer = self.outer_batch.as_ref().unwrap().num_rows();
+        let from = self.outer_offset;
+        let group_end = find_key_group_end(self.get_outer_self_cmp()?, from, num_outer);
 
-        self.get_outer_self_cmp()?;
-        let outer_group_end = find_key_group_end(
-            self.outer_self_cmp.as_ref().unwrap(),
-            self.outer_offset,
-            num_outer,
-        );
-
-        for i in self.outer_offset..outer_group_end {
+        for i in from..group_end {
             self.matched.set_bit(i, true);
         }
 
-        self.outer_offset = outer_group_end;
+        self.outer_offset = group_end;
         Ok(())
     }
 
-    /// Advance inner past the current key group. Returns Ok(true) if inner
+    /// Advance the inner cursor past the current key group. The group may
+    /// span multiple inner batches. Sets `inner_batch` to `None` if inner
     /// is exhausted.
-    async fn advance_inner_past_key_group(&mut self) -> Result<bool> {
+    async fn advance_inner_past_key_group(&mut self) -> Result<()> {
         loop {
-            let inner_batch = match &self.inner_batch {
-                Some(b) => b,
-                None => return Ok(true),
+            let Some(inner_batch) = &self.inner_batch else {
+                return Ok(());
             };
             let num_inner = inner_batch.num_rows();
-
-            self.get_inner_self_cmp()?;
-            let group_end = find_key_group_end(
-                self.inner_self_cmp.as_ref().unwrap(),
-                self.inner_offset,
-                num_inner,
-            );
+            let from = self.inner_offset;
+            let group_end =
+                find_key_group_end(self.get_inner_self_cmp()?, from, num_inner);
 
             if group_end < num_inner {
                 self.inner_offset = group_end;
-                return Ok(false);
+                return Ok(());
             }
 
-            // Key group extends to end of batch — need to check next batch
+            // Key group extends to the end of the batch — it may continue
+            // into the next one; save the last key so we can check.
             let saved_inner_keys = slice_keys(&self.inner_key_arrays, num_inner - 1);
 
             if !self.next_inner_batch().await? {
-                return Ok(true);
+                self.inner_batch = None;
+                return Ok(());
             }
-            if keys_match(
+            if !keys_match(
                 &saved_inner_keys,
                 &self.inner_key_arrays,
                 &self.sort_options,
                 self.null_equality,
             )? {
-                continue;
-            } else {
-                return Ok(false);
+                return Ok(());
             }
         }
     }
 
-    /// Buffer inner key group for filter evaluation. Collects all inner rows
-    /// with the current key across batch boundaries.
-    async fn buffer_inner_key_group(&mut self) -> Result<bool> {
+    /// Buffer the inner key group for filter evaluation, advancing the inner
+    /// cursor past the group. Collects all inner rows with the current key
+    /// across batch boundaries. Sets `inner_batch` to `None` if inner is
+    /// exhausted.
+    async fn buffer_inner_key_group(&mut self) -> Result<()> {
         self.clear_inner_key_group();
 
         loop {
-            if self.inner_batch.is_none() {
-                return Ok(true);
-            }
-            let num_inner = self.inner_batch.as_ref().unwrap().num_rows();
-            self.get_inner_self_cmp()?;
-            let group_end = find_key_group_end(
-                self.inner_self_cmp.as_ref().unwrap(),
-                self.inner_offset,
-                num_inner,
-            );
+            let Some(inner_batch) = &self.inner_batch else {
+                return Ok(());
+            };
+            let num_inner = inner_batch.num_rows();
+            let from = self.inner_offset;
+            let group_end =
+                find_key_group_end(self.get_inner_self_cmp()?, from, num_inner);
 
             let inner_batch = self.inner_batch.as_ref().unwrap();
-            let slice =
-                inner_batch.slice(self.inner_offset, group_end - self.inner_offset);
+            let slice = inner_batch.slice(from, group_end - from);
             self.inner_buffer_size += slice.get_array_memory_size();
             self.inner_key_buffer.push(slice);
 
@@ -644,24 +633,24 @@ impl BitwiseSortMergeJoinStream {
 
             if group_end < num_inner {
                 self.inner_offset = group_end;
-                return Ok(false);
+                return Ok(());
             }
 
-            // Key group extends to end of batch — check next
+            // Key group extends to the end of the batch — it may continue
+            // into the next one; save the last key so we can check.
             let saved_inner_keys = slice_keys(&self.inner_key_arrays, num_inner - 1);
 
             if !self.next_inner_batch().await? {
-                return Ok(true);
+                self.inner_batch = None;
+                return Ok(());
             }
-            if keys_match(
+            if !keys_match(
                 &saved_inner_keys,
                 &self.inner_key_arrays,
                 &self.sort_options,
                 self.null_equality,
             )? {
-                continue;
-            } else {
-                return Ok(false);
+                return Ok(());
             }
         }
     }
@@ -670,10 +659,7 @@ impl BitwiseSortMergeJoinStream {
     /// key group, evaluates the filter against the outer key group and ORs
     /// the results into the matched bitset using u64-chunked bitwise ops.
     async fn process_key_match_with_filter(&mut self) -> Result<()> {
-        self.get_outer_self_cmp()?;
-        let filter = self.filter.as_ref().unwrap();
-        let outer_batch = self.outer_batch.as_ref().unwrap();
-        let num_outer = outer_batch.num_rows();
+        let num_outer = self.outer_batch.as_ref().unwrap().num_rows();
 
         // buffer_inner_key_group must be called before this function
         debug_assert!(
@@ -689,18 +675,19 @@ impl BitwiseSortMergeJoinStream {
             "matched vector must be sized for the current outer batch"
         );
 
-        let outer_group_end = find_key_group_end(
-            self.outer_self_cmp.as_ref().unwrap(),
-            self.outer_offset,
-            num_outer,
-        );
-        let outer_group_len = outer_group_end - self.outer_offset;
-        let outer_slice = outer_batch.slice(self.outer_offset, outer_group_len);
+        let outer_group_start = self.outer_offset;
+        let outer_group_end =
+            find_key_group_end(self.get_outer_self_cmp()?, outer_group_start, num_outer);
+        let outer_group_len = outer_group_end - outer_group_start;
+
+        let filter = self.filter.as_ref().unwrap();
+        let outer_batch = self.outer_batch.as_ref().unwrap();
+        let outer_slice = outer_batch.slice(outer_group_start, outer_group_len);
 
         // Count already-matched bits using popcnt on u64 chunks (zero-copy).
         let mut matched_count = UnalignedBitChunk::new(
             self.matched.as_slice(),
-            self.outer_offset,
+            outer_group_start,
             outer_group_len,
         )
         .count_ones();
@@ -724,7 +711,7 @@ impl BitwiseSortMergeJoinStream {
                             &outer_slice,
                             &inner_slice,
                             &mut self.matched,
-                            self.outer_offset,
+                            outer_group_start,
                             outer_group_len,
                             matched_count,
                         )?;
@@ -752,7 +739,7 @@ impl BitwiseSortMergeJoinStream {
                     &outer_slice,
                     inner_slice,
                     &mut self.matched,
-                    self.outer_offset,
+                    outer_group_start,
                     outer_group_len,
                     matched_count,
                 )?;
@@ -767,7 +754,9 @@ impl BitwiseSortMergeJoinStream {
         Ok(())
     }
 
-    /// Helper to process an Equal match across potential outer batch boundaries.
+    /// Evaluate the filter for the buffered inner key group against the
+    /// outer key group. If the outer key group continues into subsequent
+    /// outer batches, keep evaluating there too.
     async fn process_filtered_match_loop(&mut self) -> Result<()> {
         loop {
             self.process_key_match_with_filter().await?;
@@ -783,8 +772,6 @@ impl BitwiseSortMergeJoinStream {
                 slice_keys(&self.outer_key_arrays, outer_batch.num_rows() - 1);
 
             self.emit_outer_batch()?;
-            // Clear stale batch before polling
-            self.outer_batch = None;
 
             if !self.next_outer_batch().await? {
                 break;
@@ -803,6 +790,197 @@ impl BitwiseSortMergeJoinStream {
         Ok(())
     }
 
+    /// Mark the outer key group as matched. If the outer key group continues
+    /// into subsequent outer batches, keep marking there too.
+    async fn process_unfiltered_match_loop(&mut self) -> Result<()> {
+        loop {
+            self.mark_outer_key_group_matched()?;
+
+            let outer_batch = self.outer_batch.as_ref().unwrap();
+            if self.outer_offset < outer_batch.num_rows() {
+                return Ok(());
+            }
+
+            // The outer key group may continue into the next outer batch;
+            // save the last key so we can check.
+            let saved_keys =
+                slice_keys(&self.outer_key_arrays, outer_batch.num_rows() - 1);
+
+            self.emit_outer_batch()?;
+
+            if !self.next_outer_batch().await? {
+                return Ok(());
+            }
+            if !keys_match(
+                &saved_keys,
+                &self.outer_key_arrays,
+                &self.sort_options,
+                self.null_equality,
+            )? {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Keys at both cursors are equal: determine which outer rows in the key
+    /// group have a match. Both key groups may span batch boundaries.
+    async fn process_key_match(&mut self) -> Result<()> {
+        if self.filter.is_some() {
+            // Buffer the inner key group so each inner row can be evaluated
+            // against the outer key group, OR-ing filter results into the
+            // matched bitset.
+            self.buffer_inner_key_group().await?;
+            self.process_filtered_match_loop().await
+        } else {
+            // Without a filter, key equality alone means every outer row in
+            // the group matches; the inner rows themselves are not needed.
+            self.advance_inner_past_key_group().await?;
+            self.process_unfiltered_match_loop().await
+        }
+    }
+
+    /// Compare the join keys at the outer and inner cursors, returning the
+    /// ordering of the outer key relative to the inner key (e.g. `Greater`
+    /// means outer key > inner key, per the sort options).
+    fn compare_current_keys(&mut self) -> Result<Ordering> {
+        let (outer_idx, inner_idx) = (self.outer_offset, self.inner_offset);
+        Ok(self.get_outer_inner_cmp()?.compare(outer_idx, inner_idx))
+    }
+
+    /// Outer key is unmatched: advance the outer cursor past its key group
+    /// (within the current batch). If the group continues into the next
+    /// batch, those rows compare Less again and are skipped the same way.
+    fn skip_outer_key_group(&mut self) -> Result<()> {
+        let num_outer = self.outer_batch.as_ref().unwrap().num_rows();
+        let from = self.outer_offset;
+        self.outer_offset =
+            find_key_group_end(self.get_outer_self_cmp()?, from, num_outer);
+        Ok(())
+    }
+
+    /// Sync fast path for `Ordering::Greater`: skip the inner key group when
+    /// it ends within the current batch. Returns false — leaving all state
+    /// unchanged — when the group reaches the batch boundary, in which case
+    /// the caller must take [`Self::advance_inner_past_key_group`].
+    fn try_skip_inner_key_group(&mut self) -> Result<bool> {
+        let num_inner = self.inner_batch.as_ref().unwrap().num_rows();
+        let from = self.inner_offset;
+        let group_end = find_key_group_end(self.get_inner_self_cmp()?, from, num_inner);
+        if group_end >= num_inner {
+            return Ok(false);
+        }
+        self.inner_offset = group_end;
+        Ok(true)
+    }
+
+    /// Sync fast path for `Ordering::Equal` without a filter: when both key
+    /// groups end within their current batches (the common case — a group
+    /// only reaches a batch boundary once per batch), mark the outer group
+    /// matched and advance both cursors without any async machinery.
+    /// Returns false — leaving all state unchanged — when a filter is
+    /// present or either group reaches a batch boundary, in which case the
+    /// caller must take [`Self::process_key_match`].
+    fn try_process_key_match(&mut self) -> Result<bool> {
+        if self.filter.is_some() {
+            return Ok(false);
+        }
+
+        let num_inner = self.inner_batch.as_ref().unwrap().num_rows();
+        let inner_from = self.inner_offset;
+        let inner_group_end =
+            find_key_group_end(self.get_inner_self_cmp()?, inner_from, num_inner);
+        if inner_group_end >= num_inner {
+            return Ok(false);
+        }
+
+        let num_outer = self.outer_batch.as_ref().unwrap().num_rows();
+        let outer_from = self.outer_offset;
+        let outer_group_end =
+            find_key_group_end(self.get_outer_self_cmp()?, outer_from, num_outer);
+        if outer_group_end >= num_outer {
+            return Ok(false);
+        }
+
+        for i in outer_from..outer_group_end {
+            self.matched.set_bit(i, true);
+        }
+        self.outer_offset = outer_group_end;
+        self.inner_offset = inner_group_end;
+        Ok(true)
+    }
+
+    /// True when the outer cursor already points at an unprocessed row: the
+    /// sync fast path of [`Self::advance_outer_row`]. Checked inline in the
+    /// hot loop so the async helper (and its state machine) is only entered
+    /// at batch boundaries — same pattern as `sorts/merge.rs`.
+    fn has_current_outer_row(&self) -> bool {
+        self.outer_batch
+            .as_ref()
+            .is_some_and(|batch| self.outer_offset < batch.num_rows())
+    }
+
+    /// True when the inner cursor already points at an unprocessed row: the
+    /// sync fast path of [`Self::advance_inner_row`].
+    fn has_current_inner_row(&self) -> bool {
+        self.inner_batch
+            .as_ref()
+            .is_some_and(|batch| self.inner_offset < batch.num_rows())
+    }
+
+    /// Ensure the outer cursor points at an unprocessed row, emitting
+    /// finished outer batches and loading new ones as needed. Returns false
+    /// when outer is exhausted.
+    async fn advance_outer_row(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<bool> {
+        loop {
+            match &self.outer_batch {
+                Some(batch) if self.outer_offset < batch.num_rows() => {
+                    return Ok(true);
+                }
+                Some(_) => {
+                    // Current batch fully scanned — emit it and load the next.
+                    self.emit_outer_batch()?;
+                    self.emit_completed_batches(emitter).await;
+                }
+                None => {
+                    if !self.next_outer_batch().await? {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ensure the inner cursor points at an unprocessed row, loading new
+    /// inner batches as needed. Returns false when inner is exhausted.
+    async fn advance_inner_row(&mut self) -> Result<bool> {
+        loop {
+            if let Some(batch) = &self.inner_batch
+                && self.inner_offset < batch.num_rows()
+            {
+                return Ok(true);
+            }
+            if !self.next_inner_batch().await? {
+                self.inner_batch = None;
+                return Ok(false);
+            }
+        }
+    }
+
+    /// Inner is exhausted, so no further matches are possible: emit the
+    /// current outer batch and all remaining ones with their current matched
+    /// bits (semi drops unmatched rows, anti emits them, mark emits them
+    /// with mark=false).
+    async fn drain_outer(&mut self) -> Result<()> {
+        self.emit_outer_batch()?;
+        while self.next_outer_batch().await? {
+            self.emit_outer_batch()?;
+        }
+        Ok(())
+    }
+
     /// Emit all completed coalescer batches to the stream consumer.
     async fn emit_completed_batches(
         &mut self,
@@ -814,167 +992,47 @@ impl BitwiseSortMergeJoinStream {
         }
     }
 
-    /// Main loop: drive the merge-scan, emitting output batches as they
-    /// complete.
+    /// Main loop: a classic merge-scan over the two sorted inputs, emitting
+    /// output batches as they complete.
     async fn join(
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
-        loop {
-            // 1. Ensure we have an outer batch
-            if self.outer_batch.is_none() {
-                if !self.next_outer_batch().await? {
-                    // Outer exhausted — flush coalescer and finish
-                    self.coalescer.finish_buffered_batch()?;
-                    self.emit_completed_batches(emitter).await;
-                    return Ok(());
-                }
+        // The `has_current_*` / `has_completed_batch` fast paths keep async
+        // state machinery out of the per-key-group hot path; the awaiting
+        // helpers are only entered at batch boundaries.
+        while self.has_current_outer_row() || self.advance_outer_row(emitter).await? {
+            if !(self.has_current_inner_row() || self.advance_inner_row().await?) {
+                self.drain_outer().await?;
+                break;
             }
 
-            // 2. Ensure we have an inner batch (unless inner is exhausted).
-            if self.inner_batch.is_none() {
-                if !self.next_inner_batch().await? {
-                    // Inner exhausted — emit remaining outer batches.
-                    // For semi: no more matches possible.
-                    // For anti: all remaining outer rows are unmatched.
-                    self.emit_outer_batch()?;
-                    self.outer_batch = None;
-
-                    while self.next_outer_batch().await? {
-                        self.emit_outer_batch()?;
-                        self.outer_batch = None;
-                    }
-
-                    self.coalescer.finish_buffered_batch()?;
-                    self.emit_completed_batches(emitter).await;
-                    return Ok(());
-                }
-            }
-
-            // 3. Main merge-scan loop
-            let outer_batch = self.outer_batch.as_ref().unwrap();
-            let num_outer = outer_batch.num_rows();
-
-            if self.outer_offset >= num_outer {
-                self.emit_outer_batch()?;
-                self.outer_batch = None;
-                self.emit_completed_batches(emitter).await;
-                continue;
-            }
-
-            let inner_batch = match &self.inner_batch {
-                Some(b) => b,
-                None => {
-                    self.emit_outer_batch()?;
-                    self.outer_batch = None;
-                    continue;
-                }
-            };
-            let num_inner = inner_batch.num_rows();
-
-            if self.inner_offset >= num_inner {
-                if !self.next_inner_batch().await? {
-                    self.inner_batch = None;
-                }
-                continue;
-            }
-
-            // 4. Compare keys at current positions
-            self.get_outer_inner_cmp()?;
-            let cmp = self
-                .outer_inner_cmp
-                .as_ref()
-                .unwrap()
-                .compare(self.outer_offset, self.inner_offset);
-
-            match cmp {
-                Ordering::Less => {
-                    self.get_outer_self_cmp()?;
-                    let group_end = find_key_group_end(
-                        self.outer_self_cmp.as_ref().unwrap(),
-                        self.outer_offset,
-                        num_outer,
-                    );
-                    self.outer_offset = group_end;
-                }
+            // Each arm handles the common case synchronously (`try_*`); the
+            // async continuations only run when a key group reaches a batch
+            // boundary or a filter must be evaluated.
+            match self.compare_current_keys()? {
+                Ordering::Less => self.skip_outer_key_group()?,
                 Ordering::Greater => {
-                    self.get_inner_self_cmp()?;
-                    let group_end = find_key_group_end(
-                        self.inner_self_cmp.as_ref().unwrap(),
-                        self.inner_offset,
-                        num_inner,
-                    );
-                    if group_end >= num_inner {
-                        // The inner key group may continue into the next
-                        // inner batch; save the last key so we can check.
-                        let saved_keys =
-                            slice_keys(&self.inner_key_arrays, num_inner - 1);
-                        if !self.next_inner_batch().await? {
-                            self.inner_batch = None;
-                            continue;
-                        }
-                        if keys_match(
-                            &saved_keys,
-                            &self.inner_key_arrays,
-                            &self.sort_options,
-                            self.null_equality,
-                        )? {
-                            self.advance_inner_past_key_group().await?;
-                        }
-                        continue;
-                    } else {
-                        self.inner_offset = group_end;
+                    if !self.try_skip_inner_key_group()? {
+                        self.advance_inner_past_key_group().await?;
                     }
                 }
                 Ordering::Equal => {
-                    if self.filter.is_some() {
-                        // Buffer inner key group (may span batches)
-                        let _inner_exhausted = self.buffer_inner_key_group().await?;
-                        // Process outer rows against buffered inner group
-                        // (may need to handle outer batch boundary)
-                        self.process_filtered_match_loop().await?;
-                    } else {
-                        // No filter: advance inner past key group, then
-                        // mark all outer rows with this key as matched.
-                        let _inner_exhausted =
-                            self.advance_inner_past_key_group().await?;
-
-                        loop {
-                            self.process_key_match_no_filter()?;
-
-                            let num_outer = self.outer_batch.as_ref().unwrap().num_rows();
-                            if self.outer_offset < num_outer {
-                                break;
-                            }
-
-                            // The outer key group may continue into the next
-                            // outer batch; save the last key so we can check.
-                            let saved_keys =
-                                slice_keys(&self.outer_key_arrays, num_outer - 1);
-
-                            self.emit_outer_batch()?;
-                            // Clear stale batch before polling
-                            self.outer_batch = None;
-
-                            if !self.next_outer_batch().await? {
-                                break;
-                            }
-                            if !keys_match(
-                                &saved_keys,
-                                &self.outer_key_arrays,
-                                &self.sort_options,
-                                self.null_equality,
-                            )? {
-                                break;
-                            }
-                        }
+                    if !self.try_process_key_match()? {
+                        self.process_key_match().await?;
                     }
                 }
             }
 
-            // Emit any completed coalescer batches
-            self.emit_completed_batches(emitter).await;
+            if self.coalescer.has_completed_batch() {
+                self.emit_completed_batches(emitter).await;
+            }
         }
+
+        // Flush whatever is still buffered in the coalescer.
+        self.coalescer.finish_buffered_batch()?;
+        self.emit_completed_batches(emitter).await;
+        Ok(())
     }
 }
 
