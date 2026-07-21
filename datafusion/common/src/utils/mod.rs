@@ -50,7 +50,6 @@ use std::collections::HashSet;
 use std::iter::repeat_n;
 use std::num::NonZero;
 use std::ops::Range;
-use std::ptr::copy_nonoverlapping;
 use std::sync::{Arc, LazyLock};
 use std::thread::available_parallelism;
 
