@@ -586,7 +586,7 @@ impl Display for SpillCompression {
     }
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub struct BufferAllocationStrategyWrapper(arrow_ipc::reader::BufferAllocationStrategy);
 
 impl Deref for BufferAllocationStrategyWrapper {
