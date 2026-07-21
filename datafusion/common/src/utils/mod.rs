@@ -426,7 +426,7 @@ where
     O: OffsetSizeTrait,
 {
     let cut_offset = offsets[n];
-    if n.saturating_mul(2) < offsets.len() {
+    if n < offsets.len() - n {
         let prefix: Vec<O> = offsets[..=n].into();
         // Shift the remaining offsets in place so that the first offset is 0.
         let dst = offsets.as_mut_ptr();
