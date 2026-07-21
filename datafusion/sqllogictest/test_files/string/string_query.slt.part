@@ -645,10 +645,10 @@ drop table test_lowercase;
 
 query IIII
 SELECT
-  ASCII(ascii_1) as c1,
-  ASCII(ascii_2) as c2,
-  ASCII(unicode_1) as c3,
-  ASCII(unicode_2) as c4
+  arrow_cast(ASCII(ascii_1), 'Int32') as c1,
+  arrow_cast(ASCII(ascii_2), 'Int32') as c2,
+  arrow_cast(ASCII(unicode_1), 'Int32') as c3,
+  arrow_cast(ASCII(unicode_2), 'Int32') as c4
 FROM test_basic_operator;
 ----
 65 88 100 128293
