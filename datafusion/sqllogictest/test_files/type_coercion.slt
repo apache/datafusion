@@ -366,6 +366,24 @@ SELECT t.s NOT SIMILAR TO arrow_cast(p.pat, 'Utf8View') FROM t CROSS JOIN p;
 ----
 false
 
+# NULL patterns (literal or Null-typed non-scalar) are accepted by the planner
+# and evaluate to NULL
+query B
+SELECT t.s SIMILAR TO NULL FROM t;
+----
+NULL
+
+statement ok
+CREATE TABLE pn AS SELECT NULL AS pat;
+
+query B
+SELECT t.s SIMILAR TO pn.pat FROM t CROSS JOIN pn;
+----
+NULL
+
+statement ok
+DROP TABLE pn;
+
 statement ok
 DROP TABLE t;
 
