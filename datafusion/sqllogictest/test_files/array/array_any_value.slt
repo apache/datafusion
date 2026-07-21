@@ -145,6 +145,36 @@ select array_any_value(make_array(NULL, 1, 2, 3, 4, 5)), array_any_value(column1
 1 41
 1 51
 
+# array_any_value with empty (length-0) list elements
+# A non-null but empty list must yield NULL, including a trailing empty element
+# whose start offset equals the values length (previously read out of bounds
+# and panicked the worker task).
+statement ok
+create table any_value_empty (id int, tags bigint[]) as values
+  (1, make_array(10)),
+  (2, cast(make_array() as bigint[])),
+  (3, make_array(20, 30)),
+  (4, cast(make_array() as bigint[]));
+
+query II
+select id, array_any_value(tags) from any_value_empty order by id;
+----
+1 10
+2 NULL
+3 20
+4 NULL
+
+query II
+select id, array_any_value(arrow_cast(tags, 'LargeList(Int64)')) from any_value_empty order by id;
+----
+1 10
+2 NULL
+3 20
+4 NULL
+
+statement ok
+drop table any_value_empty;
+
 # make_array with nulls
 query ???????
 select make_array(make_array('a','b'), null),
