@@ -395,9 +395,10 @@ ORDER BY l.non_range_key, l.value, r.value;
 2 350 350
 
 ##########
-# TEST 12: Non-Inner Range Join Repartitions
-# Only inner partitioned hash joins opt in to Range satisfying KeyPartitioned
-# requirements. Non-inner joins keep using Hash repartitioning.
+# TEST 12: Left Range Join Repartitions
+# Only Inner, Full, and right-side (Right/RightSemi/RightAnti/RightMark)
+# partitioned hash joins opt in to Range satisfying KeyPartitioned
+# requirements. Other join types, such as Left, keep using Hash repartitioning.
 ##########
 
 query TT
@@ -629,7 +630,294 @@ ORDER BY l.range_key;
 35 700
 
 ##########
-# TEST 18: Sort Merge Join Avoids Repartition for Compatible Range Inputs
+# TEST 18: Right Join on Range Partition Column
+# Compatible Range inputs satisfy the join's partitioning requirements, so no
+# Hash repartitioning is inserted. The left filter keeps its Range partitioning
+# and the unmatched right rows above 150 are preserved.
+##########
+
+query TT
+EXPLAIN SELECT l.value, r.range_key, r.value
+FROM (SELECT range_key, value FROM range_partitioned WHERE value <= 150) l
+RIGHT JOIN range_partitioned r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(range_key@0, range_key@0)], projection=[value@1, range_key@2, value@3]
+02)--FilterExec: value@1 <= 150
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query III
+SELECT l.value, r.range_key, r.value
+FROM (SELECT range_key, value FROM range_partitioned WHERE value <= 150) l
+RIGHT JOIN range_partitioned r ON l.range_key = r.range_key
+ORDER BY r.range_key;
+----
+10 1 10
+50 5 50
+100 10 100
+150 15 150
+NULL 20 200
+NULL 25 250
+NULL 30 300
+NULL 35 350
+
+##########
+# TEST 19: Right Semi Join on Range Partition Column
+# Compatible Range inputs avoid Hash repartitioning for RightSemi joins.
+# Only right rows with a match on the filtered left side are returned.
+##########
+
+query TT
+EXPLAIN SELECT r.range_key, r.value
+FROM (SELECT range_key FROM range_partitioned WHERE value <= 150) l
+RIGHT SEMI JOIN range_partitioned r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(range_key@0, range_key@0)]
+02)--FilterExec: value@1 <= 150, projection=[range_key@0]
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT r.range_key, r.value
+FROM (SELECT range_key FROM range_partitioned WHERE value <= 150) l
+RIGHT SEMI JOIN range_partitioned r ON l.range_key = r.range_key
+ORDER BY r.range_key;
+----
+1 10
+5 50
+10 100
+15 150
+
+##########
+# TEST 20: Right Anti Join on Range Partition Column
+# Compatible Range inputs avoid Hash repartitioning for RightAnti joins.
+# Only right rows without a match on the filtered left side are returned.
+##########
+
+query TT
+EXPLAIN SELECT r.range_key, r.value
+FROM (SELECT range_key FROM range_partitioned WHERE value <= 150) l
+RIGHT ANTI JOIN range_partitioned r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=RightAnti, on=[(range_key@0, range_key@0)]
+02)--FilterExec: value@1 <= 150, projection=[range_key@0]
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT r.range_key, r.value
+FROM (SELECT range_key FROM range_partitioned WHERE value <= 150) l
+RIGHT ANTI JOIN range_partitioned r ON l.range_key = r.range_key
+ORDER BY r.range_key;
+----
+20 200
+25 250
+30 300
+35 350
+
+##########
+# TEST 21: Incompatible Range Right Join Repartitions
+# The split points of the two inputs differ, so the co-partitioned layout
+# requirement cannot be satisfied and Hash repartitioning repairs both sides
+# of the right join. Results stay correct on the repartitioned path.
+##########
+
+query TT
+EXPLAIN SELECT l.value, r.range_key, r.value
+FROM (SELECT range_key, value FROM range_partitioned WHERE value <= 150) l
+RIGHT JOIN range_partitioned_shifted r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(range_key@0, range_key@0)], projection=[value@1, range_key@2, value@3]
+02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+03)----FilterExec: value@1 <= 150
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+05)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+06)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=csv, has_header=false
+
+query III
+SELECT l.value, r.range_key, r.value
+FROM (SELECT range_key, value FROM range_partitioned WHERE value <= 150) l
+RIGHT JOIN range_partitioned_shifted r ON l.range_key = r.range_key
+ORDER BY r.range_key;
+----
+10 1 10
+50 5 50
+100 10 100
+150 15 150
+NULL 20 200
+NULL 25 250
+NULL 30 300
+NULL 35 350
+
+##########
+# TEST 22: Composite-Key Right Join Repartitions
+# Range([range_key]) does not satisfy a partitioned join on
+# (range_key, non_range_key), so both sides repartition on the full key.
+##########
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 4;
+
+query TT
+EXPLAIN SELECT l.range_key, l.non_range_key, l.value, r.value
+FROM range_partitioned l
+RIGHT JOIN range_partitioned r ON l.range_key = r.range_key AND l.non_range_key = r.non_range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(range_key@0, range_key@0), (non_range_key@1, non_range_key@1)], projection=[range_key@0, non_range_key@1, value@2, value@5]
+02)--RepartitionExec: partitioning=Hash([range_key@0, non_range_key@1], 4), input_partitions=4
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--RepartitionExec: partitioning=Hash([range_key@0, non_range_key@1], 4), input_partitions=4
+05)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query IIII
+SELECT l.range_key, l.non_range_key, l.value, r.value
+FROM range_partitioned l
+RIGHT JOIN range_partitioned r ON l.range_key = r.range_key AND l.non_range_key = r.non_range_key
+ORDER BY l.range_key;
+----
+1 1 10 10
+5 2 50 50
+10 1 100 100
+15 2 150 150
+20 1 200 200
+25 2 250 250
+30 1 300 300
+35 2 350 350
+
+statement ok
+reset datafusion.optimizer.subset_repartition_threshold;
+
+##########
+# TEST 23: Right Join with Mismatched Range Partition Counts Repartitions
+# Both inputs are range partitioned on range_key, but declare a different number
+# of partitions (four vs three). The per-child key requirements can be satisfied
+# by Range, but the co-partitioned layout requirement cannot, so Hash
+# repartitioning repairs both sides of the right join.
+##########
+
+query TT
+EXPLAIN SELECT l.value, r.range_key, r.value
+FROM range_partitioned l
+RIGHT JOIN range_partitioned_narrow r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(range_key@0, range_key@0)], projection=[value@1, range_key@2, value@3]
+02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=3
+05)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20)], 3), file_type=csv, has_header=false
+
+query III
+SELECT l.value, r.range_key, r.value
+FROM range_partitioned l
+RIGHT JOIN range_partitioned_narrow r ON l.range_key = r.range_key
+ORDER BY r.range_key;
+----
+10 1 10
+50 5 50
+100 10 100
+150 15 150
+200 20 200
+250 25 250
+300 30 300
+350 35 350
+
+##########
+# TEST 24: Right Join on Non-Range Key Repartitions
+# Both inputs expose Range([range_key]), but the join key is non_range_key.
+# Range([range_key]) does not satisfy KeyPartitioned([non_range_key]), so
+# planning inserts Hash repartitioning on the actual join key for the right join.
+##########
+
+query TT
+EXPLAIN SELECT l.value, r.range_key, r.value
+FROM (SELECT non_range_key, value FROM range_partitioned WHERE range_key < 10) l
+RIGHT JOIN range_partitioned r ON l.non_range_key = r.non_range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(non_range_key@0, non_range_key@1)], projection=[value@1, range_key@2, value@4]
+02)--RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
+03)----FilterExec: range_key@0 < 10, projection=[non_range_key@1, value@2]
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+05)--RepartitionExec: partitioning=Hash([non_range_key@1], 4), input_partitions=4
+06)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query III
+SELECT l.value, r.range_key, r.value
+FROM (SELECT non_range_key, value FROM range_partitioned WHERE range_key < 10) l
+RIGHT JOIN range_partitioned r ON l.non_range_key = r.non_range_key
+ORDER BY r.range_key;
+----
+10 1 10
+50 5 50
+10 10 100
+50 15 150
+10 20 200
+50 25 250
+10 30 300
+50 35 350
+
+##########
+# TEST 25: Mark Join Marker Semantics
+# Mark joins preserve matched, unmatched, and NULL-key marker behavior over
+# range-partitioned inputs.
+##########
+
+query TT
+EXPLAIN SELECT r.range_key, r.value
+FROM range_partitioned r
+WHERE r.non_range_key = 2 OR r.range_key IN (
+  SELECT range_key FROM range_partitioned WHERE value <= 150);
+----
+physical_plan
+01)FilterExec: non_range_key@1 = 2 OR mark@3, projection=[range_key@0, value@2]
+02)--HashJoinExec: mode=Partitioned, join_type=LeftMark, on=[(range_key@0, range_key@0)]
+03)----RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+05)----RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+06)------FilterExec: value@1 <= 150, projection=[range_key@0]
+07)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+# Matched rows have mark=true and are returned; unmatched rows have
+# mark=false and are only returned when non_range_key = 2.
+query II
+SELECT r.range_key, r.value
+FROM range_partitioned r
+WHERE r.non_range_key = 2 OR r.range_key IN (
+  SELECT range_key FROM range_partitioned WHERE value <= 150)
+ORDER BY r.range_key;
+----
+1 10
+5 50
+10 100
+15 150
+25 250
+35 350
+
+# NULL join keys on the build side never match: rows whose keys only "match"
+# the NULL entries keep a non-true marker and are filtered out unless the
+# non_range_key = 2 disjunct covers them.
+query II
+SELECT r.range_key, r.value
+FROM range_partitioned r
+WHERE r.non_range_key = 2 OR r.range_key IN (
+  SELECT CASE WHEN value <= 150 THEN range_key ELSE NULL END FROM range_partitioned)
+ORDER BY r.range_key;
+----
+1 10
+5 50
+10 100
+15 150
+25 250
+35 350
+
+##########
+# TEST 26: Sort Merge Join Avoids Repartition for Compatible Range Inputs
 # Compatible Range inputs satisfy SortMergeJoinExec's co-partitioned
 # KeyPartitioned requirements.
 ##########
@@ -666,7 +954,7 @@ ORDER BY l.range_key;
 35 350 350
 
 ##########
-# TEST 19: Sort Merge Join Repartitions Incompatible Range Inputs
+# TEST 27: Sort Merge Join Repartitions Incompatible Range Inputs
 # Different Range split points do not satisfy SortMergeJoinExec's
 # co-partitioned KeyPartitioned requirements.
 ##########
@@ -705,7 +993,7 @@ statement ok
 reset datafusion.optimizer.prefer_hash_join;
 
 ##########
-# TEST 20: Symmetric Hash Join Avoids Repartition for Compatible Range Inputs
+# TEST 28: Symmetric Hash Join Avoids Repartition for Compatible Range Inputs
 # Compatible Range streams satisfy SymmetricHashJoinExec's co-partitioned
 # KeyPartitioned requirements.
 ##########
@@ -739,7 +1027,7 @@ FULL JOIN unbounded_range_like r ON l.range_key = r.range_key;
 5 50 50
 
 ##########
-# TEST 21: Symmetric Hash Join Repartitions Incompatible Range Inputs
+# TEST 29: Symmetric Hash Join Repartitions Incompatible Range Inputs
 # Different Range split points do not satisfy SymmetricHashJoinExec's
 # co-partitioned KeyPartitioned requirements.
 ##########
@@ -771,6 +1059,106 @@ FULL JOIN unbounded_range_like_shifted r ON l.range_key = r.range_key;
 35 350 350
 5 50 50
 
+##########
+# TEST 30: Full Outer Join on Range Partition Column
+# Full partitioned hash joins also opt in to Range satisfying KeyPartitioned
+# requirements, so compatible Range layouts avoid Hash repartitioning here too.
+##########
+
+query TT
+EXPLAIN SELECT l.range_key, l.value, r.value
+FROM range_partitioned l
+FULL JOIN range_partitioned r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Full, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+03)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query III
+SELECT l.range_key, l.value, r.value
+FROM range_partitioned l
+FULL JOIN range_partitioned r ON l.range_key = r.range_key
+ORDER BY l.range_key;
+----
+1 10 10
+5 50 50
+10 100 100
+15 150 150
+20 200 200
+25 250 250
+30 300 300
+35 350 350
+
+##########
+# TEST 31: Full Outer Join Incompatible Range Repartitions
+# Same as TEST 10, but for Full: differing split points between the two
+# Range-partitioned inputs still require Hash repartitioning to co-partition.
+##########
+
+query TT
+EXPLAIN SELECT l.range_key, l.value, r.value
+FROM range_partitioned l
+FULL JOIN range_partitioned_shifted r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Full, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
+02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+05)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=csv, has_header=false
+
+query III
+SELECT l.range_key, l.value, r.value
+FROM range_partitioned l
+FULL JOIN range_partitioned_shifted r ON l.range_key = r.range_key
+ORDER BY l.range_key;
+----
+1 10 10
+5 50 50
+10 100 100
+15 150 150
+20 200 200
+25 250 250
+30 300 300
+35 350 350
+
+##########
+# TEST 32: Full Outer Join Produces Matched and Unmatched Rows
+# `range_partitioned` and `range_partitioned_sparse` share the same Range
+# split points/partition count but only partially overlapping range_key
+# values, so this exercises matched rows, left-only unmatched rows (NULLs on
+# the right), and right-only unmatched rows (NULLs on the left) while still
+# avoiding Hash repartitioning.
+##########
+
+query TT
+EXPLAIN SELECT l.range_key, r.range_key, l.value, r.value
+FROM range_partitioned l
+FULL JOIN range_partitioned_sparse r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Full, on=[(range_key@0, range_key@0)], projection=[range_key@0, range_key@2, value@1, value@3]
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+03)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query IIII
+SELECT l.range_key, r.range_key, l.value, r.value
+FROM range_partitioned l
+FULL JOIN range_partitioned_sparse r ON l.range_key = r.range_key
+ORDER BY l.range_key, r.range_key;
+----
+1 NULL 10 NULL
+5 5 50 50
+10 10 100 100
+15 NULL 150 NULL
+20 20 200 200
+25 NULL 250 NULL
+30 30 300 300
+35 NULL 350 NULL
+NULL 8 NULL 80
+NULL 40 NULL 400
+
 statement ok
 reset datafusion.optimizer.prefer_hash_join;
 
@@ -781,7 +1169,7 @@ statement ok
 reset datafusion.optimizer.preserve_file_partitions;
 
 ##########
-# TEST 22: Union of Range Partitioned Inputs
+# TEST 33: Union of Range Partitioned Inputs
 # Each input exposes the same Range partitioning on range_key, so the optimizer
 # converts UnionExec to InterleaveExec to avoid redundant repartitioning.
 ##########
@@ -830,7 +1218,7 @@ set datafusion.optimizer.preserve_file_partitions = 0;
 
 
 ##########
-# TEST 23: Window on Range Partition Column
+# TEST 34: Window on Range Partition Column
 # Range([range_key]) colocates equal range_key values, so
 # PARTITION BY range_key is satisfied without a hash repartition.
 ##########
@@ -858,7 +1246,7 @@ SELECT range_key, SUM(value) OVER (PARTITION BY range_key ORDER BY value) FROM r
 
 
 ##########
-# TEST 24: Unbounded-Frame Window on Range Partition Column
+# TEST 35: Unbounded-Frame Window on Range Partition Column
 # The unbounded frame makes DataFusion use WindowAggExec instead of
 # BoundedWindowAggExec, which likewise reuses Range partitioning without a
 # hash repartition.
@@ -887,7 +1275,7 @@ SELECT range_key, SUM(value) OVER (PARTITION BY range_key ORDER BY value ROWS BE
 
 
 ##########
-# TEST 25: Window on Non-Range Column Rehashes
+# TEST 36: Window on Non-Range Column Rehashes
 # Range([range_key]) does not colocate non_range_key values, so
 # PARTITION BY non_range_key still requires a hash repartition.
 ##########
@@ -916,7 +1304,7 @@ SELECT non_range_key, value, SUM(value) OVER (PARTITION BY non_range_key ORDER B
 
 
 ##########
-# TEST 26: Unbounded-Frame Window on Non-Range Column Rehashes
+# TEST 37: Unbounded-Frame Window on Non-Range Column Rehashes
 # The unbounded frame makes DataFusion use WindowAggExec; Range([range_key])
 # does not colocate non_range_key values, so PARTITION BY non_range_key
 # still requires a hash repartition.
@@ -946,7 +1334,7 @@ SELECT non_range_key, value, SUM(value) OVER (PARTITION BY non_range_key ORDER B
 
 
 ##########
-# TEST 27: Window Subset Satisfaction on Range Partition Column
+# TEST 38: Window Subset Satisfaction on Range Partition Column
 # With the subset threshold met, Range([range_key]) satisfies
 # PARTITION BY (range_key, non_range_key): equal composite keys share the
 # same range_key, so they are already colocated.
@@ -978,7 +1366,7 @@ SELECT range_key, SUM(value) OVER (PARTITION BY range_key, non_range_key ORDER B
 
 
 ##########
-# TEST 28: Window Subset Rehashes Below Subset Threshold
+# TEST 39: Window Subset Rehashes Below Subset Threshold
 # Range([range_key]) is only a subset of PARTITION BY
 # (range_key, non_range_key), so it should not satisfy the window key when
 # subset satisfaction is disabled.
@@ -1017,7 +1405,7 @@ reset datafusion.optimizer.preserve_file_partitions;
 
 
 ##########
-# TEST 29: Window Without Partition Keys Uses a Single Partition
+# TEST 40: Window Without Partition Keys Uses a Single Partition
 # A window with no PARTITION BY requires a single partition; range
 # partitioning is not applicable.
 ##########
@@ -1047,7 +1435,7 @@ SELECT range_key, SUM(value) OVER (ORDER BY value) FROM range_partitioned ORDER 
 
 
 ##########
-# TEST 30: PartitionedTopK on Range Partition Column
+# TEST 41: PartitionedTopK on Range Partition Column
 # Exact Range([range_key]) satisfies the TopK partition key and avoids repartitioning.
 ##########
 
@@ -1090,7 +1478,7 @@ ORDER BY range_key;
 
 
 ##########
-# TEST 31: PartitionedTopK on Non-Range Column
+# TEST 42: PartitionedTopK on Non-Range Column
 # Partitioning on a non-range key cannot reuse Range([range_key]) and
 # requires hash repartitioning.
 ##########
@@ -1126,7 +1514,7 @@ ORDER BY non_range_key;
 
 
 ##########
-# TEST 32: PartitionedTopK Reuses Range Subset Partitioning
+# TEST 43: PartitionedTopK Reuses Range Subset Partitioning
 # With subset threshold met and preserve-file disabled, Range([range_key])
 # satisfies partitioning by (range_key, non_range_key).
 ##########
@@ -1167,7 +1555,7 @@ ORDER BY range_key, non_range_key;
 
 
 ##########
-# TEST 33: Range Subset PartitionedTopK Rehashes Below Subset Threshold
+# TEST 44: Range Subset PartitionedTopK Rehashes Below Subset Threshold
 # Range([range_key]) is only a subset of PARTITION BY (range_key, non_range_key),
 # so it should not satisfy the TopK partition key when subset satisfaction is
 # disabled.
@@ -1205,7 +1593,7 @@ statement ok
 reset datafusion.optimizer.enable_window_topn;
 
 ##########
-# TEST 34: Subset of Inputs Compatible Does Not Trigger InterleaveExec
+# TEST 45: Subset of Inputs Compatible Does Not Trigger InterleaveExec
 # In a three-way union, two inputs share the same Range split points [10,20,30]
 # while the third has a partially-overlapping but different set [15,20,30].
 # can_interleave requires ALL inputs to match, so UnionExec is kept.
@@ -1261,7 +1649,7 @@ ORDER BY range_key, value;
 35 350
 
 ##########
-# TEST 35: Incompatible Range Split Points Falls Back to UnionExec
+# TEST 46: Incompatible Range Split Points Falls Back to UnionExec
 # Two range-partitioned inputs with different split points cannot be interleaved,
 # so the optimizer keeps UnionExec instead of converting to InterleaveExec.
 ##########
@@ -1303,7 +1691,7 @@ ORDER BY range_key, value;
 35 350
 
 ##########
-# TEST 36: InterleaveExec Propagates Range Partitioning to Aggregate
+# TEST 47: InterleaveExec Propagates Range Partitioning to Aggregate
 # InterleaveExec outputs the same Range partitioning as its compatible inputs,
 # allowing a downstream aggregate on range_key to run SinglePartitioned without
 # a Hash repartition.

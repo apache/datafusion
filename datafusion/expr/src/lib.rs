@@ -55,6 +55,7 @@ pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod extension_types;
 pub mod function;
+pub mod physical_planning_context;
 pub mod select_expr;
 pub mod groups_accumulator {
     pub use datafusion_expr_common::groups_accumulator::*;

@@ -303,3 +303,42 @@ statement error DataFusion error: SQL error: ParserError\("'IF NOT EXISTS' canno
 CREATE OR REPLACE EXTERNAL TABLE IF NOT EXISTS t_conflict(c1 int)
 STORED AS CSV
 LOCATION 'foo.csv';
+
+# Multiple listed locations are read together as a single table.
+# Each partition-N.csv has 11 rows, so listing exactly two of them (rather than
+# the whole directory) yields 22 rows.
+statement ok
+CREATE EXTERNAL TABLE multi_loc (c1 int, c2 bigint, c3 boolean)
+STORED AS CSV
+LOCATION ('../core/tests/data/partitioned_csv/partition-0.csv', '../core/tests/data/partitioned_csv/partition-1.csv')
+OPTIONS ('format.has_header' 'false');
+
+query I
+SELECT count(*) FROM multi_loc;
+----
+22
+
+statement ok
+DROP TABLE multi_loc;
+
+# Duplicate locations are rejected to avoid scanning the same data twice.
+statement error Duplicate location
+CREATE EXTERNAL TABLE multi_loc_duplicate (c1 int, c2 bigint, c3 boolean)
+STORED AS CSV
+LOCATION ('../core/tests/data/partitioned_csv/partition-0.csv', '../core/tests/data/partitioned_csv/partition-0.csv')
+OPTIONS ('format.has_header' 'false');
+
+# Whitespace around the list separators is ignored
+statement ok
+CREATE EXTERNAL TABLE multi_loc_ws (c1 int, c2 bigint, c3 boolean)
+STORED AS CSV
+LOCATION ( '../core/tests/data/partitioned_csv/partition-0.csv' ,	'../core/tests/data/partitioned_csv/partition-1.csv' )
+OPTIONS ('format.has_header' 'false');
+
+query I
+SELECT count(*) FROM multi_loc_ws;
+----
+22
+
+statement ok
+DROP TABLE multi_loc_ws;
