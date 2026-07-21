@@ -31,8 +31,8 @@ use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_val
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
-    AggregateExec, GroupHashTracker, PhysicalGroupBy, aggregate_expressions,
-    evaluate_group_by, outputs_group_hashes,
+    AggregateExec, AggregateOutputMode, GroupHashTracker, PhysicalGroupBy,
+    aggregate_expressions, evaluate_group_by,
 };
 use crate::repartition::{ExpressionHasher, HashMetrics};
 
@@ -131,21 +131,24 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let group_schema = agg.group_by.group_schema(&input_schema)?;
         let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
 
+        let hasher = ExpressionHasher::new_with_metrics(
+            agg.group_by.input_exprs(),
+            HashMetrics::new(&agg.metrics, partition),
+        );
+        let should_output_hashes = hasher.should_output_hashes(&input_schema)?
+            && agg.mode.output_mode() == AggregateOutputMode::Partial;
+
         Ok(Self {
             group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
-            input_schema,
+            input_schema: Arc::clone(&input_schema),
             output_schema,
             batch_size,
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
                 group_by: Arc::clone(&agg.group_by),
                 group_values,
                 batch_group_indices: Default::default(),
-                group_hash_tracker: outputs_group_hashes(agg.mode, &agg.group_by)
-                    .then(GroupHashTracker::default),
-                hasher: ExpressionHasher::new_with_metrics(
-                    agg.group_by.input_exprs(),
-                    HashMetrics::new(&agg.metrics, partition),
-                ),
+                group_hash_tracker: should_output_hashes.then(GroupHashTracker::default),
+                hasher,
                 accumulators,
             }),
             _mode: PhantomData,

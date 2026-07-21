@@ -195,6 +195,27 @@ async fn summed_tpch_aggregate_reuses_hashes_after_repartition() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn primitive_grouped_tpch_aggregate_does_not_propagate_hashes() -> Result<()> {
+    let plan_with_hash_metrics = HashReuseTest::new(
+        r"SELECT l_linenumber, COUNT(*) AS row_count
+         FROM lineitem
+         GROUP BY l_linenumber",
+    )
+    .run()
+    .await?;
+
+    assert_snapshot!(plan_with_hash_metrics, @r"
+    ProjectionExec: expr=[l_linenumber@0 as l_linenumber, count(Int64(1))@1 as row_count], metrics=[]
+      AggregateExec: mode=FinalPartitioned, gby=[l_linenumber@0 as l_linenumber], aggr=[count(Int64(1))], metrics=[hash_rows_computed=6, hash_rows_reused=0]
+        RepartitionExec: partitioning=Hash([l_linenumber@0], 3), input_partitions=1, metrics=[hash_rows_computed=6, hash_rows_reused=0]
+          AggregateExec: mode=Partial, gby=[l_linenumber@0 as l_linenumber], aggr=[count(Int64(1))], metrics=[hash_rows_computed=20, hash_rows_reused=0]
+            DataSourceExec: file_groups={1 group: [[$DATAFUSION_CORE/tests/data/tpch_lineitem_small.parquet]]}, projection=[l_linenumber], file_type=parquet, metrics=[]
+    ");
+
+    Ok(())
+}
+
 struct HashReuseTest<'a> {
     sql: &'a str,
     batch_size: usize,

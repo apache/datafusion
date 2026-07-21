@@ -19,6 +19,7 @@ use crate::aggregates::PhysicalGroupBy;
 use crate::joins::SeededRandomState;
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory};
 use arrow::array::{ArrayRef, RecordBatch};
+use arrow::datatypes::Schema;
 use datafusion_common::Result;
 use datafusion_common::cast::as_uint64_array;
 use datafusion_common::hash_utils::create_hashes;
@@ -102,6 +103,24 @@ impl ExpressionHasher {
             metrics: self.metrics.clone(),
             ..Self::new(hash_exprs)
         }
+    }
+
+    /// Returns whether propagating hashes is worthwhile for these expressions.
+    ///
+    /// Hashing primitive values is inexpensive, so the cost of propagating an
+    /// additional `UInt64` column outweighs avoiding a later hash computation.
+    /// Variable-width and nested values are more expensive to hash, and retain
+    /// the propagated hashes when at least one expression has a non-primitive
+    /// type. Callers combine this policy with their output mode, such as
+    /// whether they are emitting partial aggregation state.
+    pub(crate) fn should_output_hashes(&self, input_schema: &Schema) -> Result<bool> {
+        for expr in &self.hash_exprs {
+            if !expr.data_type(input_schema)?.is_primitive() {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 
     /// Builds the name for the column that will carry hashes across [`ExecutionPlan`]s.
