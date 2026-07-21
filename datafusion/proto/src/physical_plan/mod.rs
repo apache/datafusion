@@ -2109,11 +2109,15 @@ pub trait PhysicalPlanNodeExt: Sized {
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
-        for input in &union.inputs {
-            inputs.push(proto_converter.proto_to_execution_plan(input, ctx)?);
-        }
-        UnionExec::try_new(inputs)
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Union(union.clone())),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        UnionExec::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -2126,11 +2130,15 @@ pub trait PhysicalPlanNodeExt: Sized {
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
-        for input in &interleave.inputs {
-            inputs.push(proto_converter.proto_to_execution_plan(input, ctx)?);
-        }
-        Ok(Arc::new(InterleaveExec::try_new(inputs)?))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Interleave(interleave.clone())),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        InterleaveExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_cross_join_physical_plan(
@@ -3787,21 +3795,14 @@ pub trait PhysicalPlanNodeExt: Sized {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
-        for input in union.inputs() {
-            inputs.push(
-                protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-                    input.to_owned(),
-                    codec,
-                    proto_converter,
-                )?,
-            );
-        }
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Union(protobuf::UnionExecNode {
-                inputs,
-            })),
-        })
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        union
+            .try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("UnionExec is not serializable"))
     }
 
     #[deprecated(
@@ -3813,21 +3814,14 @@ pub trait PhysicalPlanNodeExt: Sized {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
-        for input in interleave.inputs() {
-            inputs.push(
-                protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-                    input.to_owned(),
-                    codec,
-                    proto_converter,
-                )?,
-            );
-        }
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Interleave(
-                protobuf::InterleaveExecNode { inputs },
-            )),
-        })
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        interleave
+            .try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("InterleaveExec is not serializable"))
     }
 
     fn try_from_sort_preserving_merge_exec(
