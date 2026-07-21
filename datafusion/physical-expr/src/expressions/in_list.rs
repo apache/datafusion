@@ -37,6 +37,7 @@ use datafusion_common::{
 use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 mod array_static_filter;
+mod frozen_set;
 mod primitive_filter;
 mod result;
 mod static_filter;

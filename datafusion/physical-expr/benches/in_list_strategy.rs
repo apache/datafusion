@@ -35,8 +35,8 @@
 //! |------|-------|-----------------|-------------------|
 //! | Narrow integer cases | UInt8 | small value domain | 4, 16 |
 //! | Narrow integer cases | Int16, Float16 | larger value domain | 4, 64, 256 |
-//! | 32-bit primitive cases | Int32, Float32 | small and large lists | 4, 32, 64, 256 |
-//! | 64-bit primitive cases | Int64, TimestampNs | small and large lists | 4, 16, 32, 128 |
+//! | 32-bit primitive cases | Int32, Float32 | small and large lists | 4, 32, 33, 64, 256, 1024, 10000 |
+//! | 64-bit primitive cases | Int64, TimestampNs | small and large lists | 4, 16, 17, 32, 128, 1024, 10000 |
 //! | 128-bit interval cases | IntervalMonthDayNano | small lists | 4 |
 //! | Utf8 short-string cases | Utf8 | 8-byte strings | 4, 64, 256 |
 //! | Utf8 long-string cases | Utf8 | 24-byte strings | 4, 64, 256 |
@@ -420,7 +420,7 @@ fn bench_narrow_integer(c: &mut Criterion) {
 
 fn bench_primitive(c: &mut Criterion) {
     // Int32: small and larger list sizes
-    for list_size in [4, 32, 64, 256] {
+    for list_size in [4, 32, 33, 64, 256, 1024, 10_000] {
         let list_case = if list_size <= 32 {
             "small_list"
         } else {
@@ -442,7 +442,7 @@ fn bench_primitive(c: &mut Criterion) {
     }
 
     // Int64: small and larger list sizes
-    for list_size in [4, 16, 32, 128] {
+    for list_size in [4, 16, 17, 32, 128, 1024, 10_000] {
         let list_case = if list_size <= 16 {
             "small_list"
         } else {
