@@ -19,12 +19,15 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, NullBufferBuilder, StringArray,
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, NullBufferBuilder,
+    StringArray,
 };
 use arrow::datatypes::{DataType, Field, Int64Type};
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr::Accumulator;
-use datafusion_functions_aggregate::array_agg::{ArrayAggAccumulator, DistinctArrayAggAccumulator};
+use datafusion_functions_aggregate::array_agg::{
+    ArrayAggAccumulator, DistinctArrayAggAccumulator,
+};
 
 use arrow::buffer::OffsetBuffer;
 use arrow::util::bench_util::create_primitive_array;
@@ -278,8 +281,7 @@ fn distinct_array_agg_benchmark(c: &mut Criterion) {
     // --- High cardinality: ~5 % DB names, ~95 % near-unique random strings --
     // Worst-case scenario: almost every row is a new distinct value, so the
     // accumulator pays the full insertion cost for nearly every row.
-    let values =
-        Arc::new(create_string_array_high_cardinality(8192, 0.05)) as ArrayRef;
+    let values = Arc::new(create_string_array_high_cardinality(8192, 0.05)) as ArrayRef;
     distinct_update_batch_bench(
         c,
         "distinct_array_agg utf8 high cardinality (~7800 distinct, 5% db names)",

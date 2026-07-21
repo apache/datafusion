@@ -2599,8 +2599,7 @@ mod tests {
             "postgres", "mysql", "postgres", "redis", "mysql", "duckdb", "redis",
         ]));
 
-        let mut acc =
-            DistinctArrayAggAccumulator::try_new(&DataType::Utf8, None, false)?;
+        let mut acc = DistinctArrayAggAccumulator::try_new(&DataType::Utf8, None, false)?;
         acc.update_batch(&[input])?;
 
         let result = acc.evaluate()?;
@@ -2689,8 +2688,9 @@ mod tests {
         use arrow::array::Date32Array;
 
         // 7 rows with 4 distinct dates (days since epoch), each duplicate appearing twice.
-        let input: ArrayRef =
-            Arc::new(Date32Array::from(vec![100i32, 200, 100, 300, 200, 400, 300]));
+        let input: ArrayRef = Arc::new(Date32Array::from(vec![
+            100i32, 200, 100, 300, 200, 400, 300,
+        ]));
 
         let mut acc =
             DistinctArrayAggAccumulator::try_new(&DataType::Date32, None, false)?;
