@@ -120,8 +120,8 @@ use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::{
-    self, ListUnnest as ProtoListUnnest, SortExprNode, SortMergeJoinExecNode,
-    proto_error, window_agg_exec_node,
+    self, ListUnnest as ProtoListUnnest, SortMergeJoinExecNode, proto_error,
+    window_agg_exec_node,
 };
 
 pub mod from_proto;
@@ -2598,106 +2598,17 @@ pub trait PhysicalPlanNodeExt: Sized {
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left = into_physical_plan(&sort_join.left, ctx, proto_converter)?;
-        let left_schema = left.schema();
-        let right = into_physical_plan(&sort_join.right, ctx, proto_converter)?;
-        let right_schema = right.schema();
-
-        let filter = sort_join
-            .filter
-            .as_ref()
-            .map(|f| {
-                let schema = f
-                    .schema
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Missing JoinFilter schema"))?
-                    .try_into()?;
-
-                let expression = proto_converter.proto_to_physical_expr(
-                    f.expression.as_ref().ok_or_else(|| {
-                        proto_error("Unexpected empty filter expression")
-                    })?,
-                    &schema,
-                    ctx,
-                )?;
-                let column_indices = f
-                    .column_indices
-                    .iter()
-                    .map(|i| {
-                        let side =
-                            protobuf::JoinSide::try_from(i.side).map_err(|_| {
-                                proto_error(format!(
-                                    "Received a SortMergeJoinExecNode message with JoinSide in Filter {}",
-                                    i.side
-                                ))
-                            })?;
-
-                        Ok(ColumnIndex {
-                            index: i.index as usize,
-                            side: side.into(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                Ok(JoinFilter::new(
-                    expression,
-                    column_indices,
-                    Arc::new(schema),
-                ))
-            })
-            .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
-
-        let join_type =
-            protobuf::JoinType::try_from(sort_join.join_type).map_err(|_| {
-                proto_error(format!(
-                    "Received a SortMergeJoinExecNode message with unknown JoinType {}",
-                    sort_join.join_type
-                ))
-            })?;
-
-        let null_equality = protobuf::NullEquality::try_from(sort_join.null_equality)
-            .map_err(|_| {
-                proto_error(format!(
-                    "Received a SortMergeJoinExecNode message with unknown NullEquality {}",
-                    sort_join.null_equality
-                ))
-            })?;
-
-        let sort_options = sort_join
-            .sort_options
-            .iter()
-            .map(|e| SortOptions {
-                descending: !e.asc,
-                nulls_first: e.nulls_first,
-            })
-            .collect();
-        let on = sort_join
-            .on
-            .iter()
-            .map(|col| {
-                let left = proto_converter.proto_to_physical_expr(
-                    &col.left.clone().unwrap(),
-                    left_schema.as_ref(),
-                    ctx,
-                )?;
-                let right = proto_converter.proto_to_physical_expr(
-                    &col.right.clone().unwrap(),
-                    right_schema.as_ref(),
-                    ctx,
-                )?;
-                Ok((left, right))
-            })
-            .collect::<Result<_>>()?;
-
-        Ok(Arc::new(SortMergeJoinExec::try_new(
-            left,
-            right,
-            on,
-            filter,
-            JoinType::from_proto(join_type),
-            sort_options,
-            NullEquality::from_proto(null_equality),
-        )?))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::SortMergeJoin(Box::new(
+                sort_join.clone(),
+            ))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        SortMergeJoinExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_generate_series_physical_plan(
@@ -3259,85 +3170,13 @@ pub trait PhysicalPlanNodeExt: Sized {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.left().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.right().to_owned(),
-            codec,
-            proto_converter,
-        )?;
-        let on = exec
-            .on()
-            .iter()
-            .map(|tuple| {
-                let l = proto_converter.physical_expr_to_proto(&tuple.0, codec)?;
-                let r = proto_converter.physical_expr_to_proto(&tuple.1, codec)?;
-                Ok::<_, DataFusionError>(protobuf::JoinOn {
-                    left: Some(l),
-                    right: Some(r),
-                })
-            })
-            .collect::<Result<_>>()?;
-        let join_type = protobuf::JoinType::from_proto(exec.join_type().to_owned());
-        let null_equality = protobuf::NullEquality::from_proto(exec.null_equality());
-        let filter = exec
-            .filter()
-            .as_ref()
-            .map(|f| {
-                let expression =
-                    proto_converter.physical_expr_to_proto(f.expression(), codec)?;
-                let column_indices = f
-                    .column_indices()
-                    .iter()
-                    .map(|i| {
-                        let side: protobuf::JoinSide = i.side.to_owned().into();
-                        protobuf::ColumnIndex {
-                            index: i.index as u32,
-                            side: side.into(),
-                        }
-                    })
-                    .collect();
-                let schema = f.schema().as_ref().try_into()?;
-                Ok(protobuf::JoinFilter {
-                    expression: Some(expression),
-                    column_indices,
-                    schema: Some(schema),
-                })
-            })
-            .map_or(Ok(None), |v: Result<protobuf::JoinFilter>| v.map(Some))?;
-
-        let sort_options = exec
-            .sort_options()
-            .iter()
-            .map(
-                |SortOptions {
-                     descending,
-                     nulls_first,
-                 }| {
-                    SortExprNode {
-                        expr: None,
-                        asc: !*descending,
-                        nulls_first: *nulls_first,
-                    }
-                },
-            )
-            .collect();
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::SortMergeJoin(Box::new(
-                SortMergeJoinExecNode {
-                    left: Some(Box::new(left)),
-                    right: Some(Box::new(right)),
-                    on,
-                    join_type: join_type.into(),
-                    null_equality: null_equality.into(),
-                    filter,
-                    sort_options,
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("SortMergeJoinExec is not serializable")
         })
     }
 
