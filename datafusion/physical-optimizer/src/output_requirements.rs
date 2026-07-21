@@ -63,8 +63,8 @@ impl OutputRequirements {
     /// top-level [`OutputRequirementExec`] into the physical plan to keep track
     /// of global ordering and distribution requirements if there are any.
     /// Note that this rule should run at the beginning. It is idempotent: when
-    /// invoked on a plan that is already topped by an `OutputRequirementExec`,
-    /// it returns the plan unchanged.
+    /// invoked on a plan that already contains an `OutputRequirementExec` (at
+    /// the root or below it), it returns the plan unchanged.
     pub fn new_add_mode() -> Self {
         Self {
             mode: RuleMode::Add,
