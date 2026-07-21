@@ -35,6 +35,7 @@ use super::branchless_filter::{
     BranchlessFilter, BranchlessFilterType, BranchlessNative,
 };
 use super::byte_view_filter::instantiate_byte_view_filter;
+use super::fixed_size_binary_filter::instantiate_fixed_size_binary_filter;
 use super::primitive_filter::*;
 use super::static_filter::StaticFilter;
 
@@ -46,11 +47,14 @@ pub(super) fn instantiate_static_filter(
 ) -> Result<StaticFilterRef> {
     let in_array = flatten_dictionary_haystack(in_array)?;
 
-    // Byte-view filters inspect the physical view representation directly.
-    if dictionary_value_type(expr_data_type) == in_array.data_type()
-        && let Some(filter) = instantiate_byte_view_filter(&in_array)?
-    {
-        return Ok(filter);
+    // These filters inspect their Arrow physical representation directly.
+    if dictionary_value_type(expr_data_type) == in_array.data_type() {
+        if let Some(filter) = instantiate_fixed_size_binary_filter(&in_array)? {
+            return Ok(filter);
+        }
+        if let Some(filter) = instantiate_byte_view_filter(&in_array)? {
+            return Ok(filter);
+        }
     }
 
     if let Some(filter) = instantiate_primitive_filter(&in_array)? {
@@ -290,5 +294,26 @@ mod tests {
         assert!(branchless_filter::<UInt32Type>(&array, 0)?.is_some());
 
         Ok(())
+    }
+
+    #[test]
+    fn physical_type_gate_recursively_unwraps_dictionaries() {
+        let value_type = DataType::FixedSizeBinary(16);
+        let expr_type = DataType::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(DataType::Dictionary(
+                Box::new(DataType::Int16),
+                Box::new(value_type.clone()),
+            )),
+        );
+
+        assert_eq!(dictionary_value_type(&expr_type), &value_type);
+        assert_ne!(
+            dictionary_value_type(&DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::FixedSizeBinary(8)),
+            )),
+            &value_type
+        );
     }
 }
