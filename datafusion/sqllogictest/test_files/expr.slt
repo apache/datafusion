@@ -1678,6 +1678,30 @@ SELECT sha384(NULL);
 ----
 NULL
 
+# sha384 string and binary array inputs
+query BBBBBB
+SELECT
+  sha384(column1) = sha384('tom'),
+  sha384(arrow_cast(column1, 'LargeUtf8')) = sha384('tom'),
+  sha384(arrow_cast(column1, 'Utf8View')) = sha384('tom'),
+  sha384(arrow_cast(column1, 'Binary')) = sha384('tom'),
+  sha384(arrow_cast(column1, 'LargeBinary')) = sha384('tom'),
+  sha384(arrow_cast(column1, 'BinaryView')) = sha384('tom')
+FROM (VALUES ('tom'), (NULL)) AS t(column1);
+----
+true true true true true true
+NULL NULL NULL NULL NULL NULL
+
+# invalid argument count and type
+query error DataFusion error:
+SELECT sha384();
+
+query error DataFusion error:
+SELECT sha384('tom', 'extra');
+
+query error DataFusion error:
+SELECT sha384(1);
+
 query ?
 SELECT digest(NULL,'sha384');
 ----
