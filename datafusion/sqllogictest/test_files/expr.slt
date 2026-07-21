@@ -850,6 +850,15 @@ SELECT to_hex(0)
 ----
 0
 
+query T
+SELECT to_hex(arrow_cast(a, 'Dictionary(Int32, Int64)'))
+FROM (VALUES (0), (10), (255), (NULL)) AS t(a)
+----
+0
+a
+ff
+NULL
+
 # negative values (two's complement encoding)
 query T
 SELECT to_hex(-1)
