@@ -71,9 +71,11 @@ fn bench_take_n_offsets(
     c: &mut Criterion,
     group_name: &str,
     num_groups: usize,
+    sample_size: usize,
     batch_size_hint: criterion::BatchSize,
 ) {
     let mut group = c.benchmark_group(group_name);
+    group.sample_size(sample_size);
 
     for width in [OffsetWidth::I32, OffsetWidth::I64] {
         for (branch, n) in cases(num_groups) {
@@ -107,6 +109,7 @@ fn bench_take_n_offsets_small(c: &mut Criterion) {
         c,
         "take_n_offsets_small",
         1_000,
+        200,
         criterion::BatchSize::SmallInput,
     );
 }
@@ -118,6 +121,7 @@ fn bench_take_n_offsets_large(c: &mut Criterion) {
         c,
         "take_n_offsets_large",
         1_000_000,
+        50,
         criterion::BatchSize::LargeInput,
     );
 }
