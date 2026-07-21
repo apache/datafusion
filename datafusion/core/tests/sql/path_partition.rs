@@ -718,6 +718,7 @@ impl ObjectStore for MirroringObjectStore {
             payload,
             meta,
             attributes: Attributes::default(),
+            extensions: Default::default(),
         })
     }
 
@@ -789,6 +790,7 @@ impl ObjectStore for MirroringObjectStore {
         Ok(ListResult {
             common_prefixes: common_prefixes.into_iter().collect(),
             objects,
+            extensions: Default::default(),
         })
     }
 

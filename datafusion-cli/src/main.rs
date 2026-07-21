@@ -842,14 +842,14 @@ mod tests {
             ])?
             .sort(vec![col("filename").sort(true, false)])?;
         let rbs = df.collect().await?;
-        assert_snapshot!(batches_to_string(&rbs),@r"
+        assert_snapshot!(batches_to_string(&rbs),@r#"
         +---------------------+-----------+-----------------+------+------+
         | metadata_size_bytes | filename  | file_size_bytes | etag | hits |
         +---------------------+-----------+-----------------+------+------+
-        | 212                 | 0.parquet | 3642            | 0    | 2    |
-        | 212                 | 1.parquet | 3642            | 1    | 2    |
+        | 216                 | 0.parquet | 3642            | "0"  | 2    |
+        | 216                 | 1.parquet | 3642            | "1"  | 2    |
         +---------------------+-----------+-----------------+------+------+
-        ");
+        "#);
 
         Ok(())
     }
