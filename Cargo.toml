@@ -28,6 +28,8 @@ members = [
     "datafusion/datasource-json",
     "datafusion/datasource-parquet",
     "datafusion/core",
+    "datafusion/dylib",
+    "datafusion/facade",
     "datafusion/expr",
     "datafusion/expr-common",
     "datafusion/execution",
@@ -121,7 +123,8 @@ chrono = { version = "0.4.45", default-features = false }
 criterion = "0.8"
 ctor = "1.0.7"
 dashmap = "6.2.1"
-datafusion = { path = "datafusion/core", version = "54.0.0", default-features = false }
+datafusion = { path = "datafusion/facade", version = "54.0.0", default-features = false }
+datafusion-core = { path = "datafusion/core", version = "54.0.0", default-features = false }
 datafusion-catalog = { path = "datafusion/catalog", version = "54.0.0" }
 datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "54.0.0" }
 datafusion-common = { path = "datafusion/common", version = "54.0.0", default-features = false }
@@ -133,6 +136,7 @@ datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "54.
 datafusion-datasource-json = { path = "datafusion/datasource-json", version = "54.0.0", default-features = false }
 datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "54.0.0", default-features = false }
 datafusion-doc = { path = "datafusion/doc", version = "54.0.0" }
+datafusion-dylib = { path = "datafusion/dylib", version = "54.0.0", default-features = false }
 datafusion-execution = { path = "datafusion/execution", version = "54.0.0", default-features = false }
 datafusion-expr = { path = "datafusion/expr", version = "54.0.0", default-features = false }
 datafusion-expr-common = { path = "datafusion/expr-common", version = "54.0.0" }
