@@ -70,7 +70,10 @@ use datafusion_physical_plan::aggregates::{
 use datafusion_physical_plan::analyze::AnalyzeExec;
 use datafusion_physical_plan::async_func::AsyncFuncExec;
 use datafusion_physical_plan::buffer::BufferExec;
-#[expect(deprecated)]
+#[expect(
+    deprecated,
+    reason = "`CoalesceBatchesExec` remains supported for protobuf compatibility"
+)]
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::coop::CooperativeExec;
@@ -777,14 +780,15 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::ArrowScan(scan) => {
                 self.try_into_arrow_scan_physical_plan(scan, ctx, proto_converter)
             }
-            PhysicalPlanType::CoalesceBatches(coalesce_batches) => self
-                .try_into_coalesce_batches_physical_plan(
-                    coalesce_batches,
-                    ctx,
-                    proto_converter,
-                ),
-            PhysicalPlanType::Merge(merge) => {
-                self.try_into_merge_physical_plan(merge, ctx, proto_converter)
+            #[expect(
+                deprecated,
+                reason = "`CoalesceBatchesExec` remains supported for protobuf compatibility"
+            )]
+            PhysicalPlanType::CoalesceBatches(_) => {
+                CoalesceBatchesExec::try_from_proto(self.node(), &decode_ctx)
+            }
+            PhysicalPlanType::Merge(_) => {
+                CoalescePartitionsExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Repartition(repart) => {
                 self.try_into_repartition_physical_plan(repart, ctx, proto_converter)
@@ -852,8 +856,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Unnest(unnest) => {
                 self.try_into_unnest_physical_plan(unnest, ctx, proto_converter)
             }
-            PhysicalPlanType::Cooperative(cooperative) => {
-                self.try_into_cooperative_physical_plan(cooperative, ctx, proto_converter)
+            PhysicalPlanType::Cooperative(_) => {
+                CooperativeExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::GenerateSeries(generate_series) => {
                 self.try_into_generate_series_physical_plan(generate_series)
@@ -864,8 +868,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::AsyncFunc(async_func) => {
                 self.try_into_async_func_physical_plan(async_func, ctx, proto_converter)
             }
-            PhysicalPlanType::Buffer(buffer) => {
-                self.try_into_buffer_physical_plan(buffer, ctx, proto_converter)
+            PhysicalPlanType::Buffer(_) => {
+                BufferExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::ScalarSubquery(sq) => {
                 self.try_into_scalar_subquery_physical_plan(sq, ctx, proto_converter)
@@ -979,15 +983,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             );
         }
 
-        #[expect(deprecated)]
-        if let Some(coalesce_batches) = plan.downcast_ref::<CoalesceBatchesExec>() {
-            return protobuf::PhysicalPlanNode::try_from_coalesce_batches_exec(
-                coalesce_batches,
-                codec,
-                proto_converter,
-            );
-        }
-
         if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>()
             && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_source_exec(
                 data_source_exec,
@@ -996,14 +991,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             )?
         {
             return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<CoalescePartitionsExec>() {
-            return protobuf::PhysicalPlanNode::try_from_coalesce_partitions_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
         }
 
         if let Some(exec) = plan.downcast_ref::<RepartitionExec>() {
@@ -1088,14 +1075,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             );
         }
 
-        if let Some(exec) = plan.downcast_ref::<CooperativeExec>() {
-            return protobuf::PhysicalPlanNode::try_from_cooperative_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
         if let Some(exec) = plan.downcast_ref::<LazyMemoryExec>()
             && let Some(node) =
                 protobuf::PhysicalPlanNode::try_from_lazy_memory_exec(exec)?
@@ -1105,14 +1084,6 @@ pub trait PhysicalPlanNodeExt: Sized {
 
         if let Some(exec) = plan.downcast_ref::<AsyncFuncExec>() {
             return protobuf::PhysicalPlanNode::try_from_async_func_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<BufferExec>() {
-            return protobuf::PhysicalPlanNode::try_from_buffer_exec(
                 exec,
                 codec,
                 proto_converter,
@@ -1471,33 +1442,52 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(DataSourceExec::from_data_source(source))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CoalesceBatchesExec` deserializes itself via `CoalesceBatchesExec::try_from_proto`"
+    )]
     fn try_into_coalesce_batches_physical_plan(
         &self,
         coalesce_batches: &protobuf::CoalesceBatchesExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&coalesce_batches.input, ctx, proto_converter)?;
-        Ok(Arc::new(
-            #[expect(deprecated)]
-            CoalesceBatchesExec::new(input, coalesce_batches.target_batch_size as usize)
-                .with_fetch(coalesce_batches.fetch.map(|f| f as usize)),
-        ))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::CoalesceBatches(Box::new(
+                coalesce_batches.clone(),
+            ))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        #[expect(
+            deprecated,
+            reason = "`CoalesceBatchesExec` remains supported for protobuf compatibility"
+        )]
+        CoalesceBatchesExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CoalescePartitionsExec` deserializes itself via `CoalescePartitionsExec::try_from_proto`"
+    )]
     fn try_into_merge_physical_plan(
         &self,
         merge: &protobuf::CoalescePartitionsExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&merge.input, ctx, proto_converter)?;
-        Ok(Arc::new(
-            CoalescePartitionsExec::new(input)
-                .with_fetch(merge.fetch.map(|f| f as usize)),
-        ))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Merge(Box::new(merge.clone()))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        CoalescePartitionsExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_repartition_physical_plan(
@@ -2737,14 +2727,27 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CooperativeExec` deserializes itself via `CooperativeExec::try_from_proto`"
+    )]
     fn try_into_cooperative_physical_plan(
         &self,
         field_stream: &protobuf::CooperativeExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = into_physical_plan(&field_stream.input, ctx, proto_converter)?;
-        Ok(Arc::new(CooperativeExec::new(input)))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Cooperative(Box::new(
+                field_stream.clone(),
+            ))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        CooperativeExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_async_func_physical_plan(
@@ -2784,16 +2787,25 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(AsyncFuncExec::try_new(async_exprs, input)?))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `BufferExec` deserializes itself via `BufferExec::try_from_proto`"
+    )]
     fn try_into_buffer_physical_plan(
         &self,
         buffer: &protobuf::BufferExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&buffer.input, ctx, proto_converter)?;
-
-        Ok(Arc::new(BufferExec::new(input, buffer.capacity as usize)))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Buffer(Box::new(buffer.clone()))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        BufferExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_scalar_subquery_physical_plan(
@@ -3446,25 +3458,26 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
-    #[expect(deprecated)]
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CoalesceBatchesExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
+    #[expect(
+        deprecated,
+        reason = "`CoalesceBatchesExec` remains supported for protobuf compatibility"
+    )]
     fn try_from_coalesce_batches_exec(
         coalesce_batches: &CoalesceBatchesExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            coalesce_batches.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::CoalesceBatches(Box::new(
-                protobuf::CoalesceBatchesExecNode {
-                    input: Some(Box::new(input)),
-                    target_batch_size: coalesce_batches.target_batch_size() as u32,
-                    fetch: coalesce_batches.fetch().map(|n| n as u32),
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        coalesce_batches.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("CoalesceBatchesExec is not serializable")
         })
     }
 
@@ -3640,23 +3653,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(None)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CoalescePartitionsExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_coalesce_partitions_exec(
         exec: &CoalescePartitionsExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Merge(Box::new(
-                protobuf::CoalescePartitionsExecNode {
-                    input: Some(Box::new(input)),
-                    fetch: exec.fetch().map(|f| f as u32),
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("CoalescePartitionsExec is not serializable")
         })
     }
 
@@ -4076,23 +4088,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CooperativeExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_cooperative_exec(
         exec: &CooperativeExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Cooperative(Box::new(
-                protobuf::CooperativeExecNode {
-                    input: Some(Box::new(input)),
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("CooperativeExec is not serializable")
         })
     }
 
@@ -4250,25 +4261,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `BufferExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_buffer_exec(
         exec: &BufferExec,
         extension_codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            Arc::clone(exec.input()),
-            extension_codec,
+        let encoder = ConverterPlanEncoder {
+            codec: extension_codec,
             proto_converter,
-        )?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Buffer(Box::new(
-                protobuf::BufferExecNode {
-                    input: Some(Box::new(input)),
-                    capacity: exec.capacity() as u64,
-                },
-            ))),
-        })
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("BufferExec is not serializable"))
     }
 
     fn try_from_scalar_subquery_exec(
