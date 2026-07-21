@@ -2175,6 +2175,373 @@ impl ExecutionPlan for AggregateExec {
 
         Ok(result)
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let input = ctx.encode_child(self.input())?;
+        let group_by = self.group_expr();
+        let group_expr =
+            ctx.encode_expressions(group_by.expr().iter().map(|(expr, _)| expr))?;
+        let group_expr_name = group_by
+            .expr()
+            .iter()
+            .map(|(_, name)| name.to_owned())
+            .collect();
+        let null_expr =
+            ctx.encode_expressions(group_by.null_expr().iter().map(|(expr, _)| expr))?;
+        let groups = group_by.groups().iter().flatten().copied().collect();
+        let aggr_expr = self
+            .aggr_expr()
+            .iter()
+            .map(|expr| encode_aggregate_expr(expr, ctx))
+            .collect::<Result<Vec<_>>>()?;
+        let aggr_expr_name = self
+            .aggr_expr()
+            .iter()
+            .map(|expr| expr.name().to_string())
+            .collect();
+        let filter_expr = self
+            .filter_expr()
+            .iter()
+            .map(|filter| {
+                Ok(protobuf::MaybeFilter {
+                    expr: filter
+                        .as_ref()
+                        .map(|expr| ctx.encode_expr(expr))
+                        .transpose()?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mode = match self.mode() {
+            AggregateMode::Partial => protobuf::AggregateMode::Partial,
+            AggregateMode::Final => protobuf::AggregateMode::Final,
+            AggregateMode::FinalPartitioned => protobuf::AggregateMode::FinalPartitioned,
+            AggregateMode::Single => protobuf::AggregateMode::Single,
+            AggregateMode::SinglePartitioned => {
+                protobuf::AggregateMode::SinglePartitioned
+            }
+            AggregateMode::PartialReduce => protobuf::AggregateMode::PartialReduce,
+        };
+        let limit = self.limit_options().map(|options| protobuf::AggLimit {
+            limit: options.limit() as u64,
+            descending: options.descending(),
+        });
+        let dynamic_filter = match self.dynamic_filter_expr() {
+            Some(filter) => {
+                let expr: Arc<dyn PhysicalExpr> =
+                    Arc::clone(filter) as Arc<dyn PhysicalExpr>;
+                Some(ctx.encode_expr(&expr)?)
+            }
+            None => None,
+        };
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Aggregate(Box::new(
+                    protobuf::AggregateExecNode {
+                        group_expr,
+                        group_expr_name,
+                        aggr_expr,
+                        filter_expr,
+                        aggr_expr_name,
+                        mode: mode as i32,
+                        input: Some(Box::new(input)),
+                        input_schema: Some(self.input_schema().as_ref().try_into()?),
+                        null_expr,
+                        groups,
+                        limit,
+                        has_grouping_set: group_by.has_grouping_set(),
+                        dynamic_filter,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+const HUMAN_DISPLAY_ALIAS_PREFIX: &str = "\u{1f}datafusion_human_display_alias_v1:";
+
+#[cfg(feature = "proto")]
+fn encode_human_display_alias(human_display: &str, alias: &str) -> String {
+    format!(
+        "{HUMAN_DISPLAY_ALIAS_PREFIX}{}:{alias}{human_display}",
+        alias.len()
+    )
+}
+
+#[cfg(feature = "proto")]
+fn split_human_display_alias<'a>(
+    human_display: &'a str,
+    name: &'a str,
+) -> (&'a str, Option<&'a str>) {
+    if let Some(encoded) = human_display.strip_prefix(HUMAN_DISPLAY_ALIAS_PREFIX)
+        && let Some((alias_len, encoded)) = encoded.split_once(':')
+        && let Ok(alias_len) = alias_len.parse::<usize>()
+        && let Some(alias) = encoded.get(..alias_len)
+        && let Some(human_display) = encoded.get(alias_len..)
+        && alias == name
+        && !human_display.is_empty()
+    {
+        return (human_display, Some(alias));
+    }
+
+    (human_display, None)
+}
+
+#[cfg(feature = "proto")]
+fn encode_aggregate_expr(
+    aggr_expr: &Arc<AggregateFunctionExpr>,
+    ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+) -> Result<datafusion_proto_models::protobuf::PhysicalExprNode> {
+    use datafusion_proto_models::protobuf;
+
+    let expressions = aggr_expr.expressions();
+    let expr = ctx.encode_expressions(expressions.iter())?;
+    let ordering_req = aggr_expr
+        .order_bys()
+        .iter()
+        .map(|sort_expr| {
+            Ok(protobuf::PhysicalSortExprNode {
+                expr: Some(Box::new(ctx.encode_expr(&sort_expr.expr)?)),
+                asc: !sort_expr.options.descending,
+                nulls_first: sort_expr.options.nulls_first,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let name = aggr_expr.fun().name().to_string();
+    let fun_definition = ctx.encode_udaf(aggr_expr.fun())?;
+    let human_display = match (aggr_expr.human_display(), aggr_expr.human_display_alias())
+    {
+        (Some(display), Some(alias)) => encode_human_display_alias(display, alias),
+        (Some(display), None) => display.to_string(),
+        (None, _) => String::new(),
+    };
+
+    Ok(protobuf::PhysicalExprNode {
+        expr_id: None,
+        expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
+            protobuf::PhysicalAggregateExprNode {
+                aggregate_function: Some(
+                    protobuf::physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name),
+                ),
+                expr,
+                ordering_req,
+                distinct: aggr_expr.is_distinct(),
+                ignore_nulls: aggr_expr.ignore_nulls(),
+                fun_definition,
+                human_display,
+            },
+        )),
+    })
+}
+
+#[cfg(feature = "proto")]
+impl AggregateExec {
+    /// Reconstruct an [`AggregateExec`] from its protobuf representation.
+    ///
+    /// Grouping expressions are decoded against the child schema. Aggregate
+    /// arguments, ordering, filters, and the dynamic filter are decoded against
+    /// the aggregate input schema carried in the protobuf node.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_physical_expr::PhysicalSortExpr;
+        use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_aggregate_expr_node::AggregateFunction;
+        use protobuf::physical_expr_node::ExprType;
+
+        let hash_agg = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Aggregate,
+            "AggregateExec",
+        );
+        let input = ctx.decode_required_child(
+            hash_agg.input.as_deref(),
+            "AggregateExec",
+            "input",
+        )?;
+        let mode = protobuf::AggregateMode::try_from(hash_agg.mode).map_err(|_| {
+            datafusion_common::internal_datafusion_err!(
+                "Received an AggregateNode message with unknown AggregateMode {}",
+                hash_agg.mode
+            )
+        })?;
+        let mode = match mode {
+            protobuf::AggregateMode::Partial => AggregateMode::Partial,
+            protobuf::AggregateMode::Final => AggregateMode::Final,
+            protobuf::AggregateMode::FinalPartitioned => AggregateMode::FinalPartitioned,
+            protobuf::AggregateMode::Single => AggregateMode::Single,
+            protobuf::AggregateMode::SinglePartitioned => {
+                AggregateMode::SinglePartitioned
+            }
+            protobuf::AggregateMode::PartialReduce => AggregateMode::PartialReduce,
+        };
+        let num_expr = hash_agg.group_expr.len();
+        let child_schema = input.schema();
+        let group_expr = hash_agg
+            .group_expr
+            .iter()
+            .zip(hash_agg.group_expr_name.iter())
+            .map(|(expr, name)| {
+                Ok((
+                    ctx.decode_expr(expr, child_schema.as_ref())?,
+                    name.to_string(),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let null_expr = hash_agg
+            .null_expr
+            .iter()
+            .zip(hash_agg.group_expr_name.iter())
+            .map(|(expr, name)| {
+                Ok((
+                    ctx.decode_expr(expr, child_schema.as_ref())?,
+                    name.to_string(),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let groups = if hash_agg.groups.is_empty() {
+            vec![]
+        } else {
+            hash_agg
+                .groups
+                .chunks(num_expr)
+                .map(|group| group.to_vec())
+                .collect()
+        };
+        let input_schema = hash_agg.input_schema.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "input_schema in AggregateNode is missing."
+            )
+        })?;
+        let input_schema: SchemaRef = SchemaRef::new(input_schema.try_into()?);
+        let filter_expr = hash_agg
+            .filter_expr
+            .iter()
+            .map(|filter| {
+                filter
+                    .expr
+                    .as_ref()
+                    .map(|expr| ctx.decode_expr(expr, input_schema.as_ref()))
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let aggr_expr = hash_agg
+            .aggr_expr
+            .iter()
+            .zip(hash_agg.aggr_expr_name.iter())
+            .map(|(expr, name)| {
+                let expr_type = expr.expr_type.as_ref().ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "Unexpected empty aggregate physical expression"
+                    )
+                })?;
+                let ExprType::AggregateExpr(aggregate) = expr_type else {
+                    return internal_err!(
+                        "Invalid aggregate expression for AggregateExec"
+                    );
+                };
+                let args = aggregate
+                    .expr
+                    .iter()
+                    .map(|expr| ctx.decode_expr(expr, input_schema.as_ref()))
+                    .collect::<Result<Vec<_>>>()?;
+                let order_by = aggregate
+                    .ordering_req
+                    .iter()
+                    .map(|sort_expr| {
+                        let expr = sort_expr.expr.as_deref().ok_or_else(|| {
+                            datafusion_common::internal_datafusion_err!(
+                                "AggregateExec ordering expression is missing its inner expr"
+                            )
+                        })?;
+                        Ok(PhysicalSortExpr {
+                            expr: ctx.decode_expr(expr, input_schema.as_ref())?,
+                            options: arrow::compute::SortOptions {
+                                descending: !sort_expr.asc,
+                                nulls_first: sort_expr.nulls_first,
+                            },
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let Some(AggregateFunction::UserDefinedAggrFunction(udaf_name)) =
+                    aggregate.aggregate_function.as_ref()
+                else {
+                    return internal_err!(
+                        "Invalid AggregateExpr, missing aggregate_function"
+                    );
+                };
+                let udaf = ctx.decode_udaf(
+                    udaf_name,
+                    aggregate.fun_definition.as_deref(),
+                )?;
+                let (human_display, human_display_alias) =
+                    split_human_display_alias(&aggregate.human_display, name);
+                let builder = AggregateExprBuilder::new(udaf, args)
+                    .schema(Arc::clone(&input_schema))
+                    .alias(name)
+                    .with_ignore_nulls(aggregate.ignore_nulls)
+                    .with_distinct(aggregate.distinct)
+                    .order_by(order_by)
+                    .human_display(human_display);
+                let builder = if let Some(alias) = human_display_alias {
+                    builder.human_display_alias(alias)
+                } else {
+                    builder
+                };
+                builder.build().map(Arc::new)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let aggregate = AggregateExec::try_new(
+            mode,
+            PhysicalGroupBy::new(
+                group_expr,
+                null_expr,
+                groups,
+                hash_agg.has_grouping_set,
+            ),
+            aggr_expr,
+            filter_expr,
+            input,
+            Arc::clone(&input_schema),
+        )?;
+        let aggregate = if let Some(limit) = &hash_agg.limit {
+            let options = match limit.descending {
+                Some(descending) => {
+                    LimitOptions::new_with_order(limit.limit as usize, descending)
+                }
+                None => LimitOptions::new(limit.limit as usize),
+            };
+            aggregate.with_limit_options(Some(options))
+        } else {
+            aggregate
+        };
+        let aggregate = if let Some(dynamic_filter) = &hash_agg.dynamic_filter {
+            let dynamic_filter =
+                ctx.decode_expr(dynamic_filter, input_schema.as_ref())?;
+            let dynamic_filter = (dynamic_filter
+                as Arc<dyn std::any::Any + Send + Sync>)
+                .downcast::<DynamicFilterPhysicalExpr>()
+                .map_err(|_| {
+                    datafusion_common::internal_datafusion_err!(
+                        "AggregateExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+                    )
+                })?;
+            aggregate.with_dynamic_filter_expr(dynamic_filter)?
+        } else {
+            aggregate
+        };
+
+        Ok(Arc::new(aggregate))
+    }
 }
 
 /// Creates the output schema for an [`AggregateExec`] containing the group by columns followed
