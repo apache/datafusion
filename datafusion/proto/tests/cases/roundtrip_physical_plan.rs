@@ -2821,6 +2821,9 @@ async fn analyze_roundtrip_unoptimized() -> Result<()> {
 
 #[test]
 fn roundtrip_sort_merge_join() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
     let field_a = Field::new("col_a", DataType::Int64, false);
     let field_b = Field::new("col_b", DataType::Int64, false);
     let schema_left = Schema::new(vec![field_a.clone()]);
@@ -2851,26 +2854,50 @@ fn roundtrip_sort_merge_join() -> Result<()> {
 
     let schema_left = Arc::new(schema_left);
     let schema_right = Arc::new(schema_right);
-    for filter in [None, Some(filter)] {
-        for join_type in [
-            JoinType::Inner,
-            JoinType::Left,
-            JoinType::Right,
-            JoinType::Full,
-            JoinType::LeftAnti,
-            JoinType::RightAnti,
-            JoinType::LeftSemi,
-            JoinType::RightSemi,
-        ] {
-            roundtrip_test(Arc::new(SortMergeJoinExec::try_new(
-                Arc::new(EmptyExec::new(schema_left.clone())),
-                Arc::new(EmptyExec::new(schema_right.clone())),
-                on.clone(),
-                filter.clone(),
-                join_type,
-                vec![Default::default()],
-                NullEquality::NullEqualsNothing,
-            )?))?;
+    let sort_options = vec![SortOptions {
+        descending: true,
+        nulls_first: false,
+    }];
+    for null_equality in [
+        NullEquality::NullEqualsNothing,
+        NullEquality::NullEqualsNull,
+    ] {
+        for filter in [None, Some(filter.clone())] {
+            for join_type in [
+                JoinType::Inner,
+                JoinType::Left,
+                JoinType::Right,
+                JoinType::Full,
+                JoinType::LeftAnti,
+                JoinType::RightAnti,
+                JoinType::LeftSemi,
+                JoinType::RightSemi,
+                JoinType::LeftMark,
+                JoinType::RightMark,
+            ] {
+                let result = roundtrip_test_and_return(
+                    Arc::new(SortMergeJoinExec::try_new(
+                        Arc::new(EmptyExec::new(schema_left.clone())),
+                        Arc::new(EmptyExec::new(schema_right.clone())),
+                        on.clone(),
+                        filter.clone(),
+                        join_type,
+                        sort_options.clone(),
+                        null_equality,
+                    )?),
+                    &ctx,
+                    &codec,
+                    &proto_converter,
+                )?;
+                let result = result.downcast_ref::<SortMergeJoinExec>().unwrap();
+                assert_eq!(result.join_type(), join_type);
+                assert_eq!(result.null_equality(), null_equality);
+                assert_eq!(result.sort_options(), sort_options);
+                assert_eq!(
+                    result.filter().as_ref().map(|f| f.column_indices()),
+                    filter.as_ref().map(|f| f.column_indices())
+                );
+            }
         }
     }
     Ok(())
