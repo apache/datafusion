@@ -492,13 +492,6 @@ impl ExecutionPlan for UnionExec {
 
 #[cfg(feature = "proto")]
 impl UnionExec {
-    /// Reconstruct a [`UnionExec`] from its protobuf representation.
-    ///
-    /// The exact inverse of [`ExecutionPlan::try_to_proto`]: each child in
-    /// `node.inputs` is decoded recursively via the [`ExecutionPlanDecodeCtx`].
-    ///
-    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
-    /// [`ExecutionPlanDecodeCtx`]: crate::proto::ExecutionPlanDecodeCtx
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
@@ -745,13 +738,6 @@ impl ExecutionPlan for InterleaveExec {
 
 #[cfg(feature = "proto")]
 impl InterleaveExec {
-    /// Reconstruct an [`InterleaveExec`] from its protobuf representation.
-    ///
-    /// The exact inverse of [`ExecutionPlan::try_to_proto`]: each child in
-    /// `node.inputs` is decoded recursively via the [`ExecutionPlanDecodeCtx`].
-    ///
-    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
-    /// [`ExecutionPlanDecodeCtx`]: crate::proto::ExecutionPlanDecodeCtx
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,

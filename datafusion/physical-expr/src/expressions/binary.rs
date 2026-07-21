@@ -1279,7 +1279,7 @@ mod tests {
     use crate::expressions::{Column, Literal, col, lit, try_cast};
     use datafusion_expr::lit as expr_lit;
 
-    use datafusion_common::plan_datafusion_err;
+    use datafusion_common::{assert_contains, plan_datafusion_err};
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     use crate::planner::logical2physical;
@@ -3327,6 +3327,33 @@ mod tests {
             Operator::RegexNotIMatch,
             regex_not_expected,
         )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn regex_mismatched_array_types_error() -> Result<()> {
+        // The analyzer coerces both operands of a regex operator to a common
+        // string type, but an expression that bypasses it (e.g. constructed
+        // directly) must return an error instead of panicking
+        // (https://github.com/apache/datafusion/issues/22886)
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8View, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let a = Arc::new(StringViewArray::from(vec!["user auth failed"])) as ArrayRef;
+        let b = Arc::new(StringArray::from(vec!["(auth|login)"])) as ArrayRef;
+
+        // construct the expression directly, without coercion
+        let expr = binary(
+            col("a", &schema)?,
+            Operator::RegexMatch,
+            col("b", &schema)?,
+            &schema,
+        )?;
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![a, b])?;
+        let err = expr.evaluate(&batch).unwrap_err();
+        assert_contains!(err.to_string(), "failed to downcast array");
 
         Ok(())
     }
