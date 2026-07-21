@@ -78,7 +78,7 @@ pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
     /// output ordering before delegating to this hook. Implementations only need
     /// to add their sink-specific fields.
     ///
-    /// Returning `Ok(None)` preserves the legacy central serialization fallback.
+    /// Returning `Ok(None)` lets the caller try its extension codec instead.
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
