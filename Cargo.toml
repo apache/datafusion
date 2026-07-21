@@ -187,6 +187,7 @@ pbjson = { version = "0.9.0" }
 pbjson-types = "0.9"
 percent-encoding = "2.3"
 pin-project = "1"
+pin-project-lite = "^0.2.7"
 # Should match arrow-flight's version of prost.
 prost = "0.14.1"
 rand = "0.9"
@@ -225,8 +226,8 @@ assigning_clones = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(datafusion_coop, values("tokio", "tokio_fallback", "per_stream"))',
-    "cfg(tarpaulin)",
-    "cfg(tarpaulin_include)",
+    "cfg(coverage)",
+    "cfg(coverage_nightly)",
 ] }
 unused_qualifications = "deny"
 

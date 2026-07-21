@@ -294,10 +294,14 @@ impl SplitProjection {
 mod test {
     use std::sync::Arc;
 
-    use arrow::array::{AsArray, RecordBatch};
+    use arrow::array::{AsArray, RecordBatch, record_batch};
+    use arrow::datatypes as arrow_schema;
     use arrow::datatypes::{DataType, Field, SchemaRef};
-    use datafusion_common::{DFSchema, ScalarValue, config::ConfigOptions, record_batch};
-    use datafusion_expr::{Expr, ScalarUDF, col, execution_props::ExecutionProps};
+    use datafusion_common::{DFSchema, ScalarValue, config::ConfigOptions};
+    use datafusion_expr::{
+        Expr, ScalarUDF, col, execution_props::ExecutionProps,
+        physical_planning_context::PhysicalPlanningContext,
+    };
     use datafusion_functions::core::input_file_name::InputFileNameFunc;
     use datafusion_physical_expr::{
         ScalarFunctionExpr, create_physical_exprs, projection::ProjectionExpr,
@@ -324,8 +328,13 @@ mod test {
         schema: &SchemaRef,
     ) -> ProjectionExprs {
         let df_schema = DFSchema::try_from(Arc::clone(schema)).unwrap();
-        let physical_exprs =
-            create_physical_exprs(exprs, &df_schema, &ExecutionProps::default()).unwrap();
+        let physical_exprs = create_physical_exprs(
+            exprs,
+            &df_schema,
+            &ExecutionProps::default(),
+            &PhysicalPlanningContext::default(),
+        )
+        .unwrap();
         let projection_exprs = physical_exprs
             .into_iter()
             .enumerate()
