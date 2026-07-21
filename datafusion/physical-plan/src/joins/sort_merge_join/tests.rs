@@ -4112,8 +4112,8 @@ impl RecordBatchStream for PendingStream {
 }
 
 /// Helper: collect all output from a BitwiseSortMergeJoinStream.
-async fn collect_stream(stream: BitwiseSortMergeJoinStream) -> Result<Vec<RecordBatch>> {
-    common::collect(Box::pin(stream)).await
+async fn collect_stream(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
+    common::collect(stream).await
 }
 
 /// Reproduces the buffer_inner_key_group re-entry bug:
