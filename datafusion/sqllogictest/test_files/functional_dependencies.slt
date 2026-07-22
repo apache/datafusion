@@ -1,0 +1,358 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+# Tests for functional dependencies
+# (`datafusion/common/src/functional_dependencies.rs`)
+#
+# A functional dependency records that one set of columns (the *determinant*)
+# determines the values of the others. DataFusion derives them from PRIMARY
+# KEY / UNIQUE constraints and from GROUP BY keys, and four optimizer rules
+# consume them to remove redundant work, each tested here in a different section.
+#
+# NULL handling is (as always) important:
+#
+#   * A PRIMARY KEY is unique AND not nullable.
+#   * A `UNIQUE` constraint permits *multiple NULL rows*, because NULLs
+#     compare distinct.
+#
+# It is important not to mix `UNIQUE` columns with `DISTINCT` or `GROUP BY`,
+# which treat NULLs as equal and can produce wrong answers.
+##########
+
+# These rules all run during logical optimization, so show only logical plans.
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# Set target_partitions explicitly so query results are stable.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+##########
+## Test tables
+##########
+
+# `x` is a PRIMARY KEY: unique and not nullable.
+statement ok
+CREATE TABLE t_pk (x INT, y INT, PRIMARY KEY (x)) AS VALUES (1, 10), (2, 20);
+
+# `x` is UNIQUE and nullable`, so `x` does NOT determine `y`.
+statement ok
+CREATE TABLE t_uniq (x INT UNIQUE, y INT) AS VALUES (NULL, 2), (NULL, 1), (1, 3);
+
+query II rowsort
+SELECT x, y FROM t_uniq;
+----
+1 3
+NULL 1
+NULL 2
+
+##########
+## 1. Removing DISTINCT
+##    `ReplaceDistinctWithAggregate` (datafusion/optimizer/src/replace_distinct_aggregate.rs)
+##
+## A DISTINCT is a no-op when its input is already known to have unique rows,
+## and can then be dropped from the plan entirely.
+##########
+
+# 1.1 PRIMARY KEY: rows are unique, so the DISTINCT is removed and no
+# Aggregate appears in the plan.
+query TT
+EXPLAIN SELECT DISTINCT x FROM t_pk;
+----
+logical_plan TableScan: t_pk projection=[x]
+
+# 1.2 Nullable UNIQUE: the DISTINCT must be KEPT. UNIQUE allows several NULL
+# rows, but DISTINCT treats NULLs as equal and has to collapse them into one.
+#
+# BUG: the DISTINCT is removed and both NULL rows are returned.
+# Expected: `1`, `NULL`.
+# Issue: https://github.com/apache/datafusion/issues/23634
+query I
+SELECT DISTINCT x FROM t_uniq ORDER BY x NULLS LAST;
+----
+1
+NULL
+NULL
+
+query TT
+EXPLAIN SELECT DISTINCT x FROM t_uniq;
+----
+logical_plan TableScan: t_uniq projection=[x]
+
+# 1.3 A PRIMARY KEY downgraded to a non-unique dependency by a LEFT JOIN:
+# each `t_pk` row can occur once per matching row on the right, so the
+# DISTINCT must be KEPT.
+# Fixed by: https://github.com/apache/datafusion/pull/23548
+statement ok
+CREATE TABLE t_orders (x INT, amount INT) AS VALUES (1, 10), (1, 20), (2, 30);
+
+query I
+SELECT DISTINCT p.x FROM t_pk p LEFT JOIN t_orders o ON p.x = o.x ORDER BY p.x;
+----
+1
+2
+
+query TT
+EXPLAIN SELECT DISTINCT p.x FROM t_pk p LEFT JOIN t_orders o ON p.x = o.x;
+----
+logical_plan
+01)Aggregate: groupBy=[[p.x]], aggr=[[]]
+02)--Projection: p.x
+03)----Left Join: p.x = o.x
+04)------SubqueryAlias: p
+05)--------TableScan: t_pk projection=[x]
+06)------SubqueryAlias: o
+07)--------TableScan: t_orders projection=[x]
+
+statement ok
+drop table t_orders;
+
+# 1.4 DISTINCT over a GROUP BY output. Grouping collapses the multiple NULL
+# rows, (NULL included) and the DISTINCT can be removed.
+query I
+SELECT DISTINCT x FROM (SELECT x FROM t_uniq GROUP BY x) ORDER BY x NULLS LAST;
+----
+1
+NULL
+
+query TT
+EXPLAIN SELECT DISTINCT x FROM (SELECT x FROM t_uniq GROUP BY x);
+----
+logical_plan
+01)Aggregate: groupBy=[[t_uniq.x]], aggr=[[]]
+02)--TableScan: t_uniq projection=[x]
+
+##########
+## 2. Dropping trailing ORDER BY keys
+##    datafusion/optimizer/src/eliminate_duplicated_expr.rs
+##
+## A trailing sort key adds no ordering information when the earlier keys
+## already determine it, and can be dropped.
+##########
+
+# 2.1 PRIMARY KEY: `x` determines `y`, so `ORDER BY x, y` is equivalent to
+# `ORDER BY x` and the `y` key is dropped from the plan.
+query TT
+EXPLAIN SELECT x, y FROM t_pk ORDER BY x, y;
+----
+logical_plan
+01)Sort: t_pk.x ASC NULLS LAST
+02)--TableScan: t_pk projection=[x, y]
+
+# 2.2 Nullable UNIQUE: `x` does NOT determine `y` across the two NULL rows,
+# so the `y` sort key must be kept.
+#
+# BUG:
+# Expected: `1 3`, `NULL 1`, `NULL 2`.
+# Issue: https://github.com/apache/datafusion/issues/23818
+query II
+SELECT x, y FROM t_uniq ORDER BY x NULLS LAST, y;
+----
+1 3
+NULL 2
+NULL 1
+
+query TT
+EXPLAIN SELECT x, y FROM t_uniq ORDER BY x NULLS LAST, y;
+----
+logical_plan
+01)Sort: t_uniq.x ASC NULLS LAST
+02)--TableScan: t_uniq projection=[x, y]
+
+# 2.3 GROUP BY derived key: after `GROUP BY x` the key `x` really does
+# determine `cnt`, so dropping the `cnt` sort key is CORRECT.
+query TT
+EXPLAIN SELECT x, cnt FROM (SELECT x, count(*) AS cnt FROM t_uniq GROUP BY x) ORDER BY x, cnt;
+----
+logical_plan
+01)Sort: t_uniq.x ASC NULLS LAST
+02)--Projection: t_uniq.x, count(Int64(1)) AS cnt
+03)----Aggregate: groupBy=[[t_uniq.x]], aggr=[[count(Int64(1))]]
+04)------TableScan: t_uniq projection=[x]
+
+##########
+## 3. Dropping GROUP BY expressions
+##    `optimize_projections` (datafusion/optimizer/src/optimize_projections/mod.rs)
+##    -> `get_required_group_by_exprs_indices`
+##
+## A grouping column that the parent plan does not read can be dropped when
+## the remaining grouping columns already determine it.
+##########
+
+# 3.1 PRIMARY KEY: `x` determines `y`, and `y` is not selected, so grouping
+# by `x, y` is the same as grouping by `x`. CORRECT.
+query TT
+EXPLAIN SELECT x FROM t_pk GROUP BY x, y;
+----
+logical_plan
+01)Aggregate: groupBy=[[t_pk.x]], aggr=[[]]
+02)--TableScan: t_pk projection=[x]
+
+# 3.2 Nullable UNIQUE: grouping by `x, y` is NOT the same as grouping by
+# `x` -- the two NULL rows differ in `y` and belong in separate groups.
+#
+# BUG: `y` is dropped from the GROUP BY and the two NULL groups are merged,
+# so one row goes missing.
+# Expected: `1`, `NULL`, `NULL` (three rows).
+# Issue: https://github.com/apache/datafusion/issues/23819
+query I rowsort
+SELECT x FROM t_uniq GROUP BY x, y;
+----
+1
+NULL
+
+query TT
+EXPLAIN SELECT x FROM t_uniq GROUP BY x, y;
+----
+logical_plan
+01)Aggregate: groupBy=[[t_uniq.x]], aggr=[[]]
+02)--TableScan: t_uniq projection=[x]
+
+# 3.3 The same grouping, but with `y` selected so the parent needs it: no
+# column can be dropped and the answer is right. CORRECT.
+query II rowsort
+SELECT x, y FROM t_uniq GROUP BY x, y;
+----
+1 3
+NULL 1
+NULL 2
+
+##########
+## 4. Selecting columns that are not in the GROUP BY
+##    `add_group_by_exprs_from_dependencies` (datafusion/expr/src/logical_plan/builder.rs)
+##
+## A column determined by the GROUP BY key has one value per group, so it
+## may be selected without being listed in the GROUP BY clause. DataFusion
+## implements this by silently appending it to the GROUP BY.
+##########
+
+# 4.1 PRIMARY KEY: `x` determines `y`, so `y` has a single well-defined
+# value per group and one row is returned per `x`. CORRECT.
+query II rowsort
+SELECT x, y FROM t_pk GROUP BY x;
+----
+1 10
+2 20
+
+query TT
+EXPLAIN SELECT x, y FROM t_pk GROUP BY x;
+----
+logical_plan
+01)Aggregate: groupBy=[[t_pk.x, t_pk.y]], aggr=[[]]
+02)--TableScan: t_pk projection=[x, y]
+
+# 4.2 Nullable UNIQUE: `x` does NOT determine `y`, so there is no
+# well-defined `y` for the `x = NULL` group.
+#
+# BUG: `y` is appended to the GROUP BY anyway, so `GROUP BY x` returns TWO
+# rows for `x = NULL`.
+# Expected: one row per distinct `x` (or a planning error -- postgres
+# rejects this query, and accepts the 4.1 PRIMARY KEY form).
+# Issue: https://github.com/apache/datafusion/issues/23820
+query II rowsort
+SELECT x, y FROM t_uniq GROUP BY x;
+----
+1 3
+NULL 1
+NULL 2
+
+query TT
+EXPLAIN SELECT x, y FROM t_uniq GROUP BY x;
+----
+logical_plan
+01)Aggregate: groupBy=[[t_uniq.x, t_uniq.y]], aggr=[[]]
+02)--TableScan: t_uniq projection=[x, y]
+
+##########
+## 5. GROUP BY derived keys on the NULL-padded side of an outer join
+##
+## The inner aggregate makes `x` a key of `g`. A LEFT JOIN then NULL-pads
+## `g` for non-matching probe rows.
+##
+## Note this section uses no constraints at all -- the dependency comes
+## purely from GROUP BY.
+##########
+
+statement ok
+CREATE TABLE t_null (x INT) AS VALUES (NULL), (NULL);
+
+statement ok
+CREATE TABLE t_probe (z INT) AS VALUES (0), (2);
+
+# 5.1 Grouping by `g.x, g.cnt` must keep both columns: `g.x` alone does not
+# determine `g.cnt` after NULL padding. CORRECT.
+query II
+SELECT g.x, count(*) AS c
+  FROM t_probe a
+  LEFT JOIN (SELECT x, count(*) AS cnt FROM t_null GROUP BY x) g
+    ON a.z = g.cnt
+  GROUP BY g.x, g.cnt
+  ORDER BY c;
+----
+NULL 1
+NULL 1
+
+query TT
+EXPLAIN SELECT g.x, count(*) AS c
+  FROM t_probe a
+  LEFT JOIN (SELECT x, count(*) AS cnt FROM t_null GROUP BY x) g
+    ON a.z = g.cnt
+  GROUP BY g.x, g.cnt;
+----
+logical_plan
+01)Projection: g.x, count(Int64(1)) AS count(*) AS c
+02)--Aggregate: groupBy=[[g.x, g.cnt]], aggr=[[count(Int64(1))]]
+03)----Projection: g.x, g.cnt
+04)------Left Join: CAST(a.z AS Int64) = g.cnt
+05)--------SubqueryAlias: a
+06)----------TableScan: t_probe projection=[z]
+07)--------SubqueryAlias: g
+08)----------Projection: t_null.x, count(Int64(1)) AS count(*) AS cnt
+09)------------Aggregate: groupBy=[[t_null.x]], aggr=[[count(Int64(1))]]
+10)--------------TableScan: t_null projection=[x]
+
+# 5.2 The ORDER BY variant: `g.x` is NULL for both rows, so the `g.cnt`
+# tie-breaker is what orders them. CORRECT.
+query II
+SELECT g.x, g.cnt
+  FROM t_probe a
+  LEFT JOIN (SELECT x, count(*) AS cnt FROM t_null GROUP BY x) g
+    ON a.z = g.cnt
+  ORDER BY g.x, g.cnt;
+----
+NULL 2
+NULL NULL
+
+statement ok
+drop table t_null;
+
+statement ok
+drop table t_probe;
+
+##########
+## Cleanup
+##########
+
+statement ok
+drop table t_pk;
+
+statement ok
+drop table t_uniq;
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
