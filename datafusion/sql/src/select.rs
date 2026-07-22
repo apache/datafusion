@@ -667,7 +667,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             // The default SQL `UNNEST` matches DuckDB/PostgreSQL: drop both
-            // NULL and empty input lists. Spark `explode_outer` (modelled as
+            // NULL and empty input lists. Outer-unnest (modelled as
             // `Unnest { outer: true }`) overrides that and selects
             // `NullHandling::PreserveAndExpandEmpty`. Mixing the two in a
             // single SELECT is a planning error because `UnnestOptions` is
@@ -1466,7 +1466,8 @@ fn has_unnest_expr_recursively(expr: &Expr) -> bool {
 /// * No unnest with `outer = true`  → [`NullHandling::Drop`] (default SQL
 ///   `UNNEST(...)` semantics, matching DuckDB/PostgreSQL).
 /// * Every unnest with `outer = true` → [`NullHandling::PreserveAndExpandEmpty`]
-///   (Spark `explode_outer(...)` semantics).
+///   (outer-unnest semantics: `NULL` and empty input lists each produce a
+///   single `NULL` output row).
 /// * A mix of `outer = true` and `outer = false` in one SELECT → planning
 ///   error, because `UnnestOptions` applies per `Unnest` plan node, not
 ///   per output column.

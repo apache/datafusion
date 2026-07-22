@@ -775,8 +775,7 @@ fn build_batch(
 /// ```
 ///
 /// With [`datafusion_common::NullHandling::PreserveAndExpandEmpty`], empty input lists are
-/// also bumped to length 1 so they produce a single `NULL` row, matching
-/// Spark `explode_outer` semantics:
+/// also bumped to length 1 so they produce a single `NULL` output row:
 ///
 /// ```ignore
 /// longest_length: [3, 1, 1, 2]
@@ -1300,7 +1299,7 @@ mod tests {
     #[test]
     fn test_build_batch_preserve_and_expand_empty() -> Result<()> {
         // c1: [A, B, C], [], NULL, [D], NULL, [NULL, F]   c2: 1, 2, 3, 4, 5, 6
-        // Expected for `NullHandling::PreserveAndExpandEmpty` (Spark explode_outer):
+        // Expected for `NullHandling::PreserveAndExpandEmpty`:
         //   [A, B, C] -> three rows with c2 = 1, 1, 1
         //   []        -> one  row  with c2 = 2 and unnested value NULL
         //   NULL      -> one  row  with c2 = 3 and unnested value NULL

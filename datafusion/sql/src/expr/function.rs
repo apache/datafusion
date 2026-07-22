@@ -549,7 +549,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Build Unnest expression.
         //
         // `unnest` is DataFusion's native SQL name. `explode` and
-        // `explode_outer` are Spark/Hive aliases — `explode` matches plain
+        // `explode_outer` are accepted aliases — `explode` matches plain
         // `unnest` (drops NULL and empty input lists), while `explode_outer`
         // sets `outer = true` so the downstream planner picks
         // `NullHandling::PreserveAndExpandEmpty`.

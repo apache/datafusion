@@ -35,7 +35,7 @@ pub enum NullHandling {
     Preserve,
     /// Like [`Self::Preserve`], and additionally treat an empty list
     /// identically to a `NULL` list, producing a single output row
-    /// containing `NULL`. Matches Spark's `explode_outer` semantics.
+    /// containing `NULL`.
     PreserveAndExpandEmpty,
 }
 
@@ -143,8 +143,8 @@ impl UnnestOptions {
     /// `preserve_nulls` flag onto [`NullHandling`].
     ///
     /// `true` maps to [`NullHandling::Preserve`]; `false` maps to
-    /// [`NullHandling::Drop`]. To opt into Spark `explode_outer`
-    /// semantics, call [`Self::with_null_handling`] directly with
+    /// [`NullHandling::Drop`]. To opt into the new empty-list-preserving
+    /// mode, call [`Self::with_null_handling`] directly with
     /// [`NullHandling::PreserveAndExpandEmpty`].
     pub fn with_preserve_nulls(self, preserve_nulls: bool) -> Self {
         let null_handling = if preserve_nulls {
@@ -162,7 +162,7 @@ impl UnnestOptions {
     }
 
     /// Returns true if empty input lists should produce a single
-    /// output row containing `NULL` (Spark `explode_outer` semantics).
+    /// output row containing `NULL`.
     pub fn expand_empty_as_null(&self) -> bool {
         matches!(self.null_handling, NullHandling::PreserveAndExpandEmpty)
     }

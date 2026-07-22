@@ -673,14 +673,14 @@ pub fn intersect_metadata_for_union<'a>(
 /// UNNEST expression.
 ///
 /// When `outer` is `true`, the unnest should preserve `NULL` and empty input
-/// lists by emitting a single `NULL` output row for each, matching Spark
-/// `explode_outer` semantics. When `false` (the historical default), the
-/// behavior is identical to the plain `UNNEST(col)` SQL form.
+/// lists by emitting a single `NULL` output row for each. When `false` (the
+/// historical default), the behavior is identical to the plain `UNNEST(col)`
+/// SQL form: `NULL` and empty input lists are dropped from the output.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
     pub expr: Box<Expr>,
-    /// Spark `explode_outer`-style behavior: also expand empty input lists
-    /// into a single `NULL` output row.
+    /// Outer-unnest behavior: also expand empty input lists into a single
+    /// `NULL` output row (in addition to preserving `NULL` input rows).
     pub outer: bool,
 }
 
@@ -701,8 +701,8 @@ impl Unnest {
         }
     }
 
-    /// Create a new Unnest expression with `explode_outer` semantics:
-    /// `NULL` and empty input lists each produce a single `NULL` row.
+    /// Create a new Unnest expression with outer-unnest semantics: `NULL`
+    /// and empty input lists each produce a single `NULL` output row.
     pub fn new_outer(expr: Expr) -> Self {
         Self {
             expr: Box::new(expr),
