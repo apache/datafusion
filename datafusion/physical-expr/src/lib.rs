@@ -63,7 +63,9 @@ pub use equivalence::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, calculate_union,
 };
 pub use expressions::{DynamicFilterTracker, DynamicFilterTracking};
-pub use partitioning::{Distribution, Partitioning, RangePartitioning};
+pub use partitioning::{
+    Distribution, Partitioning, PartitioningSatisfaction, RangePartitioning,
+};
 pub use physical_expr::{
     add_offset_to_expr, add_offset_to_physical_sort_exprs, create_lex_ordering,
     create_ordering, create_physical_partitioning, create_physical_sort_expr,

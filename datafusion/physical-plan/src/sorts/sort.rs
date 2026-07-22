@@ -45,9 +45,9 @@ use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
-use crate::statistics::StatisticsArgs;
-use crate::stream::RecordBatchStreamAdapter;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::ReservationStream;
+use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
 use crate::topk::TopKDynamicFilters;
 use crate::{
@@ -374,7 +374,7 @@ impl ExternalSorter {
             // allocation. Only needed for the non-spill path; the spill
             // path transfers the reservation to the merge stream instead.
             self.merge_reservation.free();
-            self.in_mem_sort_stream(self.metrics.baseline.clone(), true)
+            self.in_mem_sort_stream(true, true)
         }
     }
 
@@ -476,9 +476,11 @@ impl ExternalSorter {
         // reserved again for the next spill.
         self.merge_reservation.free();
 
-        // No coalescing on the spill path: it raises per-run peak memory.
-        let mut sorted_stream =
-            self.in_mem_sort_stream(self.metrics.baseline.intermediate(), false)?;
+        let mut sorted_stream = self.in_mem_sort_stream(
+            false,
+            // No coalescing on the spill path: it raises per-run peak memory.
+            false,
+        )?;
         // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
         // to construct a globally sorted stream.
         assert_or_internal_err!(
@@ -589,18 +591,18 @@ impl ExternalSorter {
     /// reduce merge fan-in. Disabled on the spill path to keep peak memory low.
     fn in_mem_sort_stream(
         &mut self,
-        metrics: BaselineMetrics,
+        is_output_stream: bool,
         coalesce_runs: bool,
     ) -> Result<SendableRecordBatchStream> {
         if self.in_mem_batches.is_empty() {
-            return Ok(Box::pin(EmptyRecordBatchStream::new(Arc::clone(
-                &self.schema,
-            ))));
+            let empty_stream =
+                Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)));
+            return Ok(self.observe_if_output(empty_stream, is_output_stream));
         }
 
         // The elapsed compute timer is updated when the value is dropped.
         // There is no need for an explicit call to drop.
-        let elapsed_compute = metrics.elapsed_compute().clone();
+        let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
         let _timer = elapsed_compute.timer();
 
         // Please pay attention that any operation inside of `in_mem_sort_stream` will
@@ -612,7 +614,8 @@ impl ExternalSorter {
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
-            return self.sort_batch_stream(batch, &metrics, reservation);
+            let sorted_stream = self.sort_batch_stream(batch, reservation)?;
+            return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
         // If less than sort_in_place_threshold_bytes, concatenate and sort in place
@@ -624,7 +627,8 @@ impl ExternalSorter {
                 .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
-            return self.sort_batch_stream(batch, &metrics, reservation);
+            let sorted_stream = self.sort_batch_stream(batch, reservation)?;
+            return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
         // For single-column sorts, coalesce the buffered batches into fewer,
@@ -642,11 +646,10 @@ impl ExternalSorter {
         let streams = runs
             .into_iter()
             .map(|batch| {
-                let metrics = self.metrics.baseline.intermediate();
                 let reservation = self
                     .reservation
                     .split(get_reserved_bytes_for_record_batch(&batch)?);
-                let input = self.sort_batch_stream(batch, &metrics, reservation)?;
+                let input = self.sort_batch_stream(batch, reservation)?;
                 Ok(spawn_buffered(input, 1))
             })
             .collect::<Result<_>>()?;
@@ -655,7 +658,11 @@ impl ExternalSorter {
             .with_streams(streams)
             .with_schema(Arc::clone(&self.schema))
             .with_expressions(&self.expr.clone())
-            .with_metrics(metrics)
+            .with_metrics(if is_output_stream {
+                self.metrics.baseline.clone()
+            } else {
+                self.metrics.baseline.intermediate()
+            })
             .with_batch_size(self.batch_size)
             .with_fetch(None)
             .with_reservation(self.merge_reservation.new_empty())
@@ -726,7 +733,6 @@ impl ExternalSorter {
     fn sort_batch_stream(
         &self,
         batch: RecordBatch,
-        metrics: &BaselineMetrics,
         reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(
@@ -737,7 +743,6 @@ impl ExternalSorter {
         let schema = batch.schema();
         let expressions = self.expr.clone();
         let batch_size = self.batch_size;
-        let output_row_metrics = metrics.output_rows().clone();
 
         let stream = futures::stream::once(async move {
             let schema = batch.schema();
@@ -767,14 +772,7 @@ impl ExternalSorter {
                 reservation,
             )) as SendableRecordBatchStream)
         })
-        .try_flatten()
-        .map(move |batch| match batch {
-            Ok(batch) => {
-                output_row_metrics.add(batch.num_rows());
-                Ok(batch)
-            }
-            Err(e) => Err(e),
-        });
+        .try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
@@ -832,6 +830,22 @@ impl ExternalSorter {
             // This is not an OOM error, so just return it as is.
             _ => e,
         }
+    }
+
+    fn observe_if_output(
+        &self,
+        mut stream: SendableRecordBatchStream,
+        wrap: bool,
+    ) -> SendableRecordBatchStream {
+        if wrap {
+            stream = Box::pin(ObservedStream::new(
+                stream,
+                self.metrics.baseline.clone(),
+                None,
+            ))
+        }
+
+        stream
     }
 }
 
@@ -1244,14 +1258,18 @@ impl ExecutionPlan for SortExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.preserve_partitioning {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(if self.preserve_partitioning {
             vec![Distribution::UnspecifiedDistribution]
         } else {
             // global sort
             // TODO support range partitioning and OrderedDistribution.
             // See https://github.com/apache/datafusion/issues/22395
             vec![Distribution::SinglePartition]
-        }
+        })
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -1393,14 +1411,21 @@ impl ExecutionPlan for SortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let partition = if self.preserve_partitioning() {
-            args.partition()
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        let child_partition = if self.preserve_partitioning() {
+            partition
         } else {
             None
         };
-        let child_stats = args.compute_child_statistics(&self.input, partition)?;
-        let stats = Arc::unwrap_or_clone(child_stats);
+        vec![ChildStats::At(child_partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
         Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
@@ -1564,6 +1589,7 @@ mod tests {
     use datafusion_physical_expr::expressions::{Column, Literal};
     use datafusion_physical_expr::{DynamicFilterTracking, EquivalenceProperties};
 
+    use datafusion_physical_expr_common::metrics::MetricValue;
     use futures::{FutureExt, Stream, TryStreamExt};
     use insta::assert_snapshot;
 
@@ -2506,7 +2532,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_return_stream_with_batches_in_the_requested_size() -> Result<()> {
+    async fn should_return_stream_with_batches_in_the_requested_size_and_update_metrics()
+    -> Result<()> {
         let batch_size = 100;
 
         let create_task_ctx = |_: &[RecordBatch]| {
@@ -2518,19 +2545,22 @@ mod tests {
         };
 
         // Smaller than batch size and require more than a single batch to get the requested batch size
-        test_sort_output_batch_size(10, batch_size / 4, create_task_ctx).await?;
+        test_sort_output_batch_size_and_base_metrics(10, batch_size / 4, create_task_ctx)
+            .await?;
 
         // Not evenly divisible by batch size
-        test_sort_output_batch_size(10, batch_size + 7, create_task_ctx).await?;
+        test_sort_output_batch_size_and_base_metrics(10, batch_size + 7, create_task_ctx)
+            .await?;
 
         // Evenly divisible by batch size and is larger than 2 output batches
-        test_sort_output_batch_size(10, batch_size * 3, create_task_ctx).await?;
+        test_sort_output_batch_size_and_base_metrics(10, batch_size * 3, create_task_ctx)
+            .await?;
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn should_return_stream_with_batches_in_the_requested_size_when_sorting_in_place()
+    async fn should_return_stream_with_batches_in_the_requested_size_and_update_metrics_when_sorting_in_place()
     -> Result<()> {
         let batch_size = 100;
 
@@ -2544,8 +2574,12 @@ mod tests {
 
         // Smaller than batch size and require more than a single batch to get the requested batch size
         {
-            let metrics =
-                test_sort_output_batch_size(10, batch_size / 4, create_task_ctx).await?;
+            let metrics = test_sort_output_batch_size_and_base_metrics(
+                10,
+                batch_size / 4,
+                create_task_ctx,
+            )
+            .await?;
 
             assert_eq!(
                 metrics.spill_count(),
@@ -2556,8 +2590,12 @@ mod tests {
 
         // Not evenly divisible by batch size
         {
-            let metrics =
-                test_sort_output_batch_size(10, batch_size + 7, create_task_ctx).await?;
+            let metrics = test_sort_output_batch_size_and_base_metrics(
+                10,
+                batch_size + 7,
+                create_task_ctx,
+            )
+            .await?;
 
             assert_eq!(
                 metrics.spill_count(),
@@ -2568,8 +2606,12 @@ mod tests {
 
         // Evenly divisible by batch size and is larger than 2 output batches
         {
-            let metrics =
-                test_sort_output_batch_size(10, batch_size * 3, create_task_ctx).await?;
+            let metrics = test_sort_output_batch_size_and_base_metrics(
+                10,
+                batch_size * 3,
+                create_task_ctx,
+            )
+            .await?;
 
             assert_eq!(
                 metrics.spill_count(),
@@ -2582,7 +2624,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_return_stream_with_batches_in_the_requested_size_when_having_a_single_batch()
+    async fn should_return_stream_with_batches_in_the_requested_size_and_update_metrics_when_having_a_single_batch()
     -> Result<()> {
         let batch_size = 100;
 
@@ -2593,7 +2635,7 @@ mod tests {
 
         // Smaller than batch size and require more than a single batch to get the requested batch size
         {
-            let metrics = test_sort_output_batch_size(
+            let metrics = test_sort_output_batch_size_and_base_metrics(
                 // Single batch
                 1,
                 batch_size / 4,
@@ -2610,7 +2652,7 @@ mod tests {
 
         // Not evenly divisible by batch size
         {
-            let metrics = test_sort_output_batch_size(
+            let metrics = test_sort_output_batch_size_and_base_metrics(
                 // Single batch
                 1,
                 batch_size + 7,
@@ -2627,7 +2669,7 @@ mod tests {
 
         // Evenly divisible by batch size and is larger than 2 output batches
         {
-            let metrics = test_sort_output_batch_size(
+            let metrics = test_sort_output_batch_size_and_base_metrics(
                 // Single batch
                 1,
                 batch_size * 3,
@@ -2646,7 +2688,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_return_stream_with_batches_in_the_requested_size_when_having_to_spill()
+    async fn should_return_stream_with_batches_in_the_requested_size_and_update_metrics_when_having_to_spill()
     -> Result<()> {
         let batch_size = 100;
 
@@ -2674,24 +2716,36 @@ mod tests {
 
         // Smaller than batch size and require more than a single batch to get the requested batch size
         {
-            let metrics =
-                test_sort_output_batch_size(10, batch_size / 4, create_task_ctx).await?;
+            let metrics = test_sort_output_batch_size_and_base_metrics(
+                10,
+                batch_size / 4,
+                create_task_ctx,
+            )
+            .await?;
 
             assert_ne!(metrics.spill_count().unwrap(), 0, "expected to spill");
         }
 
         // Not evenly divisible by batch size
         {
-            let metrics =
-                test_sort_output_batch_size(10, batch_size + 7, create_task_ctx).await?;
+            let metrics = test_sort_output_batch_size_and_base_metrics(
+                10,
+                batch_size + 7,
+                create_task_ctx,
+            )
+            .await?;
 
             assert_ne!(metrics.spill_count().unwrap(), 0, "expected to spill");
         }
 
         // Evenly divisible by batch size and is larger than 2 batches
         {
-            let metrics =
-                test_sort_output_batch_size(10, batch_size * 3, create_task_ctx).await?;
+            let metrics = test_sort_output_batch_size_and_base_metrics(
+                10,
+                batch_size * 3,
+                create_task_ctx,
+            )
+            .await?;
 
             assert_ne!(metrics.spill_count().unwrap(), 0, "expected to spill");
         }
@@ -2699,7 +2753,7 @@ mod tests {
         Ok(())
     }
 
-    async fn test_sort_output_batch_size(
+    async fn test_sort_output_batch_size_and_base_metrics(
         number_of_batches: usize,
         batch_size_to_generate: usize,
         create_task_ctx: impl Fn(&[RecordBatch]) -> TaskContext,
@@ -2709,10 +2763,13 @@ mod tests {
             .collect::<Vec<_>>();
         let task_ctx = create_task_ctx(batches.as_slice());
 
+        let output_rows = batches.iter().map(|item| item.num_rows()).sum();
+
         let expected_batch_size = task_ctx.session_config().batch_size();
 
+        let schema = batches[0].schema();
         let (mut output_batches, metrics) =
-            run_sort_on_input(task_ctx, "i", batches).await?;
+            run_sort_on_input(task_ctx, "i", batches, schema).await?;
 
         let last_batch = output_batches.pop().unwrap();
 
@@ -2727,18 +2784,87 @@ mod tests {
         }
         assert_eq!(last_batch.num_rows(), last_expected_batch_size);
 
+        assert_baseline_metrics_for_non_empty_output(
+            &metrics,
+            output_rows,
+            expected_batch_size,
+        );
+
         Ok(metrics)
+    }
+
+    #[tokio::test]
+    async fn empty_sort_stream_should_report_end_time() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        let task_ctx = TaskContext::default();
+
+        let (_, metrics) = run_sort_on_input(task_ctx, "i", vec![], schema).await?;
+
+        let end_time = metrics
+            .iter()
+            .find_map(|item| match item.value() {
+                MetricValue::EndTimestamp(end) => Some(end),
+                _ => None,
+            })
+            .expect("Must have end time metric since it exists in the baseline");
+
+        assert_eq!(
+            metrics.spill_count().unwrap_or_default(),
+            0,
+            "expected to not have spills"
+        );
+        assert_ne!(end_time.value(), None);
+
+        Ok(())
+    }
+
+    fn assert_baseline_metrics_for_non_empty_output(
+        metrics: &MetricsSet,
+        output_rows: usize,
+        batch_size: usize,
+    ) {
+        let end_time = metrics
+            .iter()
+            .find_map(|item| match item.value() {
+                MetricValue::EndTimestamp(end) => Some(end),
+                _ => None,
+            })
+            .expect("Must have end time metric since it exists in the baseline");
+
+        assert_ne!(end_time.value(), None);
+
+        assert_eq!(metrics.output_rows(), Some(output_rows));
+
+        let output_bytes = metrics
+            .iter()
+            .find_map(|item| match item.value() {
+                MetricValue::OutputBytes(total) => Some(total),
+                _ => None,
+            })
+            .expect("Must have output_bytes metric since it exists in the baseline");
+
+        assert_ne!(output_bytes.value(), 0_usize);
+
+        let output_batches = metrics
+            .iter()
+            .find_map(|item| match item.value() {
+                MetricValue::OutputBatches(total) => Some(total),
+                _ => None,
+            })
+            .expect("Must have output_batches metric since it exists in the baseline");
+
+        assert_eq!(output_batches.value(), output_rows.div_ceil(batch_size));
     }
 
     async fn run_sort_on_input(
         task_ctx: TaskContext,
         order_by_col: &str,
         batches: Vec<RecordBatch>,
+        schema: SchemaRef,
     ) -> Result<(Vec<RecordBatch>, MetricsSet)> {
         let task_ctx = Arc::new(task_ctx);
 
         // let task_ctx = env.
-        let schema = batches[0].schema();
         let ordering: LexOrdering = [PhysicalSortExpr {
             expr: col(order_by_col, &schema)?,
             options: SortOptions {
@@ -2749,7 +2875,11 @@ mod tests {
         .into();
         let sort_exec: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
             ordering.clone(),
-            TestMemoryExec::try_new_exec(std::slice::from_ref(&batches), schema, None)?,
+            TestMemoryExec::try_new_exec(
+                std::slice::from_ref(&batches),
+                Arc::clone(&schema),
+                None,
+            )?,
         ));
 
         let sorted_batches =
@@ -2759,11 +2889,10 @@ mod tests {
 
         // assert output
         {
-            let input_batches_concat = concat_batches(batches[0].schema_ref(), &batches)?;
+            let input_batches_concat = concat_batches(&schema, &batches)?;
             let sorted_input_batch = sort_batch(&input_batches_concat, &ordering, None)?;
 
-            let sorted_batches_concat =
-                concat_batches(sorted_batches[0].schema_ref(), &sorted_batches)?;
+            let sorted_batches_concat = concat_batches(&schema, &sorted_batches)?;
 
             assert_eq!(sorted_input_batch, sorted_batches_concat);
         }

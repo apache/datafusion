@@ -32,6 +32,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tempfile::{Builder, NamedTempFile, TempDir};
 pub const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
+pub const DEFAULT_MAX_SPILL_MERGE_FAN_IN: usize = 0;
 
 /// Builder pattern for the [DiskManager] structure
 #[derive(Clone)]
@@ -41,6 +42,9 @@ pub struct DiskManagerBuilder {
     /// The maximum amount of data (in bytes) stored inside the temporary directories.
     /// Default to 100GB
     max_temp_directory_size: u64,
+    /// Maximum number of spill files opened by one external merge pass.
+    /// A value of 0 means unlimited.
+    max_spill_merge_fan_in: usize,
 }
 impl Debug for DiskManagerBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -55,6 +59,7 @@ impl Default for DiskManagerBuilder {
         Self {
             mode: DiskManagerMode::OsTmpDirectory,
             max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+            max_spill_merge_fan_in: DEFAULT_MAX_SPILL_MERGE_FAN_IN,
         }
     }
 }
@@ -98,12 +103,22 @@ impl DiskManagerBuilder {
         self
     }
 
+    pub fn set_max_spill_merge_fan_in(&mut self, value: usize) {
+        self.max_spill_merge_fan_in = value;
+    }
+
+    pub fn with_max_spill_merge_fan_in(mut self, value: usize) -> Self {
+        self.set_max_spill_merge_fan_in(value);
+        self
+    }
+
     /// Create a DiskManager given the builder
     pub fn build(self) -> Result<DiskManager> {
         match self.mode {
             DiskManagerMode::OsTmpDirectory => Ok(DiskManager {
                 local_dirs: Mutex::new(Some(vec![])),
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
+                max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
                 active_files_count: Arc::new(AtomicUsize::new(0)),
                 factory: None,
@@ -116,6 +131,7 @@ impl DiskManagerBuilder {
                 Ok(DiskManager {
                     local_dirs: Mutex::new(Some(local_dirs)),
                     max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
+                    max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                     used_disk_space: Arc::new(AtomicU64::new(0)),
                     active_files_count: Arc::new(AtomicUsize::new(0)),
                     factory: None,
@@ -124,6 +140,7 @@ impl DiskManagerBuilder {
             DiskManagerMode::Disabled => Ok(DiskManager {
                 local_dirs: Mutex::new(None),
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
+                max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
                 active_files_count: Arc::new(AtomicUsize::new(0)),
                 factory: None,
@@ -131,6 +148,7 @@ impl DiskManagerBuilder {
             DiskManagerMode::Custom(factory) => Ok(DiskManager {
                 local_dirs: Mutex::new(None),
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
+                max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
                 active_files_count: Arc::new(AtomicUsize::new(0)),
                 factory: Some(factory),
@@ -181,6 +199,9 @@ pub struct DiskManager {
     /// Default to 100GB. Stored as `AtomicU64` so it can be adjusted at runtime
     /// without requiring exclusive (`&mut`) access to the `DiskManager`.
     max_temp_directory_size: AtomicU64,
+    /// Maximum number of spill files opened by one external merge pass.
+    /// A value of 0 preserves the memory-driven, unbounded behavior.
+    max_spill_merge_fan_in: AtomicUsize,
     /// Used disk space in the temporary directories. Now only spilled data for
     /// external executors are counted.
     used_disk_space: Arc<AtomicU64>,
@@ -268,6 +289,22 @@ impl DiskManager {
     /// Returns the maximum temporary directory size in bytes
     pub fn max_temp_directory_size(&self) -> u64 {
         self.max_temp_directory_size.load(Ordering::Relaxed)
+    }
+
+    /// Atomically set the maximum spill merge fan-in.
+    ///
+    /// A value of 0 disables the cap. Values of 1 are accepted but external
+    /// merge code will still merge at least two spill streams to make progress.
+    pub fn set_max_spill_merge_fan_in(&self, max_spill_merge_fan_in: usize) {
+        self.max_spill_merge_fan_in
+            .store(max_spill_merge_fan_in, Ordering::Relaxed);
+    }
+
+    /// Returns the maximum number of spill files opened by one merge pass.
+    ///
+    /// A value of 0 means unlimited.
+    pub fn max_spill_merge_fan_in(&self) -> usize {
+        self.max_spill_merge_fan_in.load(Ordering::Relaxed)
     }
 
     /// Returns the current spilling progress
@@ -921,6 +958,25 @@ mod tests {
         // Final value should be one of the values set by threads
         let final_val = dm.max_temp_directory_size();
         assert!((1000..=8000).contains(&final_val));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_max_spill_merge_fan_in_builder_and_dynamic_update() -> Result<()> {
+        let dm = Arc::new(
+            DiskManager::builder()
+                .with_max_spill_merge_fan_in(8)
+                .build()?,
+        );
+
+        assert_eq!(dm.max_spill_merge_fan_in(), 8);
+
+        dm.set_max_spill_merge_fan_in(4);
+        assert_eq!(dm.max_spill_merge_fan_in(), 4);
+
+        dm.set_max_spill_merge_fan_in(0);
+        assert_eq!(dm.max_spill_merge_fan_in(), 0);
 
         Ok(())
     }
