@@ -1498,8 +1498,14 @@ fn get_expr_properties(
     schema: &SchemaRef,
 ) -> Result<ExprProperties> {
     if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
-        // If exact match is found, return its ordering. As a leaf, it is
-        // trivially a strictly order-preserving (identity) mapping of itself.
+        // If exact match is found, return its ordering. This is a base case
+        // of the recursion: the expression is treated as an atomic ordered
+        // input from here on, so `strictly_order_preserving` states only that
+        // it is a one-to-one mapping *of itself* (the identity), which holds
+        // for any expression. It makes no claim about the expression being
+        // one-to-one in its own inputs (e.g. `floor(x)` as a sort key), and
+        // it does not need to: parent expressions are substituted for this
+        // sort key, so their strictness only has to be relative to it.
         Ok(ExprProperties {
             sort_properties: SortProperties::Ordered(column_order.options),
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
@@ -1511,6 +1517,8 @@ fn get_expr_properties(
             sort_properties: SortProperties::Unordered,
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
             preserves_lex_ordering: false,
+            // A base case of the recursion: a column is the identity mapping
+            // of itself, which is trivially one-to-one.
             strictly_order_preserving: true,
         })
     } else if let Some(literal) = expr.downcast_ref::<Literal>() {
