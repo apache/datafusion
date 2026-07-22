@@ -24,7 +24,7 @@ use crate::expr::{
 use crate::type_coercion::functions::value_fields_with_higher_order_udf;
 use crate::udf_eq::UdfEq;
 use crate::{ColumnarValue, Documentation, Expr, ExprSchemable};
-use arrow::array::{ArrayRef, RecordBatch};
+use arrow::array::{ArrayRef, NullArray, RecordBatch};
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
@@ -34,8 +34,8 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    DFSchema, HashMap, HashSet, Result, ScalarValue, exec_err, internal_datafusion_err,
-    internal_err, not_impl_err, plan_datafusion_err, plan_err,
+    DFSchema, HashMap, HashSet, Result, ScalarValue, exec_datafusion_err, exec_err,
+    internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::signature::Volatility;
@@ -330,59 +330,51 @@ impl LambdaArgument {
         args: &[&dyn Fn() -> Result<ArrayRef>],
         spread_captures: impl FnOnce(&[ArrayRef]) -> Result<Vec<ArrayRef>>,
     ) -> Result<ColumnarValue> {
-        let spread_captures = self
-            .captures
-            .as_ref()
-            .map(|captures| {
-                let spread_columns = spread_captures(captures.columns())?;
+        if args.len() < self.params.len() {
+            return exec_err!(
+                "expected at least {} lambda arguments to merge with captures, got {}",
+                self.params.len(),
+                args.len()
+            );
+        }
 
-                RecordBatch::try_new(captures.schema(), spread_columns)
-            })
-            .transpose()?;
+        let args = args
+            .iter()
+            .take(self.params.len())
+            .map(|arg| arg())
+            .collect::<Result<Vec<_>>>()?;
 
-        let merged = merge_captures_with_variables(
-            spread_captures.as_ref(),
-            Arc::clone(&self.schema),
-            &self.params,
-            args,
-        )?;
+        let row_count = args.first().map(|arg| arg.len()).ok_or_else(|| {
+            exec_datafusion_err!("lambdas with zero parameters are not supported")
+        })?;
+
+        let columns = match &self.captures {
+            Some(captures) if !captures.columns().is_empty() => {
+                if captures
+                    .schema_ref()
+                    .fields()
+                    .iter()
+                    .all(|f| f.data_type().is_null())
+                {
+                    let null = Arc::new(NullArray::new(row_count)) as _;
+
+                    std::iter::repeat_n(null, captures.num_columns())
+                        .chain(args)
+                        .collect()
+                } else {
+                    spread_captures(captures.columns())?
+                        .into_iter()
+                        .chain(args)
+                        .collect()
+                }
+            }
+            _ => args,
+        };
+
+        let merged = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
 
         self.body.evaluate(&merged)
     }
-}
-
-fn merge_captures_with_variables(
-    captures: Option<&RecordBatch>,
-    schema: SchemaRef,
-    params: &[FieldRef],
-    variables: &[&dyn Fn() -> Result<ArrayRef>],
-) -> Result<RecordBatch> {
-    if variables.len() < params.len() {
-        return exec_err!(
-            "expected at least {} lambda arguments to merge with captures, got {}",
-            params.len(),
-            variables.len()
-        );
-    }
-
-    let columns = match captures {
-        Some(captures) => {
-            let mut columns = captures.columns().to_vec();
-
-            for arg in &variables[..params.len()] {
-                columns.push(arg()?);
-            }
-
-            columns
-        }
-        None => variables
-            .iter()
-            .take(params.len())
-            .map(|arg| arg())
-            .collect::<Result<_>>()?,
-    };
-
-    Ok(RecordBatch::try_new(schema, columns)?)
 }
 
 /// Information about arguments passed to the function
