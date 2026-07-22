@@ -21,7 +21,7 @@
 //! for details.
 //!
 //! Note these streams are an incremental migration of the existing
-//! [`crate::aggregates::row_hash::GroupedHashAggregateStream`].
+//! [`crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream`].
 //!
 //! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 

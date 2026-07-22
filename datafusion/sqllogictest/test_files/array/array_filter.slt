@@ -204,6 +204,12 @@ SELECT array_transform(array_filter(list, v -> v > 1), v -> v * 3) FROM with_nul
 [6]
 NULL
 
+# null arg
+query ?
+SELECT array_filter(NULL, x -> x > 2);
+----
+NULL
+
 statement ok
 drop table t;
 

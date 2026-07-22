@@ -55,6 +55,7 @@ pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod extension_types;
 pub mod function;
+pub mod physical_planning_context;
 pub mod select_expr;
 pub mod groups_accumulator {
     pub use datafusion_expr_common::groups_accumulator::*;
@@ -101,8 +102,8 @@ pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::placement::ExpressionPlacement;
 pub use datafusion_expr_common::signature::{
-    ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature,
-    TIMEZONE_WILDCARD, TypeSignature, TypeSignatureClass, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, Coercion, EncodingPreservation,
+    Signature, TIMEZONE_WILDCARD, TypeSignature, TypeSignatureClass, Volatility,
 };
 pub use datafusion_expr_common::type_coercion::binary;
 pub use expr::{

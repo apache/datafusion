@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int64Array, ListArray, StringArray};
+use arrow::array::{
+    ArrayRef, Int64Array, LargeStringArray, ListArray, StringArray, StringViewArray,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use criterion::{
@@ -43,17 +45,234 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     for &size in &array_sizes {
         bench_array_has(c, size);
+        bench_array_has_array(c, size);
         bench_array_has_all(c, size);
         bench_array_has_any(c, size);
     }
 
     // Specific benchmarks for string arrays (common use case)
     bench_array_has_strings(c);
+    bench_array_has_array_strings(c);
     bench_array_has_all_strings(c);
     bench_array_has_any_strings(c);
 
     // Benchmark for array_has_any with one scalar arg
     bench_array_has_any_scalar(c);
+
+    // Array-needle fast-path profile: null patterns, list length, row height.
+    bench_array_has_array_null_patterns(c);
+    bench_array_has_array_by_size(c);
+    bench_array_has_array_by_rows(c);
+}
+
+/// Invoke `array_has` once with an array (column) needle -- exercises the
+/// `array_has_dispatch_for_array` fast path.
+fn run_array_needle_case(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    id: String,
+    haystack: ArrayRef,
+    needle: ArrayRef,
+    rows: usize,
+) {
+    let config_options = Arc::new(ConfigOptions::default());
+    let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
+    let arg_fields: Vec<Arc<Field>> = vec![
+        Field::new("arr", haystack.data_type().clone(), false).into(),
+        Field::new("el", needle.data_type().clone(), false).into(),
+    ];
+    let args = vec![ColumnarValue::Array(haystack), ColumnarValue::Array(needle)];
+    group.bench_function(id, |b| {
+        let udf = ArrayHas::new();
+        b.iter(|| {
+            black_box(
+                udf.invoke_with_args(ScalarFunctionArgs {
+                    args: args.clone(),
+                    arg_fields: arg_fields.clone(),
+                    number_rows: rows,
+                    return_field: return_field.clone(),
+                    config_options: config_options.clone(),
+                })
+                .unwrap(),
+            )
+        });
+    });
+}
+
+/// Build a `List` of `array_size` string elements per row (`{prefix}{i}`) with
+/// the given element type (`Utf8` / `LargeUtf8` / `Utf8View`) and null density.
+/// The prefix controls element length: a short one stays inline in a `Utf8View`
+/// (<= 12 bytes), a long one spills to the data buffer.
+fn string_list_array(
+    num_rows: usize,
+    array_size: usize,
+    null_density: f64,
+    prefix: &str,
+    element_type: &DataType,
+) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(SEED);
+    let data = (0..num_rows * array_size).map(|_| {
+        if rng.random::<f64>() < null_density {
+            None
+        } else {
+            Some(format!("{prefix}{}", rng.random_range(0..array_size)))
+        }
+    });
+    let values: ArrayRef = match element_type {
+        DataType::Utf8 => Arc::new(data.collect::<StringArray>()),
+        DataType::LargeUtf8 => Arc::new(data.collect::<LargeStringArray>()),
+        DataType::Utf8View => Arc::new(data.collect::<StringViewArray>()),
+        other => panic!("unsupported string element type: {other}"),
+    };
+    let offsets = (0..=num_rows)
+        .map(|i| (i * array_size) as i32)
+        .collect::<Vec<i32>>();
+    Arc::new(
+        ListArray::try_new(
+            Arc::new(Field::new("item", element_type.clone(), true)),
+            OffsetBuffer::new(offsets.into()),
+            values,
+            None,
+        )
+        .unwrap(),
+    )
+}
+
+/// Build a string needle column (one value per row) of the given element type.
+fn string_value_array(
+    num_rows: usize,
+    range: usize,
+    prefix: &str,
+    element_type: &DataType,
+) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(SEED + 2);
+    let data =
+        (0..num_rows).map(|_| Some(format!("{prefix}{}", rng.random_range(0..range))));
+    match element_type {
+        DataType::Utf8 => Arc::new(data.collect::<StringArray>()),
+        DataType::LargeUtf8 => Arc::new(data.collect::<LargeStringArray>()),
+        DataType::Utf8View => Arc::new(data.collect::<StringViewArray>()),
+        other => panic!("unsupported string element type: {other}"),
+    }
+}
+
+/// Array needle, fixed list length (64), across null patterns. i64 covers
+/// no-nulls found/not-found, 30% nulls found/not-found, all-null, and a
+/// null-fill collision. Each string
+/// element type (`Utf8`, `LargeUtf8`, `Utf8View`) covers no nulls / 30% nulls at
+/// both short (inline, <= 12 byte) and long (> 12 byte, shared-prefix) element
+/// lengths, plus all-null. `not_found` shifts the needle out of the value range.
+fn bench_array_has_array_null_patterns(c: &mut Criterion) {
+    let (rows, size) = (10_000usize, 64usize);
+    let s = size as i64;
+    let mut group = c.benchmark_group("array_has_array_null_patterns");
+    run_array_needle_case(
+        &mut group,
+        "i64/no_nulls".to_string(),
+        create_int64_list_array(rows, size, 0.0),
+        create_int64_value_array(rows, s, 0),
+        rows,
+    );
+    // Worst case for the all-valid fold: non-null, no match -> the whole row is
+    // scanned (the branchless OR-reduction never short-circuits).
+    run_array_needle_case(
+        &mut group,
+        "i64/no_nulls_not_found".to_string(),
+        create_int64_list_array(rows, size, 0.0),
+        create_int64_value_array(rows, s, s),
+        rows,
+    );
+    run_array_needle_case(
+        &mut group,
+        "i64/nulls30_found".to_string(),
+        create_int64_list_array(rows, size, 0.3),
+        create_int64_value_array(rows, s, 0),
+        rows,
+    );
+    run_array_needle_case(
+        &mut group,
+        "i64/nulls30_not_found".to_string(),
+        create_int64_list_array(rows, size, 0.3),
+        create_int64_value_array(rows, s, s),
+        rows,
+    );
+    run_array_needle_case(
+        &mut group,
+        "i64/all_null".to_string(),
+        create_int64_list_array(rows, size, 1.0),
+        create_int64_value_array(rows, s, 0),
+        rows,
+    );
+    run_array_needle_case(
+        &mut group,
+        "i64/collision".to_string(),
+        create_int64_list_array(rows, size, 1.0),
+        create_int64_value_array(rows, 1, 0),
+        rows,
+    );
+    // Short elements stay inline in a `Utf8View` (<= 12 bytes); long elements
+    // share a 4-byte prefix (the realistic case where the view prefix can't
+    // reject, forcing a buffer compare). `_short` / `_long` labels distinguish
+    // them; all-null has no content so it is length-independent.
+    let short = "value_"; // "value_0".."value_63": <= 8 bytes, inline
+    let long = "long_element_string_value_"; // ~28 bytes, spills to the buffer
+    for (type_label, element_type) in [
+        ("utf8", DataType::Utf8),
+        ("largeutf8", DataType::LargeUtf8),
+        ("utf8view", DataType::Utf8View),
+    ] {
+        for (len_label, prefix) in [("short", short), ("long", long)] {
+            for (pat_label, density) in [("no_nulls", 0.0), ("nulls30", 0.3)] {
+                run_array_needle_case(
+                    &mut group,
+                    format!("{type_label}_{len_label}/{pat_label}"),
+                    string_list_array(rows, size, density, prefix, &element_type),
+                    string_value_array(rows, size, prefix, &element_type),
+                    rows,
+                );
+            }
+        }
+        run_array_needle_case(
+            &mut group,
+            format!("{type_label}/all_null"),
+            string_list_array(rows, size, 1.0, short, &element_type),
+            string_value_array(rows, size, short, &element_type),
+            rows,
+        );
+    }
+    group.finish();
+}
+
+/// Array needle, i64, 30% element nulls, not found, across list lengths.
+fn bench_array_has_array_by_size(c: &mut Criterion) {
+    let rows = 10_000usize;
+    let mut group = c.benchmark_group("array_has_array_by_size");
+    for size in [8usize, 32, 128, 256, 512, 1024] {
+        let s = size as i64;
+        run_array_needle_case(
+            &mut group,
+            size.to_string(),
+            create_int64_list_array(rows, size, 0.3),
+            create_int64_value_array(rows, s, s),
+            rows,
+        );
+    }
+    group.finish();
+}
+
+/// Array needle, i64, 8 elems/row, 30% nulls, not found, across row counts.
+fn bench_array_has_array_by_rows(c: &mut Criterion) {
+    let (size, s) = (8usize, 8i64);
+    let mut group = c.benchmark_group("array_has_array_by_rows");
+    for rows in [10_000usize, 100_000, 1_000_000] {
+        run_array_needle_case(
+            &mut group,
+            rows.to_string(),
+            create_int64_list_array(rows, size, 0.3),
+            create_int64_value_array(rows, s, s),
+            rows,
+        );
+    }
+    group.finish();
 }
 
 fn bench_array_has(c: &mut Criterion, array_size: usize) {
@@ -115,6 +334,136 @@ fn bench_array_has(c: &mut Criterion, array_size: usize) {
             })
         },
     );
+
+    group.finish();
+}
+
+/// Benchmarks array_has where the needle is an array (a column with one value
+/// per row) rather than a scalar.
+fn bench_array_has_array(c: &mut Criterion, array_size: usize) {
+    let mut group = c.benchmark_group("array_has_array_i64");
+    let haystack = create_int64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
+    let config_options = Arc::new(ConfigOptions::default());
+    let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
+    let arg_fields: Vec<Arc<Field>> = vec![
+        Field::new("arr", haystack.data_type().clone(), false).into(),
+        Field::new("el", DataType::Int64, false).into(),
+    ];
+
+    // Needle values drawn from the same range as the haystack values, so many
+    // rows find a match (and the inner loop can short-circuit).
+    let needle_found = create_int64_value_array(NUM_ROWS, array_size as i64, 0);
+    let args_found = vec![
+        ColumnarValue::Array(haystack.clone()),
+        ColumnarValue::Array(needle_found),
+    ];
+    group.bench_with_input(
+        BenchmarkId::new("found", array_size),
+        &array_size,
+        |b, _| {
+            let udf = ArrayHas::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_found.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
+        },
+    );
+
+    // Needle values outside the haystack range: never matches, so every row
+    // scans its full element list (worst case for the inner loop).
+    let needle_not_found =
+        create_int64_value_array(NUM_ROWS, array_size as i64, array_size as i64);
+    let args_not_found = vec![
+        ColumnarValue::Array(haystack.clone()),
+        ColumnarValue::Array(needle_not_found),
+    ];
+    group.bench_with_input(
+        BenchmarkId::new("not_found", array_size),
+        &array_size,
+        |b, _| {
+            let udf = ArrayHas::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_not_found.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
+        },
+    );
+
+    group.finish();
+}
+
+fn bench_array_has_array_strings(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_has_array_strings");
+    let config_options = Arc::new(ConfigOptions::default());
+    let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
+
+    let sizes = vec![10, 100, 500];
+
+    for &size in &sizes {
+        let haystack = create_string_list_array(NUM_ROWS, size, NULL_DENSITY);
+        let arg_fields: Vec<Arc<Field>> = vec![
+            Field::new("arr", haystack.data_type().clone(), false).into(),
+            Field::new("el", DataType::Utf8, false).into(),
+        ];
+
+        let needle_found = create_string_value_array(NUM_ROWS, size, "value_");
+        let args_found = vec![
+            ColumnarValue::Array(haystack.clone()),
+            ColumnarValue::Array(needle_found),
+        ];
+        group.bench_with_input(BenchmarkId::new("found", size), &size, |b, _| {
+            let udf = ArrayHas::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_found.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
+        });
+
+        let needle_not_found = create_string_value_array(NUM_ROWS, size, "missing_");
+        let args_not_found = vec![
+            ColumnarValue::Array(haystack.clone()),
+            ColumnarValue::Array(needle_not_found),
+        ];
+        group.bench_with_input(BenchmarkId::new("not_found", size), &size, |b, _| {
+            let udf = ArrayHas::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_not_found.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
+        });
+    }
 
     group.finish();
 }
@@ -657,6 +1006,30 @@ fn create_int64_list_array(
         )
         .unwrap(),
     )
+}
+
+/// Create an `Int64Array` of `num_rows` non-null values in `[offset, offset +
+/// range)`, used as an array needle for `array_has`.
+fn create_int64_value_array(num_rows: usize, range: i64, offset: i64) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(SEED + 2);
+    let values = (0..num_rows)
+        .map(|_| Some(rng.random_range(0..range) + offset))
+        .collect::<Int64Array>();
+    Arc::new(values)
+}
+
+/// Create a `StringArray` of `num_rows` non-null values like "{prefix}{idx}"
+/// where `idx` is drawn from `[0, range)`, used as an array needle for
+/// `array_has`.
+fn create_string_value_array(num_rows: usize, range: usize, prefix: &str) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(SEED + 2);
+    let values = (0..num_rows)
+        .map(|_| {
+            let idx = rng.random_range(0..range);
+            Some(format!("{prefix}{idx}"))
+        })
+        .collect::<StringArray>();
+    Arc::new(values)
 }
 
 /// Like `create_int64_list_array` but values are offset so they won't

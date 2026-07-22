@@ -264,7 +264,7 @@ impl Unparser<'_> {
             }
             Expr::Cast(Cast { expr, field }) => Ok(self.cast_to_sql(expr, field)?),
             Expr::Literal(value, _) => Ok(self.scalar_to_sql(value)?),
-            Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
+            Expr::Alias(Alias { expr, .. }) => self.expr_to_sql_inner(expr),
             Expr::WindowFunction(window_fun) => {
                 let WindowFunction {
                     fun,
@@ -402,20 +402,25 @@ impl Unparser<'_> {
                     ..
                 } = &agg.params;
 
-                let args = self.function_args_to_sql(args)?;
+                let args_to_use;
+                let within_group;
+
+                // if this is a WITHIN GROUP aggregate, skip the prepended arg
+                if agg.func.supports_within_group_clause() && !order_by.is_empty() {
+                    args_to_use = self.function_args_to_sql(&args[1..])?;
+                    within_group = order_by
+                        .iter()
+                        .map(|sort_expr| self.sort_to_sql(sort_expr))
+                        .collect::<Result<Vec<ast::OrderByExpr>>>()?;
+                } else {
+                    args_to_use = self.function_args_to_sql(args)?;
+                    within_group = Vec::new();
+                }
+
                 let filter = match filter {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
                 };
-                let within_group: Vec<ast::OrderByExpr> =
-                    if agg.func.supports_within_group_clause() {
-                        order_by
-                            .iter()
-                            .map(|sort_expr| self.sort_to_sql(sort_expr))
-                            .collect::<Result<Vec<ast::OrderByExpr>>>()?
-                    } else {
-                        Vec::new()
-                    };
                 Ok(ast::Expr::Function(Function {
                     name: ObjectName::from(vec![Ident {
                         value: func_name.to_string(),
@@ -425,7 +430,7 @@ impl Unparser<'_> {
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: distinct
                             .then_some(DuplicateTreatment::Distinct),
-                        args,
+                        args: args_to_use,
                         clauses: vec![],
                     }),
                     filter,
