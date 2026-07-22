@@ -106,8 +106,6 @@ use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, PhysicalExpr, Wind
 use prost::Message;
 use prost::bytes::BufMut;
 
-use self::from_proto::parse_protobuf_partitioning;
-use self::to_proto::serialize_partitioning;
 use crate::common::{byte_to_string, str_to_byte};
 use crate::convert::{FromProto, TryFromProto};
 use crate::convert_required;
@@ -790,8 +788,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Merge(_) => {
                 CoalescePartitionsExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Repartition(repart) => {
-                self.try_into_repartition_physical_plan(repart, ctx, proto_converter)
+            PhysicalPlanType::Repartition(_) => {
+                RepartitionExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::GlobalLimit(limit) => {
                 self.try_into_global_limit_physical_plan(limit, ctx, proto_converter)
@@ -983,14 +981,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             )?
         {
             return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<RepartitionExec>() {
-            return protobuf::PhysicalPlanNode::try_from_repartition_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
         }
 
         if let Some(exec) = plan.downcast_ref::<SortExec>() {
@@ -1482,25 +1472,27 @@ pub trait PhysicalPlanNodeExt: Sized {
         CoalescePartitionsExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `RepartitionExec` deserializes itself via `RepartitionExec::try_from_proto`"
+    )]
     fn try_into_repartition_physical_plan(
         &self,
         repart: &protobuf::RepartitionExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&repart.input, ctx, proto_converter)?;
-        let partitioning = parse_protobuf_partitioning(
-            repart.partitioning.as_ref(),
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Repartition(Box::new(
+                repart.clone(),
+            ))),
+        };
+        let decoder = ConverterPlanDecoder {
             ctx,
-            input.schema().as_ref(),
             proto_converter,
-        )?;
-        let mut repart_exec = RepartitionExec::try_new(input, partitioning.unwrap())?;
-        if repart.preserve_order {
-            repart_exec = repart_exec.with_preserve_order();
-        }
-        Ok(Arc::new(repart_exec))
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        RepartitionExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_global_limit_physical_plan(
@@ -3511,28 +3503,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `RepartitionExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_repartition_exec(
         exec: &RepartitionExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-
-        let pb_partitioning =
-            serialize_partitioning(exec.partitioning(), codec, proto_converter)?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Repartition(Box::new(
-                protobuf::RepartitionExecNode {
-                    input: Some(Box::new(input)),
-                    partitioning: Some(pb_partitioning),
-                    preserve_order: exec.preserve_order(),
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("RepartitionExec is not serializable")
         })
     }
 
