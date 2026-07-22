@@ -646,6 +646,20 @@ enum BatchPartitionerState {
 /// executions and runs.
 pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_seed(0);
 
+/// Mixes an expression hash before using it to choose an output partition.
+///
+/// Aggregations consume the original hash when probing their hash tables. Using
+/// the same low bits for both partition selection and the final aggregation
+/// would correlate every final hash table with its input partition. This
+/// inexpensive permutation breaks that correlation without hashing the group
+/// expressions again. Expression hashes are already well distributed, so
+/// folding the upper half into the lower half is sufficient to select a new
+/// set of low bits for partitioning.
+#[inline]
+fn mix_hash_for_partitioning(hash: u64) -> u64 {
+    hash ^ (hash >> 32)
+}
+
 /// Computes `value % divisor` without division in the hot loop when `divisor`
 /// is fixed for many values.
 ///
@@ -679,7 +693,8 @@ impl StrengthReducedU64 {
         match self {
             Self::PowerOfTwo { mask } => {
                 for (index, hash) in hash_buffer.iter().enumerate() {
-                    indices[(*hash & mask) as usize].push(index as u32);
+                    let hash = mix_hash_for_partitioning(*hash);
+                    indices[(hash & mask) as usize].push(index as u32);
                 }
             }
             Self::Reciprocal {
@@ -687,8 +702,9 @@ impl StrengthReducedU64 {
                 reciprocal,
             } => {
                 for (index, hash) in hash_buffer.iter().enumerate() {
-                    let quotient = Self::quotient(*hash, reciprocal);
-                    let partition = *hash - quotient * divisor;
+                    let hash = mix_hash_for_partitioning(*hash);
+                    let quotient = Self::quotient(hash, reciprocal);
+                    let partition = hash - quotient * divisor;
                     indices[partition as usize].push(index as u32);
                 }
             }
@@ -2266,6 +2282,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn partition_hash_mix_breaks_low_bit_correlation() {
+        const NUM_PARTITIONS: u64 = 16;
+        const INPUT_PARTITION: u64 = 3;
+
+        let mut output_partitions = [false; NUM_PARTITIONS as usize];
+        for upper_bits in 0..1024 {
+            let hash = (upper_bits << 32) | INPUT_PARTITION;
+            let partition = mix_hash_for_partitioning(hash) & (NUM_PARTITIONS - 1);
+            output_partitions[partition as usize] = true;
+        }
+
+        assert!(output_partitions.into_iter().all(|seen| seen));
     }
 
     #[test]
