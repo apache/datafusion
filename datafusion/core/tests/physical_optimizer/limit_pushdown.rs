@@ -18,8 +18,8 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    coalesce_partitions_exec, global_limit_exec, hash_join_exec, local_limit_exec,
-    sort_exec, sort_preserving_merge_exec, stream_exec,
+    TestScan, coalesce_partitions_exec, global_limit_exec, hash_join_exec,
+    local_limit_exec, sort_exec, sort_preserving_merge_exec, stream_exec,
 };
 
 use arrow::compute::SortOptions;
@@ -38,6 +38,7 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{ExecutionPlan, get_plan_string};
 
 fn create_schema() -> SchemaRef {
@@ -162,6 +163,208 @@ fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_li
     Ok(())
 }
 
+#[test]
+fn keeps_global_limit_above_fetch_capable_multi_partition_scan() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(
+        TestScan::new(schema, vec![])
+            .with_supports_fetch(true)
+            .with_partition_count(2),
+    );
+    let global_limit = global_limit_exec(scan, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    CoalescePartitionsExec: fetch=5
+      TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn keeps_global_offset_limit_above_fetch_capable_multi_partition_scan() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(
+        TestScan::new(schema, vec![])
+            .with_supports_fetch(true)
+            .with_partition_count(2),
+    );
+    let global_limit = global_limit_exec(scan, 2, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=2, fetch=5
+      CoalescePartitionsExec: fetch=7
+        TestScan: fetch=7
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn preserves_existing_per_partition_fetch_under_global_limit() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(
+        TestScan::new(schema, vec![])
+            .with_supports_fetch(true)
+            .with_partition_count(2),
+    );
+    let scan = scan.with_fetch(Some(3)).unwrap();
+    let global_limit = global_limit_exec(scan, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    CoalescePartitionsExec: fetch=5
+      TestScan: fetch=3
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn adds_global_boundary_above_unfetchable_multi_partition_scan() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]).with_partition_count(2));
+    let global_limit = global_limit_exec(scan, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    CoalescePartitionsExec: fetch=5
+      TestScan
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn materializes_global_boundary_before_pushing_into_union_children() -> Result<()> {
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let union = UnionExec::try_new(vec![left, right])?;
+    let global_limit = global_limit_exec(union, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    CoalescePartitionsExec: fetch=5
+      UnionExec
+        TestScan: fetch=5
+        TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn materializes_global_boundary_for_offset_only_multi_partition_scan() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]).with_partition_count(2));
+    let global_limit = global_limit_exec(scan, 2, None);
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=2, fetch=None
+      CoalescePartitionsExec
+        TestScan
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn removes_noop_global_limit_without_materializing_boundary() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]));
+    let noop_global_limit = global_limit_exec(scan, 0, None);
+
+    let optimized =
+        LimitPushdown::new().optimize(noop_global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @"TestScan"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn keeps_global_limit_above_local_limit_on_multi_partition_union() -> Result<()> {
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let union = UnionExec::try_new(vec![left, right])?;
+    let local_limit = local_limit_exec(union, 3);
+    let global_limit = global_limit_exec(local_limit, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    CoalescePartitionsExec: fetch=5
+      UnionExec
+        TestScan: fetch=3
+        TestScan: fetch=3
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn keeps_global_offset_limit_above_local_limit_on_multi_partition_union() -> Result<()> {
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let union = UnionExec::try_new(vec![left, right])?;
+    let local_limit = local_limit_exec(union, 3);
+    let global_limit = global_limit_exec(local_limit, 2, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=2, fetch=5
+      CoalescePartitionsExec: fetch=7
+        UnionExec
+          TestScan: fetch=3
+          TestScan: fetch=3
+    "
+    );
+
+    Ok(())
+}
+
 fn join_on_columns(
     left_col: &str,
     right_col: &str,
@@ -180,8 +383,9 @@ fn join_on_columns(
 fn absorbs_limit_into_hash_join_inner() -> Result<()> {
     // HashJoinExec with Inner join should absorb limit via with_fetch
     let schema = create_schema();
-    let left = empty_exec(Arc::clone(&schema));
-    let right = empty_exec(Arc::clone(&schema));
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
     let on = join_on_columns("c1", "c1");
     let hash_join = hash_join_exec(left, right, on, None, &JoinType::Inner)?;
     let global_limit = global_limit_exec(hash_join, 0, Some(5));
@@ -192,8 +396,8 @@ fn absorbs_limit_into_hash_join_inner() -> Result<()> {
         @r"
     GlobalLimitExec: skip=0, fetch=5
       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c1@0)]
-        EmptyExec
-        EmptyExec
+        TestScan
+        TestScan
     "
     );
 
@@ -205,8 +409,8 @@ fn absorbs_limit_into_hash_join_inner() -> Result<()> {
         optimized,
         @r"
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c1@0)], fetch=5
-      EmptyExec
-      EmptyExec
+      TestScan
+      TestScan
     "
     );
 
@@ -217,8 +421,9 @@ fn absorbs_limit_into_hash_join_inner() -> Result<()> {
 fn absorbs_limit_into_hash_join_right() -> Result<()> {
     // HashJoinExec with Right join should absorb limit via with_fetch
     let schema = create_schema();
-    let left = empty_exec(Arc::clone(&schema));
-    let right = empty_exec(Arc::clone(&schema));
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
     let on = join_on_columns("c1", "c1");
     let hash_join = hash_join_exec(left, right, on, None, &JoinType::Right)?;
     let global_limit = global_limit_exec(hash_join, 0, Some(10));
@@ -229,8 +434,8 @@ fn absorbs_limit_into_hash_join_right() -> Result<()> {
         @r"
     GlobalLimitExec: skip=0, fetch=10
       HashJoinExec: mode=Partitioned, join_type=Right, on=[(c1@0, c1@0)]
-        EmptyExec
-        EmptyExec
+        TestScan
+        TestScan
     "
     );
 
@@ -242,8 +447,8 @@ fn absorbs_limit_into_hash_join_right() -> Result<()> {
         optimized,
         @r"
     HashJoinExec: mode=Partitioned, join_type=Right, on=[(c1@0, c1@0)], fetch=10
-      EmptyExec
-      EmptyExec
+      TestScan
+      TestScan
     "
     );
 
@@ -254,8 +459,9 @@ fn absorbs_limit_into_hash_join_right() -> Result<()> {
 fn absorbs_limit_into_hash_join_left() -> Result<()> {
     // during probing, then unmatched rows at the end, stopping when limit is reached
     let schema = create_schema();
-    let left = empty_exec(Arc::clone(&schema));
-    let right = empty_exec(Arc::clone(&schema));
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
     let on = join_on_columns("c1", "c1");
     let hash_join = hash_join_exec(left, right, on, None, &JoinType::Left)?;
     let global_limit = global_limit_exec(hash_join, 0, Some(5));
@@ -266,8 +472,8 @@ fn absorbs_limit_into_hash_join_left() -> Result<()> {
         @r"
     GlobalLimitExec: skip=0, fetch=5
       HashJoinExec: mode=Partitioned, join_type=Left, on=[(c1@0, c1@0)]
-        EmptyExec
-        EmptyExec
+        TestScan
+        TestScan
     "
     );
 
@@ -279,8 +485,8 @@ fn absorbs_limit_into_hash_join_left() -> Result<()> {
         optimized,
         @r"
     HashJoinExec: mode=Partitioned, join_type=Left, on=[(c1@0, c1@0)], fetch=5
-      EmptyExec
-      EmptyExec
+      TestScan
+      TestScan
     "
     );
 
