@@ -42,7 +42,7 @@ pub trait SchemaProvider: Any + Debug + Sync + Send {
     }
 
     /// Retrieves the list of available table names in this schema.
-    fn table_names(&self) -> Vec<String>;
+    fn table_names(&self) -> Result<Vec<String>>;
 
     /// Retrieves a specific table from the schema by name, if it exists,
     /// otherwise returns `None`.
@@ -83,7 +83,7 @@ pub trait SchemaProvider: Any + Debug + Sync + Send {
     }
 
     /// Returns true if table exist in the schema provider, false otherwise.
-    fn table_exist(&self, name: &str) -> bool;
+    fn table_exist(&self, name: &str) -> Result<bool>;
 }
 
 impl dyn SchemaProvider {

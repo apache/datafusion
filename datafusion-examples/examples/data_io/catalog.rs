@@ -178,9 +178,9 @@ impl DirSchema {
 
 #[async_trait]
 impl SchemaProvider for DirSchema {
-    fn table_names(&self) -> Vec<String> {
+    fn table_names(&self) -> Result<Vec<String>> {
         let tables = self.tables.read().unwrap();
-        tables.keys().cloned().collect::<Vec<_>>()
+        Ok(tables.keys().cloned().collect::<Vec<_>>())
     }
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
@@ -188,9 +188,9 @@ impl SchemaProvider for DirSchema {
         Ok(tables.get(name).cloned())
     }
 
-    fn table_exist(&self, name: &str) -> bool {
+    fn table_exist(&self, name: &str) -> Result<bool> {
         let tables = self.tables.read().unwrap();
-        tables.contains_key(name)
+        Ok(tables.contains_key(name))
     }
 
     fn register_table(
@@ -237,20 +237,14 @@ impl CatalogProvider for DirCatalog {
         Ok(Some(schema))
     }
 
-    fn schema_names(&self) -> Vec<String> {
+    fn schema_names(&self) -> Result<Vec<String>> {
         let schemas = self.schemas.read().unwrap();
-        schemas.keys().cloned().collect()
+        Ok(schemas.keys().cloned().collect())
     }
 
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
+    fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
         let schemas = self.schemas.read().unwrap();
-        let maybe_schema = schemas.get(name);
-        if let Some(schema) = maybe_schema {
-            let schema = schema.clone() as Arc<dyn SchemaProvider>;
-            Some(schema)
-        } else {
-            None
-        }
+        Ok(schemas.get(name).cloned())
     }
 }
 

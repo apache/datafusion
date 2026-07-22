@@ -82,11 +82,14 @@ fn default_register_schema_not_supported() {
     #[derive(Debug)]
     struct TestProvider {}
     impl CatalogProvider for TestProvider {
-        fn schema_names(&self) -> Vec<String> {
+        fn schema_names(&self) -> datafusion_common::Result<Vec<String>> {
             unimplemented!()
         }
 
-        fn schema(&self, _name: &str) -> Option<Arc<dyn SchemaProvider>> {
+        fn schema(
+            &self,
+            _name: &str,
+        ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
             unimplemented!()
         }
     }
@@ -107,7 +110,11 @@ fn default_register_schema_not_supported() {
 async fn test_mem_provider() {
     let provider = MemorySchemaProvider::new();
     let table_name = "test_table_exist";
-    assert!(!provider.table_exist(table_name));
+    assert!(
+        !provider
+            .table_exist(table_name)
+            .expect("table existence lookup should succeed")
+    );
     assert!(provider.deregister_table(table_name).unwrap().is_none());
     let test_table = EmptyTable::new(Arc::new(Schema::empty()));
     // register table successfully
@@ -117,7 +124,11 @@ async fn test_mem_provider() {
             .unwrap()
             .is_none()
     );
-    assert!(provider.table_exist(table_name));
+    assert!(
+        provider
+            .table_exist(table_name)
+            .expect("table existence lookup should succeed")
+    );
     let other_table = EmptyTable::new(Arc::new(Schema::empty()));
     let result = provider.register_table(table_name.to_string(), Arc::new(other_table));
     assert!(result.is_err(), "The table test_table_exist already exists");

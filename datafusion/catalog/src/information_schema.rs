@@ -117,11 +117,11 @@ impl InformationSchemaConfig {
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
-            for schema_name in catalog.schema_names() {
+            for schema_name in catalog.schema_names()? {
                 if schema_name != INFORMATION_SCHEMA {
                     // schema name may not exist in the catalog, so we need to check
-                    if let Some(schema) = catalog.schema(&schema_name) {
-                        for table_name in schema.table_names() {
+                    if let Some(schema) = catalog.schema(&schema_name)? {
+                        for table_name in schema.table_names()? {
                             if let Some(table_type) =
                                 schema.table_type(&table_name).await?
                             {
@@ -151,19 +151,23 @@ impl InformationSchemaConfig {
         Ok(())
     }
 
-    async fn make_schemata(&self, builder: &mut InformationSchemataBuilder) {
+    async fn make_schemata(
+        &self,
+        builder: &mut InformationSchemataBuilder,
+    ) -> Result<(), DataFusionError> {
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
-            for schema_name in catalog.schema_names() {
+            for schema_name in catalog.schema_names()? {
                 if schema_name != INFORMATION_SCHEMA
-                    && let Some(schema) = catalog.schema(&schema_name)
+                    && let Some(schema) = catalog.schema(&schema_name)?
                 {
                     let schema_owner = schema.owner_name();
                     builder.add_schemata(&catalog_name, &schema_name, schema_owner);
                 }
             }
         }
+        Ok(())
     }
 
     async fn make_views(
@@ -173,11 +177,11 @@ impl InformationSchemaConfig {
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
-            for schema_name in catalog.schema_names() {
+            for schema_name in catalog.schema_names()? {
                 if schema_name != INFORMATION_SCHEMA {
                     // schema name may not exist in the catalog, so we need to check
-                    if let Some(schema) = catalog.schema(&schema_name) {
-                        for table_name in schema.table_names() {
+                    if let Some(schema) = catalog.schema(&schema_name)? {
+                        for table_name in schema.table_names()? {
                             if let Some(table) = schema.table(&table_name).await? {
                                 builder.add_view(
                                     &catalog_name,
@@ -203,11 +207,11 @@ impl InformationSchemaConfig {
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
-            for schema_name in catalog.schema_names() {
+            for schema_name in catalog.schema_names()? {
                 if schema_name != INFORMATION_SCHEMA {
                     // schema name may not exist in the catalog, so we need to check
-                    if let Some(schema) = catalog.schema(&schema_name) {
-                        for table_name in schema.table_names() {
+                    if let Some(schema) = catalog.schema(&schema_name)? {
+                        for table_name in schema.table_names()? {
                             if let Some(table) = schema.table(&table_name).await? {
                                 for (field_position, field) in
                                     table.schema().fields().iter().enumerate()
@@ -575,11 +579,11 @@ fn remove_native_type_prefix(native_type: &NativeType) -> String {
 
 #[async_trait]
 impl SchemaProvider for InformationSchemaProvider {
-    fn table_names(&self) -> Vec<String> {
-        INFORMATION_SCHEMA_TABLES
+    fn table_names(&self) -> Result<Vec<String>> {
+        Ok(INFORMATION_SCHEMA_TABLES
             .iter()
             .map(|t| (*t).to_string())
-            .collect()
+            .collect())
     }
 
     async fn table(
@@ -603,8 +607,8 @@ impl SchemaProvider for InformationSchemaProvider {
         )))
     }
 
-    fn table_exist(&self, name: &str) -> bool {
-        INFORMATION_SCHEMA_TABLES.contains(&name.to_ascii_lowercase().as_str())
+    fn table_exist(&self, name: &str) -> Result<bool> {
+        Ok(INFORMATION_SCHEMA_TABLES.contains(&name.to_ascii_lowercase().as_str()))
     }
 }
 
@@ -1152,7 +1156,7 @@ impl PartitionStream for InformationSchemata {
             Arc::clone(&self.schema),
             // TODO: Stream this
             futures::stream::once(async move {
-                config.make_schemata(&mut builder).await;
+                config.make_schemata(&mut builder).await?;
                 builder.finish()
             }),
         ))
@@ -1598,11 +1602,11 @@ mod tests {
             )
         }
 
-        fn table_names(&self) -> Vec<String> {
-            vec!["atable".to_string()]
+        fn table_names(&self) -> Result<Vec<String>> {
+            Ok(vec!["atable".to_string()])
         }
 
-        fn table_exist(&self, _: &str) -> bool {
+        fn table_exist(&self, _: &str) -> Result<bool> {
             unimplemented!("not required for these tests")
         }
     }
@@ -1626,12 +1630,12 @@ mod tests {
     }
 
     impl CatalogProvider for Fixture {
-        fn schema_names(&self) -> Vec<String> {
-            vec!["aschema".to_string()]
+        fn schema_names(&self) -> Result<Vec<String>> {
+            Ok(vec!["aschema".to_string()])
         }
 
-        fn schema(&self, _: &str) -> Option<Arc<dyn SchemaProvider>> {
-            Some(Arc::new(Self))
+        fn schema(&self, _: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
+            Ok(Some(Arc::new(Self)))
         }
     }
 }

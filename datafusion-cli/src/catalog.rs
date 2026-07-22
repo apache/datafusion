@@ -86,15 +86,15 @@ impl DynamicObjectStoreCatalogProvider {
 }
 
 impl CatalogProvider for DynamicObjectStoreCatalogProvider {
-    fn schema_names(&self) -> Vec<String> {
+    fn schema_names(&self) -> Result<Vec<String>> {
         self.inner.schema_names()
     }
 
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
+    fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
         let state = self.state.clone();
-        self.inner.schema(name).map(|schema| {
+        Ok(self.inner.schema(name)?.map(|schema| {
             Arc::new(DynamicObjectStoreSchemaProvider::new(schema, state)) as _
-        })
+        }))
     }
 
     fn register_schema(
@@ -125,7 +125,7 @@ impl DynamicObjectStoreSchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for DynamicObjectStoreSchemaProvider {
-    fn table_names(&self) -> Vec<String> {
+    fn table_names(&self) -> Result<Vec<String>> {
         self.inner.table_names()
     }
 
@@ -200,7 +200,7 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
         self.inner.deregister_table(name)
     }
 
-    fn table_exist(&self, name: &str) -> bool {
+    fn table_exist(&self, name: &str) -> Result<bool> {
         self.inner.table_exist(name)
     }
 }
@@ -235,12 +235,22 @@ mod tests {
             ctx.state().catalog_list().clone(),
             ctx.state_weak_ref(),
         ) as &dyn CatalogProviderList;
+        let catalog_name = provider
+            .catalog_names()
+            .first()
+            .expect("default catalog should exist")
+            .clone();
         let catalog = provider
-            .catalog(provider.catalog_names().first().unwrap())
-            .unwrap();
+            .catalog(&catalog_name)
+            .expect("default catalog should be retrievable");
+        let schema_names = catalog
+            .schema_names()
+            .expect("schema names lookup should succeed");
+        let schema_name = schema_names.first().expect("default schema should exist");
         let schema = catalog
-            .schema(catalog.schema_names().first().unwrap())
-            .unwrap();
+            .schema(schema_name)
+            .expect("schema lookup should succeed")
+            .expect("default schema should be retrievable");
         (ctx, schema)
     }
 

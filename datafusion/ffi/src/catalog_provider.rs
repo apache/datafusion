@@ -37,12 +37,12 @@ use crate::{df_result, sresult_return};
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_CatalogProvider {
-    pub schema_names: unsafe extern "C" fn(provider: &Self) -> SVec<SString>,
+    pub schema_names: unsafe extern "C" fn(provider: &Self) -> FFI_Result<SVec<SString>>,
 
     pub schema: unsafe extern "C" fn(
         provider: &Self,
         name: SString,
-    ) -> FFI_Option<FFI_SchemaProvider>,
+    ) -> FFI_Result<FFI_Option<FFI_SchemaProvider>>,
 
     pub register_schema:
         unsafe extern "C" fn(
@@ -106,28 +106,30 @@ impl FFI_CatalogProvider {
 
 unsafe extern "C" fn schema_names_fn_wrapper(
     provider: &FFI_CatalogProvider,
-) -> SVec<SString> {
+) -> FFI_Result<SVec<SString>> {
     unsafe {
-        let names = provider.inner().schema_names();
-        names.into_iter().map(|s| s.into()).collect()
+        let names = sresult_return!(provider.inner().schema_names());
+        FFI_Result::Ok(names.into_iter().map(|s| s.into()).collect())
     }
 }
 
 unsafe extern "C" fn schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
     name: SString,
-) -> FFI_Option<FFI_SchemaProvider> {
+) -> FFI_Result<FFI_Option<FFI_SchemaProvider>> {
     unsafe {
-        let maybe_schema = provider.inner().schema(name.as_str());
-        maybe_schema
-            .map(|schema| {
-                FFI_SchemaProvider::new_with_ffi_codec(
-                    schema,
-                    provider.runtime(),
-                    provider.logical_codec.clone(),
-                )
-            })
-            .into()
+        let maybe_schema = sresult_return!(provider.inner().schema(name.as_str()));
+        FFI_Result::Ok(
+            maybe_schema
+                .map(|schema| {
+                    FFI_SchemaProvider::new_with_ffi_codec(
+                        schema,
+                        provider.runtime(),
+                        provider.logical_codec.clone(),
+                    )
+                })
+                .into(),
+        )
     }
 }
 
@@ -297,23 +299,23 @@ impl Clone for FFI_CatalogProvider {
 }
 
 impl CatalogProvider for ForeignCatalogProvider {
-    fn schema_names(&self) -> Vec<String> {
+    fn schema_names(&self) -> Result<Vec<String>> {
         unsafe {
-            (self.0.schema_names)(&self.0)
+            Ok(df_result!((self.0.schema_names)(&self.0))?
                 .into_iter()
                 .map(|s| s.into())
-                .collect()
+                .collect())
         }
     }
 
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
+    fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
         unsafe {
             let maybe_provider: Option<FFI_SchemaProvider> =
-                (self.0.schema)(&self.0, name.into()).into();
+                df_result!((self.0.schema)(&self.0, name.into()))?.into();
 
-            maybe_provider.map(|provider| {
+            Ok(maybe_provider.map(|provider| {
                 Arc::new(ForeignSchemaProvider(provider)) as Arc<dyn SchemaProvider>
-            })
+            }))
         }
     }
 
@@ -359,8 +361,36 @@ impl CatalogProvider for ForeignCatalogProvider {
 #[cfg(test)]
 mod tests {
     use datafusion::catalog::{MemoryCatalogProvider, MemorySchemaProvider};
+    use datafusion_common::DataFusionError;
 
     use super::*;
+
+    #[derive(Debug)]
+    struct FailingCatalogProvider;
+
+    impl CatalogProvider for FailingCatalogProvider {
+        fn schema_names(&self) -> Result<Vec<String>> {
+            Err(DataFusionError::Internal(
+                "schema_names failure from provider".to_string(),
+            ))
+        }
+
+        fn schema(&self, _name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
+            Err(DataFusionError::Internal(
+                "schema failure from provider".to_string(),
+            ))
+        }
+    }
+
+    fn assert_ffi_error_contains(err: DataFusionError, expected: &str) {
+        let DataFusionError::Ffi(message) = err else {
+            panic!("expected FFI error, got {err:?}");
+        };
+        assert!(
+            message.contains(expected),
+            "expected error message to contain '{expected}', got '{message}'"
+        );
+    }
 
     #[test]
     fn test_round_trip_ffi_catalog_provider() {
@@ -382,7 +412,9 @@ mod tests {
 
         let foreign_catalog: Arc<dyn CatalogProvider> = (&ffi_catalog).into();
 
-        let prior_schema_names = foreign_catalog.schema_names();
+        let prior_schema_names = foreign_catalog
+            .schema_names()
+            .expect("schema names lookup should succeed");
         assert_eq!(prior_schema_names.len(), 1);
         assert_eq!(prior_schema_names[0], "prior_schema");
 
@@ -391,29 +423,76 @@ mod tests {
             .register_schema("prior_schema", Arc::new(MemorySchemaProvider::new()))
             .expect("Unable to register schema");
         assert!(returned_schema.is_some());
-        assert_eq!(foreign_catalog.schema_names().len(), 1);
+        assert_eq!(
+            foreign_catalog
+                .schema_names()
+                .expect("schema names lookup should succeed")
+                .len(),
+            1
+        );
 
         // Add a new schema name
         let returned_schema = foreign_catalog
             .register_schema("second_schema", Arc::new(MemorySchemaProvider::new()))
             .expect("Unable to register schema");
         assert!(returned_schema.is_none());
-        assert_eq!(foreign_catalog.schema_names().len(), 2);
+        assert_eq!(
+            foreign_catalog
+                .schema_names()
+                .expect("schema names lookup should succeed")
+                .len(),
+            2
+        );
 
         // Remove a schema
         let returned_schema = foreign_catalog
             .deregister_schema("prior_schema", false)
             .expect("Unable to deregister schema");
         assert!(returned_schema.is_some());
-        assert_eq!(foreign_catalog.schema_names().len(), 1);
+        assert_eq!(
+            foreign_catalog
+                .schema_names()
+                .expect("schema names lookup should succeed")
+                .len(),
+            1
+        );
 
         // Retrieve non-existent schema
-        let returned_schema = foreign_catalog.schema("prior_schema");
+        let returned_schema = foreign_catalog
+            .schema("prior_schema")
+            .expect("schema lookup should succeed");
         assert!(returned_schema.is_none());
 
         // Retrieve valid schema
-        let returned_schema = foreign_catalog.schema("second_schema");
+        let returned_schema = foreign_catalog
+            .schema("second_schema")
+            .expect("schema lookup should succeed");
         assert!(returned_schema.is_some());
+    }
+
+    #[test]
+    fn test_ffi_catalog_provider_propagates_failures() {
+        let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+
+        let mut ffi_catalog = FFI_CatalogProvider::new(
+            Arc::new(FailingCatalogProvider),
+            None,
+            task_ctx_provider,
+            None,
+        );
+        ffi_catalog.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_catalog: Arc<dyn CatalogProvider> = (&ffi_catalog).into();
+
+        let schema_names_err = foreign_catalog
+            .schema_names()
+            .expect_err("schema_names failure should cross FFI boundary");
+        assert_ffi_error_contains(schema_names_err, "schema_names failure");
+
+        let schema_err = foreign_catalog
+            .schema("failing_schema")
+            .expect_err("schema failure should cross FFI boundary");
+        assert_ffi_error_contains(schema_err, "schema failure");
     }
 
     #[test]
