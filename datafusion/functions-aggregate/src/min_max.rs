@@ -764,15 +764,15 @@ impl Accumulator for SlidingMinAccumulator {
 /// ```
 #[derive(Debug)]
 pub struct MovingMin<T> {
-    push_stack: Vec<(T, T)>,
-    pop_stack: Vec<(T, T)>,
+    fifo: std::collections::VecDeque<T>,
+    deque: std::collections::VecDeque<T>,
 }
 
 impl<T: Clone + PartialOrd> Default for MovingMin<T> {
     fn default() -> Self {
         Self {
-            push_stack: Vec::new(),
-            pop_stack: Vec::new(),
+            fifo: std::collections::VecDeque::new(),
+            deque: std::collections::VecDeque::new(),
         }
     }
 }
@@ -790,8 +790,8 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            push_stack: Vec::with_capacity(capacity),
-            pop_stack: Vec::with_capacity(capacity),
+            fifo: std::collections::VecDeque::with_capacity(capacity),
+            deque: std::collections::VecDeque::with_capacity(capacity),
         }
     }
 
@@ -799,63 +799,42 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
     /// empty.
     #[inline]
     pub fn min(&self) -> Option<&T> {
-        match (self.push_stack.last(), self.pop_stack.last()) {
-            (None, None) => None,
-            (Some((_, min)), None) => Some(min),
-            (None, Some((_, min))) => Some(min),
-            (Some((_, a)), Some((_, b))) => Some(if a < b { a } else { b }),
-        }
+        self.deque.front()
     }
 
     /// Pushes a new element into the sliding window.
     #[inline]
     pub fn push(&mut self, val: T) {
-        self.push_stack.push(match self.push_stack.last() {
-            Some((_, min)) => {
-                if val > *min {
-                    (val, min.clone())
-                } else {
-                    (val.clone(), val)
-                }
-            }
-            None => (val.clone(), val),
-        });
+        self.fifo.push_back(val.clone());
+        while self.deque.back().map_or(false, |back_val| *back_val > val) {
+            self.deque.pop_back();
+        }
+        self.deque.push_back(val);
     }
 
     /// Removes and returns the last value of the sliding window.
     #[inline]
     pub fn pop(&mut self) -> Option<T> {
-        if self.pop_stack.is_empty() {
-            match self.push_stack.pop() {
-                Some((val, _)) => {
-                    let mut last = (val.clone(), val);
-                    self.pop_stack.push(last.clone());
-                    while let Some((val, _)) = self.push_stack.pop() {
-                        let min = if last.1 < val {
-                            last.1.clone()
-                        } else {
-                            val.clone()
-                        };
-                        last = (val.clone(), min);
-                        self.pop_stack.push(last.clone());
-                    }
-                }
-                None => return None,
+        if let Some(popped) = self.fifo.pop_front() {
+            if self.deque.front().map_or(false, |front_val| *front_val == popped) {
+                self.deque.pop_front();
             }
+            Some(popped)
+        } else {
+            None
         }
-        self.pop_stack.pop().map(|(val, _)| val)
     }
 
     /// Returns the number of elements stored in the sliding window.
     #[inline]
     pub fn len(&self) -> usize {
-        self.push_stack.len() + self.pop_stack.len()
+        self.fifo.len()
     }
 
     /// Returns `true` if the moving window contains no elements.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.fifo.is_empty()
     }
 }
 
@@ -884,15 +863,15 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
 /// ```
 #[derive(Debug)]
 pub struct MovingMax<T> {
-    push_stack: Vec<(T, T)>,
-    pop_stack: Vec<(T, T)>,
+    fifo: std::collections::VecDeque<T>,
+    deque: std::collections::VecDeque<T>,
 }
 
 impl<T: Clone + PartialOrd> Default for MovingMax<T> {
     fn default() -> Self {
         Self {
-            push_stack: Vec::new(),
-            pop_stack: Vec::new(),
+            fifo: std::collections::VecDeque::new(),
+            deque: std::collections::VecDeque::new(),
         }
     }
 }
@@ -909,71 +888,50 @@ impl<T: Clone + PartialOrd> MovingMax<T> {
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            push_stack: Vec::with_capacity(capacity),
-            pop_stack: Vec::with_capacity(capacity),
+            fifo: std::collections::VecDeque::with_capacity(capacity),
+            deque: std::collections::VecDeque::with_capacity(capacity),
         }
     }
 
     /// Returns the maximum of the sliding window or `None` if the window is empty.
     #[inline]
     pub fn max(&self) -> Option<&T> {
-        match (self.push_stack.last(), self.pop_stack.last()) {
-            (None, None) => None,
-            (Some((_, max)), None) => Some(max),
-            (None, Some((_, max))) => Some(max),
-            (Some((_, a)), Some((_, b))) => Some(if a > b { a } else { b }),
-        }
+        self.deque.front()
     }
 
     /// Pushes a new element into the sliding window.
     #[inline]
     pub fn push(&mut self, val: T) {
-        self.push_stack.push(match self.push_stack.last() {
-            Some((_, max)) => {
-                if val < *max {
-                    (val, max.clone())
-                } else {
-                    (val.clone(), val)
-                }
-            }
-            None => (val.clone(), val),
-        });
+        self.fifo.push_back(val.clone());
+        while self.deque.back().map_or(false, |back_val| *back_val < val) {
+            self.deque.pop_back();
+        }
+        self.deque.push_back(val);
     }
 
     /// Removes and returns the last value of the sliding window.
     #[inline]
     pub fn pop(&mut self) -> Option<T> {
-        if self.pop_stack.is_empty() {
-            match self.push_stack.pop() {
-                Some((val, _)) => {
-                    let mut last = (val.clone(), val);
-                    self.pop_stack.push(last.clone());
-                    while let Some((val, _)) = self.push_stack.pop() {
-                        let max = if last.1 > val {
-                            last.1.clone()
-                        } else {
-                            val.clone()
-                        };
-                        last = (val.clone(), max);
-                        self.pop_stack.push(last.clone());
-                    }
-                }
-                None => return None,
+        if let Some(popped) = self.fifo.pop_front() {
+            if self.deque.front().map_or(false, |front_val| *front_val == popped) {
+                self.deque.pop_front();
             }
+            Some(popped)
+        } else {
+            None
         }
-        self.pop_stack.pop().map(|(val, _)| val)
     }
 
     /// Returns the number of elements stored in the sliding window.
     #[inline]
     pub fn len(&self) -> usize {
-        self.push_stack.len() + self.pop_stack.len()
+        self.fifo.len()
     }
 
     /// Returns `true` if the moving window contains no elements.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.fifo.is_empty()
     }
 }
 
