@@ -237,10 +237,11 @@ impl SkipAggregationProbe {
         }
 
         // With the cost model disabled we replicate the original
-        // behaviour: nothing to do, keep partial.
+        // behaviour: don't lock the phase — subsequent batches may push
+        // the ratio over the threshold and trigger `commit_skip` above.
+        // The probe naturally locks itself once `should_skip` becomes
+        // true; until then, keep re-checking on every partial batch.
         if !self.use_cost_model {
-            self.phase = ProbePhase::Locked { should_skip: false };
-            self.is_locked = true;
             return;
         }
 
@@ -350,6 +351,14 @@ impl SkipAggregationProbe {
 
     pub(super) fn should_skip(&self) -> bool {
         self.should_skip
+    }
+
+    /// `true` once the probe has made its terminal decision (either
+    /// via the bare-ratio short-circuit or the cost-aware A/B window).
+    /// Used by the stream to distinguish "still measuring in A/B" from
+    /// "decision finalised, revert to partial".
+    pub(super) fn is_locked(&self) -> bool {
+        self.is_locked
     }
 
     /// Record the number of rows that were output directly without

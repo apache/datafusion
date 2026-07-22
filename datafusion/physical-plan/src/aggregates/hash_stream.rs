@@ -1225,6 +1225,18 @@ mod tests {
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
             &datafusion_common::ScalarValue::Float64(Some(probe_ratio_threshold)),
         );
+        // This test asserts the *legacy* not-locked-until-skip behaviour:
+        // batch 1 crosses the row threshold but not the ratio threshold
+        // (so the probe stays unlocked); batch 2 pushes ratio over the
+        // threshold and skip fires. The cost-aware A/B path added by
+        // #22518 transitions to AbSampling as soon as the row threshold
+        // is reached with ratio < 0.8, which breaks that scenario. Turn
+        // the cost model off explicitly so the test continues to exercise
+        // the ratio-only decision.
+        session_config = session_config.set(
+            "datafusion.execution.skip_partial_aggregation_use_cost_model",
+            &datafusion_common::ScalarValue::Boolean(Some(false)),
+        );
         task_ctx = task_ctx.with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
 
