@@ -9634,6 +9634,17 @@ SELECT sum(column2) FILTER (WHERE sum(column2) > 0) FROM nested_agg_t;
 statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested
 SELECT array_agg(column2 ORDER BY sum(column2)) FROM nested_agg_t;
 
+# A window function nested inside an aggregate is rejected as well
+statement error DataFusion error: Error during planning: Aggregate function calls cannot contain window function calls
+SELECT sum(sum(column2) OVER ()) FROM nested_agg_t;
+
+# ... as are nested window functions
+statement error DataFusion error: Error during planning: Window function calls cannot be nested
+SELECT sum(sum(column2) OVER ()) OVER () FROM nested_agg_t;
+
+statement error DataFusion error: Error during planning: Window function calls cannot be nested
+SELECT row_number() OVER (ORDER BY row_number() OVER ()) FROM nested_agg_t;
+
 # A scalar function applied to an aggregate is legal
 query IR
 SELECT column1, abs(sum(column2)) FROM nested_agg_t GROUP BY column1 ORDER BY column1;
@@ -9653,6 +9664,12 @@ query R
 SELECT sum(s) FROM (SELECT sum(column2) AS s FROM nested_agg_t GROUP BY column1);
 ----
 60
+
+# An aggregate over the result of a window function computed in a subquery is legal
+query R
+SELECT sum(s) FROM (SELECT sum(column2) OVER () AS s FROM nested_agg_t);
+----
+180
 
 statement ok
 DROP TABLE nested_agg_t;

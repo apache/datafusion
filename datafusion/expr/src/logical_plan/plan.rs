@@ -41,9 +41,9 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    check_no_nested_aggregates, enumerate_grouping_sets, exprlist_to_fields,
-    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
-    merge_schema, split_conjunction,
+    check_aggregate_nesting, check_window_nesting, enumerate_grouping_sets,
+    exprlist_to_fields, find_out_reference_exprs, grouping_set_expr_count,
+    grouping_set_to_exprlist, merge_schema, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -2780,6 +2780,11 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+        // Reject e.g. `sum(sum(x) OVER ()) OVER ()` here rather than letting it
+        // reach physical planning, which has no equivalent for a nested window
+        // function.
+        check_window_nesting(window_expr.iter())?;
+
         let fields: Vec<(Option<TableReference>, Arc<Field>)> = input
             .schema()
             .iter()
@@ -3895,7 +3900,7 @@ impl Aggregate {
     ) -> Result<Self> {
         // Reject e.g. `sum(sum(x))` here rather than letting it reach physical
         // planning, which has no equivalent for a nested aggregate.
-        check_no_nested_aggregates(group_expr.iter().chain(aggr_expr.iter()))?;
+        check_aggregate_nesting(group_expr.iter().chain(aggr_expr.iter()))?;
 
         let group_expr = enumerate_grouping_sets(group_expr)?;
 

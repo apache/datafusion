@@ -679,11 +679,34 @@ fn test_nested_aggregate() -> Result<()> {
     let query = "SELECT sum(sum(/*a*/age/*a*/)) FROM person";
     let spans = get_spans(query);
     let diag = do_query(query);
-    assert_snapshot!(diag.message, @"aggregate function calls cannot be nested");
+    assert_snapshot!(diag.message, @"Aggregate function calls cannot be nested");
     assert_eq!(diag.span, Some(spans["a"]));
     assert_snapshot!(
         diag.helps[0].message,
         @"Compute 'sum(person.age)' in an inner query and aggregate its result, or use a window function such as 'sum(sum(person.age)) OVER ()'"
     );
+    Ok(())
+}
+
+#[test]
+fn test_window_function_inside_aggregate() -> Result<()> {
+    let query = "SELECT sum(sum(/*a*/age/*a*/) OVER ()) FROM person";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(
+        diag.message,
+        @"Aggregate function calls cannot contain window function calls"
+    );
+    assert_eq!(diag.span, Some(spans["a"]));
+    Ok(())
+}
+
+#[test]
+fn test_nested_window_function() -> Result<()> {
+    let query = "SELECT sum(sum(/*a*/age/*a*/) OVER ()) OVER () FROM person";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Window function calls cannot be nested");
+    assert_eq!(diag.span, Some(spans["a"]));
     Ok(())
 }

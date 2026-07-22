@@ -652,45 +652,91 @@ pub fn find_aggregate_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Ve
     })
 }
 
-/// Returns an error if any of `exprs` contains an aggregate function call
-/// nested inside another aggregate function call, such as `sum(sum(x))`.
+/// Either an aggregate function call or a window function call, the two kinds
+/// of expression whose nesting is restricted by [`check_aggregate_nesting`] and
+/// [`check_window_nesting`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FunctionCallKind {
+    Aggregate,
+    Window,
+}
+
+impl FunctionCallKind {
+    fn of(expr: &Expr) -> Option<Self> {
+        match expr {
+            Expr::AggregateFunction(_) => Some(Self::Aggregate),
+            Expr::WindowFunction(_) => Some(Self::Window),
+            _ => None,
+        }
+    }
+}
+
+/// Returns an error if any of `exprs` contains an aggregate or window function
+/// call nested inside an aggregate function call, such as `sum(sum(x))` or
+/// `sum(sum(x) OVER ())`.
 ///
 /// Such expressions are not valid SQL (PostgreSQL reports `aggregate function
-/// calls cannot be nested`) and have no physical equivalent, so they are
-/// rejected while the logical plan is built rather than failing later with an
-/// error that does not point back at the original SQL.
+/// calls cannot be nested` and `aggregate function calls cannot contain window
+/// function calls`) and have no physical equivalent, so they are rejected while
+/// the logical plan is built rather than failing later with an error that does
+/// not point back at the original SQL.
 ///
-/// The nested aggregate is searched for in the arguments, `FILTER` and
-/// `ORDER BY` of each aggregate function call. Note that an aggregate used as
-/// the argument of a *window* function, such as `sum(sum(x)) OVER ()`, is
-/// legal and accepted: there the inner aggregate is evaluated by the
+/// The nested call is searched for in the arguments, `FILTER` and `ORDER BY` of
+/// each aggregate function call. Note that the reverse nesting, an aggregate
+/// used as the argument of a *window* function such as `sum(sum(x)) OVER ()`,
+/// is legal and accepted: there the inner aggregate is evaluated by the
 /// `Aggregate` node and the window function is evaluated on top of its result.
-pub fn check_no_nested_aggregates<'a>(
+pub fn check_aggregate_nesting<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
+) -> Result<()> {
+    check_nesting(
+        exprs,
+        FunctionCallKind::Aggregate,
+        &[FunctionCallKind::Aggregate, FunctionCallKind::Window],
+    )
+}
+
+/// Returns an error if any of `exprs` contains a window function call nested
+/// inside another window function call, such as `sum(sum(x) OVER ()) OVER ()`.
+///
+/// Such expressions are not valid SQL (PostgreSQL reports `window function
+/// calls cannot be nested`) and have no physical equivalent. The nested call is
+/// searched for in the arguments, `PARTITION BY`, `ORDER BY` and `FILTER` of
+/// each window function call.
+pub fn check_window_nesting<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Result<()> {
+    check_nesting(exprs, FunctionCallKind::Window, &[FunctionCallKind::Window])
+}
+
+/// Returns an error if any expression of kind `outer_kind` in `exprs` has an
+/// expression of one of the `illegal_inner_kinds` anywhere below it.
+fn check_nesting<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+    outer_kind: FunctionCallKind,
+    illegal_inner_kinds: &[FunctionCallKind],
 ) -> Result<()> {
     for expr in exprs {
         expr.apply(|outer| {
-            if !matches!(outer, Expr::AggregateFunction(_)) {
+            if FunctionCallKind::of(outer) != Some(outer_kind) {
                 return Ok(TreeNodeRecursion::Continue);
             }
 
-            // `outer` is an aggregate, so no other aggregate may appear
-            // anywhere below it.
-            let mut nested: Option<&Expr> = None;
+            let mut nested = None;
             outer.apply_children(|child| {
-                child.apply(|inner| {
-                    if matches!(inner, Expr::AggregateFunction(_)) {
-                        nested = Some(inner);
+                child.apply(|inner| match FunctionCallKind::of(inner) {
+                    Some(kind) if illegal_inner_kinds.contains(&kind) => {
+                        nested = Some((inner, kind));
                         Ok(TreeNodeRecursion::Stop)
-                    } else {
-                        Ok(TreeNodeRecursion::Continue)
                     }
+                    _ => Ok(TreeNodeRecursion::Continue),
                 })
             })?;
 
             match nested {
-                Some(inner) => nested_aggregate_err(outer, inner),
-                // The whole subtree below `outer` has just been checked
+                Some((inner, inner_kind)) => {
+                    nested_call_err(outer, outer_kind, inner, inner_kind)
+                }
+                // Nothing below `outer` can be an `outer_kind` expression, as
+                // that kind is always one of the illegal inner kinds
                 None => Ok(TreeNodeRecursion::Jump),
             }
         })?;
@@ -698,20 +744,34 @@ pub fn check_no_nested_aggregates<'a>(
     Ok(())
 }
 
-fn nested_aggregate_err(outer: &Expr, inner: &Expr) -> Result<TreeNodeRecursion> {
-    let diagnostic = Diagnostic::new_error(
-        "aggregate function calls cannot be nested",
-        first_span(inner),
-    )
-    .with_help(
-        format!(
-            "Compute '{inner}' in an inner query and aggregate its result, or use a window function such as '{outer} OVER ()'"
+fn nested_call_err(
+    outer: &Expr,
+    outer_kind: FunctionCallKind,
+    inner: &Expr,
+    inner_kind: FunctionCallKind,
+) -> Result<TreeNodeRecursion> {
+    let (message, help) = match (outer_kind, inner_kind) {
+        (FunctionCallKind::Aggregate, FunctionCallKind::Aggregate) => (
+            "Aggregate function calls cannot be nested",
+            format!(
+                "Compute '{inner}' in an inner query and aggregate its result, or use a window function such as '{outer} OVER ()'"
+            ),
         ),
-        None,
-    );
+        (FunctionCallKind::Aggregate, FunctionCallKind::Window) => (
+            "Aggregate function calls cannot contain window function calls",
+            format!("Compute '{inner}' in an inner query and aggregate its result"),
+        ),
+        (FunctionCallKind::Window, _) => (
+            "Window function calls cannot be nested",
+            format!("Compute '{inner}' in an inner query and use its result here"),
+        ),
+    };
+
+    let diagnostic =
+        Diagnostic::new_error(message, first_span(inner)).with_help(help, None);
 
     plan_err!(
-        "Aggregate function calls cannot be nested: '{inner}' is nested inside '{outer}'";
+        "{message}: '{inner}' is nested inside '{outer}'";
         diagnostic = diagnostic
     )
 }
@@ -2000,33 +2060,37 @@ mod tests {
         ");
     }
 
+    /// `sum(<args>) OVER ()`
+    fn sum_over(args: Vec<Expr>) -> Expr {
+        Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::AggregateUDF(sum_udaf()),
+            args,
+        ))
+    }
+
     #[test]
-    fn test_check_no_nested_aggregates_ok() -> Result<()> {
+    fn test_check_aggregate_nesting_ok() -> Result<()> {
         use crate::test::function_stub::{count, sum};
 
         // a plain aggregate, an aggregate wrapped in a scalar expression and a
         // window function over an aggregate are all legal
-        let window_over_aggregate = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::AggregateUDF(sum_udaf()),
-            vec![sum(col("a"))],
-        ));
         let exprs = [
             sum(col("a")),
             count(col("a")) + lit(1),
-            window_over_aggregate,
+            sum_over(vec![sum(col("a"))]),
         ];
 
-        check_no_nested_aggregates(exprs.iter())?;
+        check_aggregate_nesting(exprs.iter())?;
         Ok(())
     }
 
     #[test]
-    fn test_check_no_nested_aggregates_err() {
+    fn test_check_aggregate_nesting_err() {
         use crate::test::function_stub::{count, sum};
         use insta::assert_snapshot;
 
         // directly nested
-        let err = check_no_nested_aggregates([&sum(sum(col("a")))]).unwrap_err();
+        let err = check_aggregate_nesting([&sum(sum(col("a")))]).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
             @"Error during planning: Aggregate function calls cannot be nested: 'sum(a)' is nested inside 'sum(sum(a))'"
@@ -2034,7 +2098,7 @@ mod tests {
 
         // nested below another expression in the arguments
         let err =
-            check_no_nested_aggregates([&sum(col("a") + count(col("b")))]).unwrap_err();
+            check_aggregate_nesting([&sum(col("a") + count(col("b")))]).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
             @"Error during planning: Aggregate function calls cannot be nested: 'COUNT(b)' is nested inside 'sum(a + COUNT(b))'"
@@ -2045,7 +2109,7 @@ mod tests {
             .filter(sum(col("b")).gt(lit(0)))
             .build()
             .unwrap();
-        let err = check_no_nested_aggregates([&filtered]).unwrap_err();
+        let err = check_aggregate_nesting([&filtered]).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
             @"Error during planning: Aggregate function calls cannot be nested: 'sum(b)' is nested inside 'sum(a) FILTER (WHERE sum(b) > Int32(0))'"
@@ -2056,10 +2120,45 @@ mod tests {
             .order_by(vec![Sort::new(sum(col("b")), true, false)])
             .build()
             .unwrap();
-        let err = check_no_nested_aggregates([&ordered]).unwrap_err();
+        let err = check_aggregate_nesting([&ordered]).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
             @"Error during planning: Aggregate function calls cannot be nested: 'sum(b)' is nested inside 'sum(a) ORDER BY [sum(b) ASC NULLS LAST]'"
+        );
+
+        // a window function nested inside an aggregate
+        let err = check_aggregate_nesting([&sum(sum_over(vec![col("a")]))]).unwrap_err();
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Aggregate function calls cannot contain window function calls: 'sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)'"
+        );
+    }
+
+    #[test]
+    fn test_check_window_nesting_ok() -> Result<()> {
+        use crate::test::function_stub::sum;
+
+        // a window function over a column, and a window function over the
+        // result of an aggregate, are both legal
+        let exprs = [
+            sum_over(vec![col("a")]),
+            sum_over(vec![sum(col("a"))]),
+            sum(col("a")),
+        ];
+
+        check_window_nesting(exprs.iter())?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_window_nesting_err() {
+        use insta::assert_snapshot;
+
+        let err = check_window_nesting([&sum_over(vec![sum_over(vec![col("a")])])])
+            .unwrap_err();
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Window function calls cannot be nested: 'sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
         );
     }
 }

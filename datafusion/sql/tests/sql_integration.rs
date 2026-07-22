@@ -1798,6 +1798,37 @@ fn select_nested_aggregate() {
 }
 
 #[test]
+fn select_window_function_inside_aggregate() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age) OVER ()) FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot contain window function calls: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)'"
+    );
+}
+
+#[test]
+fn select_nested_window_function() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age) OVER ()) OVER () FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls cannot be nested: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    let err = logical_plan(
+        "SELECT rank() OVER (ORDER BY rank() OVER (ORDER BY age)) FROM person",
+    )
+    .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls cannot be nested: 'rank() ORDER BY [person.age ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW' is nested inside 'rank() ORDER BY [rank() ORDER BY [person.age ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW'"
+    );
+}
+
+#[test]
 fn select_aggregate_inside_window_function() {
     // an aggregate as the argument of a window function is legal: the window
     // function is evaluated on top of the aggregate
