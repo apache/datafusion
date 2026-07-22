@@ -829,11 +829,12 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::PlaceholderRow(placeholder) => {
                 self.try_into_placeholder_row_physical_plan(placeholder, ctx)
             }
-            PhysicalPlanType::Sort(sort) => {
-                self.try_into_sort_physical_plan(sort, ctx, proto_converter)
+            PhysicalPlanType::Sort(_) => {
+                SortExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::SortPreservingMerge(sort) => self
-                .try_into_sort_preserving_merge_physical_plan(sort, ctx, proto_converter),
+            PhysicalPlanType::SortPreservingMerge(_) => {
+                SortPreservingMergeExec::try_from_proto(self.node(), &decode_ctx)
+            }
             PhysicalPlanType::Extension(extension) => {
                 self.try_into_extension_physical_plan(extension, ctx, proto_converter)
             }
@@ -993,14 +994,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             );
         }
 
-        if let Some(exec) = plan.downcast_ref::<SortExec>() {
-            return protobuf::PhysicalPlanNode::try_from_sort_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
         if let Some(union) = plan.downcast_ref::<UnionExec>() {
             return protobuf::PhysicalPlanNode::try_from_union_exec(
                 union,
@@ -1012,14 +1005,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         if let Some(interleave) = plan.downcast_ref::<InterleaveExec>() {
             return protobuf::PhysicalPlanNode::try_from_interleave_exec(
                 interleave,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<SortPreservingMergeExec>() {
-            return protobuf::PhysicalPlanNode::try_from_sort_preserving_merge_exec(
-                exec,
                 codec,
                 proto_converter,
             );
@@ -2123,130 +2108,48 @@ pub trait PhysicalPlanNodeExt: Sized {
         ))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SortExec` deserializes itself via `SortExec::try_from_proto`"
+    )]
     fn try_into_sort_physical_plan(
         &self,
         sort: &protobuf::SortExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let node = self.node();
-        let input = into_physical_plan(&sort.input, ctx, proto_converter)?;
-        let exprs = sort
-            .expr
-            .iter()
-            .map(|expr| {
-                let expr = expr.expr_type.as_ref().ok_or_else(|| {
-                    proto_error(format!(
-                        "physical_plan::from_proto() Unexpected expr {node:?}"
-                    ))
-                })?;
-                if let ExprType::Sort(sort_expr) = expr {
-                    let expr = sort_expr
-                        .expr
-                        .as_ref()
-                        .ok_or_else(|| {
-                            proto_error(format!(
-                                "physical_plan::from_proto() Unexpected sort expr {node:?}"
-                            ))
-                        })?
-                        .as_ref();
-                    Ok(PhysicalSortExpr {
-                        expr: proto_converter.proto_to_physical_expr(
-                            expr,
-                            input.schema().as_ref(),
-                            ctx,
-                        )?,
-                        options: SortOptions {
-                            descending: !sort_expr.asc,
-                            nulls_first: sort_expr.nulls_first,
-                        },
-                    })
-                } else {
-                    internal_err!(
-                        "physical_plan::from_proto() {node:?}"
-                    )
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let Some(ordering) = LexOrdering::new(exprs) else {
-            return internal_err!("SortExec requires an ordering");
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Sort(Box::new(sort.clone()))),
         };
-        let fetch = (sort.fetch >= 0).then_some(sort.fetch as _);
-        let new_sort = SortExec::new(ordering, input)
-            .with_fetch(fetch)
-            .with_preserve_partitioning(sort.preserve_partitioning);
-
-        let new_sort = if let Some(dynamic_filter_proto) = &sort.dynamic_filter {
-            let dynamic_filter_expr = proto_converter.proto_to_physical_expr(
-                dynamic_filter_proto,
-                new_sort.input().schema().as_ref(),
-                ctx,
-            )?;
-            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
-                .downcast::<DynamicFilterPhysicalExpr>()
-                .map_err(|_| {
-                    internal_datafusion_err!(
-                        "SortExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
-                    )
-                })?;
-            new_sort.with_dynamic_filter_expr(df)?
-        } else {
-            new_sort
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
         };
-
-        Ok(Arc::new(new_sort))
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        SortExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SortPreservingMergeExec` deserializes itself via `SortPreservingMergeExec::try_from_proto`"
+    )]
     fn try_into_sort_preserving_merge_physical_plan(
         &self,
         sort: &protobuf::SortPreservingMergeExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let node = self.node();
-        let input = into_physical_plan(&sort.input, ctx, proto_converter)?;
-        let exprs = sort
-            .expr
-            .iter()
-            .map(|expr| {
-                let expr = expr.expr_type.as_ref().ok_or_else(|| {
-                    proto_error(format!(
-                        "physical_plan::from_proto() Unexpected expr {node:?}"
-                    ))
-                })?;
-                if let ExprType::Sort(sort_expr) = expr {
-                    let expr = sort_expr
-                        .expr
-                        .as_ref()
-                        .ok_or_else(|| {
-                            proto_error(format!(
-                            "physical_plan::from_proto() Unexpected sort expr {node:?}"
-                        ))
-                        })?
-                        .as_ref();
-                    Ok(PhysicalSortExpr {
-                        expr: proto_converter.proto_to_physical_expr(
-                            expr,
-                            input.schema().as_ref(),
-                            ctx,
-                        )?,
-                        options: SortOptions {
-                            descending: !sort_expr.asc,
-                            nulls_first: sort_expr.nulls_first,
-                        },
-                    })
-                } else {
-                    internal_err!("physical_plan::from_proto() {node:?}")
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let Some(ordering) = LexOrdering::new(exprs) else {
-            return internal_err!("SortExec requires an ordering");
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::SortPreservingMerge(Box::new(
+                sort.clone(),
+            ))),
         };
-        let fetch = (sort.fetch >= 0).then_some(sort.fetch as _);
-        Ok(Arc::new(
-            SortPreservingMergeExec::new(ordering, input).with_fetch(fetch),
-        ))
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        SortPreservingMergeExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_extension_physical_plan(
@@ -3536,51 +3439,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SortExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_sort_exec(
         exec: &SortExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = proto_converter.execution_plan_to_proto(exec.input(), codec)?;
-        let expr = exec
-            .expr()
-            .iter()
-            .map(|expr| {
-                let sort_expr = Box::new(protobuf::PhysicalSortExprNode {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(&expr.expr, codec)?,
-                    )),
-                    asc: !expr.options.descending,
-                    nulls_first: expr.options.nulls_first,
-                });
-                Ok(protobuf::PhysicalExprNode {
-                    expr_id: None,
-                    expr_type: Some(ExprType::Sort(sort_expr)),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let dynamic_filter = exec
-            .dynamic_filter_expr()
-            .map(|df| {
-                let df_expr: Arc<dyn PhysicalExpr> = df as Arc<dyn PhysicalExpr>;
-                proto_converter.physical_expr_to_proto(&df_expr, codec)
-            })
-            .transpose()?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Sort(Box::new(
-                protobuf::SortExecNode {
-                    input: Some(Box::new(input)),
-                    expr,
-                    fetch: match exec.fetch() {
-                        Some(n) => n as i64,
-                        _ => -1,
-                    },
-                    preserve_partitioning: exec.preserve_partitioning(),
-                    dynamic_filter,
-                },
-            ))),
-        })
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("SortExec is not serializable"))
     }
 
     fn try_from_union_exec(
@@ -3627,41 +3501,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SortPreservingMergeExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_sort_preserving_merge_exec(
         exec: &SortPreservingMergeExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let expr = exec
-            .expr()
-            .iter()
-            .map(|expr| {
-                let sort_expr = Box::new(protobuf::PhysicalSortExprNode {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(&expr.expr, codec)?,
-                    )),
-                    asc: !expr.options.descending,
-                    nulls_first: expr.options.nulls_first,
-                });
-                Ok(protobuf::PhysicalExprNode {
-                    expr_id: None,
-                    expr_type: Some(ExprType::Sort(sort_expr)),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::SortPreservingMerge(Box::new(
-                protobuf::SortPreservingMergeExecNode {
-                    input: Some(Box::new(input)),
-                    expr,
-                    fetch: exec.fetch().map(|f| f as i64).unwrap_or(-1),
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("SortPreservingMergeExec is not serializable")
         })
     }
 
