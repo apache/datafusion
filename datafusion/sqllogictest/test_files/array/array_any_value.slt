@@ -147,8 +147,7 @@ select array_any_value(make_array(NULL, 1, 2, 3, 4, 5)), array_any_value(column1
 
 # array_any_value with empty (length-0) list elements
 # A non-null but empty list must yield NULL, including a trailing empty element
-# whose start offset equals the values length (previously read out of bounds
-# and panicked the worker task).
+# whose start offset equals the values length
 statement ok
 create table any_value_empty (id int, tags bigint[]) as values
   (1, make_array(10)),
