@@ -117,6 +117,35 @@ fn contains_fsl_with_dictionary(data_type: &DataType) -> bool {
     walk(data_type, false)
 }
 
+/// Return `true` if `data_type` contains a [`DataType::Union`] or
+/// [`DataType::RunEndEncoded`] anywhere in its subtree.
+///
+/// These two nested variants can round-trip through `RowConverter` in
+/// principle, but their arrow-row decoders have not been validated by
+/// this crate's test matrix against the full range of leaf types (dict,
+/// nested, etc.). Before this PR both were handled by `GroupValuesRows`
+/// (they were not `is_nested`-eligible for `GroupValuesColumn`), so
+/// reject them here to preserve the pre-PR routing rather than route
+/// untested shapes through `RowsGroupColumn`. When we grow explicit
+/// round-trip tests for these types, this blacklist can be removed.
+fn contains_union_or_run_end_encoded(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Union(_, _) | DataType::RunEndEncoded(_, _) => true,
+        DataType::List(f)
+        | DataType::LargeList(f)
+        | DataType::ListView(f)
+        | DataType::LargeListView(f)
+        | DataType::FixedSizeList(f, _) => {
+            contains_union_or_run_end_encoded(f.data_type())
+        }
+        DataType::Map(f, _) => contains_union_or_run_end_encoded(f.data_type()),
+        DataType::Struct(fs) => fs
+            .iter()
+            .any(|f| contains_union_or_run_end_encoded(f.data_type())),
+        _ => false,
+    }
+}
+
 impl RowsGroupColumn {
     /// Returns whether `data_type` can be handled by this generic column.
     ///
@@ -133,8 +162,17 @@ impl RowsGroupColumn {
     /// `GroupValuesRows`. The other list-likes (`List`, `LargeList`,
     /// `ListView`, `LargeListView`, `Map`) do carry the correction and
     /// round-trip cleanly on the same arrow-row version.
+    ///
+    /// Additionally, `Union` and `RunEndEncoded` are rejected because
+    /// they were routed to `GroupValuesRows` before this column existed
+    /// and their arrow-row round-trip has not been covered by this
+    /// crate's tests yet. Keeping them on the pre-PR path avoids
+    /// introducing an untested code path for those types.
     pub fn supports_type(data_type: &DataType) -> bool {
         if contains_fsl_with_dictionary(data_type) {
+            return false;
+        }
+        if contains_union_or_run_end_encoded(data_type) {
             return false;
         }
         RowConverter::supports_fields(&[SortField::new(data_type.clone())])
@@ -686,5 +724,94 @@ mod tests {
             &outer_dt,
             "Map<..., Dict>: build() must preserve the declared type",
         );
+    }
+
+    // ---- Union / RunEndEncoded defensive rejection -----------------
+    //
+    // Before this PR both types were routed to `GroupValuesRows`
+    // (`group_column_supported_type` didn't have a nested branch). This
+    // PR added `is_nested`-based dispatch to `RowsGroupColumn`, which
+    // would opt them in — but the arrow-row round-trip for these two
+    // families hasn't been covered by our tests. Reject them here so
+    // the pre-PR routing is preserved; drop the blacklist when the
+    // round-trip matrix grows to include them.
+
+    #[test]
+    fn supports_type_rejects_union() {
+        use arrow::datatypes::UnionFields;
+
+        let fields = UnionFields::try_new(
+            vec![0_i8, 1_i8],
+            vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+        let dt = DataType::Union(fields, arrow::datatypes::UnionMode::Dense);
+        assert!(
+            !RowsGroupColumn::supports_type(&dt),
+            "Union must fall back to GroupValuesRows until arrow-row \
+             round-trip is covered by our tests",
+        );
+    }
+
+    #[test]
+    fn supports_type_rejects_run_end_encoded_with_nested_values() {
+        // REE with `is_nested() = true` (nested values) is what this PR
+        // could otherwise opt into RowsGroupColumn; keep it on
+        // GroupValuesRows.
+        let list_of_i32 =
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let dt = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", list_of_i32, true)),
+        );
+        assert!(!RowsGroupColumn::supports_type(&dt));
+    }
+
+    #[test]
+    fn supports_type_rejects_run_end_encoded_with_scalar_values() {
+        // REE with scalar values is `is_nested() == false`, so
+        // `group_column_supported_type` never routes it to us via the
+        // nested branch anyway — but pin the invariant explicitly so a
+        // future refactor doesn't accidentally opt it in.
+        let dt = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        assert!(!RowsGroupColumn::supports_type(&dt));
+    }
+
+    #[test]
+    fn supports_type_rejects_ree_hidden_under_outer_wrapper() {
+        // REE buried under a struct or list: still rejected because
+        // the wrapper's decoder recurses through the REE branch we
+        // haven't validated.
+        let ree = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let outer = DataType::Struct(vec![Field::new("f", ree, true)].into());
+        assert!(!RowsGroupColumn::supports_type(&outer));
+    }
+
+    #[test]
+    fn supports_type_accepts_plain_list_and_struct_still() {
+        // Sanity: the defensive Union/REE blacklist must not accidentally
+        // catch the well-tested list-likes / structs that this column
+        // exists to serve.
+        let list_of_int =
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(RowsGroupColumn::supports_type(&list_of_int));
+
+        let struct_of_prims = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Utf8, true),
+            ]
+            .into(),
+        );
+        assert!(RowsGroupColumn::supports_type(&struct_of_prims));
     }
 }
