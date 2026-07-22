@@ -34,8 +34,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, HashMap, Result, TableReference, internal_err,
-    plan_err,
+    Column, DFSchema, DFSchemaRef, Diagnostic, HashMap, Result, Span, TableReference,
+    internal_err, plan_err,
 };
 
 #[cfg(not(feature = "sql"))]
@@ -650,6 +650,88 @@ pub fn find_aggregate_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Ve
     find_exprs_in_exprs(exprs, &|nested_expr| {
         matches!(nested_expr, Expr::AggregateFunction { .. })
     })
+}
+
+/// Returns an error if any of `exprs` contains an aggregate function call
+/// nested inside another aggregate function call, such as `sum(sum(x))`.
+///
+/// Such expressions are not valid SQL (PostgreSQL reports `aggregate function
+/// calls cannot be nested`) and have no physical equivalent, so they are
+/// rejected while the logical plan is built rather than failing later with an
+/// error that does not point back at the original SQL.
+///
+/// The nested aggregate is searched for in the arguments, `FILTER` and
+/// `ORDER BY` of each aggregate function call. Note that an aggregate used as
+/// the argument of a *window* function, such as `sum(sum(x)) OVER ()`, is
+/// legal and accepted: there the inner aggregate is evaluated by the
+/// `Aggregate` node and the window function is evaluated on top of its result.
+pub fn check_no_nested_aggregates<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+) -> Result<()> {
+    for expr in exprs {
+        expr.apply(|outer| {
+            if !matches!(outer, Expr::AggregateFunction(_)) {
+                return Ok(TreeNodeRecursion::Continue);
+            }
+
+            // `outer` is an aggregate, so no other aggregate may appear
+            // anywhere below it.
+            let mut nested: Option<&Expr> = None;
+            outer.apply_children(|child| {
+                child.apply(|inner| {
+                    if matches!(inner, Expr::AggregateFunction(_)) {
+                        nested = Some(inner);
+                        Ok(TreeNodeRecursion::Stop)
+                    } else {
+                        Ok(TreeNodeRecursion::Continue)
+                    }
+                })
+            })?;
+
+            match nested {
+                Some(inner) => nested_aggregate_err(outer, inner),
+                // The whole subtree below `outer` has just been checked
+                None => Ok(TreeNodeRecursion::Jump),
+            }
+        })?;
+    }
+    Ok(())
+}
+
+fn nested_aggregate_err(outer: &Expr, inner: &Expr) -> Result<TreeNodeRecursion> {
+    let diagnostic = Diagnostic::new_error(
+        "aggregate function calls cannot be nested",
+        first_span(inner),
+    )
+    .with_help(
+        format!(
+            "Compute '{inner}' in an inner query and aggregate its result, or use a window function such as '{outer} OVER ()'"
+        ),
+        None,
+    );
+
+    plan_err!(
+        "Aggregate function calls cannot be nested: '{inner}' is nested inside '{outer}'";
+        diagnostic = diagnostic
+    )
+}
+
+/// Best effort source location for `expr`: the first [`Span`] found in its
+/// subtree. Only some expressions (currently columns) carry spans, so pointing
+/// at e.g. the column of `sum(x)` is the closest we can get to the location of
+/// the whole expression.
+fn first_span(expr: &Expr) -> Option<Span> {
+    let mut span = None;
+    expr.apply(|e| {
+        span = e.spans().and_then(|spans| spans.first());
+        if span.is_some() {
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .ok()?;
+    span
 }
 
 /// Collect all deeply nested `Expr::WindowFunction`. They are returned in order of occurrence
@@ -1916,5 +1998,68 @@ mod tests {
         	Candidate functions:
         	substr(string: String, start_pos: Int64, length: Int64)
         ");
+    }
+
+    #[test]
+    fn test_check_no_nested_aggregates_ok() -> Result<()> {
+        use crate::test::function_stub::{count, sum};
+
+        // a plain aggregate, an aggregate wrapped in a scalar expression and a
+        // window function over an aggregate are all legal
+        let window_over_aggregate = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::AggregateUDF(sum_udaf()),
+            vec![sum(col("a"))],
+        ));
+        let exprs = [
+            sum(col("a")),
+            count(col("a")) + lit(1),
+            window_over_aggregate,
+        ];
+
+        check_no_nested_aggregates(exprs.iter())?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_no_nested_aggregates_err() {
+        use crate::test::function_stub::{count, sum};
+        use insta::assert_snapshot;
+
+        // directly nested
+        let err = check_no_nested_aggregates([&sum(sum(col("a")))]).unwrap_err();
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Aggregate function calls cannot be nested: 'sum(a)' is nested inside 'sum(sum(a))'"
+        );
+
+        // nested below another expression in the arguments
+        let err =
+            check_no_nested_aggregates([&sum(col("a") + count(col("b")))]).unwrap_err();
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Aggregate function calls cannot be nested: 'COUNT(b)' is nested inside 'sum(a + COUNT(b))'"
+        );
+
+        // nested in the FILTER of an aggregate
+        let filtered = sum(col("a"))
+            .filter(sum(col("b")).gt(lit(0)))
+            .build()
+            .unwrap();
+        let err = check_no_nested_aggregates([&filtered]).unwrap_err();
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Aggregate function calls cannot be nested: 'sum(b)' is nested inside 'sum(a) FILTER (WHERE sum(b) > Int32(0))'"
+        );
+
+        // nested in the ORDER BY of an aggregate
+        let ordered = sum(col("a"))
+            .order_by(vec![Sort::new(sum(col("b")), true, false)])
+            .build()
+            .unwrap();
+        let err = check_no_nested_aggregates([&ordered]).unwrap_err();
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Aggregate function calls cannot be nested: 'sum(b)' is nested inside 'sum(a) ORDER BY [sum(b) ASC NULLS LAST]'"
+        );
     }
 }

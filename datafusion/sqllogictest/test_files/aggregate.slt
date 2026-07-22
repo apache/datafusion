@@ -9607,3 +9607,52 @@ SET datafusion.execution.target_partitions = 4;
 
 statement ok
 DROP TABLE hits_raw;
+
+# Nested aggregate function calls are rejected during planning
+# issue: https://github.com/apache/datafusion/issues/23812
+statement ok
+CREATE TABLE nested_agg_t AS VALUES (1, 10.0), (1, 20.0), (2, 30.0);
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested: 'sum\(nested_agg_t\.column2\)' is nested inside 'sum\(sum\(nested_agg_t\.column2\)\)'
+SELECT column1, sum(sum(column2)) FROM nested_agg_t GROUP BY column1;
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested: 'count\(nested_agg_t\.column2\)' is nested inside 'sum\(count\(nested_agg_t\.column2\)\)'
+SELECT column1, sum(count(column2)) FROM nested_agg_t GROUP BY column1;
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested
+SELECT sum(sum(column2)) FROM nested_agg_t;
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested
+SELECT column1 FROM nested_agg_t GROUP BY column1 HAVING sum(sum(column2)) > 0;
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested
+SELECT column1, sum(column2 + sum(column2)) FROM nested_agg_t GROUP BY column1;
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested
+SELECT sum(column2) FILTER (WHERE sum(column2) > 0) FROM nested_agg_t;
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested
+SELECT array_agg(column2 ORDER BY sum(column2)) FROM nested_agg_t;
+
+# A scalar function applied to an aggregate is legal
+query IR
+SELECT column1, abs(sum(column2)) FROM nested_agg_t GROUP BY column1 ORDER BY column1;
+----
+1 30
+2 30
+
+# A window function applied to an aggregate is legal
+query IR
+SELECT column1, sum(sum(column2)) OVER () FROM nested_agg_t GROUP BY column1 ORDER BY column1;
+----
+1 60
+2 60
+
+# An aggregate over the result of an aggregate computed in a subquery is legal
+query R
+SELECT sum(s) FROM (SELECT sum(column2) AS s FROM nested_agg_t GROUP BY column1);
+----
+60
+
+statement ok
+DROP TABLE nested_agg_t;

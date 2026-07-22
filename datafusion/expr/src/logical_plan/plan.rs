@@ -41,8 +41,9 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, merge_schema, split_conjunction,
+    check_no_nested_aggregates, enumerate_grouping_sets, exprlist_to_fields,
+    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
+    merge_schema, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -3892,6 +3893,10 @@ impl Aggregate {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<Self> {
+        // Reject e.g. `sum(sum(x))` here rather than letting it reach physical
+        // planning, which has no equivalent for a nested aggregate.
+        check_no_nested_aggregates(group_expr.iter().chain(aggr_expr.iter()))?;
+
         let group_expr = enumerate_grouping_sets(group_expr)?;
 
         let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
