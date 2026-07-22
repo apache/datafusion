@@ -165,7 +165,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -187,7 +187,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -200,7 +200,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -219,7 +219,7 @@ dependencies = [
 [[package]]
 name = "arrow-avro"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -242,7 +242,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "bytes",
  "half",
@@ -253,7 +253,7 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -274,7 +274,7 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -288,7 +288,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -300,7 +300,7 @@ dependencies = [
 [[package]]
 name = "arrow-flight"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -326,7 +326,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -341,7 +341,7 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -365,7 +365,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -377,7 +377,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -389,7 +389,7 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "bitflags",
  "serde",
@@ -400,7 +400,7 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -413,7 +413,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -4458,7 +4458,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "59.1.0"
-source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#2c09b00a40040965cdc2a411970367bb90d2c39e"
+source = "git+https://github.com/pydantic/arrow-rs?branch=bounded-column-streaming#7fc5501c34fec845f8a1e730f5b1e964b78acff6"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -4837,7 +4837,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "petgraph",
@@ -4856,7 +4856,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn",
