@@ -633,22 +633,53 @@ impl EquivalenceProperties {
             if !satisfy {
                 return Ok(false);
             }
-            // Treat satisfied keys as constants in subsequent iterations. We
-            // can do this because the "next" key only matters in a lexicographical
-            // ordering when the keys to its left have the same values.
-            //
-            // Note that these expressions are not properly "constants". This is just
-            // an implementation strategy confined to this function.
-            //
-            // For example, assume that the requirement is `[a ASC, (b + c) ASC]`,
-            // and existing equivalent orderings are `[a ASC, b ASC]` and `[c ASC]`.
-            // From the analysis above, we know that `[a ASC]` is satisfied. Then,
-            // we add column `a` as constant to the algorithm state. This enables us
-            // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
-            let const_expr = ConstExpr::from(element.expr);
-            eq_properties.add_constants(std::iter::once(const_expr))?;
+            // Treat satisfied keys (and the sub-expressions they pin down) as
+            // constants in subsequent iterations. See
+            // [`Self::add_satisfied_key_constants`] for the rationale.
+            eq_properties.add_satisfied_key_constants(element.expr)?;
         }
         Ok(true)
+    }
+
+    /// Registers a satisfied sort key as a constant for subsequent iterations
+    /// of the ordering satisfaction checks. We can do this because the "next"
+    /// key only matters in a lexicographical ordering when the keys to its
+    /// left have the same values (i.e. within a single tie group). Note that
+    /// these expressions are not properly "constants"; this is just an
+    /// implementation strategy confined to the satisfaction checks.
+    ///
+    /// For example, assume that the requirement is `[a ASC, (b + c) ASC]`,
+    /// and existing equivalent orderings are `[a ASC, b ASC]` and `[c ASC]`.
+    /// Once we deduce that `[a ASC]` is satisfied, we add column `a` as a
+    /// constant to the algorithm state. This enables us to deduce that
+    /// `(b + c) ASC` is satisfied, given `a` is constant.
+    ///
+    /// In addition to the key itself, this also registers any sub-expressions
+    /// whose values the key pins down: if an expression is strictly
+    /// order-preserving, equal outputs imply equal values of its ordered
+    /// children, so within a tie group of the key those children are constant
+    /// as well. For example, if data is sorted by `[a, b]`, the requirement
+    /// `[CAST(a AS BIGINT) ASC, b ASC]` is satisfied: `a` is constant within
+    /// each group of equal `CAST(a AS BIGINT)` values, and hence `b` is
+    /// sorted within each such group.
+    fn add_satisfied_key_constants(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
+        let mut stack = vec![expr];
+        while let Some(expr) = stack.pop() {
+            let properties = self.get_expr_properties(Arc::clone(&expr));
+            if properties.strictly_order_preserving {
+                for child in expr.children() {
+                    let child_properties = self.get_expr_properties(Arc::clone(child));
+                    if matches!(
+                        child_properties.sort_properties,
+                        SortProperties::Ordered(_)
+                    ) {
+                        stack.push(Arc::clone(child));
+                    }
+                }
+            }
+            self.add_constants(std::iter::once(ConstExpr::from(expr)))?;
+        }
+        Ok(())
     }
 
     /// Returns the number of consecutive sort expressions (starting from the
@@ -683,20 +714,10 @@ impl EquivalenceProperties {
                 // many we've satisfied so far:
                 return Ok(idx);
             }
-            // Treat satisfied keys as constants in subsequent iterations. We
-            // can do this because the "next" key only matters in a lexicographical
-            // ordering when the keys to its left have the same values.
-            //
-            // Note that these expressions are not properly "constants". This is just
-            // an implementation strategy confined to this function.
-            //
-            // For example, assume that the requirement is `[a ASC, (b + c) ASC]`,
-            // and existing equivalent orderings are `[a ASC, b ASC]` and `[c ASC]`.
-            // From the analysis above, we know that `[a ASC]` is satisfied. Then,
-            // we add column `a` as constant to the algorithm state. This enables us
-            // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
-            let const_expr = ConstExpr::from(Arc::clone(&element.expr));
-            eq_properties.add_constants(std::iter::once(const_expr))?
+            // Treat satisfied keys (and the sub-expressions they pin down) as
+            // constants in subsequent iterations. See
+            // [`Self::add_satisfied_key_constants`] for the rationale.
+            eq_properties.add_satisfied_key_constants(Arc::clone(&element.expr))?;
         }
         // All sort expressions are satisfied, return full length:
         Ok(full_length)
@@ -1412,7 +1433,10 @@ fn update_properties(
     } else if node.expr.is::<Column>() {
         // We have a Column, which is the other possible leaf node type:
         node.data.range =
-            Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)?
+            Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)?;
+        // A column is the identity mapping of itself, which is trivially
+        // strict:
+        node.data.strictly_order_preserving = true;
     }
     // Now, check what we know about orderings:
     let normal_expr = eq_properties

@@ -329,7 +329,7 @@ mod tests {
         EquivalenceClass, EquivalenceGroup, EquivalenceProperties,
         OrderingEquivalenceClass, convert_to_orderings, convert_to_sort_exprs,
     };
-    use crate::expressions::{BinaryExpr, Column, col};
+    use crate::expressions::{BinaryExpr, CastExpr, Column, col};
     use crate::utils::tests::TestScalarUDF;
     use crate::{
         AcrossPartitions, ConstExpr, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
@@ -373,6 +373,48 @@ mod tests {
         let eq_properties_crude =
             EquivalenceProperties::new_with_orderings(Arc::clone(&input_schema), [crude]);
         assert!(!eq_properties_crude.ordering_satisfy(finer)?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordering_satisfy_strictly_order_preserving() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int64, true),
+        ]));
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let asc = SortOptions::default();
+        let ordering = vec![
+            PhysicalSortExpr::new(Arc::clone(&col_a), asc),
+            PhysicalSortExpr::new(Arc::clone(&col_b), asc),
+        ];
+        let eq_properties =
+            EquivalenceProperties::new_with_orderings(Arc::clone(&schema), [ordering]);
+
+        // A widening cast is strictly order-preserving: `a` is constant
+        // within each group of equal `CAST(a AS BIGINT)` values, so `b`
+        // remains sorted within those groups.
+        let widening = Arc::new(CastExpr::new(Arc::clone(&col_a), DataType::Int64, None))
+            as PhysicalExprRef;
+        assert!(eq_properties.ordering_satisfy(vec![
+            PhysicalSortExpr::new(widening, asc),
+            PhysicalSortExpr::new(Arc::clone(&col_b), asc),
+        ])?);
+
+        // A narrowing cast is only monotonic: it satisfies as a leading key,
+        // but it may collapse distinct `a` values, so `b` is not guaranteed
+        // to be sorted within its tie groups.
+        let narrowing = Arc::new(CastExpr::new(Arc::clone(&col_a), DataType::Int16, None))
+            as PhysicalExprRef;
+        assert!(eq_properties.ordering_satisfy(vec![PhysicalSortExpr::new(
+            Arc::clone(&narrowing),
+            asc
+        )])?);
+        assert!(!eq_properties.ordering_satisfy(vec![
+            PhysicalSortExpr::new(narrowing, asc),
+            PhysicalSortExpr::new(Arc::clone(&col_b), asc),
+        ])?);
         Ok(())
     }
 

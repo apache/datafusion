@@ -988,27 +988,35 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// For example, `concat(a || b)` preserves lexicographical ordering, but `abs(a)` does not.
     ///
     /// This is a *non-strict* (monotone) property: distinct inputs may map to
-    /// equal outputs. See [`Self::strictly_order_preserving`] for the strict
-    /// variant and [`ExprProperties::strictly_order_preserving`] for an
-    /// explanation of the difference.
+    /// equal outputs. See [`Self::strictly_order_preserving`] for a related
+    /// strict property and [`ExprProperties::strictly_order_preserving`] for
+    /// an explanation of the difference.
     fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
         Ok(false)
     }
 
     /// Returns true if the function is strictly order-preserving with respect
-    /// to its `Ordered` inputs: the output is ordered in the same direction,
-    /// equal outputs can only result from equal values of those inputs (i.e.
-    /// the mapping is one-to-one), and nulls map to nulls.
+    /// to its `Ordered` inputs: assuming those inputs advance simultaneously
+    /// (component-wise, i.e. all of them are sorted in the data), the output
+    /// is ordered in the same direction, equal outputs can only result from
+    /// equal values of those inputs (i.e. the mapping is one-to-one), and
+    /// nulls map to nulls.
     ///
     /// i.e. setting this to true means that `a.cmp(b) == f(a).cmp(f(b))`
     ///
-    /// Unlike [`Self::preserves_lex_ordering`], this rules out collapsing
-    /// distinct inputs into equal outputs: monotone but non-injective
-    /// functions such as `floor` or `date_trunc` must return `false` here
-    /// (see [`ExprProperties::strictly_order_preserving`] for why this
-    /// distinction matters). Optimizers rely on this to substitute a sort
-    /// key with an expression computed from it: if data is sorted by
-    /// `[x, y]`, it is also sorted by `[expr(x), y]`.
+    /// This is not simply a stricter [`Self::preserves_lex_ordering`] — the
+    /// two properties also assume different input orderings, and with
+    /// multiple ordered inputs neither implies the other. Monotone but
+    /// non-injective functions such as `floor` or `date_trunc` must return
+    /// `false` here, while an addition over ordered, overflow-free inputs
+    /// may return `true` here even though it does not preserve
+    /// lexicographical ordering. See
+    /// [`ExprProperties::strictly_order_preserving`] for a detailed
+    /// comparison.
+    ///
+    /// Optimizers rely on this to substitute a sort key with an expression
+    /// computed from it: if data is sorted by `[x, y]`, it is also sorted by
+    /// `[expr(x), y]`.
     ///
     /// When in doubt, return `false` (the default). The `inputs` properties
     /// allow conditional answers, e.g. based on the ranges of the inputs.
