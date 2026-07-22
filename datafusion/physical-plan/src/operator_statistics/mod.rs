@@ -1208,10 +1208,10 @@ mod tests {
 
     #[test]
     fn test_default_provider() -> Result<()> {
-        let engine = StatisticsRegistry::new();
+        let registry = StatisticsRegistry::new();
         let source = make_source(1000);
 
-        let stats = compute(&engine, source.as_ref())?;
+        let stats = compute(&registry, source.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Exact(1000)));
         Ok(())
     }
@@ -1331,13 +1331,13 @@ mod tests {
 
     #[test]
     fn test_custom_provider_for_custom_exec() -> Result<()> {
-        let mut engine = StatisticsRegistry::new();
-        engine.register(Arc::new(CustomStatisticsProvider));
+        let mut registry = StatisticsRegistry::new();
+        registry.register(Arc::new(CustomStatisticsProvider));
 
         let source = make_source(1000);
         let custom: Arc<dyn ExecutionPlan> = Arc::new(CustomExec { input: source });
 
-        let stats = compute(&engine, custom.as_ref())?;
+        let stats = compute(&registry, custom.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Exact(1000)));
         Ok(())
     }
@@ -1370,15 +1370,15 @@ mod tests {
 
     #[test]
     fn test_provider_opts_out_of_child_stats() -> Result<()> {
-        let mut engine = StatisticsRegistry::new();
-        engine.register(Arc::new(NoChildStatsProvider));
+        let mut registry = StatisticsRegistry::new();
+        registry.register(Arc::new(NoChildStatsProvider));
 
         let source = make_source(1000);
         let custom: Arc<dyn ExecutionPlan> = Arc::new(CustomExec { input: source });
 
         // The provider requested no children, so it sees the unknown placeholder
         // rather than the source's row count.
-        let stats = compute(&engine, custom.as_ref())?;
+        let stats = compute(&registry, custom.as_ref())?;
         assert!(stats.base.num_rows.get_value().is_none());
         Ok(())
     }
@@ -1418,8 +1418,8 @@ mod tests {
 
     #[test]
     fn test_override_builtin_operator() -> Result<()> {
-        let mut engine = StatisticsRegistry::new();
-        engine.register(Arc::new(OverrideFilterProvider {
+        let mut registry = StatisticsRegistry::new();
+        registry.register(Arc::new(OverrideFilterProvider {
             fixed_selectivity: 0.1,
         }));
 
@@ -1427,20 +1427,20 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(lit(true), source)?);
 
-        let stats = compute(&engine, filter.as_ref())?;
+        let stats = compute(&registry, filter.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Inexact(100)));
         Ok(())
     }
 
     #[test]
     fn test_filter_statistics_propagation() -> Result<()> {
-        let engine = StatisticsRegistry::new();
+        let registry = StatisticsRegistry::new();
         let source = make_source(1000);
         let predicate = lit(true);
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, source)?);
 
-        let stats = compute(&engine, filter.as_ref())?;
+        let stats = compute(&registry, filter.as_ref())?;
         assert!(stats.base.num_rows.get_value().unwrap_or(&0) <= &1000);
         Ok(())
     }
@@ -1520,7 +1520,7 @@ mod tests {
 
     #[test]
     fn test_projection_statistics_propagation() -> Result<()> {
-        let engine = StatisticsRegistry::new();
+        let registry = StatisticsRegistry::new();
         let source = make_source(1000);
         let schema = make_schema();
         let proj: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
@@ -1528,7 +1528,7 @@ mod tests {
             source,
         )?);
 
-        let stats = compute(&engine, proj.as_ref())?;
+        let stats = compute(&registry, proj.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Exact(1000)));
         Ok(())
     }
@@ -1537,12 +1537,12 @@ mod tests {
     fn test_passthrough_statistics_propagation() -> Result<()> {
         use crate::coalesce_partitions::CoalescePartitionsExec;
 
-        let engine = StatisticsRegistry::new();
+        let registry = StatisticsRegistry::new();
         let source = make_source(1000);
         let coalesce: Arc<dyn ExecutionPlan> =
             Arc::new(CoalescePartitionsExec::new(source));
 
-        let stats = compute(&engine, coalesce.as_ref())?;
+        let stats = compute(&registry, coalesce.as_ref())?;
         // PassthroughStatisticsProvider should propagate child row count unchanged
         assert_eq!(stats.base.num_rows, Precision::Exact(1000));
         Ok(())
@@ -1550,11 +1550,11 @@ mod tests {
 
     #[test]
     fn test_chain_priority() -> Result<()> {
-        let mut engine = StatisticsRegistry::new();
-        engine.register(Arc::new(OverrideFilterProvider {
+        let mut registry = StatisticsRegistry::new();
+        registry.register(Arc::new(OverrideFilterProvider {
             fixed_selectivity: 0.5,
         }));
-        engine.register(Arc::new(CustomStatisticsProvider));
+        registry.register(Arc::new(CustomStatisticsProvider));
 
         let source = make_source(1000);
 
@@ -1562,13 +1562,13 @@ mod tests {
         let custom: Arc<dyn ExecutionPlan> = Arc::new(CustomExec {
             input: Arc::clone(&source),
         });
-        let stats = compute(&engine, custom.as_ref())?;
+        let stats = compute(&registry, custom.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Exact(1000)));
 
         // FilterExec: CustomStatisticsProvider delegates, OverrideFilterProvider handles
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(lit(true), source)?);
-        let stats = compute(&engine, filter.as_ref())?;
+        let stats = compute(&registry, filter.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Inexact(500)));
 
         Ok(())
