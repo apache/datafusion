@@ -141,6 +141,7 @@ pub(crate) mod test_utils {
         execution_props::ExecutionProps,
         expr::{HigherOrderFunction, LambdaVariable},
         lambda,
+        physical_planning_context::PhysicalPlanningContext,
     };
     use datafusion_physical_expr::create_physical_expr;
 
@@ -175,6 +176,7 @@ pub(crate) mod test_utils {
             )),
             &schema,
             &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
         )?
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),

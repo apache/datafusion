@@ -44,6 +44,7 @@ use datafusion_execution::cache::cache_manager::{
 };
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
     Expr, Partitioning as LogicalPartitioning, TableProviderFilterPushDown, TableType,
 };
@@ -614,6 +615,7 @@ impl TableProvider for ListingTable {
                         output_partitioning,
                         &df_schema,
                         state.execution_props(),
+                        &PhysicalPlanningContext::default(),
                     )?
                 }
             };
