@@ -31,6 +31,7 @@ use datafusion_expr::{
     Sort, SortExpr, Window, WindowFunctionDefinition,
 };
 use datafusion_expr::{ExprFunctionExt, Limit, LogicalPlanBuilder, col, lit};
+use datafusion_sql::sqlparser::keywords::Keyword::PARALLEL;
 
 /// Optimizer that replaces logical [[Filter]] with a "top 1" predicate, that has a child  with a logical [[Window]] with a function using `row_number`
 /// to an aggregate
@@ -88,7 +89,7 @@ impl OptimizerRule for ReplaceFilterTop1 {
                 ref input,
                 ..
             }) => {
-                let Some((order_by, partition_by, rn_name)) =
+                let Some((order_by, partition_by, rn_name, input_cols, child)) =
                     has_valid_window_input(input)
                 else {
                     return Ok(Transformed::no(plan));
@@ -97,7 +98,49 @@ impl OptimizerRule for ReplaceFilterTop1 {
                 if !has_valid_predicate(predicate, &rn_name) {
                     return Ok(Transformed::no(plan));
                 }
-                Ok(Transformed::no(plan))
+
+                let is_partition = |c: &Column| {
+                    partition_by.iter().any(|e| matches!(e, Expr::Column(p) if p.name == c.name && p.relation == c.relation))
+                };
+
+                let first_value =
+                    config.function_registry().unwrap().udaf("first_value")?;
+                let aggr_expr = input_cols
+                    .iter()
+                    .filter(|c| !is_partition(c))
+                    .map(|c| {
+                        first_value
+                            .call(vec![Expr::Column(c.clone())])
+                            .order_by(order_by.clone())
+                            .build()
+                            .map(|e| {
+                                e.alias_qualified(c.relation.clone(), c.name.clone())
+                            })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
+                    Arc::clone(child),
+                    partition_by.clone(),
+                    aggr_expr,
+                )?);
+
+                let proj_exprs = input
+                    .schema()
+                    .iter()
+                    .map(|(qualifier, field)| {
+                        if qualifier.is_none() && field.name() == &rn_name {
+                            lit(1u64).alias(field.name())
+                        } else {
+                            Expr::Column(Column::new(qualifier.cloned(), field.name()))
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                let new_plan = LogicalPlanBuilder::from(aggregate)
+                    .project(proj_exprs)?
+                    .build()?;
+                Ok(Transformed::yes(new_plan))
             }
             _ => Ok(Transformed::no(plan)),
         }
@@ -142,7 +185,13 @@ fn has_valid_predicate(predicate: &Expr, rn_name: &str) -> bool {
 
 fn has_valid_window_input(
     input: &Arc<LogicalPlan>,
-) -> Option<(&Vec<SortExpr>, &Vec<Expr>, String)> {
+) -> Option<(
+    &Vec<SortExpr>,
+    &Vec<Expr>,
+    String,
+    Vec<Column>,
+    &Arc<LogicalPlan>,
+)> {
     let window = match &**input {
         LogicalPlan::Window(w) => w,
         LogicalPlan::Projection(p) => match &*p.input {
@@ -171,6 +220,8 @@ fn has_valid_window_input(
                 &e.params.order_by,
                 &e.params.partition_by,
                 window_expr.schema_name().to_string(),
+                window.input.schema().columns(),
+                &window.input,
             ));
         }
         _ => None,
