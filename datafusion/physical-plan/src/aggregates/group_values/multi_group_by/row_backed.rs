@@ -88,10 +88,55 @@ pub struct RowsGroupColumn {
     output_type: DataType,
 }
 
+/// Walk `data_type`'s subtree and return `true` if it contains a
+/// [`DataType::FixedSizeList`] whose descendant tree includes any
+/// [`DataType::Dictionary`].
+///
+/// Two-state recursion: once we cross a `FixedSizeList`, `inside_fsl`
+/// stays true for every descendant, so a `Dictionary` anywhere below
+/// counts. Above that boundary, encountering a `Dictionary` is fine —
+/// only nested containers propagate the risk.
+fn contains_fsl_with_dictionary(data_type: &DataType) -> bool {
+    fn walk(dt: &DataType, inside_fsl: bool) -> bool {
+        match dt {
+            DataType::Dictionary(_, _) => inside_fsl,
+            DataType::FixedSizeList(f, _) => walk(f.data_type(), true),
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::ListView(f)
+            | DataType::LargeListView(f) => walk(f.data_type(), inside_fsl),
+            DataType::Map(f, _) => walk(f.data_type(), inside_fsl),
+            DataType::Struct(fs) => fs.iter().any(|f| walk(f.data_type(), inside_fsl)),
+            DataType::RunEndEncoded(_, values) => walk(values.data_type(), inside_fsl),
+            DataType::Union(fs, _) => {
+                fs.iter().any(|(_, f)| walk(f.data_type(), inside_fsl))
+            }
+            _ => false,
+        }
+    }
+    walk(data_type, false)
+}
+
 impl RowsGroupColumn {
-    /// Returns whether `data_type` can be handled by this generic column, i.e.
-    /// whether arrow's [`RowConverter`] can encode it.
+    /// Returns whether `data_type` can be handled by this generic column.
+    ///
+    /// This is stricter than [`RowConverter::supports_fields`]: the row
+    /// format also has to survive the `build` / `take_n` reverse trip
+    /// through [`RowConverter::convert_rows`], and arrow's
+    /// `decode_fixed_size_list` (arrow-row 59.1.0) skips the
+    /// dictionary-flatten correction that the other list-like decoders
+    /// apply, so any `FixedSizeList` containing a `Dictionary` leaf
+    /// panics on emit with `"FixedSizeListArray expected data type
+    /// Dictionary(...) got <flattened> for \"item\""`.
+    ///
+    /// Reject those shapes here so `make_group_column` falls back to
+    /// `GroupValuesRows`. The other list-likes (`List`, `LargeList`,
+    /// `ListView`, `LargeListView`, `Map`) do carry the correction and
+    /// round-trip cleanly on the same arrow-row version.
     pub fn supports_type(data_type: &DataType) -> bool {
+        if contains_fsl_with_dictionary(data_type) {
+            return false;
+        }
         RowConverter::supports_fields(&[SortField::new(data_type.clone())])
     }
 
@@ -415,6 +460,231 @@ mod tests {
             &outer_dt,
             "build() must return the declared List<Dict> data type, \
              not the RowConverter-flattened List<Utf8>",
+        );
+    }
+
+    // ---- FSL<Dict> rejection ----------------------------------------
+    //
+    // arrow-row 59.1.0's `decode_fixed_size_list` skips the
+    // dict-flatten correction that the generic `decode<L>` path applies
+    // to `List` / `LargeList` / `ListView` / `LargeListView` / `Map`,
+    // so any `FixedSizeList` containing a `Dictionary` leaf panics on
+    // emit. `supports_type` must reject those shapes so
+    // `GroupValuesRows` fallback handles them instead. These tests pin
+    // the current shape of that black-list.
+
+    fn dict_utf8() -> DataType {
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+    }
+
+    fn fsl_of(inner: DataType) -> DataType {
+        DataType::FixedSizeList(Arc::new(Field::new("item", inner, true)), 2)
+    }
+
+    #[test]
+    fn supports_type_rejects_fixed_size_list_of_dict() {
+        // Direct case: `FixedSizeList<Dict<Int32, Utf8>>`.
+        assert!(!RowsGroupColumn::supports_type(&fsl_of(dict_utf8())));
+    }
+
+    #[test]
+    fn supports_type_rejects_fsl_with_dict_nested_in_struct() {
+        // The dict is one level deep under a struct that is itself the
+        // FSL element. arrow-row still panics because `convert_raw`
+        // returns the struct with a decoded (Utf8) field while the
+        // FSL builder expects the declared struct-with-dict shape.
+        let struct_dt = DataType::Struct(vec![Field::new("d", dict_utf8(), true)].into());
+        assert!(!RowsGroupColumn::supports_type(&fsl_of(struct_dt)));
+    }
+
+    #[test]
+    fn supports_type_rejects_fsl_with_dict_nested_in_list() {
+        // `FixedSizeList<List<Dict>>` — the inner `List<Dict>` handles
+        // dicts correctly on its own, but the outer FSL wrapper still
+        // panics with the mismatched declared child type.
+        let list_of_dict =
+            DataType::List(Arc::new(Field::new("item", dict_utf8(), true)));
+        assert!(!RowsGroupColumn::supports_type(&fsl_of(list_of_dict)));
+    }
+
+    #[test]
+    fn supports_type_rejects_fsl_hidden_under_outer_list() {
+        // Sibling positioning: the outer container is a `List` (which is
+        // fine on its own), but its child is a `FixedSizeList<Dict>`.
+        // The panic surface is at the inner FSL layer regardless of what
+        // wraps it, so this must still be rejected.
+        let outer =
+            DataType::List(Arc::new(Field::new("item", fsl_of(dict_utf8()), true)));
+        assert!(!RowsGroupColumn::supports_type(&outer));
+    }
+
+    #[test]
+    fn supports_type_rejects_fsl_hidden_under_outer_struct() {
+        // Same, but the outer wrapper is a struct.
+        let outer =
+            DataType::Struct(vec![Field::new("f", fsl_of(dict_utf8()), true)].into());
+        assert!(!RowsGroupColumn::supports_type(&outer));
+    }
+
+    // ---- FSL without dicts is still fine ----------------------------
+
+    #[test]
+    fn supports_type_accepts_fsl_of_primitive() {
+        // Sanity: a plain FSL<Int32> must not get caught by the
+        // dict-under-FSL blacklist.
+        assert!(RowsGroupColumn::supports_type(&fsl_of(DataType::Int32)));
+    }
+
+    #[test]
+    fn supports_type_accepts_fsl_of_struct_without_dict() {
+        // FSL of struct where the struct's fields are all primitives.
+        let struct_dt =
+            DataType::Struct(vec![Field::new("a", DataType::Int32, true)].into());
+        assert!(RowsGroupColumn::supports_type(&fsl_of(struct_dt)));
+    }
+
+    // ---- Positive round-trip tests for non-FSL list-likes -----------
+    //
+    // The other list-like decoders in arrow-row 59.1.0
+    // (`GenericListArrayOrMap` path) apply the corrected_type fix, so
+    // `List<Dict>`, `LargeList<Dict>`, `ListView<Dict>`, `LargeListView<Dict>`
+    // and `Map<..., Dict>` all round-trip cleanly. These tests pin
+    // that they are (a) accepted by `supports_type` and (b) actually
+    // survive `vectorized_append` + `build()` without panicking, so a
+    // future arrow-rs regression there is caught here rather than in
+    // production.
+
+    #[test]
+    fn supports_type_accepts_large_list_of_dict() {
+        let dt = DataType::LargeList(Arc::new(Field::new("item", dict_utf8(), true)));
+        assert!(RowsGroupColumn::supports_type(&dt));
+    }
+
+    #[test]
+    fn supports_type_accepts_list_view_of_dict() {
+        let dt = DataType::ListView(Arc::new(Field::new("item", dict_utf8(), true)));
+        assert!(RowsGroupColumn::supports_type(&dt));
+    }
+
+    #[test]
+    fn supports_type_accepts_large_list_view_of_dict() {
+        let dt = DataType::LargeListView(Arc::new(Field::new("item", dict_utf8(), true)));
+        assert!(RowsGroupColumn::supports_type(&dt));
+    }
+
+    #[test]
+    fn supports_type_map_agrees_with_row_converter() {
+        // Map<Int32, Dict<Int32, Utf8>>. Whether arrow-row supports Map
+        // depends on the version; either way, our `supports_type` must
+        // agree with `RowConverter::supports_fields` — otherwise we'd
+        // pick a strategy the converter can't back.
+        let entries = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("keys", DataType::Int32, false),
+                    Field::new("values", dict_utf8(), true),
+                ]
+                .into(),
+            ),
+            false,
+        ));
+        let map_dt = DataType::Map(entries, false);
+        let arrow_supports =
+            RowConverter::supports_fields(&[SortField::new(map_dt.clone())]);
+        assert_eq!(RowsGroupColumn::supports_type(&map_dt), arrow_supports);
+    }
+
+    /// End-to-end regression: `LargeList<Dict<Int32, Utf8>>` must
+    /// actually survive `vectorized_append` + `build()` on the current
+    /// arrow-rs version, not just be accepted by `supports_type`.
+    #[test]
+    fn build_preserves_large_list_of_dictionary_schema() {
+        use arrow::array::{DictionaryArray, LargeListArray, StringArray};
+        use arrow::buffer::OffsetBuffer;
+
+        let item_field = Arc::new(Field::new("item", dict_utf8(), true));
+        let outer_dt = DataType::LargeList(Arc::clone(&item_field));
+
+        // Skip if this arrow-rs version rejects the nesting (defensive:
+        // the invariant we care about is `output().data_type() == declared`
+        // conditional on `supports_type` saying yes).
+        if !RowsGroupColumn::supports_type(&outer_dt) {
+            return;
+        }
+
+        let mut col = Box::new(RowsGroupColumn::try_new(outer_dt.clone()).unwrap());
+
+        let values = Arc::new(StringArray::from(vec!["a", "b"]));
+        let keys = Int32Array::from(vec![0, 1]);
+        let dict = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
+        let offsets = OffsetBuffer::<i64>::from_lengths([2]);
+        let list = LargeListArray::try_new(
+            Arc::clone(&item_field),
+            offsets,
+            Arc::new(dict),
+            None,
+        )
+        .unwrap();
+
+        col.vectorized_append(&(Arc::new(list) as ArrayRef), &[0])
+            .unwrap();
+        let built = col.build();
+        assert_eq!(
+            built.data_type(),
+            &outer_dt,
+            "LargeList<Dict>: build() must preserve the declared type",
+        );
+    }
+
+    /// End-to-end regression for `Map<Int32, Dict<Int32, Utf8>>` when
+    /// arrow-row supports it. Same intent as the LargeList test.
+    #[test]
+    fn build_preserves_map_of_dictionary_schema() {
+        use arrow::array::{
+            DictionaryArray, Int32Array, MapArray, StringArray, StructArray,
+        };
+        use arrow::buffer::OffsetBuffer;
+
+        let key_field = Arc::new(Field::new("keys", DataType::Int32, false));
+        let value_field = Arc::new(Field::new("values", dict_utf8(), true));
+        let entries_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(vec![(*key_field).clone(), (*value_field).clone()].into()),
+            false,
+        ));
+        let outer_dt = DataType::Map(Arc::clone(&entries_field), false);
+
+        if !RowsGroupColumn::supports_type(&outer_dt) {
+            return;
+        }
+
+        let mut col = Box::new(RowsGroupColumn::try_new(outer_dt.clone()).unwrap());
+
+        // One map entry: {1 -> "a"}.
+        let keys = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
+        let values_arr = Arc::new(StringArray::from(vec!["a"]));
+        let value_keys = Int32Array::from(vec![0]);
+        let value_dict =
+            DictionaryArray::<Int32Type>::try_new(value_keys, values_arr).unwrap();
+        let entries = StructArray::try_new(
+            vec![(*key_field).clone(), (*value_field).clone()].into(),
+            vec![keys, Arc::new(value_dict)],
+            None,
+        )
+        .unwrap();
+        let offsets = OffsetBuffer::<i32>::from_lengths([1]);
+        let map =
+            MapArray::try_new(Arc::clone(&entries_field), offsets, entries, None, false)
+                .unwrap();
+
+        col.vectorized_append(&(Arc::new(map) as ArrayRef), &[0])
+            .unwrap();
+        let built = col.build();
+        assert_eq!(
+            built.data_type(),
+            &outer_dt,
+            "Map<..., Dict>: build() must preserve the declared type",
         );
     }
 }
