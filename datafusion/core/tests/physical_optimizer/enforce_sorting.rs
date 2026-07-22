@@ -66,11 +66,11 @@ use arrow_schema::Schema;
 use datafusion_execution::TaskContext;
 use datafusion_catalog::streaming::StreamingTable;
 
-use futures::StreamExt;
-use insta::{Settings, assert_snapshot};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr::projection::ProjectionExpr;
 use datafusion_physical_plan::projection::ProjectionExec;
+use futures::StreamExt;
+use insta::{Settings, assert_snapshot};
 
 /// Create a sorted Csv exec
 fn csv_exec_sorted(
@@ -3259,7 +3259,6 @@ async fn test_does_not_push_fetch_sort_through_projection_over_union() -> Result
     Ok(())
 }
 
-
 /// A pass-through wrapper around a column: just assert that column does not contain any nulls
 #[derive(Debug, Eq)]
 struct AssertNotNull {
@@ -3299,23 +3298,20 @@ impl PhysicalExpr for AssertNotNull {
         Ok(false)
     }
 
-    fn evaluate(
-        &self,
-        batch: &RecordBatch,
-    ) -> Result<ColumnarValue> {
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let child = self.inner.evaluate(batch)?;
         match child {
             ColumnarValue::Array(a) if a.logical_null_count() > 0 => {
                 return Err(DataFusionError::Internal(
                     "AssertNotNull evaluated to null".to_string(),
-                ))
+                ));
             }
             ColumnarValue::Scalar(s) if s.is_null() => {
                 return Err(DataFusionError::Internal(
                     "AssertNotNull evaluated to null".to_string(),
-                ))
+                ));
             }
-            child => Ok(child)
+            child => Ok(child),
         }
     }
 
@@ -3358,9 +3354,9 @@ async fn test_passthrough_wrapper_projection_keeps_ordering() -> Result<()> {
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let proj_exprs: Vec<ProjectionExpr> = expr
-          .into_iter()
-          .map(|(expr, alias)| ProjectionExpr { expr, alias })
-          .collect();
+            .into_iter()
+            .map(|(expr, alias)| ProjectionExpr { expr, alias })
+            .collect();
         Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
     }
 
@@ -3388,41 +3384,29 @@ async fn test_passthrough_wrapper_projection_keeps_ordering() -> Result<()> {
 
     let projection = projection_exec(
         vec![
-            (
-                AssertNotNull::new(
-                    col("a", &schema)?,
-                ),
-                "a".to_string(),
-            ),
-            (
-                AssertNotNull::new(
-                    col("b", &schema)?,
-                ),
-                "b".to_string(),
-            ),
-            (
-                AssertNotNull::new(
-                    col("c", &schema)?,
-                ),
-                "c".to_string(),
-            ),
+            (AssertNotNull::new(col("a", &schema)?), "a".to_string()),
+            (AssertNotNull::new(col("b", &schema)?), "b".to_string()),
+            (AssertNotNull::new(col("c", &schema)?), "c".to_string()),
         ],
         source,
     )?;
 
-    let ordering =  LexOrdering::new([
+    let ordering = LexOrdering::new([
         sort_expr("a", &projection.schema()),
         sort_expr("b", &projection.schema()),
         sort_expr("c", &projection.schema()),
     ])
-      .unwrap();
+    .unwrap();
 
     let sort_satisfied = projection
-      .equivalence_properties()
-      .ordering_satisfy(ordering.clone())?;
+        .equivalence_properties()
+        .ordering_satisfy(ordering.clone())?;
 
     let plan_str = displayable(projection.as_ref()).indent(true).to_string();
-    assert!(sort_satisfied, "sort should be satisfied, ordering: {ordering}\nplan:\n{plan_str}");
+    assert!(
+        sort_satisfied,
+        "sort should be satisfied, ordering: {ordering}\nplan:\n{plan_str}"
+    );
 
     Ok(())
 }

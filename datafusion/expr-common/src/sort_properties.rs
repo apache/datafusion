@@ -158,12 +158,26 @@ pub struct ExprProperties {
     ///
     /// # Difference from [`Self::preserves_lex_ordering`]
     ///
-    /// `preserves_lex_ordering` only promises monotonicity, which allows the
-    /// expression to collapse distinct input values into equal outputs;
-    /// `floor`, `date_trunc` and narrowing casts are monotone but do exactly
-    /// that. This field additionally rules such collapses out, so
-    /// `strictly_order_preserving` implies (same-direction)
-    /// `preserves_lex_ordering`, but not vice versa.
+    /// The two properties differ in both their premise and their strictness:
+    ///
+    /// - `preserves_lex_ordering` assumes the inputs advance in
+    ///   *lexicographical* order (a later input may decrease whenever an
+    ///   earlier one increases), and only promises a non-decreasing output,
+    ///   allowing distinct inputs to collapse into equal outputs; `floor`,
+    ///   `date_trunc` and narrowing casts do exactly that.
+    /// - `strictly_order_preserving` assumes every `Ordered` input advances
+    ///   *simultaneously* (component-wise, which is what actually holds when
+    ///   all of them are sorted in the data), and promises a strict output:
+    ///   equal outputs only from equal inputs.
+    ///
+    /// For an expression with a single ordered input the premises coincide,
+    /// and this field is simply the stronger claim: it implies
+    /// `preserves_lex_ordering`. With multiple ordered inputs, neither
+    /// implies the other: `concat(a, b)` preserves lexicographical ordering
+    /// but is not strict (distinct inputs can produce equal outputs), while
+    /// `a + b` over two ordered, overflow-free inputs is strict but not
+    /// lexicographical (under the lexicographical premise `b` may decrease
+    /// while `a` increases, making the sum decrease).
     ///
     /// The distinction matters for suffix sort keys. Optimizers use this
     /// field to substitute a sort key with an expression computed from it:
